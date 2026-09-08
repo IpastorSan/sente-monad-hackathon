@@ -36,20 +36,42 @@ function requestFunds(address recipient) external;   // selector 0x544c7cf9
 performs `AUSD.transfer(recipient, 10000000000)`. Costs ~130k gas. `token()`
 returns exactly the AUSD address above, so it dispenses the right asset.
 
-**Not one-shot — you can top up repeatedly.** The guard is a balance ceiling,
-not a cooldown: it reads `balanceOf(recipient)` and reverts with `0x0949dab9`
-if the recipient already holds too much. Verified by `eth_call` per address:
-balances of 0, 100, 8,800 and 9,504 AUSD all succeed; 740,000 and 63.9M revert.
-The exact cutoff is somewhere in (9,504, 740,000] and was not pinned further —
-AUSD uses ERC-7201 namespaced storage, so a balance cannot be state-overridden
-to bisect it. Practically irrelevant: 10,000 AUSD is far more than needed.
+**Not one-shot — you can top up repeatedly.** Two independent guards, both
+verified, with distinct revert codes:
+
+| Guard                     | Value            | Revert when tripped |
+| ------------------------- | ---------------- | ------------------- |
+| Recipient balance ceiling | **100,000 AUSD** | `0x0949dab9`        |
+| **Global** cooldown       | **60 seconds**   | `0x20e5bc67`        |
+
+Config read straight off the contract (names inferred from values and behaviour,
+not from an ABI — no verified source exists on any chain):
+
+| Selector     | Value          | Reading                          |
+| ------------ | -------------- | -------------------------------- |
+| `0x905467f6` | `10000000000`  | payout = 10,000 AUSD             |
+| `0x14bc2fd7` | `100000000000` | recipient ceiling = 100,000 AUSD |
+| `0x48645704` | `60`           | cooldown seconds                 |
+| `0xd9772a25` | unix ts        | last request, **global**         |
+| `0xfc0c546a` | AUSD address   | `token()`                        |
+
+**The cooldown is global, not per-address — plan for contention.** `0xd9772a25`
+returns the same value regardless of caller or argument, and steps forward when
+_anyone's_ claim lands. Confirmed by binary-searching historical `eth_call`
+around a real claim: block 60828793 (ts 1788891723) reverts `0x20e5bc67`, block
+60828794 (ts 1788891724) succeeds. Exactly 60 seconds.
+
+Operationally this means other Metropolis teams claiming can make us lose the
+race. **Retry on `0x20e5bc67`** with a short backoff; a 60-second ceiling makes
+it a non-issue as long as the code expects it.
 
 Live payouts were observed during investigation — two real claims of exactly
 10,000 AUSD in a ~30 minute window, and the faucet balance dropping
 750,000 → 740,000. It is in active use, not abandoned.
 
-**Supply is finite.** 740,000 AUSD is ~74 remaining claims at time of writing,
-and nothing tops it up. Do not burn claims casually.
+**Supply looks finite.** 740,000 AUSD is ~74 remaining claims at time of
+writing. Whether anything refills it is **unconfirmed** — do not burn claims
+casually, and do not assume it will still be funded in week five.
 
 MON for gas comes from `https://faucet.monad.xyz` (0.5–10 MON per address per
 24h, depending on whether the address holds mainnet ETH).
@@ -80,6 +102,30 @@ AUSD**; the live `GET /api/v1/pub/context` names AUSD; and `PerplFoundation/perp
 **Use AUSD `0xa9012a05...`. Ignore the api-docs README on this point.**
 (Found independently by two separate investigations, so this is not a one-off
 misreading.)
+
+## Perpl testnet onboarding — the working sequence
+
+There is **no faucet in the Perpl testnet UI**. The frontend bundle (3.5 MB) has
+zero occurrences of `faucet` or `requestFunds`, but 57 of `deposit` and strings
+like _"Deposit to start trading"_ — it expects you to arrive already holding
+AUSD. The Agora faucet is the only path and Perpl does not link to it.
+
+```
+1. MON for gas                      faucet.monad.xyz
+2. requestFunds(you)                0xd236c18D274E54FAccC3dd9DDA4b27965a73ee6C
+                                    -> 10,000 AUSD
+3. approve(Exchange, amt)           on AUSD 0xa9012a05...5322dC
+4. createAccount(amt)               amt >= 100000000  (100 AUSD)
+5. allowOrderForwarding(true)       without it, orders fail with reason 34
+```
+
+Steps 3-5 are three separate transactions and three failure modes — batch them
+into one sponsored userOp via the ERC-7579 helper.
+
+**Minimum is exactly 100.000000 AUSD**, established two independent ways:
+on-chain binary search (99.999999 reverts `0xcfe73bb0`, 100.000000 passes) and
+the live API's `min_account_open_amount`. Subsequent top-ups need only 10 AUSD
+(`min_deposit_amount`); minimum withdrawal is 0.01 AUSD.
 
 ## Perpl onboarding — verified numbers
 
