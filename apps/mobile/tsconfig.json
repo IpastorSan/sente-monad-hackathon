@@ -1,0 +1,18 @@
+{
+  "extends": ["expo/tsconfig.base", "../../tsconfig.base.json"],
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    // Metro resolves TS source directly, and `scripts/*.ts` are run by node's
+    // native type stripping, which requires the explicit .ts specifier.
+    "allowImportingTsExtensions": true,
+    "types": ["node", "react"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  "exclude": ["node_modules", ".expo", "ios", "android"]
+}

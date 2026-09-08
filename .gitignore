@@ -1,0 +1,14 @@
+node_modules/
+.pnpm-store/
+dist/
+build/
+*.tsbuildinfo
+.expo/
+.expo-shared/
+ios/
+android/
+*.log
+.env
+.env.local
+.DS_Store
+.ralph-loop.sh

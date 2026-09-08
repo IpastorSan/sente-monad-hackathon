@@ -1,0 +1,45 @@
+{
+  "name": "@sente/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "read-block": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/read-block.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@sente/venues": "workspace:*",
+    "expo": "~57.0.20",
+    "expo-constants": "~57.0.17",
+    "expo-crypto": "~57.0.2",
+    "expo-dev-client": "~57.0.15",
+    "expo-linking": "~57.0.9",
+    "expo-router": "~57.0.19",
+    "expo-splash-screen": "~57.0.8",
+    "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.3",
+    "fast-text-encoding": "^1.0.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-get-random-values": "^2.0.0",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.10.1",
+    "viem": "^2.56.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/react": "~19.2.2",
+    "eslint": "^10.10.0",
+    "typescript": "~6.0.3"
+  }
+}

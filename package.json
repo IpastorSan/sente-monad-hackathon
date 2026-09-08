@@ -1,0 +1,28 @@
+{
+  "name": "sente",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Sente \u2014 mobile trading on Monad with mandate-bounded AI agents",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "lint": "pnpm -r --if-present run lint",
+    "lint:fix": "pnpm -r --if-present run lint:fix",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // TS 6 deprecates explicitly naming node10; leaving moduleResolution unset
+    // lets it default from module=CommonJS, which is what Nest expects.
+    "module": "CommonJS",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "rootDir": "./src",
+    "outDir": "./dist",
+
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    "declaration": true,
+    "sourceMap": true,
+    "incremental": true,
+    "isolatedModules": false,
+
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
