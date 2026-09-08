@@ -22,31 +22,62 @@ AUSD is **6 decimals**, not 18. Scale by `1e6`.
 
 ## Getting testnet AUSD
 
-**Agora deployed their faucet on Monad testnet and never documented it.** Their
-docs describe this contract only for Sepolia, under the separate Instant
-Settlement product. It is the same address on Monad testnet — they reuse
-addresses across chains.
+**It is documented** — on Agora's [contract-deployments page](https://docs.agora.finance/developer/contract-deployments),
+listed under Monad Testnet next to the testnet AUSD address. It is _also_
+described in their Instant Settlement docs as a Sepolia thing, which is what
+sends you down the wrong path. Read the deployments page, not the product docs.
 
 ```solidity
 // 0xd236c18D274E54FAccC3dd9DDA4b27965a73ee6C
 function requestFunds(address recipient) external;   // selector 0x544c7cf9
 ```
 
-Confirmed: `token()` on the faucet returns exactly the AUSD address above, so it
-dispenses the right asset. At time of writing the faucet held **750,000 AUSD**.
+**Payout: exactly 10,000 AUSD per call**, verified by `debug_traceCall` — it
+performs `AUSD.transfer(recipient, 10000000000)`. Costs ~130k gas. `token()`
+returns exactly the AUSD address above, so it dispenses the right asset.
 
-`eth_call` from a fresh zero-history address does not revert. **This is not the
-same as a successful broadcast** — the first real call still has to be made from
-a MON-funded key.
+**Not one-shot — you can top up repeatedly.** The guard is a balance ceiling,
+not a cooldown: it reads `balanceOf(recipient)` and reverts with `0x0949dab9`
+if the recipient already holds too much. Verified by `eth_call` per address:
+balances of 0, 100, 8,800 and 9,504 AUSD all succeed; 740,000 and 63.9M revert.
+The exact cutoff is somewhere in (9,504, 740,000] and was not pinned further —
+AUSD uses ERC-7201 namespaced storage, so a balance cannot be state-overridden
+to bisect it. Practically irrelevant: 10,000 AUSD is far more than needed.
 
-**Unresolved:** whether `requestFunds` has a per-address cooldown or a one-shot
-guard. The implementation exposes `0x14bc2fd7`, `0x48645704`, `0x905467f6`,
-`0xd9772a25` (all zero on a no-arg call) and `0x8be6392f` (non-zero), none of
-them yet named. This decides whether one address can top up across demo runs or
-whether each run needs a fresh address.
+Live payouts were observed during investigation — two real claims of exactly
+10,000 AUSD in a ~30 minute window, and the faucet balance dropping
+750,000 → 740,000. It is in active use, not abandoned.
+
+**Supply is finite.** 740,000 AUSD is ~74 remaining claims at time of writing,
+and nothing tops it up. Do not burn claims casually.
 
 MON for gas comes from `https://faucet.monad.xyz` (0.5–10 MON per address per
 24h, depending on whether the address holds mainnet ETH).
+
+## Perpl collateral: the api-docs README is stale, and the wrong token is _tempting_
+
+`PerplFoundation/api-docs` (README line 143) states testnet collateral is
+`0xdf5b718d8fcc173335185a2a1513ee8151e3c027`. **That is wrong for the live
+Exchange.** The token does exist on testnet — it is named "Test USD" / `USD`,
+6 decimals — and it has a **fully permissionless `mint(address,uint256)`** with
+no owner check and no cap. So it looks like the easy path, right up until
+nothing works.
+
+Verified by tracing `createAccount(100e6)` against the live Exchange:
+
+```
+CALL          -> 0x1964c32f... (Exchange)   0xcab13915  reverted
+ DELEGATECALL -> 0x5dce9e6a...              0xcab13915  reverted
+   CALL       -> 0xa9012a05... (AUSD)       0x23b872dd  reverted
+```
+
+It calls `transferFrom` on **AUSD**, and reverts only with
+`ERC20InsufficientAllowance` (`0xfb8f41b2`) — meaning everything else passed.
+Corroborated three ways: the Exchange holds **0** Test USD but **63,973,144
+AUSD**; the live `GET /api/v1/pub/context` names AUSD; and `PerplFoundation/perpl-docs`
+`networks-and-configuration.md` names AUSD.
+
+**Use AUSD `0xa9012a05...`. Ignore the api-docs README on this point.**
 
 ## The gotcha that nearly produced a wrong answer
 
