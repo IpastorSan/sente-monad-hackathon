@@ -58,6 +58,32 @@ Per package: `mise exec -- pnpm --filter @sente/api run start:dev`,
 
 ---
 
+## Permanent, unchangeable values
+
+### rpId: `sente.lol`
+
+The WebAuthn relying-party ID is **`sente.lol`** (the apex, not a subdomain). This can never
+change.
+
+It is not just an auth setting. Mera derives the user's wallet from
+`PRF(credential, rpId, salt)` → BIP-39 entropy → BIP-44 key → address. **The rpId is an input to
+every user's wallet address.** Change it and the same passkey on the same device derives a
+different key: accounts are not migrated, they become unreachable, and every secret vault
+encrypted under a PRF-derived key becomes undecryptable.
+
+The apex was chosen because a passkey is scoped to its rpId _and everything below it_. `sente.lol`
+works from any subdomain; `accounts.sente.lol` would not work from `sente.lol`. That scope can
+never be widened afterwards, so it was picked as wide as it will ever need to be.
+
+Two things that follow:
+
+- `https://sente.lol/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json`
+  must return **200 with no redirect**. Apple and Google both refuse to follow one, and a
+  registrar's default apex → `www` redirect fails silently with an unhelpful passkey error.
+  Check with `curl -sSI https://sente.lol/.well-known/assetlinks.json`.
+- `assetlinks.json` needs **both** the debug and release SHA-256 signing fingerprints. They
+  differ, and shipping only debug works throughout development and breaks on demo day.
+
 ## Gotchas that will burn you
 
 ### 1. `node-linker=hoisted` in `.npmrc` is load-bearing
