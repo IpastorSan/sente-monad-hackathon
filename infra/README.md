@@ -29,16 +29,23 @@ Do not loop `deploy.sh` while DNS is still propagating.
 `deploy.sh` refuses to run while `site/.well-known/` contains `REPLACE_`. Two
 values must come from elsewhere:
 
-- **`REPLACE_APPLE_TEAM_ID`** — from the Apple Developer portal. Requires a paid
-  Apple Developer account; there is no way around it for passkeys on a real
-  device.
+**Android only. iOS is out of scope**, deliberately: the `associated-domains`
+entitlement needs a paid Apple Developer Program membership, and building or
+device-testing an iOS app needs a Mac. Nothing in the bounties requires iOS —
+Agora's wording is "a mobile application", platform unspecified.
+
 - **`REPLACE_DEBUG_SHA256_FINGERPRINT` / `REPLACE_RELEASE_SHA256_FINGERPRINT`** —
   ```
   keytool -list -v -keystore android/app/debug.keystore \
     -alias androiddebugkey -storepass android
   ```
   **Both are required.** They differ, and shipping only the debug fingerprint
-  works throughout development and fails on demo day.
+  works throughout development and fails on demo day. The keystore appears
+  after `expo prebuild`; generating one costs nothing. The $25 Play Store fee
+  is for publishing only — judges install the APK directly.
+
+`deploy.sh` warns but does not block on placeholders, so the certificate can be
+issued before the app exists.
 
 ## Verifying
 

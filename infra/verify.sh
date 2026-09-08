@@ -27,7 +27,6 @@ check () { # $1=url  $2=expected content-type substring
 }
 
 echo "Checking https://$HOST"
-check "https://$HOST/.well-known/apple-app-site-association" "application/json"
 check "https://$HOST/.well-known/assetlinks.json" "json"
 
 echo

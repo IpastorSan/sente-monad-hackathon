@@ -11,10 +11,12 @@ sente.lol {
 	@wellknown path /.well-known/*
 	header @wellknown Cache-Control "public, max-age=300"
 
-	# apple-app-site-association has no file extension, so Caddy would
-	# otherwise sniff it as text/plain. Apple requires application/json.
-	@aasa path /.well-known/apple-app-site-association
-	header @aasa Content-Type application/json
+	# Android only. iOS is deliberately out of scope: the associated-domains
+	# entitlement needs a paid Apple Developer account, and building or
+	# device-testing an iOS app needs a Mac we do not have. If iOS is ever
+	# added, apple-app-site-association has no file extension and Caddy will
+	# sniff it as text/plain — it needs an explicit
+	# `header @aasa Content-Type application/json` matcher.
 
 	file_server
 }
