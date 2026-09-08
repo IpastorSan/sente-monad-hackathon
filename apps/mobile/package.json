@@ -10,7 +10,8 @@
     "read-block": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/read-block.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "claim:ausd": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/claim-ausd.ts"
   },
   "dependencies": {
     "@sente/venues": "workspace:*",

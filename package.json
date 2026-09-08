@@ -14,7 +14,8 @@
     "build": "pnpm -r --if-present run build",
     "test": "pnpm -r --if-present run test",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "claim:ausd": "pnpm --filter @sente/mobile run claim:ausd"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
