@@ -69,9 +69,43 @@ Live payouts were observed during investigation — two real claims of exactly
 10,000 AUSD in a ~30 minute window, and the faucet balance dropping
 750,000 → 740,000. It is in active use, not abandoned.
 
-**Supply looks finite.** 740,000 AUSD is ~74 remaining claims at time of
-writing. Whether anything refills it is **unconfirmed** — do not burn claims
-casually, and do not assume it will still be funded in week five.
+### Supply is finite and draining fast — claim early
+
+**No mint path exists for us.** AUSD's implementation exposes
+`mint(address,uint256)` and `MINTER_ROLE()`, but `mint` reverts with
+`0xdfcadb5b` from every sender simulated — a random EOA, a real faucet
+recipient, and **the faucet contract itself**. The faucet holds no minter role;
+`requestFunds` performs a plain `transfer` from a pre-funded balance. The
+balance is strictly finite unless Agora tops it up manually.
+
+**It has never been refilled within observable history.** Sampling the balance
+backwards shows monotonic decline: 840,000 (6.8d ago) → 830,000 → 810,000 →
+770,000 → **740,000 now**. The public RPC prunes state beyond ~2M blocks
+(~7 days), so a refill before that cannot be ruled out — **unverified** past a
+week.
+
+**The burn rate is accelerating sharply**, which is the part that matters:
+
+| Window      | Claims/day |
+| ----------- | ---------- |
+| 7d → 4d ago | 0.0        |
+| ~4d ago     | 1.4        |
+| ~2d ago     | 2.9        |
+| ~1d ago     | 5.7        |
+| last ~8h    | **8.6**    |
+
+At the 7-day average the remaining 74 claims last ~50 days. **At the current
+rate, ~9 days.** The acceleration is almost certainly other Metropolis teams
+onboarding, so assume the pessimistic number.
+
+**Mitigation: claim once or twice now into a treasury wallet and bank it.**
+10,000 AUSD ÷ 100 AUSD minimum = **100 fundable accounts per claim**. Two claims
+covers the entire hackathon. AUSD is a plain transferable ERC-20, so distribute
+internally from the treasury rather than re-claiming per demo run.
+
+**Do not build claim-on-demand into the app's demo flow.** That is what drains a
+shared faucet, and it makes the demo depend on a resource we do not control at
+the moment a judge is watching.
 
 MON for gas comes from `https://faucet.monad.xyz` (0.5–10 MON per address per
 24h, depending on whether the address holds mainnet ETH).
