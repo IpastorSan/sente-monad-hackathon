@@ -78,6 +78,60 @@ AUSD**; the live `GET /api/v1/pub/context` names AUSD; and `PerplFoundation/perp
 `networks-and-configuration.md` names AUSD.
 
 **Use AUSD `0xa9012a05...`. Ignore the api-docs README on this point.**
+(Found independently by two separate investigations, so this is not a one-off
+misreading.)
+
+## Perpl onboarding — verified numbers
+
+|                           | Testnet (10143)                    | Mainnet (143)             |
+| ------------------------- | ---------------------------------- | ------------------------- |
+| `min_account_open_amount` | **100 AUSD**                       | **10 AUSD**               |
+| `min_deposit_amount`      | 10 AUSD                            | 10 AUSD                   |
+| `max_account_equity`      | —                                  | 1,000,000 AUSD            |
+| Collateral                | AUSD `0xa9012a05…5322dc`           | AUSD `0x00000000eF…9012a` |
+| Markets                   | BTC, ETH, SOL, MON, ZEC, LIT, PUMP | 8 markets                 |
+
+From the live `GET /api/v1/pub/context`. **Testnet costs 10x mainnet to open an
+account** — 100 AUSD versus 10. One faucet claim (10,000 AUSD) covers 100
+testnet account opens, so this is comfortable, but it is the opposite of what
+you would assume.
+
+Two calls are required, not one. `createAccount(uint256)` leaves order
+forwarding **disabled**; `allowOrderForwarding(bool)` must be called separately
+or the API cannot post orders. Both selectors confirmed present in the deployed
+implementation: `createAccount` = `0xcab13915`, `allowOrderForwarding` =
+`0x7962f910`. Note it takes a **bool** argument.
+
+## Perpl API keys: we do NOT need to be whitelisted
+
+The docs say _"the request's `Origin` must be whitelisted by Perpl… requests
+from a non-whitelisted Origin are rejected."_ That is true for a _wrong_ Origin
+and false for **no** Origin:
+
+| `Origin` header             | `POST /api/v1/api-key/payload` |
+| --------------------------- | ------------------------------ |
+| _omitted_                   | **200** + `typed_data` + `mac` |
+| `https://testnet.perpl.xyz` | **200**                        |
+| `https://evil.example.com`  | 400                            |
+| `http://localhost:3000`     | 400                            |
+
+Route-existence controls confirm 400 means rejected rather than missing:
+`POST /api/v1/api-key/nope` → 404, `GET …/payload` → 405. Mainnet behaves
+identically.
+
+**React Native's `fetch` does not send an `Origin` header**, so this is the
+natural path for our app rather than a workaround. The returned typed data has
+`"origin": ""`, and enrollment records that as `ApiKeyInfo.origin`.
+
+**Unverified:** whether `/api-key/enroll` shares this behaviour. Probing it with
+deliberately invalid signatures returns a bare 400 for both no-Origin and
+bad-Origin, so the two failure modes are indistinguishable without a real
+enrollment. The _payload_ step is proven reachable; enroll is not.
+
+One gotcha worth stating: the payload endpoint 400s on a malformed key in a way
+that looks like an Origin rejection. It wants a **32-byte Ed25519** public key
+(`openssl genpkey -algorithm ed25519`); a 33-byte secp256k1 key 400s from every
+origin and reads as a whitelist block.
 
 ## The gotcha that nearly produced a wrong answer
 
