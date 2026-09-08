@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PROJECT="${PROJECT:?set PROJECT}"
-ZONE="${ZONE:?set ZONE}"
+ZONE="${ZONE:-us-central1-a}"
 NAME="${NAME:-sente-web}"
 
 if grep -rq 'REPLACE_' site/.well-known/; then

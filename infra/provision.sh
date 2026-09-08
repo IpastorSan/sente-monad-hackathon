@@ -9,10 +9,19 @@
 set -euo pipefail
 
 PROJECT="${PROJECT:?set PROJECT=your-gcp-project}"
-ZONE="${ZONE:?set ZONE, e.g. us-central1-a (free tier) or europe-southwest1-a (Madrid)}"
+
+# us-central1-a: GCP Always Free covers ONE e2-micro per month, and only in
+# us-west1 / us-central1 / us-east1. The free allowance also requires the
+# machine to be e2-micro with a <=30GB standard persistent disk — both of which
+# the defaults below satisfy. Change any of those three and it starts billing.
+#
+# Note the instance being free-tier does NOT make the whole thing $0: GCP bills
+# external IPv4 addresses separately. Budget a couple of dollars a month for
+# the static IP and check current pricing rather than trusting this comment.
+ZONE="${ZONE:-us-central1-a}"
 REGION="${ZONE%-*}"
 NAME="${NAME:-sente-web}"
-MACHINE="${MACHINE:-e2-micro}"
+MACHINE="${MACHINE:-e2-micro}"   # do not change without re-reading the free-tier note above
 
 say () { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
