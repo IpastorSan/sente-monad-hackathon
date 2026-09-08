@@ -249,3 +249,70 @@ curl -s -X POST $RPC -H 'content-type: application/json' \
 **`eth_getLogs` on the public RPC is capped at a 100-block range**, so history
 scans need an indexer (Envio HyperSync, `https://monad.hypersync.xyz`) rather
 than raw RPC.
+
+---
+
+## Perpl mainnet is open — and it is the fallback if the faucet dries up
+
+The UI says "gated beta" and asks for an access code. **The contract does not.**
+
+The mainnet Exchange implementation does contain the gate — scanning all 320
+selectors in its 126,672-byte implementation found `whitelistingEnabled()`
+(`0x5b0c29eb`), `whitelisted(address)` (`0xd936547e`) and
+`setWhitelistingEnabled(bool)` (`0x5f40c1f7`). Read live:
+
+```
+whitelistingEnabled()   -> false
+whitelisted(<random>)   -> false
+```
+
+The mechanism exists and **the switch is currently off**. Testnet returns false
+for the same flag.
+
+**Proven end to end, not just inferred.** Reaching `transferFrom` only shows the
+path gets that far; a whitelist check could have sat after it. That was closed
+by overriding AUSD's bytecode with a stub returning `1` for every call
+(`0x60015f5260205ff3`) and calling `createAccount(10 AUSD)` from a random,
+non-whitelisted address. It **succeeds**, returning account ID `0x147f` = 5247.
+No revert anywhere. Insufficient allowance was the only thing ever in the way.
+
+That ID is itself informative: mainnet has ~5,247 accounts. The "gated beta" is
+not keeping people out at any meaningful scale.
+
+| Layer    | Gated?  | Evidence                                                           |
+| -------- | ------- | ------------------------------------------------------------------ |
+| Web UI   | **yes** | "gated beta phase", access codes, waitlist                         |
+| API      | **no**  | `/api-key/payload` returns a valid payload for a random address    |
+| Contract | **no**  | `whitelistingEnabled() == false`; stubbed `createAccount` succeeds |
+
+The access-code wall is a front-end product decision, not a protocol
+restriction. An app talking to the contracts and REST API never meets it.
+
+### Why this matters strategically
+
+**A mainnet demo costs 10 AUSD plus gas.** Mainnet's
+`min_account_open_amount` is 10 AUSD — a tenth of testnet's 100 — and mainnet
+has no faucet dependency at all. So if the testnet faucet runs dry mid-hackathon
+(see the burn-rate table above), the fallback is roughly ten dollars of real
+money, not a lost bounty.
+
+Real AUSD: native on Monad mainnet at `0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a`
+(6 decimals), Agora bridge at `0x9CaB7Ede13dc56652E44D2404E969C212f22689b`.
+Agora deploys AUSD on 9 EVM mainnets plus Solana, so buy on whichever chain your
+exchange supports and bridge in. Perpl ships `funBridgeEnabled: "on"` in mainnet
+config, so Fun.xyz bridging is live in their UI — **mainnet only**, absent from
+testnet.
+
+### Two caveats
+
+1. **`setWhitelistingEnabled(bool)` is owner-flippable.** Today's answer is a
+   snapshot. Re-read `whitelistingEnabled()` before committing to a mainnet
+   demo — one `eth_call`.
+2. **`POST /api/v1/api-key/enroll` was never exercised** — it needs a real
+   wallet signature. A server-side whitelist _there_ remains possible and is the
+   only thing that could still block a mainnet demo. One signed request from a
+   funded wallet settles it.
+
+Mainnet also returns `getMinimumPostCNS()` = 0 and `getMinimumSettleCNS()` = 0 —
+no per-order floor today. Exchange `owner()` is
+`0xd0a0205e9188998e0be7f2600a715ad3cd289cb1`.
