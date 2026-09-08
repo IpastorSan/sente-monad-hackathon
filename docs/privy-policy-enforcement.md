@@ -84,15 +84,72 @@ client — structurally identical to our demo.
 not describe Mera signing sessions as policy-bearing (they are an in-memory key
 with a manual `end()` — no TTL, no cap, no revocation).
 
+**One claim to drop:** a fiat- or asset-denominated cap like "max $500 per
+trade" routed through the Transfer API. Express the cap as a `value` bound or a
+decoded calldata argument on the raw transaction instead, and it moves back
+inside the enclave.
+
+## Use `eth_signTransaction`, not `eth_sendTransaction`
+
+This single choice resolves two separate problems at once, and it is the second
+architectural constraint this document imposes.
+
+**Stateful aggregations — which a rolling spend cap requires — are supported on
+`eth_signTransaction` and `eth_signUserOperation` only. Not
+`eth_sendTransaction`.**
+
+Separately, `eth_sendTransaction` is the sign-and-broadcast path, and it is
+exactly where _"transaction simulation runs before policy evaluation"_ — the one
+place an unsupported-simulation failure on Monad could bite us.
+
+So signing and broadcasting ourselves unlocks rolling caps **and** sidesteps the
+Monad simulation question entirely. We already broadcast through Pimlico's
+bundler, so this costs nothing.
+
+## Rolling caps: the concurrency exposure, and how to size it
+
+Privy is explicit that stateful policies are not real-time:
+
+> Aggregation values are updated **after** a request is successfully signed, not
+> before. This means multiple concurrent requests may all pass policy evaluation
+> before any of their values are recorded. Stateful policies are designed for
+> disaster prevention rather than strict real-time enforcement.
+
+**There is no fixed staleness window**, and that is the actual answer rather than
+a gap in the research. It is not a cache TTL — the exposure is precisely the
+in-flight interval between a request passing evaluation and its value being
+recorded after signing. **Serial requests are exact.** The gap only opens under
+concurrency, and its width is set by our own request pattern.
+
+Worst case with N requests in flight: an overshoot of up to
+**(N − 1) × per-transaction maximum** above the cap. Two levers, both ours:
+
+- **Drive N to 1.** Serialize the agent's submissions — one in-flight signing
+  request at a time. At N = 1 the cap is exact. Natural for a trading agent
+  anyway, and we already serialize per-key in the drip relayer for nonce reasons.
+- **Shrink the per-transaction max.** Pair the rolling cap with a tight
+  per-transaction `value` limit so any breach is bounded and small. Privy's own
+  recommended mitigation.
+
+Two mechanics make this better than the warning first reads:
+
+- Evaluation is **forward-looking** — the engine uses the aggregated value _plus_
+  the current request, so a single request that would breach the cap is denied
+  correctly. Only a burst races.
+- **Denied requests still count** toward the aggregate.
+
+Rolling windows accept `duration_seconds` between **3600 (1h) and 259200 (72h)**.
+A 24h cap sits comfortably inside, and is Privy's own worked example.
+
 ## Still open
 
-- **Stateful policies are documented as not real-time.** A rolling daily spend
-  cap uses these. The staleness window is not yet established, and concurrent
-  requests inside it may be able to exceed the cap. Resolve before designing the
-  mandate around a rolling cap.
-- Whether the policy engine's pre-flight simulation supports Monad's chain ID at
-  all. Conditions on `to`/`value`/calldata are chain-agnostic and unaffected;
-  this only bites where simulation is in the path.
+- Whether the policy engine's pre-flight simulation supports Monad's chain ID.
+  **Largely defused** by choosing `eth_signTransaction`, which keeps simulation
+  out of the path. Conditions on `to`/`value`/calldata are chain-agnostic
+  regardless.
+- None of the enforcement claims here were tested empirically — they are a
+  careful reading of primary documentation. Verify the refusal path for real in
+  Phase 3, since it is the demo centrepiece.
 
 ## Plan availability
 
