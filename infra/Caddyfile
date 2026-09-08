@@ -1,0 +1,26 @@
+{
+	email {$ACME_EMAIL}
+}
+
+sente.lol {
+	root * /srv/site
+
+	# The apex MUST serve these directly. A redirect here — including the
+	# apex -> www that many registrars add by default — silently breaks
+	# passkey association on both platforms.
+	@wellknown path /.well-known/*
+	header @wellknown Cache-Control "public, max-age=300"
+
+	# apple-app-site-association has no file extension, so Caddy would
+	# otherwise sniff it as text/plain. Apple requires application/json.
+	@aasa path /.well-known/apple-app-site-association
+	header @aasa Content-Type application/json
+
+	file_server
+}
+
+# www is a convenience only. The rpId is the apex and nothing about passkeys
+# may depend on this host.
+www.sente.lol {
+	redir https://sente.lol{uri} permanent
+}

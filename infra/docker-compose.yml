@@ -1,0 +1,33 @@
+# Caddy fronting the sente.lol apex.
+#
+# Its first job is the two WebAuthn association files that let iOS and Android
+# trust the app for the `sente.lol` relying-party ID. Those must return 200 with
+# NO redirect — Apple and Google both refuse to follow one, and the resulting
+# passkey failure gives no useful error. See ../CLAUDE.md.
+#
+# Later this same box is where apps/web and services/api land, which is why it
+# is a VM with a reverse proxy rather than a static file host.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: sente-caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/srv/site:ro
+      # caddy_data holds the Let's Encrypt certificates and account key.
+      # Losing it means re-issuing certs and burning rate limit (5 per domain
+      # per week). It must be a named volume, never a bind mount to /tmp.
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Used for the ACME account and expiry warnings.
+      - ACME_EMAIL=${ACME_EMAIL:-ignacio@moveseventyeight.com}
+
+volumes:
+  caddy_data:
+  caddy_config:
