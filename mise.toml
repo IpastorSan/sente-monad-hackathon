@@ -1,3 +1,11 @@
 [tools]
+java = "temurin-21"
 node = "26"
 pnpm = "12"
+
+[env]
+# Android SDK installed locally under $HOME/Android/Sdk (no root, no AUR).
+# Scoped to this project so it does not leak into the rest of ~/Work.
+ANDROID_HOME = "/home/ignacio/Android/Sdk"
+ANDROID_SDK_ROOT = "/home/ignacio/Android/Sdk"
+_.path = ["/home/ignacio/Android/Sdk/platform-tools", "/home/ignacio/Android/Sdk/cmdline-tools/latest/bin"]
