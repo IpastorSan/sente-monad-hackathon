@@ -79,18 +79,70 @@ _"Authentication works with allowlisted and `allow-all` Relay deployments… the
 SDK does not infer it from configuration."_ Nothing was signed, so admission is
 untested.
 
-## Addresses: trust the contract-addresses page
+## Addresses: there are THREE sets, and the obvious one is wrong
 
-Kuru's docs contradict themselves — the SDK quickstart page and the
-contract-addresses page list **different** testnet addresses. The quickstart's
-addresses have **no code on either chain**. Use the contract-addresses page.
+| Set   | Source                                                    | Status                            |
+| ----- | --------------------------------------------------------- | --------------------------------- |
+| A     | `docs.kuru.io` SDK quickstart                             | **dead** — 0 bytes on both chains |
+| B     | `docs.kuru.io` contract-addresses                         | live, but **V1**                  |
+| **C** | **`kuru-testnet-docs.mintlify.site/deployments/testnet`** | **live, Spot V2 — use this**      |
 
-## Open: is there a testnet REST API?
+**Use Set C.** `ts-sdk` targets Spot V2: its `generated/metadata.ts` pins
+artifacts named `AccountCore`, `SpotRouter`, `OrderBook`, `KuruTradingWallet`,
+`SpotPeriphery` — not V1's `Router`/`MarginAccount`. Its README says it targets
+_"the new Kuru exchange contracts"_ and that _"the spot market artifact is now
+`OrderBook`."_ Pairing the new SDK with Set B is a category error.
 
-`https://exchange.kuru.io` appears to be **mainnet-only**. This is unresolved
-and it matters — the spot leg's market-data plan assumed testnet coverage.
+Verified by `eth_getCode` — every one has code on testnet 10143 and **zero on
+mainnet 143**:
 
-If there is genuinely no testnet REST API, the options are to drive the testnet
-contracts directly through the new SDK and index events ourselves with Envio
-(which we want for the leaderboard regardless), or to run the spot leg on
-mainnet. Resolve before building against an API that does not serve our chain.
+| Contract               | Address                                      | testnet  |
+| ---------------------- | -------------------------------------------- | -------- |
+| AccountCore (proxy)    | `0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22` | 141 B    |
+| SpotRouter (proxy)     | `0xba24a1042701f06e8F7edCF04389260D1Fa4c697` | 141 B    |
+| OrderBook impl         | `0xE20f57e673d7F254279c19270862A3d1E6F5B0d4` | 85,584 B |
+| KuruTradingWallet      | `0xc7f2a9761276F7050D6561d2FDC51abC993F45E9` | 18,352 B |
+| **TestnetTokenFaucet** | `0x25B1416FcD3400bE2D8F50bbe7Cf1101b8B891E9` | 2,427 B  |
+
+Four live markets, all quoted in **Kuru Testnet USDC**
+`0xee0722ead54f1b4fe97be399be43bc0226a6f97e` (6 decimals) — _not_ AUSD:
+
+| Market     | Address                                      | Base       |
+| ---------- | -------------------------------------------- | ---------- |
+| MON/USDC   | `0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61` | native MON |
+| WETH/USDC  | `0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7` | 18 dec     |
+| cbBTC/USDC | `0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f` | 8 dec      |
+| XAUt0/USDC | `0x0B4dD2A7b09d5c5401149fFe51301Cc589017343` | 6 dec      |
+
+**The spot leg needs Kuru Testnet USDC, not AUSD.** `TestnetTokenFaucet` is
+deployed and presumably dispenses it — _unverified_, but it is a Kuru-native
+faucet and therefore a cleaner path than anything touching Agora's finite AUSD
+supply, which the Perpl leg needs.
+
+## Testnet market data exists — on a different host
+
+`https://exchange.kuru.io` **is mainnet-only**, confirmed: the markets its
+`exchangeInfo` lists have code on mainnet 143 and **zero on testnet 10143**, and
+its quote asset is the mainnet USDC. It is an older, separate surface.
+
+The testnet stack is entirely different hosts. Per
+`kuru-testnet-docs.mintlify.site/api/introduction`, testnet exposes **three
+independent API surfaces**. Confirmed serving live data:
+
+```
+GET https://api.testnet.kuru.io/api/v1/markets   -> 200, 4 active markets
+GET https://api.testnet.kuru.io/api/v1/tokens    -> 200
+```
+
+Note the path shape is `/api/v1/...` — **not** the mainnet host's Binance-style
+`/api/v3/exchangeInfo`, which 404s here. Probing `/api/v1/candles`, `/trades`,
+`/orderbook`, `/balances`, `/orders` all 404 as bare paths, so they take
+required parameters; read the API docs rather than guessing.
+
+**So no Envio indexer is required for the spot leg, and no mainnet fallback.**
+Envio is still wanted for the agent leaderboard ($1k bounty), just not as a
+market-data workaround.
+
+**Unconfirmed:** the Exchange Gateway REST surface is reportedly read-only,
+which would mean order _placement_ goes through the relay. Confirm before
+designing submission.
