@@ -169,6 +169,35 @@ see `MONAD_TX_DEFAULTS` in `apps/mobile/src/chain/client.ts`. When a call needs 
 measure it and hard-code that number; do not paste an `estimateGas` result with a safety multiplier
 on top.
 
+**This gets worse under ERC-4337, because the overestimate is charged twice over.** The EntryPoint
+takes the prefund at the LIMIT — `(callGasLimit + verificationGasLimit + preVerificationGas +
+paymaster limits) * maxFeePerGas` — and the unused remainder does **not** come back to the account's
+balance. It stays as that account's **deposit inside the EntryPoint**, recoverable only by
+`EntryPoint.withdrawTo`, which only the account itself may call, which needs another UserOperation,
+which costs gas again. Measured on MOV-253: a 0.25 MON account was left holding 0.0091 MON with
+0.0685 MON stranded in the EntryPoint, and sweeping it back netted 0.0316 MON — the rest went to
+gas. **Size the limits from a real estimate, not from a round number.**
+
+Numbers measured against Monad testnet for a Kernel v0.3.1 account, worth reusing rather than
+rediscovering:
+
+| Field                  | Deployed account  | First op (deploys the account) |
+| ---------------------- | ----------------- | ------------------------------ |
+| `verificationGasLimit` | **~220,000**      | ~607,000                       |
+| `callGasLimit`         | ~42,000 (2 calls) | ~107,000                       |
+| `preVerificationGas`   | ~206,000          | ~480,000                       |
+
+`verificationGasLimit` is the one that surprises: **120,000 is not enough** and fails with
+`AA26 over verificationGasLimit`, which reads like a bug in the account rather than a budget.
+`preVerificationGas` is large because Monad prices calldata high — it is bundler-overhead
+reimbursement, so when you call `EntryPoint.handleOps` yourself you are the beneficiary and can set
+it to ~21,000.
+
+**Pimlico enforces its own `maxFeePerGas` floor**, and it is the `slow` tier from
+`pimlico_getUserOperationGasPrice` — bidding below it is rejected outright
+(`maxFeePerGas must be at least ...`). Since Monad charges on the reservation, bidding _above_ that
+floor is pure waste. Read the floor, use it.
+
 ### 5. Dev build, not Expo Go
 
 `react-native-passkey` (singular — see below) is a native module, so `apps/mobile` targets a custom
@@ -212,6 +241,33 @@ anyone ever runs this on Windows.)
 
 Expo SDK 57 and NestJS 12 both pin `~6.0.x`, and `typescript-eslint` supports `<6.1.0`. TypeScript
 7 is released but nothing in this toolchain accepts it yet. Do not bump.
+
+### 8. A UserOperation can fail inside a transaction that succeeded
+
+**Never decide whether a UserOperation worked from the transaction receipt.** The bundler wraps
+several UserOperations in one transaction; a UserOperation whose execution reverts is still
+_included_, the EntryPoint still charges for it, and the carrying transaction still reports
+`status: 0x1`. Read `eth_getUserOperationReceipt` and branch on **its** `success` field.
+
+Observed on Monad testnet, not inferred — tx
+`0x164e7b1c7d6152f7f374147a450007a1c49692129e11adcf5dc6b451d1e14ea0` carries a batch that reverted:
+
+```
+userOp success   = false   <- the UserOperation
+bundle tx status = success <- the transaction carrying it
+```
+
+A confirmation view built on the transaction receipt calls that batch confirmed, and for a trading
+app that means telling a user their order landed when it did not. This is exactly why
+`apps/mobile/src/wallet/confirmation.ts` races the bundler's UserOperation receipt against our own
+status view and lets the bundler win ties: our view can only be as fresh as its last poll, but the
+bundler reports the per-operation flag. `services/api/src/wallet/confirmation/operation-tracker.ts`
+sets `included` only from that flag.
+
+The corollary, and the reason ERC-7579 `execType` is always `0x00` in
+`apps/mobile/src/wallet/batch.ts`: when one leg of a batch reverts the whole batch must revert. Also
+verified on chain in that same transaction — the first leg's approval did not persist. A batch that
+half-applies is worse than no batching, and only a real transaction proves which one you have.
 
 ---
 
