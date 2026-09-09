@@ -48,7 +48,16 @@ if (!key) {
 }
 const claims = Number(process.argv[2] ?? 2);
 
-const account = privateKeyToAccount(key as `0x${string}`);
+// Accept the key with or without the 0x prefix — viem requires it, and pasting
+// a bare 64-char hex string is the obvious mistake to make.
+const normalized = (key.startsWith('0x') ? key : `0x${key}`).trim() as `0x${string}`;
+if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+  console.error(
+    `TREASURY_PRIVATE_KEY is not a 32-byte hex key (got ${normalized.length - 2} hex chars)`,
+  );
+  process.exit(1);
+}
+const account = privateKeyToAccount(normalized);
 const rpc = process.env['MONAD_TESTNET_RPC_URL'] ?? 'https://testnet-rpc.monad.xyz';
 const pub = createPublicClient({ chain: monadTestnet, transport: http(rpc) });
 const wallet = createWalletClient({ account, chain: monadTestnet, transport: http(rpc) });
