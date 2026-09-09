@@ -24,7 +24,17 @@ over the public internet. **It cannot get a certificate until DNS resolves.**
 Let's Encrypt rate-limits failed authorisations — five per domain per week.
 Do not loop `deploy.sh` while DNS is still propagating.
 
-## The placeholders are deliberate
+## The placeholders are deliberate — and are now filled in
+
+**Status: both fingerprints are in `site/.well-known/assetlinks.json` (MOV-251).
+The live host still serves the placeholder version — it needs one
+`PROJECT=… ./deploy.sh` to pick them up.** Check with
+`curl -sS https://sente.lol/.well-known/assetlinks.json`.
+
+The keys behind them: the debug keystore is the stock one `expo prebuild` writes
+to `apps/mobile/android/app/debug.keystore`; the release keystore was generated
+into `apps/mobile/keystores/` (gitignored, documented in the README committed
+there). Package name is `lol.sente.app`.
 
 `deploy.sh` refuses to run while `site/.well-known/` contains `REPLACE_`. Two
 values must come from elsewhere:

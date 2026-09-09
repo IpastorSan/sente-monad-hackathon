@@ -12,3 +12,9 @@ android/
 .env.local
 .DS_Store
 .ralph-loop.sh
+
+# Android signing keys. Losing the release key is unrecoverable and breaks
+# passkey association for every user — see apps/mobile/keystores/README.md.
+*.keystore
+*.jks
+apps/mobile/keystores/credentials.json

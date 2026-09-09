@@ -13,7 +13,7 @@
       "bundleIdentifier": "xyz.moveseventyeight.sente"
     },
     "android": {
-      "package": "xyz.moveseventyeight.sente",
+      "package": "lol.sente.app",
       "adaptiveIcon": {
         "backgroundColor": "#0B0B0F",
         "foregroundImage": "./assets/images/android-icon-foreground.png"
@@ -33,6 +33,15 @@
           "backgroundColor": "#0B0B0F",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 96
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 28
+          }
         }
       ]
     ],

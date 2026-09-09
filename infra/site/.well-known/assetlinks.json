@@ -5,8 +5,8 @@
       "namespace": "android_app",
       "package_name": "lol.sente.app",
       "sha256_cert_fingerprints": [
-        "REPLACE_DEBUG_SHA256_FINGERPRINT",
-        "REPLACE_RELEASE_SHA256_FINGERPRINT"
+        "FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C",
+        "15:FA:4B:41:D1:C8:44:C2:F7:9F:B7:B8:3A:5D:B6:6D:39:B8:1E:8C:D3:46:90:F8:C3:A1:6B:55:9F:AF:36:55"
       ]
     }
   }

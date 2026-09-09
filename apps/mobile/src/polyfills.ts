@@ -59,4 +59,15 @@ if (typeof cryptoRef.randomUUID !== 'function') {
   };
 }
 
+// Explicit resource management. Hermes does not define the well-known
+// disposal symbols, and `@category-labs/mera`'s signing sessions (and ours)
+// declare `[Symbol.dispose]`. A missing symbol does not throw — the computed
+// key silently becomes the string "undefined" — so the failure mode is a
+// `using` declaration that never disposes, which is exactly the sort of leak
+// this code exists to avoid.
+type DisposalSymbols = { dispose?: symbol; asyncDispose?: symbol };
+const symbolRef = Symbol as unknown as DisposalSymbols;
+symbolRef.dispose ??= Symbol('Symbol.dispose');
+symbolRef.asyncDispose ??= Symbol('Symbol.asyncDispose');
+
 export {};
