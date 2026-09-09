@@ -114,10 +114,28 @@ Four live markets, all quoted in **Kuru Testnet USDC**
 | cbBTC/USDC | `0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f` | 8 dec      |
 | XAUt0/USDC | `0x0B4dD2A7b09d5c5401149fFe51301Cc589017343` | 6 dec      |
 
-**The spot leg needs Kuru Testnet USDC, not AUSD.** `TestnetTokenFaucet` is
-deployed and presumably dispenses it — _unverified_, but it is a Kuru-native
-faucet and therefore a cleaner path than anything touching Agora's finite AUSD
-supply, which the Perpl leg needs.
+### The spot leg needs Kuru Testnet USDC, not AUSD — and its faucet is generous
+
+`TestnetTokenFaucet` `0x25B1416FcD3400bE2D8F50bbe7Cf1101b8B891E9` is **not a
+proxy** (EIP-1967 impl slot is zero), so its 30-selector dispatch table is the
+real one — unlike Agora's faucet, where reading the proxy misleads.
+
+|                                |                                                           |
+| ------------------------------ | --------------------------------------------------------- |
+| `claim()`                      | `0x4e71d92d`, present                                     |
+| Simulated from a fresh address | **succeeds**                                              |
+| Gas estimate                   | **261,237** — a real multi-transfer, not a fallback no-op |
+| USDC held                      | **9,920,000**                                             |
+
+Two getters return token addresses — `0x3e413bee` → USDC `0xee0722ea...`,
+`0xecf3a80e` → cbBTC `0xef2a20a1...` — so `claim()` appears to dispense a bundle
+of the four test tokens rather than one, which the gas figure corroborates.
+
+**Use this, not the treasury AUSD.** It is Kuru-native, permissionless, and
+nearly ten million deep, where Agora's AUSD supply is finite and needed by the
+Perpl leg. Unverified: whether `claim()` has a per-address or global cooldown
+the way Agora's does. Establish that in MOV-254 rather than assuming it has
+none.
 
 ## Testnet market data exists — on a different host
 
