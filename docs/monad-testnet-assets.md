@@ -213,6 +213,64 @@ that looks like an Origin rejection. It wants a **32-byte Ed25519** public key
 (`openssl genpkey -algorithm ed25519`); a 33-byte secp256k1 key 400s from every
 origin and reads as a whitelist block.
 
+## Perpl API keys need an EOA owner — ERC-1271 is not accepted (MOV-255)
+
+**`/api-key/enroll` verifies the wallet signature with `ecrecover` only.** A
+smart account can own a Perpl account on chain, but it can never get an API
+key for it, so it can never trade through the API. The Perpl account must be
+owned by the **passkey EOA**, not the Kernel smart account. Verified on testnet
+2026-09-10, with controls that rule out everything else:
+
+| Signer                          | Owns a Perpl account? | Signature                                                     | `/enroll` |
+| ------------------------------- | --------------------- | ------------------------------------------------------------- | --------- |
+| EOA `0xDBb4…611F`               | no                    | valid EIP-712                                                 | **404**   |
+| same EOA, wrong key / garbage   | no                    | invalid                                                       | **400**   |
+| same EOA                        | **yes** (account 493) | valid EIP-712                                                 | **200**   |
+| Kernel `0x75b4…AeFf` (that EOA) | **yes**               | ERC-1271; the account's own `isValidSignature` → `0x1626ba7e` | **400**   |
+
+The server checks the signature first (a bad one is 400) and looks up the
+profile second (a missing one is 404). The Kernel account owned a live Perpl
+account and produced a signature it validates on chain itself — and got the
+same 400 as garbage. `target_profile` does not help either: it is for Perpl's
+own `DelegatedAccount` contracts, and pointing it at the Kernel account returns 404.
+
+The Kernel account's Perpl account was created with **one ERC-7579 batch
+UserOperation** (approve → createAccount → allowOrderForwarding):
+userOp `0xe1e2c1b2…98239`, `success = true` in the UserOperation receipt, bundle
+tx `0x10943e82b8631689bac13a7da3d6fb7aa1c34e2cdc4e7d245ea79d23486aa1d0`. So
+batching works on chain — it just produces an account nobody can ever trade
+through the API. Its 100 AUSD is still there and can come back out through a
+Kernel UserOperation calling `withdrawCollateral`.
+
+Consequence for onboarding: the EOA needs MON for **three plain transactions**.
+Measured, and cheaper than the UserOperation anyway (~0.035 MON against 0.078):
+
+| Call                         | Gas used |
+| ---------------------------- | -------- |
+| `approve(Exchange, 100e6)`   | 71,099   |
+| `createAccount(100e6)`       | 202,237  |
+| `allowOrderForwarding(true)` | 71,363   |
+
+After that the EOA needs no more MON for trading: API orders are forwarded, and
+the exchange pays their gas.
+
+### Two more things the docs get wrong or leave out
+
+- **The signed request-target omits `/api`.** The REST base is
+  `https://testnet.perpl.xyz/api`, but the proxy strips that prefix before it
+  checks the signature. Signing `/v1/trading/account-history?count=5` → 200;
+  signing `/api/v1/…` for the same URL → 401.
+- **No `Origin` on `/enroll` either.** The enrollment above was made with no
+  Origin header; the key records `origin: ""`.
+
+### Gas limits that are too low for AUSD
+
+An AUSD `transfer` to a fresh recipient uses **72,918** gas.
+`MONAD_GAS_LIMITS.erc20Transfer = 65_000n` runs out of gas, and Monad charges
+the full limit for the failure (two such reverts on 2026-09-10:
+`0x9a0bd10d…`, `0x16a7c0e6…`). A MON transfer **into a Kernel account** uses
+40,995, not 21,000: it runs the account's `receive()`.
+
 ## The gotcha that nearly produced a wrong answer
 
 Reading the **proxy's** bytecode shows three selectors and `requestFunds` is not

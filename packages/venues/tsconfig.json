@@ -8,7 +8,14 @@
     "sourceMap": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    // Lets sources import siblings as `./x.ts` — which node's native type
+    // stripping needs to run `*.test.ts` directly — and rewrites them to `.js`
+    // on emit. Existing `./x.js` specifiers keep working unchanged.
+    "rewriteRelativeImportExtensions": true,
+    // TypeScript 6 no longer loads every installed @types package by default.
+    // The tests run on node:test and use node globals.
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

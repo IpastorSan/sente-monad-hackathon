@@ -2,7 +2,7 @@
   "name": "@sente/venues",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared venue interface for Sente. Types only — no adapters.",
+  "description": "Shared venue interface for Sente (root entry, types only) plus venue adapters on subpaths.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -10,6 +10,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./perpl": {
+      "types": "./src/perpl/index.ts",
+      "default": "./dist/perpl/index.js"
     }
   },
   "files": [
@@ -19,11 +23,19 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --no-warnings --test 'src/**/*.test.ts'",
+    "live:perpl": "node --no-warnings scripts/perpl-live.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
     "eslint": "^10.10.0",
     "typescript": "~6.0.3"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^3.2.0",
+    "@noble/hashes": "^2.4.0",
+    "viem": "^2.56.3"
   }
 }
