@@ -14,6 +14,10 @@
     "./kuru": {
       "types": "./src/kuru/index.ts",
       "default": "./dist/kuru/index.js"
+    },
+    "./perpl": {
+      "types": "./src/perpl/index.ts",
+      "default": "./dist/perpl/index.js"
     }
   },
   "files": [
@@ -26,7 +30,8 @@
     "test": "node --test 'src/**/*.test.ts'",
     "kuru:live": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/kuru-live.ts",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "live:perpl": "node --no-warnings scripts/perpl-live.ts"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
@@ -35,6 +40,8 @@
   },
   "dependencies": {
     "@toxicflow-labs/ts-sdk": "0.0.4",
-    "viem": "^2.56.3"
+    "viem": "^2.56.3",
+    "@noble/ed25519": "^3.2.0",
+    "@noble/hashes": "^2.4.0"
   }
 }

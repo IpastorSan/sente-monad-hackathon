@@ -213,6 +213,79 @@ that looks like an Origin rejection. It wants a **32-byte Ed25519** public key
 (`openssl genpkey -algorithm ed25519`); a 33-byte secp256k1 key 400s from every
 origin and reads as a whitelist block.
 
+## Perpl API keys need an EOA owner — ERC-1271 is not accepted (MOV-255)
+
+**`/api-key/enroll` verifies the wallet signature with `ecrecover` only.** A
+smart account can own a Perpl account on chain, but it can never get an API
+key for it, so it can never trade through the API. The Perpl account must be
+owned by the **passkey EOA**, not the Kernel smart account. Verified on testnet
+2026-09-10, with controls that rule out everything else:
+
+| Signer                          | Owns a Perpl account? | Signature                                                     | `/enroll` |
+| ------------------------------- | --------------------- | ------------------------------------------------------------- | --------- |
+| EOA `0xDBb4…611F`               | no                    | valid EIP-712                                                 | **404**   |
+| same EOA, wrong key / garbage   | no                    | invalid                                                       | **400**   |
+| same EOA                        | **yes** (account 493) | valid EIP-712                                                 | **200**   |
+| Kernel `0x75b4…AeFf` (that EOA) | **yes**               | ERC-1271; the account's own `isValidSignature` → `0x1626ba7e` | **400**   |
+
+The server checks the signature first (a bad one is 400) and looks up the
+profile second (a missing one is 404). The Kernel account owned a live Perpl
+account and produced a signature it validates on chain itself — and got the
+same 400 as garbage. `target_profile` does not help either: it is for Perpl's
+own `DelegatedAccount` contracts, and pointing it at the Kernel account returns 404.
+
+The Kernel account's Perpl account was created with **one ERC-7579 batch
+UserOperation** (approve → createAccount → allowOrderForwarding):
+userOp `0xe1e2c1b2…98239`, `success = true` in the UserOperation receipt, bundle
+tx `0x10943e82b8631689bac13a7da3d6fb7aa1c34e2cdc4e7d245ea79d23486aa1d0`. So
+batching works on chain — it just produces an account nobody can ever trade
+through the API. Its 100 AUSD was recovered to the treasury with one more batch
+UserOperation — `withdrawCollateral(100e6)` → `AUSD.transfer(treasury, 100e6)`,
+userOp `0xebfc31357263c33af3f614d0028749569f3bc0d7070d64f7af7b4da38a8a7b96`,
+`success = true`. **Withdrawal is immediate**, not queued: Perpl's global rate
+limit has a $1M/hour floor, far above anything we move.
+
+**The persistent dev account** is the EOA `0xDBb4…611F`, which owns Perpl
+testnet account 493 (onboarded, forwarding on). Its key and an enrolled API key
+are `PERPL_DEV_*` in the main checkout's `.env` — reuse it rather than spending
+another 100 AUSD onboarding a new one.
+
+Consequence for onboarding: the EOA needs MON for **three plain transactions**.
+Measured, and cheaper than the UserOperation anyway (~0.035 MON against 0.078):
+
+| Call                         | Gas used |
+| ---------------------------- | -------- |
+| `approve(Exchange, 100e6)`   | 71,099   |
+| `createAccount(100e6)`       | 202,237  |
+| `allowOrderForwarding(true)` | 71,363   |
+
+After that the EOA needs no more MON for trading: API orders are forwarded, and
+the exchange pays their gas.
+
+### Two more things the docs get wrong or leave out
+
+- **The signed request-target omits `/api`.** The REST base is
+  `https://testnet.perpl.xyz/api`, but the proxy strips that prefix before it
+  checks the signature. Signing `/v1/trading/account-history?count=5` → 200;
+  signing `/api/v1/…` for the same URL → 401.
+- **No `Origin` on `/enroll` either.** The enrollment above was made with no
+  Origin header; the key records `origin: ""`.
+
+### Gas limits: AUSD and smart-account recipients need more than you'd think
+
+| Call                               | Measured | `MONAD_GAS_LIMITS`                    |
+| ---------------------------------- | -------- | ------------------------------------- |
+| MON → EOA                          | 21,000   | `nativeTransfer` 21,000               |
+| MON → Kernel account (`receive()`) | 40,995   | `nativeTransferToSmartAccount` 46,000 |
+| AUSD `transfer`, zero-balance dest | 72,918   | `erc20Transfer` 82,000 (was 65,000)   |
+| AUSD `transfer`, existing holder   | 55,850   | (covered by the worst case above)     |
+| AUSD `approve`, fresh spender      | 71,099   | `erc20Approve` 80,000 (was 55,000)    |
+
+The old `erc20Transfer = 65_000n` ran out of gas, and Monad charged the full
+limit for each failure (two reverts on 2026-09-10: `0x9a0bd10d…`,
+`0x16a7c0e6…`). `apps/mobile/src/chain/client.test.ts` now fails if a limit
+drops below its measurement or pads more than 20% over it.
+
 ## The gotcha that nearly produced a wrong answer
 
 Reading the **proxy's** bytecode shows three selectors and `requestFunds` is not

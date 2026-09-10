@@ -1,0 +1,231 @@
+import { formatOrderId, PPS_DENOMINATOR } from './orders.ts';
+import { fromUnits, precisionDecimals, ratioToDecimal, toUnits } from './units.ts';
+const priceDecimals = (market) => precisionDecimals(market.pricePrecision);
+const sizeDecimals = (market) => precisionDecimals(market.sizePrecision);
+export function toMarket(api, config) {
+  const step = fromUnits(1n, precisionDecimals(BigInt(api.sizePrecision)));
+  return {
+    symbol: config.symbol,
+    kind: 'spot',
+    base: config.base.symbol,
+    quote: config.quote.symbol,
+    tickSize: fromUnits(BigInt(api.tickSize), precisionDecimals(BigInt(api.pricePrecision))),
+    stepSize: step,
+    // Kuru enforces a quote-notional floor, not a base-size floor, so the
+    // smallest base size it will parse is one step. `minNotional` is the rule.
+    minSize: step,
+    minNotional: fromUnits(BigInt(api.minQuoteNotionalX18), 18),
+    venueSymbol: api.symbol,
+  };
+}
+export function toDepth(api, market, limit, observedAt) {
+  const level = (raw) => ({
+    price: fromUnits(BigInt(raw.price), priceDecimals(market)),
+    size: fromUnits(BigInt(raw.total_base), sizeDecimals(market)),
+  });
+  return {
+    symbol: market.symbol,
+    bids: api.bids.slice(0, limit).map(level),
+    asks: api.asks.slice(0, limit).map(level),
+    // The Gateway stamps a sequence, not a time.
+    timestamp: observedAt,
+    sequence: api.market_seq,
+  };
+}
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+export const KLINE_INTERVAL_MS = {
+  '1m': MINUTE,
+  '5m': 5 * MINUTE,
+  '15m': 15 * MINUTE,
+  '30m': 30 * MINUTE,
+  '1h': HOUR,
+  '4h': 4 * HOUR,
+  '1d': DAY,
+  '1w': 7 * DAY,
+};
+/**
+ * Kuru materializes 1s/1m/5m/1h/6h/1d candles. Each Sente interval is read at
+ * the largest native interval that divides it evenly and aggregated up.
+ */
+export const KLINE_SOURCE = {
+  '1m': '1m',
+  '5m': '5m',
+  '15m': '5m',
+  '30m': '5m',
+  '1h': '1h',
+  '4h': '1h',
+  '1d': '1d',
+  '1w': '1d',
+};
+/** Weeks open Monday 00:00 UTC, as on every major venue; the Unix epoch was a Thursday. */
+const WEEK_OFFSET_MS = 4 * DAY;
+export function bucketStart(openTime, interval) {
+  const width = KLINE_INTERVAL_MS[interval];
+  const offset = interval === '1w' ? WEEK_OFFSET_MS : 0;
+  return Math.floor((openTime - offset) / width) * width + offset;
+}
+/**
+ * Kuru candles -> Sente klines at `interval`, oldest first.
+ *
+ * `Kline.volume` is an ESTIMATE. Kuru reports quote volume only; base volume
+ * is derived per native candle as quote volume over that candle's typical
+ * price `(h + l + c) / 3`. `quoteVolume` is exact.
+ */
+export function toKlines(api, market, interval) {
+  const buckets = new Map();
+  for (let i = 0; i < api.t.length; i++) {
+    const open = BigInt(api.o[i]);
+    const high = BigInt(api.h[i]);
+    const low = BigInt(api.l[i]);
+    const close = BigInt(api.c[i]);
+    const quoteX18 = BigInt(api.v[i]);
+    const typicalX3 = high + low + close;
+    // quote / (typical / pricePrecision), still scaled by 1e18.
+    const baseX18 = typicalX3 === 0n ? 0n : (quoteX18 * market.pricePrecision * 3n) / typicalX3;
+    const key = bucketStart(api.t[i] * 1000, interval);
+    const bucket = buckets.get(key);
+    if (!bucket) {
+      buckets.set(key, { open, high, low, close, quoteX18, baseX18 });
+    } else {
+      if (high > bucket.high) bucket.high = high;
+      if (low < bucket.low) bucket.low = low;
+      bucket.close = close;
+      bucket.quoteX18 += quoteX18;
+      bucket.baseX18 += baseX18;
+    }
+  }
+  const width = KLINE_INTERVAL_MS[interval];
+  const pd = priceDecimals(market);
+  const sd = sizeDecimals(market);
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([openTime, b]) => ({
+      openTime,
+      closeTime: openTime + width - 1,
+      open: fromUnits(b.open, pd),
+      high: fromUnits(b.high, pd),
+      low: fromUnits(b.low, pd),
+      close: fromUnits(b.close, pd),
+      volume: fromUnits(b.baseX18 / 10n ** BigInt(18 - sd), sd),
+      quoteVolume: fromUnits(b.quoteX18, 18),
+    }));
+}
+/**
+ * One Gateway open order. The snapshot carries remaining size only and no
+ * timestamps, so `size` is the REMAINING size, `filledSize` is `"0"`, and both
+ * times are when the snapshot was read.
+ */
+export function toOpenOrder(api, market, observedAt) {
+  return {
+    id: formatOrderId({ slotIdx: api.slotIdx, orderId: BigInt(api.orderId) }),
+    clientOrderId: api.clientOrderId ?? undefined,
+    symbol: market.symbol,
+    side: api.isBuy ? 'buy' : 'sell',
+    type: 'limit',
+    status: 'open',
+    price: fromUnits(BigInt(api.price), priceDecimals(market)),
+    size: fromUnits(BigInt(api.remainingSize), sizeDecimals(market)),
+    filledSize: '0',
+    createdAt: observedAt,
+    updatedAt: observedAt,
+  };
+}
+/**
+ * Walks the book for a taker order of `size`. Reads only.
+ *
+ * Slippage is measured against the mid when both sides are populated, and
+ * against the best price on the side being taken when only that side is.
+ * Resting depth is reported at stored size, which can overstate what a stale
+ * reduce-after-block order will actually fill — Kuru's own caveat.
+ */
+export function simulateQuote(input) {
+  const { params, side } = input;
+  const pd = precisionDecimals(params.pricePrecision);
+  const sd = precisionDecimals(params.sizePrecision);
+  const wanted = toUnits(input.size, sd, 'size');
+  const levels = side === 'buy' ? input.asks : input.bids;
+  let filled = 0n;
+  let priceTimesSize = 0n;
+  for (const level of levels) {
+    if (filled >= wanted) break;
+    const take = level.size < wanted - filled ? level.size : wanted - filled;
+    filled += take;
+    priceTimesSize += level.price * take;
+  }
+  const bestBid = input.bids[0]?.price;
+  const bestAsk = input.asks[0]?.price;
+  // Twice the reference price, so the mid stays an integer.
+  const referenceX2 =
+    bestBid !== undefined && bestAsk !== undefined
+      ? bestBid + bestAsk
+      : levels[0] !== undefined
+        ? levels[0].price * 2n
+        : undefined;
+  let slippage = '0';
+  if (filled > 0n && referenceX2 !== undefined) {
+    // (average - reference) / reference, with both scaled by 2 * filled.
+    const adverse = 2n * priceTimesSize - filled * referenceX2;
+    slippage = ratioToDecimal(side === 'buy' ? adverse : -adverse, filled * referenceX2);
+  }
+  const notionalScale = 10n ** BigInt(pd + sd);
+  return {
+    symbol: input.symbol,
+    side,
+    size: input.size,
+    fillableSize: fromUnits(filled, sd),
+    averagePrice:
+      filled > 0n ? ratioToDecimal(priceTimesSize, filled * params.pricePrecision) : '0',
+    notional: fromUnits(priceTimesSize, pd + sd),
+    slippage,
+    estimatedFee: ratioToDecimal(
+      priceTimesSize * params.takerFeePps,
+      notionalScale * PPS_DENOMINATOR,
+      input.quoteDecimals,
+    ),
+    timestamp: input.observedAt,
+  };
+}
+/** A placement's decoded outcome as a Sente `Order`. */
+export function toPlacedOrder(input) {
+  const { outcome, params } = input;
+  const sd = precisionDecimals(params.sizePrecision);
+  let filled = 0n;
+  let priceTimesSize = 0n;
+  for (const fill of outcome.fills) {
+    filled += fill.size;
+    priceTimesSize += fill.price * fill.size;
+  }
+  // One order was placed, so at most one of this account's orders rested.
+  const rested = outcome.rested.at(-1);
+  let status;
+  if (rested) {
+    status = filled > 0n ? 'partially_filled' : 'open';
+  } else if (filled >= input.quantity) {
+    status = 'filled';
+  } else if (input.type === 'market' || input.timeInForce === 'IOC') {
+    status = filled > 0n ? 'cancelled' : 'expired'; // the unfilled remainder is discarded
+  } else if (filled > 0n) {
+    status = 'filled'; // a remainder too small to settle one quote atom is removed as dust
+  } else {
+    status = 'rejected'; // a crossing POST_ONLY is skipped, not reverted
+  }
+  return {
+    id: rested ? formatOrderId(rested) : input.executionHash,
+    clientOrderId: input.clientOrderId,
+    symbol: input.symbol,
+    side: input.side,
+    type: input.type,
+    status,
+    price: input.price,
+    size: fromUnits(input.quantity, sd),
+    filledSize: fromUnits(filled, sd),
+    averageFillPrice:
+      filled > 0n ? ratioToDecimal(priceTimesSize, filled * params.pricePrecision) : undefined,
+    timeInForce: input.timeInForce,
+    createdAt: input.observedAt,
+    updatedAt: input.observedAt,
+    txHash: input.transactionHash,
+  };
+}
