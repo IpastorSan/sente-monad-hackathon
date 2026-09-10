@@ -56,13 +56,37 @@ export const publicClient: PublicClient = createPublicClient({
  * ---------------------------------------------------------------------------
  */
 export const MONAD_TX_DEFAULTS = {
-  /** Native MON transfer. Same 21k floor as Ethereum. */
+  /**
+   * Native MON transfer to an EOA — the 21k intrinsic cost, exactly. NOT for a
+   * smart-account recipient; see `MONAD_GAS_LIMITS.nativeTransferToSmartAccount`.
+   */
   gas: 21_000n,
 } as const;
 
-/** Measured gas limits for common calls. Extend as contracts land. */
+/**
+ * Gas limits for common calls: each is a measurement on Monad testnet plus
+ * ~10-15% headroom, never a round guess and never 2x. Monad charges the LIMIT,
+ * so headroom is real money; too little, and the call reverts with the whole
+ * limit still charged. That happened for real: at 65,000 two AUSD transfers
+ * ran out of gas (2026-09-10, tx 0x9a0bd10d…, 0x16a7c0e6…).
+ *
+ * The measurements are pinned in `client.test.ts`, which fails if a limit drops
+ * below its measurement. Re-measure with `eth_estimateGas` before changing one.
+ * Extend as contracts land.
+ */
 export const MONAD_GAS_LIMITS = {
+  /** MON to an EOA: 21,000 measured, and it cannot vary — no headroom needed. */
   nativeTransfer: 21_000n,
-  erc20Transfer: 65_000n,
-  erc20Approve: 55_000n,
+  /**
+   * MON INTO A KERNEL SMART ACCOUNT: 40,995 measured. The send runs the
+   * account's `receive()`, so the 21k EOA figure reverts.
+   */
+  nativeTransferToSmartAccount: 46_000n,
+  /**
+   * AUSD `transfer`: 72,918 measured to a recipient holding zero AUSD (the
+   * worst case — a fresh balance slot), 55,850 to an existing holder.
+   */
+  erc20Transfer: 82_000n,
+  /** AUSD `approve` of a spender with no prior allowance: 71,099 measured. */
+  erc20Approve: 80_000n,
 } as const;

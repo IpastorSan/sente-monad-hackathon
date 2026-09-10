@@ -2,6 +2,9 @@
 //
 //   PERPL_OWNER_PRIVATE_KEY=0x... node scripts/perpl-live.ts [--onboard]
 //
+// Without PERPL_OWNER_PRIVATE_KEY it falls back to PERPL_DEV_PRIVATE_KEY, the
+// team's already-onboarded dev account (see .env.example).
+//
 // The key is the EOA that OWNS (or will own) the Perpl account — never a smart
 // account: Perpl enrolls API keys by ecrecover only (see src/perpl/enroll.ts).
 // It is read from the environment and never logged; only the derived address
@@ -62,9 +65,12 @@ const POSITION_V2_ABI = [
   },
 ] as const;
 
-const key = process.env['PERPL_OWNER_PRIVATE_KEY']?.trim();
+// PERPL_DEV_PRIVATE_KEY (from .env) is the team's already-onboarded dev account.
+const key = (
+  process.env['PERPL_OWNER_PRIVATE_KEY'] ?? process.env['PERPL_DEV_PRIVATE_KEY']
+)?.trim();
 if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
-  console.error('set PERPL_OWNER_PRIVATE_KEY to the 0x key of the EOA that owns the account');
+  console.error('set PERPL_OWNER_PRIVATE_KEY (or PERPL_DEV_PRIVATE_KEY) to the owning EOA key');
   process.exit(1);
 }
 const owner = privateKeyToAccount(key as Hex);

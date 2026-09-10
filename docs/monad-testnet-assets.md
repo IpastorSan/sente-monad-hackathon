@@ -239,8 +239,16 @@ UserOperation** (approve → createAccount → allowOrderForwarding):
 userOp `0xe1e2c1b2…98239`, `success = true` in the UserOperation receipt, bundle
 tx `0x10943e82b8631689bac13a7da3d6fb7aa1c34e2cdc4e7d245ea79d23486aa1d0`. So
 batching works on chain — it just produces an account nobody can ever trade
-through the API. Its 100 AUSD is still there and can come back out through a
-Kernel UserOperation calling `withdrawCollateral`.
+through the API. Its 100 AUSD was recovered to the treasury with one more batch
+UserOperation — `withdrawCollateral(100e6)` → `AUSD.transfer(treasury, 100e6)`,
+userOp `0xebfc31357263c33af3f614d0028749569f3bc0d7070d64f7af7b4da38a8a7b96`,
+`success = true`. **Withdrawal is immediate**, not queued: Perpl's global rate
+limit has a $1M/hour floor, far above anything we move.
+
+**The persistent dev account** is the EOA `0xDBb4…611F`, which owns Perpl
+testnet account 493 (onboarded, forwarding on). Its key and an enrolled API key
+are `PERPL_DEV_*` in the main checkout's `.env` — reuse it rather than spending
+another 100 AUSD onboarding a new one.
 
 Consequence for onboarding: the EOA needs MON for **three plain transactions**.
 Measured, and cheaper than the UserOperation anyway (~0.035 MON against 0.078):
@@ -263,13 +271,20 @@ the exchange pays their gas.
 - **No `Origin` on `/enroll` either.** The enrollment above was made with no
   Origin header; the key records `origin: ""`.
 
-### Gas limits that are too low for AUSD
+### Gas limits: AUSD and smart-account recipients need more than you'd think
 
-An AUSD `transfer` to a fresh recipient uses **72,918** gas.
-`MONAD_GAS_LIMITS.erc20Transfer = 65_000n` runs out of gas, and Monad charges
-the full limit for the failure (two such reverts on 2026-09-10:
-`0x9a0bd10d…`, `0x16a7c0e6…`). A MON transfer **into a Kernel account** uses
-40,995, not 21,000: it runs the account's `receive()`.
+| Call                               | Measured | `MONAD_GAS_LIMITS`                    |
+| ---------------------------------- | -------- | ------------------------------------- |
+| MON → EOA                          | 21,000   | `nativeTransfer` 21,000               |
+| MON → Kernel account (`receive()`) | 40,995   | `nativeTransferToSmartAccount` 46,000 |
+| AUSD `transfer`, zero-balance dest | 72,918   | `erc20Transfer` 82,000 (was 65,000)   |
+| AUSD `transfer`, existing holder   | 55,850   | (covered by the worst case above)     |
+| AUSD `approve`, fresh spender      | 71,099   | `erc20Approve` 80,000 (was 55,000)    |
+
+The old `erc20Transfer = 65_000n` ran out of gas, and Monad charged the full
+limit for each failure (two reverts on 2026-09-10: `0x9a0bd10d…`,
+`0x16a7c0e6…`). `apps/mobile/src/chain/client.test.ts` now fails if a limit
+drops below its measurement or pads more than 20% over it.
 
 ## The gotcha that nearly produced a wrong answer
 
