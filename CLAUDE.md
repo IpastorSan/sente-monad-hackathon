@@ -31,7 +31,7 @@ pnpm workspaces. Globs are in `pnpm-workspace.yaml` (`apps/*`, `services/*`, `pa
 ```
 apps/mobile        Expo / React Native, expo-router. DEV BUILD, not Expo Go.
 services/api       NestJS. Auth, wallet, venues, agents, credits, gas.
-packages/venues    Shared `Venue` interface + order/fill/depth types. Types only, no adapters.
+packages/venues    Venue interface + Kuru (./kuru) and Perpl (./perpl) adapters
 ```
 
 `apps/mobile/src/auth/` is the passkey wallet, and the split inside it is deliberate:
@@ -268,6 +268,32 @@ The corollary, and the reason ERC-7579 `execType` is always `0x00` in
 `apps/mobile/src/wallet/batch.ts`: when one leg of a batch reverts the whole batch must revert. Also
 verified on chain in that same transaction — the first leg's approval did not persist. A batch that
 half-applies is worse than no batching, and only a real transaction proves which one you have.
+
+### 9. The two venues have different account owners, on purpose
+
+**Perpl's API-key enrollment is `ecrecover`-only.** An ERC-1271 signature from the Kernel smart
+account — valid on chain, its own `isValidSignature` returns `0x1626ba7e` — gets the same `400` as
+garbage. A Perpl account owned by a smart account can never obtain an API key, so **the passkey EOA
+owns the Perpl account**, onboarding with three plain transactions (~0.035 MON, covered by the gas
+drip). **Kuru Spot V2 accepts a contract caller**, so there **the Kernel account is the AccountCore
+root** and deposit → order is one atomic ERC-7579 batch. Do not "unify" these: each is the only
+arrangement that works for its venue. Evidence in `docs/monad-testnet-assets.md` and `docs/kuru.md`.
+
+### 10. `@sente/venues/kuru` and `@sente/venues/perpl` do not resolve out of the box
+
+Both are `package.json` subpath exports. **Metro has package exports turned off** (gotcha 2), so
+the mobile app needs a `resolver.resolveRequest` alias per subpath — the same pattern already used
+for `@category-labs/mera` in `metro.config.js`. The subpaths' `types` point at `src/` files that
+import each other with `.ts` extensions, so **`services/api` needs `allowImportingTsExtensions`** in
+its tsconfig before it can import them. Neither is wired yet; the first consumer has to do it.
+
+### 11. Test vectors use publicly known keys — never fund what they derive
+
+Unit tests and some live runs use the Anvil/Hardhat default accounts (`0xf39Fd6e5…` is #0,
+`0x70997970…` is #1). Their private keys are published. The Kernel test account
+`0xEC4b217240f0292c65Bf136b341e400e2D28cA6F` is owned by Anvil #1, so **anyone can control it**.
+Fine for worthless testnet tokens; never send anything of value to an address derived from these
+keys. On mainnet, sweeper bots drain them within a block.
 
 ---
 
