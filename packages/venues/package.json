@@ -2,7 +2,7 @@
   "name": "@sente/venues",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared venue interface for Sente. Types only — no adapters.",
+  "description": "Shared venue interface for Sente, plus venue adapters under subpath exports.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -10,6 +10,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./kuru": {
+      "types": "./src/kuru/index.ts",
+      "default": "./dist/kuru/index.js"
     }
   },
   "files": [
@@ -19,11 +23,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test 'src/**/*.test.ts'",
+    "kuru:live": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/kuru-live.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
     "eslint": "^10.10.0",
     "typescript": "~6.0.3"
+  },
+  "dependencies": {
+    "@toxicflow-labs/ts-sdk": "0.0.4",
+    "viem": "^2.56.3"
   }
 }

@@ -4,6 +4,11 @@ Two earlier research passes contradicted each other on almost everything here.
 This records what was settled empirically, and by what method, because the
 package in question is deliberately hard to find.
 
+The adapter itself lives in `packages/venues/src/kuru/` and is exported as
+`@sente/venues/kuru`. The section **How the adapter trades (MOV-254)** at the
+end is what it was built on; everything above it is the research that led
+there.
+
 ## `@toxicflow-labs/ts-sdk` exists, and it is the SDK we want
 
 `https://registry.npmjs.org/@toxicflow-labs%2Fts-sdk` → **200**.
@@ -12,16 +17,19 @@ package in question is deliberately hard to find.
 | ------------------ | -------------- |
 | 0.0.1              | 2026-09-01     |
 | 0.0.2              | 2026-09-03     |
-| **0.0.3** (latest) | **2026-09-07** |
+| 0.0.3              | 2026-09-07     |
+| **0.0.4** (pinned) | **2026-09-09** |
 
 _"Viem-first TypeScript SDK for Kuru contracts."_ Single dependency
 `viem ^2.51.3`. Maintainer `toxicflow-labs`, licence `UNLICENSED`.
+`packages/venues` pins **exactly `0.0.4`** — a `0.0.x` package gives no
+compatibility promise between patches.
 
-**Why a competent search misses it:** the package has **no `repository` field
-and no `homepage`** — nothing links it back to Kuru — and it is the only result
-for `npm search toxicflow`. It never surfaces unless you query the exact name.
-`github.com/Kuru-Labs/ts-sdk` (pushed 2026-09-07) closes the gap: _"Releases are
-published to npm as `@toxicflow-labs/ts-sdk`."_
+**Why a competent search missed it:** up to 0.0.3 the package had **no
+`repository` field and no `homepage`** — nothing linked it back to Kuru — and it
+was the only result for `npm search toxicflow`. 0.0.4 added both, pointing at
+`github.com/Kuru-Labs/ts-sdk`, whose README says _"Releases are published to npm
+as `@toxicflow-labs/ts-sdk`."_
 
 Modules: `relay/`, `trading-wallet/`, `spot/`, `account/`, `exchange-ws/`,
 `events/`, `abi/`, `generated/`, `errors/`, `utils/`.
@@ -62,6 +70,9 @@ That is a second, independent enclave guarantee on the Kuru leg, and it closes
 an attack the mandate would otherwise miss entirely — an agent that cannot
 exceed its spend cap but _can_ redelegate its wallet has escaped the cap.
 
+**The user's own account does not use this path** — see below. It stays
+relevant for a later issue, as one way to give an _agent_ a signer.
+
 ## The relay is live
 
 `POST https://relay.testnet.kuru.io/auth/challenge` → **200**, returning a real
@@ -74,10 +85,16 @@ An earlier pass concluded the host was dead. It had hit bare `GET /` → **404**
 `GET` on the real routes returns **405** (route exists, wrong method), which is
 the signal that distinguishes "no such host" from "wrong verb".
 
+What the Relay is, per its docs: **gas sponsorship for a secondary trading EOA
+that is EIP-7702-delegated to KuruTradingWallet.** Every order method
+(`wallet.execute_batch`, `wallet.execute_replace_by_slot`) takes an intent
+signed by that delegated EOA. It is not a general order-entry API, and a smart
+account cannot use it as itself.
+
 **Unverified:** whether _our_ wallet would be admitted. The SDK docs say
 _"Authentication works with allowlisted and `allow-all` Relay deployments… the
 SDK does not infer it from configuration."_ Nothing was signed, so admission is
-untested.
+untested — and MOV-254 does not need it.
 
 ## Addresses: there are THREE sets, and the obvious one is wrong
 
@@ -112,7 +129,17 @@ Four live markets, all quoted in **Kuru Testnet USDC**
 | MON/USDC   | `0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61` | native MON |
 | WETH/USDC  | `0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7` | 18 dec     |
 | cbBTC/USDC | `0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f` | 8 dec      |
-| XAUt0/USDC | `0x0B4dD2A7b09d5c5401149fFe51301Cc589017343` | 6 dec      |
+| XAUt/USDC  | `0x0B4dD2A7b09d5c5401149fFe51301Cc589017343` | 6 dec      |
+
+Two copying traps in the deployment page itself:
+
+- **WETH `0x8B6C…380aaf8` is printed with a broken EIP-55 checksum.** viem
+  rejects it at call time with `InvalidAddressError`, deep inside an encoder.
+  The valid form is `0x8B6C5fafeF85B030bB1e71ae7ac085cC2380aAf8`.
+  `constants.test.ts` checks every configured address so the next typo fails a
+  test instead of a live run.
+- The page calls the gold token **XAUt0**; its own `symbol()` and the Data
+  Source catalog both say **`XAUt`**. The adapter uses `XAUt`.
 
 ### The spot leg needs Kuru Testnet USDC, not AUSD — and its faucet is generous
 
@@ -120,22 +147,32 @@ Four live markets, all quoted in **Kuru Testnet USDC**
 proxy** (EIP-1967 impl slot is zero), so its 30-selector dispatch table is the
 real one — unlike Agora's faucet, where reading the proxy misleads.
 
-|                                |                                                           |
-| ------------------------------ | --------------------------------------------------------- |
-| `claim()`                      | `0x4e71d92d`, present                                     |
-| Simulated from a fresh address | **succeeds**                                              |
-| Gas estimate                   | **261,237** — a real multi-transfer, not a fallback no-op |
-| USDC held                      | **9,920,000**                                             |
+**One `claim()` pays 10,000 USDC, 1 WETH, 0.1 cbBTC and 1 XAUt to
+`msg.sender`**, observed from the Transfer logs of tx
+`0xe0e063e9055614f27e253ab7e41f737c00f0800a43453079fb6fe2ef26c5b314`. Getter
+values, read off the contract and matching the payout: `USDC_AMOUNT()` =
+10,000e6, `WETH_AMOUNT()` = 1e18.
 
-Two getters return token addresses — `0x3e413bee` → USDC `0xee0722ea...`,
-`0xecf3a80e` → cbBTC `0xef2a20a1...` — so `claim()` appears to dispense a bundle
-of the four test tokens rather than one, which the gas figure corroborates.
+**The cooldown is 12 hours PER ADDRESS** — not global like Agora's AUSD
+faucet. Established on chain, not from the getter names:
+
+| Check                                          | Result                                           |
+| ---------------------------------------------- | ------------------------------------------------ |
+| `COOLDOWN()` (`0xa2724a4d`)                    | `43200` (12 h)                                   |
+| `nextClaimAt(me)` (`0x11a163e9`) before claim  | `0`                                              |
+| `nextClaimAt(me)` after claim                  | claim block timestamp **+ 43,200** exactly       |
+| `nextClaimAt(anyone else)` after my claim      | still `0`                                        |
+| Second `claim()` from me                       | reverts `0x15f3b7ab` + `uint256 nextClaimAt`     |
+| `claim()` from a fresh address, right after it | **succeeds**                                     |
+| `claim()` simulated from a contract address    | succeeds — a Kernel account can claim for itself |
+
+So there is no contention with other teams: every address, including every
+user's smart account, gets its own 10,000 USDC every 12 h. Unlike AUSD,
+claim-on-demand is fine for the spot leg. Measured cost: 261,237 gas.
 
 **Use this, not the treasury AUSD.** It is Kuru-native, permissionless, and
 nearly ten million deep, where Agora's AUSD supply is finite and needed by the
-Perpl leg. Unverified: whether `claim()` has a per-address or global cooldown
-the way Agora's does. Establish that in MOV-254 rather than assuming it has
-none.
+Perpl leg.
 
 ## Testnet market data exists — on a different host
 
@@ -143,24 +180,142 @@ none.
 `exchangeInfo` lists have code on mainnet 143 and **zero on testnet 10143**, and
 its quote asset is the mainnet USDC. It is an older, separate surface.
 
-The testnet stack is entirely different hosts. Per
-`kuru-testnet-docs.mintlify.site/api/introduction`, testnet exposes **three
-independent API surfaces**. Confirmed serving live data:
+Testnet exposes **three independent API surfaces**
+(`kuru-testnet-docs.mintlify.site/api/introduction`). Every route below was
+called and answered 200 with live data:
 
-```
-GET https://api.testnet.kuru.io/api/v1/markets   -> 200, 4 active markets
-GET https://api.testnet.kuru.io/api/v1/tokens    -> 200
-```
+| Surface                  | Host                              | Routes the adapter uses                                                                |
+| ------------------------ | --------------------------------- | -------------------------------------------------------------------------------------- |
+| Data Source (finalized)  | `https://api.testnet.kuru.io`     | `/api/v1/markets`, `/api/v1/markets/{addr}/candles`, `/api/v1/users/{id}/order-events` |
+| Exchange Gateway (live)  | `https://gateway.testnet.kuru.io` | `/api/depth?symbol=MONUSDC`, `/api/v1/users/{id}/orders?state=proposed`                |
+| Relay (sponsored writes) | `https://relay.testnet.kuru.io`   | none                                                                                   |
 
-Note the path shape is `/api/v1/...` — **not** the mainnet host's Binance-style
-`/api/v3/exchangeInfo`, which 404s here. Probing `/api/v1/candles`, `/trades`,
-`/orderbook`, `/balances`, `/orders` all 404 as bare paths, so they take
-required parameters; read the API docs rather than guessing.
+Things that are easy to get wrong:
+
+- **Gateway book routes take Kuru's symbol, not an address**:
+  `/api/depth?symbol=MONUSDC&levels=20` and `/api/bbo?symbol=MONUSDC`.
+  `/api/v1/markets/{addr}/l2book` 404s.
+- **Candles need `from`** (Unix seconds); without it the API answers
+  `400 from is required`. Native intervals are `1s 1m 5m 1h 6h 1d` only — the
+  adapter builds 15m/30m from 5m, 4h from 1h and 1w (Monday-aligned) from 1d.
+  `v` is **quote** volume ×1e18; there is no base-volume column, so
+  `Kline.volume` is an estimate at each candle's typical price and says so.
+- Every quantity is an **integer string in market units**: price ÷
+  `pricePrecision`, size ÷ `sizePrecision`. MON/USDC is `1e6` / `1e8`.
+- `/api/v1/users/by-address/{addr}` resolves an address to its account id; the
+  adapter reads `AccountCore.userRegistry` on chain instead.
+- User routes want the **numeric AccountCore id**, not an address.
 
 **So no Envio indexer is required for the spot leg, and no mainnet fallback.**
 Envio is still wanted for the agent leaderboard ($1k bounty), just not as a
 market-data workaround.
 
-**Unconfirmed:** the Exchange Gateway REST surface is reportedly read-only,
-which would mean order _placement_ goes through the relay. Confirm before
-designing submission.
+## How the adapter trades (MOV-254)
+
+### Finding 1 — orders go straight to the OrderBook, not through the Relay
+
+The Exchange Gateway REST is read-only: **confirmed** — its reference lists
+only book, BBO, balances and open orders, with no write route. Spot V2 accepts
+an order two ways:
+
+1. **Direct:** `OrderBook.batch(userId, orders, cancelSlotIdxs[, clientOrderId])`
+   from any address holding live `TRADE` permission on `userId`. **`userId = 0`
+   resolves to the caller's own account**, so whoever deposited trades with no
+   id bookkeeping.
+2. **Relay:** a secondary EOA, 7702-delegated to KuruTradingWallet, signs an
+   EIP-712 intent; the Relay pays gas.
+
+The adapter uses (1). It produces calls; the caller's submitter lands them. For
+the Kernel account that is one ERC-7579 batch through
+`apps/mobile/src/wallet/batch.ts`, so deposit-then-place is atomic.
+
+### Finding 2 — a Kernel smart account can be the AccountCore root directly
+
+Nothing in AccountCore or the OrderBook requires an EOA caller. Verified by
+simulation against a real Kernel v0.3.1 account deployed on testnet during
+MOV-253 (`0xEC4b217240f0292c65Bf136b341e400e2D28cA6F`): `execute(batch)` called
+from the EntryPoint, with legs **faucet `claim` → USDC `approve` → AccountCore
+`deposit` → OrderBook `batch` (resting GTC bid)**, succeeds with revert-on-
+failure exec type, ~842k gas. The call list was the adapter's own
+(`depositCalls` + `limitOrderCalls`) run through `encodeKernelExecute`. The
+first `deposit` registers the Kernel address as a **root** account.
+
+**Not yet done:** that flow as a real UserOperation. A first op also deploys
+the account (~607k verification gas) and strands the unused prefund in the
+EntryPoint (CLAUDE.md gotcha 4); inside MOV-254's 0.3 MON cap that did not fit
+next to the EOA run below. It needs no new code — the calls are identical.
+
+**Why root-owner-direct and not KuruTradingWallet.** KuruTradingWallet is
+logic 7702-delegated into an EOA. For our users that would mean delegating
+either the Mera EOA or a new trading EOA:
+
+|                       | Kernel account as root (chosen)        | 7702 trading EOA + Relay                                         |
+| --------------------- | -------------------------------------- | ---------------------------------------------------------------- |
+| Gas                   | our paymaster, like every other action | Kuru's Relay sponsor — if our wallet is admitted (unverified)    |
+| Monad reserve balance | not affected                           | a delegated EOA loses the exception and cannot go below 10 MON   |
+| Atomic fund-and-place | yes, one ERC-7579 batch                | no — deposit is a separate AccountCore action                    |
+| Moving parts          | none new                               | 7702 auth + AccountCore signer grant + Relay JWT + intent nonces |
+| Stored TP/SL triggers | not available                          | available in the contract; **disabled on the testnet Relay**     |
+
+### Subaccounts and delegated signers — how they would compose with agents
+
+Not exercised on chain; read from the contracts reference, recorded for the
+issue that wires agents in.
+
+- **Delegated signers:** `authorizeAccountSigner(account, signer, permissions,
+expiry)` grants a bitmap — `TRADE` 1, `INTERNAL_TRANSFER` 4, `WITHDRAW` 8,
+  `ADMIN` 16 — optionally expiring. The signer then calls `batch` **itself**,
+  naming the owner's `userId`. Revocation advances
+  `accountSignerAuthorizationNonces(account)`, which also kills any
+  trading-wallet intent signed under the old epoch. `…BySig` variants let
+  anyone relay an EIP-712 grant.
+- **Subaccounts:** a root links a consenting address with
+  `createSubaccount(subaccount, deadline, signature)` (EIP-712 consent from the
+  subaccount; ERC-1271 accepted). A subaccount has its own balances, orders and
+  signers; `transferBetweenAccounts` moves free balance inside one root tree.
+- **Composition with Privy mandates:** one subaccount per hired agent, funded
+  with the mandate's allocation, and the agent's Privy wallet authorized on it
+  with **`TRADE` only** and an expiry equal to the mandate's window. That gives
+  two independent layers: the enclave limits what the agent can _sign_
+  (`to` ∈ markets, `batch` calldata bounds), and AccountCore limits what the
+  agent's address can _do_ — trade that subaccount's funds, never withdraw
+  them, and nothing after expiry. Open question for that issue: the agent's
+  Privy wallet is an EOA, so it needs gas for `batch` unless it goes through
+  the Relay, which brings back 7702.
+
+### Verified live on Monad testnet (2026-09-10)
+
+From a throwaway EOA (`0x15BBC549326dd8D053233c3A546Aa7fDAbB57256`, AccountCore
+id 62), via `pnpm --filter @sente/venues run kuru:live`:
+
+| Step                                             | Transaction                                                          |
+| ------------------------------------------------ | -------------------------------------------------------------------- |
+| Faucet `claim()`                                 | `0xe0e063e9055614f27e253ab7e41f737c00f0800a43453079fb6fe2ef26c5b314` |
+| USDC `approve` (30 USDC)                         | `0x40e4afde9d423e7fd43f3c9b345644dcc6037ffee3adb2c99fce028f61e48216` |
+| AccountCore `deposit` — registers id 62          | `0xf0b6ffc917e6965f4e4cb88ed602c018b38e01144f7219ae907c26620e9c1e9a` |
+| `placeLimit` 500 MON @ 0.02 GTC → rests `0:3680` | `0x2e22612f7d6542b2466ff09c7ca18c681ae67037c430d2d2f92d27ca78bf1111` |
+| `cancel` `0:3680`                                | `0x2a9e40b3055783cb9b65b14c729f5756a346a36dbac084cadab3a428e523262b` |
+| `placeMarket` 388 MON, 2% bound → 317.737 filled | `0x9d7fbce17b32fb4585612ed292ba064da5e85c0da865edee6dcfb2aefb2d30fd` |
+
+After placing, `getOpenOrders` listed `0:3680` and 10.004 USDC was locked (10 +
+maker-fee headroom); after cancelling it was gone. A second `cancel` of the
+same id sent no transaction and reported `cancelled` from order history. The
+IOC swept the whole best ask (317.73742494 MON at 0.030974); the next ask sat
+above the bound, so the remainder was discarded and the order reads
+`cancelled` with a partial fill. The USDC debit matched notional + 0.07% taker
+fee to the atom. These receipts are `receipts.fixture.ts`.
+
+### Gas, measured (Monad charges on the limit)
+
+| Call                                            | Gas                  |
+| ----------------------------------------------- | -------------------- |
+| USDC `approve`                                  | 52,089               |
+| First `deposit` (registers the account)         | 252,059              |
+| `batch`, GTC resting                            | 404,204              |
+| `batch`, IOC sweeping one level                 | 425,430              |
+| `batch`, cancel one slot                        | 242,923              |
+| Faucet `claim`                                  | 261,237              |
+| Kernel `execute` of claim+approve+deposit+place | ~841,763 (simulated) |
+
+Also in `KURU_MEASURED_GAS`. Placement grows with the number of price levels
+crossed.

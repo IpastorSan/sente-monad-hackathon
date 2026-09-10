@@ -8,7 +8,15 @@
     "sourceMap": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    // Adapter sources import each other as `./x.ts` so `node --test` can run
+    // them with native type stripping, which resolves specifiers literally;
+    // tsc rewrites those to `./x.js` on emit. Erasable syntax only, for the
+    // same reason: node strips types, it does not compile enums.
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    // TypeScript 6 no longer loads @types/* implicitly; the tests need node's.
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

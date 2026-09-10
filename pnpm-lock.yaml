@@ -238,7 +238,17 @@ importers:
         version: 6.0.3
 
   packages/venues:
+    dependencies:
+      '@toxicflow-labs/ts-sdk':
+        specifier: 0.0.4
+        version: 0.0.4(typescript@6.0.3)(zod@3.25.76)
+      viem:
+        specifier: ^2.56.3
+        version: 2.56.3(typescript@6.0.3)(zod@3.25.76)
     devDependencies:
+      '@types/node':
+        specifier: ^26.4.1
+        version: 26.4.1
       eslint:
         specifier: ^10.10.0
         version: 10.10.0(supports-color@8.1.1)
@@ -1955,6 +1965,10 @@ packages:
 
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
+
+  '@toxicflow-labs/ts-sdk@0.0.4':
+    resolution: {integrity: sha512-yG0Y78/e+sDyxEYzgqL8bamzEZVUtgKWjDf+FKRRWRa8AlpW9vaCe44TGVRdRsj8xvH1LyS3dXvfH/iiAcwDpw==}
+    engines: {node: '>=20'}
 
   '@tsconfig/node10@1.0.13':
     resolution: {integrity: sha512-gcLdvR9HO1ZJBypsOGqaP6TFEzb6vIta0KSTLt9NAQ6pXQO3cRgSVyCN6pzYqI9DlJgY71XKO0dpDhCf08b3pg==}
@@ -7410,6 +7424,15 @@ snapshots:
       - supports-color
 
   '@tokenizer/token@0.3.0': {}
+
+  '@toxicflow-labs/ts-sdk@0.0.4(typescript@6.0.3)(zod@3.25.76)':
+    dependencies:
+      viem: 2.56.3(typescript@6.0.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
 
   '@tsconfig/node10@1.0.13': {}
 
