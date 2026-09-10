@@ -240,10 +240,40 @@ failure exec type, ~842k gas. The call list was the adapter's own
 (`depositCalls` + `limitOrderCalls`) run through `encodeKernelExecute`. The
 first `deposit` registers the Kernel address as a **root** account.
 
-**Not yet done:** that flow as a real UserOperation. A first op also deploys
-the account (~607k verification gas) and strands the unused prefund in the
-EntryPoint (CLAUDE.md gotcha 4); inside MOV-254's 0.3 MON cap that did not fit
-next to the EOA run below. It needs no new code — the calls are identical.
+**Then landed as a real UserOperation**, because only a real transaction proves
+an ERC-7579 batch (CLAUDE.md gotcha 8). Same account, same four legs, same
+`encodeKernelExecute` call list, via `scripts/kuru-kernel-userop.ts`:
+
+|                         |                                                                          |
+| ----------------------- | ------------------------------------------------------------------------ |
+| UserOperation           | `0x1c46d2646aeecee64a4c3f0c7384431074c0e5d5ed9759f58d414847e859857a`     |
+| Bundle tx (`handleOps`) | `0x6c70f693e4b5b9a3cd237432fab5579297c9ed085698f3a848bbfb7560f24b98`     |
+| tx status               | `success`                                                                |
+| `UserOperationEvent`    | **`success = true`**, `actualGasUsed` 919,857, `actualGasCost` 0         |
+| Result                  | AccountCore id **63** (root); order `0:3683` resting, 10.004 USDC locked |
+
+`getOrderId(63, 0)` read back `3683` afterwards. The script checks the app's
+encoder against `permissionless`'s `encodeCalls` before signing.
+
+**Self-bundling with a zero fee bid.** The treasury called
+`EntryPoint.handleOps` itself as beneficiary, and the UserOperation bid
+`maxFeePerGas = 0`. That makes the required prefund
+`(vgl + cgl + pvg) × maxFeePerGas` zero, so the account needed no MON and
+nothing stranded in the EntryPoint — being the beneficiary alone does not do
+that, since the prefund is still taken from the account. Limits:
+`verificationGasLimit` 220,000, `callGasLimit` 812,498 (the measured execute
+cost of this exact callData, minus 21k intrinsic), `preVerificationGas`
+21,000; the outer transaction took 1,038,005 gas = 0.1059 MON at 102 gwei.
+
+**Not landed:** the follow-up cancel as a second UserOperation. It estimated at
+466,409 gas (0.0476 MON) and would have exceeded the cap, so the script
+refused to send it. Order `0:3683` is still resting on that account.
+
+> **Test vectors use Anvil default keys. Never fund an account derived from
+> one.** `0xEC4b…A6F` is owned by `0x70997970…` — Anvil/Hardhat default account
+> #1, whose private key is public. Anyone can drive that account; it holds only
+> worthless test tokens and must stay that way. On mainnet, sweeper bots drain
+> addresses derived from default keys within a block.
 
 **Why root-owner-direct and not KuruTradingWallet.** KuruTradingWallet is
 logic 7702-delegated into an EOA. For our users that would mean delegating
@@ -307,15 +337,17 @@ fee to the atom. These receipts are `receipts.fixture.ts`.
 
 ### Gas, measured (Monad charges on the limit)
 
-| Call                                            | Gas                  |
-| ----------------------------------------------- | -------------------- |
-| USDC `approve`                                  | 52,089               |
-| First `deposit` (registers the account)         | 252,059              |
-| `batch`, GTC resting                            | 404,204              |
-| `batch`, IOC sweeping one level                 | 425,430              |
-| `batch`, cancel one slot                        | 242,923              |
-| Faucet `claim`                                  | 261,237              |
-| Kernel `execute` of claim+approve+deposit+place | ~841,763 (simulated) |
+| Call                                             | Gas                                         |
+| ------------------------------------------------ | ------------------------------------------- |
+| USDC `approve`                                   | 52,089                                      |
+| First `deposit` (registers the account)          | 252,059                                     |
+| `batch`, GTC resting                             | 404,204                                     |
+| `batch`, IOC sweeping one level                  | 425,430                                     |
+| `batch`, cancel one slot                         | 242,923                                     |
+| Faucet `claim`                                   | 261,237                                     |
+| Kernel `execute` of claim+approve+deposit+place  | 812,498 `callGasLimit`; landed              |
+| ↳ self-bundled `handleOps` transaction around it | 1,038,005                                   |
+| Kernel cancel, one slot (estimated, not landed)  | 266,556 `callGasLimit`; 466,409 `handleOps` |
 
 Also in `KURU_MEASURED_GAS`. Placement grows with the number of price levels
 crossed.

@@ -175,6 +175,12 @@ export const KURU_MEASURED_GAS = {
   /** IOC order sweeping one price level. */
   placeTakingOneLevel: 425_430n,
   cancelOne: 242_923n,
-  /** claim + approve + deposit + place as one Kernel `execute` (simulated). */
-  kernelOnboardAndPlace: 841_763n,
+  /**
+   * claim + approve + deposit + place as one Kernel `execute`: the UserOperation's
+   * `callGasLimit`. Landed for real in userOp 0x1c46d264…859857a; the
+   * self-bundled `handleOps` transaction around it took 1,038,005.
+   */
+  kernelOnboardAndPlace: 812_498n,
+  /** Cancel one slot as a Kernel UserOperation's `callGasLimit` (estimated, not landed). */
+  kernelCancelOne: 266_556n,
 } as const;
