@@ -16,7 +16,9 @@
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "probe:openrouter": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/openrouter-probe.ts",
     "privy:keys": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-keys.ts",
-    "probe:privy": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-probe.ts"
+    "probe:privy": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-probe.ts",
+    "agent:fund": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/fund-agent.ts",
+    "agent:venues-live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-venues-live.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",

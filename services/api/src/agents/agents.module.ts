@@ -15,6 +15,7 @@ import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
+import { agentVenuesExports, agentVenuesProviders } from './venues/agent-venues.providers';
 
 const configProvider: Provider = {
   provide: AGENTS_CONFIG,
@@ -61,7 +62,7 @@ const agentWalletsProvider: Provider = {
  */
 @Module({
   controllers: [AgentsController],
-  providers: [configProvider, agentWalletsProvider, AgentsService],
-  exports: [AgentsService, AGENT_WALLETS],
+  providers: [configProvider, agentWalletsProvider, AgentsService, ...agentVenuesProviders],
+  exports: [AgentsService, AGENT_WALLETS, ...agentVenuesExports],
 })
 export class AgentsModule {}
