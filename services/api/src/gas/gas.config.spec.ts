@@ -101,6 +101,64 @@ describe('loadGasDripConfig', () => {
     );
   });
 
+  describe('agent drip', () => {
+    /**
+     * SEN-6, live on Monad testnet: one agent's first seven transactions used
+     * 1,355,412 gas at 102 gwei, charged at the limit — 0.138252024 MON.
+     */
+    const MEASURED_AGENT_GAS_WEI = parseEther('0.138252024');
+
+    it('defaults to at least one agent’s measured gas, at most +20%', () => {
+      const { agent } = loadGasDripConfig({});
+      expect(agent.amountWei).toBeGreaterThanOrEqual(MEASURED_AGENT_GAS_WEI);
+      expect(agent.amountWei).toBeLessThanOrEqual(
+        (MEASURED_AGENT_GAS_WEI * (100n + MAX_HEADROOM_PERCENT)) / 100n,
+      );
+    });
+
+    it('defaults to 0.15 MON, 3 agents per user per day, 5 s spacing, 15 s receipt timeout', () => {
+      expect(loadGasDripConfig({}).agent).toEqual({
+        amountWei: parseEther('0.15'),
+        maxPerUserPerDay: 3,
+        senderSpacingMs: 5_000,
+        receiptTimeoutMs: 15_000,
+      });
+    });
+
+    it('reads its variables', () => {
+      const { agent } = loadGasDripConfig({
+        GAS_DRIP_AGENT_AMOUNT_MON: '0.2',
+        GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY: '5',
+        GAS_DRIP_SENDER_SPACING_MS: '8000',
+        GAS_DRIP_AGENT_RECEIPT_TIMEOUT_MS: '30000',
+      });
+      expect(agent).toEqual({
+        amountWei: parseEther('0.2'),
+        maxPerUserPerDay: 5,
+        senderSpacingMs: 8_000,
+        receiptTimeoutMs: 30_000,
+      });
+    });
+
+    it('rejects a daily cap below one agent drip', () => {
+      expect(() => loadGasDripConfig({ GAS_DRIP_DAILY_CAP_MON: '0.1' })).toThrow(
+        /below GAS_DRIP_AGENT_AMOUNT_MON/,
+      );
+    });
+
+    it.each(['0', '1.5', 'many'])('rejects a GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY of %s', (raw) => {
+      expect(() => loadGasDripConfig({ GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY: raw })).toThrow(
+        /GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY must be a positive integer/,
+      );
+    });
+
+    it('rejects a zero agent amount', () => {
+      expect(() => loadGasDripConfig({ GAS_DRIP_AGENT_AMOUNT_MON: '0' })).toThrow(
+        /GAS_DRIP_AGENT_AMOUNT_MON must be greater than zero/,
+      );
+    });
+  });
+
   it('rejects a non-integer rate limit', () => {
     expect(() => loadGasDripConfig({ GAS_DRIP_RATE_LIMIT_MAX: '2.5' })).toThrow(
       /must be a positive integer/,

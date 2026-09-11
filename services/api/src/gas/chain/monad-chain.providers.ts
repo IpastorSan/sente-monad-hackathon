@@ -15,6 +15,12 @@ import { monadTestnet } from 'viem/chains';
 import { GAS_DRIP_CONFIG, type GasDripConfig } from '../gas.config';
 import { SENDER_POOL, type NonceSource, type TransactionBroadcaster } from '../sender/drip-sender';
 import { NonceManagedSender } from '../sender/nonce-managed-sender';
+import {
+  AGENT_DRIP_DISPATCHER,
+  ReserveAwareDispatcher,
+  type ReceiptWaiter,
+  type TransferSimulator,
+} from '../sender/reserve-aware-dispatcher';
 import { SenderPool } from '../sender/sender-pool';
 
 /** DI token for the "does this address already have MON?" guard's data source. */
@@ -151,9 +157,44 @@ const senderPoolProvider: Provider = {
     buildSenderPool(config, client),
 };
 
+/**
+ * The agent drip's sends: spaced per key, simulated, confirmed by receipt —
+ * see `sender/reserve-aware-dispatcher.ts`. In dry run nothing is broadcast,
+ * so there is nothing to simulate or wait for; spacing still runs for real.
+ */
+const agentDripDispatcherProvider: Provider = {
+  provide: AGENT_DRIP_DISPATCHER,
+  inject: [GAS_DRIP_CONFIG, MONAD_PUBLIC_CLIENT, SENDER_POOL],
+  useFactory: (
+    config: GasDripConfig,
+    client: MonadPublicClient,
+    pool: SenderPool,
+  ): ReserveAwareDispatcher => {
+    const simulator: TransferSimulator = config.dryRun
+      ? { simulateTransfer: () => Promise.resolve() }
+      : {
+          simulateTransfer: async ({ from, to, value, gas }) => {
+            await client.call({ account: from, to, value, gas });
+          },
+        };
+    const receipts: ReceiptWaiter = config.dryRun
+      ? { waitForReceipt: () => Promise.resolve('success') }
+      : {
+          waitForReceipt: async ({ hash, timeoutMs }) =>
+            (await client.waitForTransactionReceipt({ hash, timeout: timeoutMs })).status,
+        };
+    return new ReserveAwareDispatcher(pool, simulator, receipts, {
+      spacingMs: config.agent.senderSpacingMs,
+      receiptTimeoutMs: config.agent.receiptTimeoutMs,
+      logger: new Logger('AgentDripDispatcher'),
+    });
+  },
+};
+
 export const monadChainProviders: Provider[] = [
   publicClientProvider,
   balanceReaderProvider,
   codeReaderProvider,
   senderPoolProvider,
+  agentDripDispatcherProvider,
 ];

@@ -37,12 +37,38 @@ export interface GasDripConfig {
   /** Optional RPC override; falls back to viem's default for monadTestnet. */
   rpcUrl: string | undefined;
   rateLimit: GasDripRateLimitConfig;
+  /** The agent drip (SEN-14): MON for a hired agent's own EOA. */
+  agent: GasDripAgentConfig;
   /**
    * Local/CI only. Runs every guard for real but never broadcasts, returning a
    * synthetic tx hash. Lets the refusal paths be exercised end to end without a
    * funded key. Refuses to switch on when NODE_ENV=production.
    */
   dryRun: boolean;
+}
+
+export interface GasDripAgentConfig {
+  /**
+   * MON sent to each hired agent's EOA. Default 0.15: SEN-6 measured 0.138 MON
+   * of gas for one agent's first seven transactions (Kuru approve/deposit/
+   * order/cancel and Perpl's three onboarding txs — 1,355,412 gas at 102 gwei,
+   * charged at the limit). Floor and ceiling pinned in gas.config.spec.ts.
+   */
+  amountWei: bigint;
+  /**
+   * Agents one user may have funded per UTC day. Separate from the user's own
+   * one-drip-ever rule, which an agent drip never consumes.
+   */
+  maxPerUserPerDay: number;
+  /**
+   * Minimum gap between two agent-drip sends from the same faucet key,
+   * measured from the previous send's receipt. Keeps each send its key's first
+   * transaction in the reserve-balance window — see
+   * `sender/reserve-aware-dispatcher.ts` and CLAUDE.md gotcha 12.
+   */
+  senderSpacingMs: number;
+  /** How long to wait for a drip's receipt before calling it unconfirmed. */
+  receiptTimeoutMs: number;
 }
 
 const PRIVATE_KEY_PATTERN = /^0x[0-9a-fA-F]{64}$/;
@@ -63,6 +89,18 @@ export const GAS_DRIP_DEFAULTS = {
   gasLimitContract: 46_000n,
   rateLimitMax: 3,
   rateLimitWindowMs: 15 * 60 * 1000,
+  /** 0.138252 MON measured per agent in SEN-6, +8%. */
+  agentAmountMon: '0.15',
+  agentMaxPerUserPerDay: 3,
+  /**
+   * Monad's execution delay is a few blocks at ~400 ms each; the exact
+   * reserve-balance window was never measured (gotcha 12). 5 s from the
+   * previous receipt is roughly 12 blocks — deliberately generous, since agent
+   * hires are rare and a violation costs gas.
+   */
+  senderSpacingMs: 5_000,
+  /** Monad finalises in about a second; 15 s is an RPC in trouble. */
+  agentReceiptTimeoutMs: 15_000,
 } as const;
 
 function parseMon(raw: string | undefined, fallback: string, name: string): bigint {
@@ -135,6 +173,18 @@ export function loadGasDripConfig(env: NodeJS.ProcessEnv = process.env): GasDrip
     );
   }
 
+  const agentAmountWei = parseMon(
+    env.GAS_DRIP_AGENT_AMOUNT_MON,
+    GAS_DRIP_DEFAULTS.agentAmountMon,
+    'GAS_DRIP_AGENT_AMOUNT_MON',
+  );
+  if (dailyCapWei < agentAmountWei) {
+    throw new Error(
+      `GAS_DRIP_DAILY_CAP_MON (${formatEther(dailyCapWei)}) is below GAS_DRIP_AGENT_AMOUNT_MON ` +
+        `(${formatEther(agentAmountWei)}); no agent drip could ever succeed`,
+    );
+  }
+
   const dryRun = env.GAS_DRIP_DRY_RUN === 'true';
   if (dryRun && env.NODE_ENV === 'production') {
     throw new Error('GAS_DRIP_DRY_RUN cannot be enabled with NODE_ENV=production');
@@ -171,6 +221,24 @@ export function loadGasDripConfig(env: NodeJS.ProcessEnv = process.env): GasDrip
         'GAS_DRIP_RATE_LIMIT_WINDOW_MS',
       ),
     },
+    agent: {
+      amountWei: agentAmountWei,
+      maxPerUserPerDay: parsePositiveInt(
+        env.GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY,
+        GAS_DRIP_DEFAULTS.agentMaxPerUserPerDay,
+        'GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY',
+      ),
+      senderSpacingMs: parsePositiveInt(
+        env.GAS_DRIP_SENDER_SPACING_MS,
+        GAS_DRIP_DEFAULTS.senderSpacingMs,
+        'GAS_DRIP_SENDER_SPACING_MS',
+      ),
+      receiptTimeoutMs: parsePositiveInt(
+        env.GAS_DRIP_AGENT_RECEIPT_TIMEOUT_MS,
+        GAS_DRIP_DEFAULTS.agentReceiptTimeoutMs,
+        'GAS_DRIP_AGENT_RECEIPT_TIMEOUT_MS',
+      ),
+    },
     dryRun,
   };
 }
@@ -183,5 +251,11 @@ export function describeGasDripConfig(config: GasDripConfig, logger: Logger): vo
       `senders=${config.senderKeys.length} gasLimit=${config.gasLimit} ` +
       `gasLimitContract=${config.gasLimitContract} ` +
       `rateLimit=${config.rateLimit.max}/${config.rateLimit.windowMs}ms dryRun=${config.dryRun}`,
+  );
+  logger.log(
+    `agent drip amount=${formatEther(config.agent.amountWei)} MON ` +
+      `maxPerUserPerDay=${config.agent.maxPerUserPerDay} ` +
+      `senderSpacing=${config.agent.senderSpacingMs}ms ` +
+      `receiptTimeout=${config.agent.receiptTimeoutMs}ms`,
   );
 }

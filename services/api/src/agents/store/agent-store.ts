@@ -1,6 +1,7 @@
 import type { Mandate } from '@sente/mandate';
-import type { Address } from 'viem';
+import type { Address, Hash } from 'viem';
 
+import type { AgentDripRefusalReason } from '../../gas/gas.errors';
 import type { AgentModel } from '../agents.config';
 
 /** DI token for agent persistence. */
@@ -8,6 +9,24 @@ export const AGENT_STORE = Symbol('AGENT_STORE');
 
 export const AGENT_STATUSES = ['active', 'revoked'] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+/**
+ * Why an agent has no gas drip: the gas module's reasons, plus
+ * `gas_drip_unavailable` (no drip wired in) and `drip_pending` (hired, drip
+ * still in progress).
+ */
+export type AgentGasFundingReason =
+  AgentDripRefusalReason | 'gas_drip_unavailable' | 'drip_pending';
+
+/** The MON gas drip at hire (SEN-14). A drip that fails never fails the hire. */
+export interface AgentGasFunding {
+  readonly funded: boolean;
+  /** Only when not funded. */
+  readonly reason?: AgentGasFundingReason;
+  /** The drip transaction: when funded, or when broadcast but unconfirmed. */
+  readonly txHash?: Hash;
+  readonly amountWei?: bigint;
+}
 
 /**
  * One hired agent. The mandate is stored PARSED (bigint atoms, checksummed
@@ -27,7 +46,10 @@ export interface AgentRecord {
   readonly mandate: Mandate;
   /** The provider's (Privy's) wallet id. */
   readonly walletId: string;
-  /** The agent's own EOA, EIP-55. The user funds it; nothing server-side does. */
+  /**
+   * The agent's own EOA, EIP-55. The user funds its collateral; the server
+   * only drips MON for gas, once, at hire (`gasFunding`).
+   */
   readonly address: Address;
   /** The policy that bounds the wallet. Emptied (`[]`) on revoke. */
   readonly policyId: string;
@@ -48,11 +70,19 @@ export interface AgentRecord {
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly revokedAt?: Date;
+  /**
+   * The gas drip's outcome. Optional so records built elsewhere (specs, older
+   * code) stay valid; absent reads as not funded.
+   */
+  readonly gasFunding?: AgentGasFunding;
 }
 
 /** The only fields that change after hire. */
 export type AgentPatch = Partial<
-  Pick<AgentRecord, 'mandate' | 'status' | 'policyCleared' | 'updatedAt' | 'revokedAt'>
+  Pick<
+    AgentRecord,
+    'mandate' | 'status' | 'policyCleared' | 'updatedAt' | 'revokedAt' | 'gasFunding'
+  >
 >;
 
 export interface AgentStore {

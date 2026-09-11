@@ -14,11 +14,23 @@ import {
   type CodeReader,
 } from './chain/monad-chain.providers';
 import { GAS_DRIP_CONFIG, type GasDripConfig } from './gas.config';
-import { GasDripRefusedError } from './gas.errors';
+import { GasDripRefusedError, type AgentDripRefusalReason } from './gas.errors';
 import type { GasDripPrincipal } from './auth/gas-drip-auth';
-import { DRIP_LEDGER, utcDay, type DripLedger } from './ledger/drip-ledger';
+import {
+  DRIP_LEDGER,
+  utcDay,
+  type AgentLedgerRefusalReason,
+  type DripLedger,
+} from './ledger/drip-ledger';
 import { IP_RATE_LIMITER, type IpRateLimiter } from './rate-limit/ip-rate-limiter';
 import { SENDER_POOL, type DripSendResult } from './sender/drip-sender';
+import {
+  AGENT_DRIP_DISPATCHER,
+  DripUnconfirmedError,
+  ReserveBalanceBusyError,
+  type AgentDripDispatcher,
+  type ConfirmedSend,
+} from './sender/reserve-aware-dispatcher';
 import type { SenderPool } from './sender/sender-pool';
 
 export interface DripCommand {
@@ -39,6 +51,32 @@ export interface DripReceipt {
   dailyCapWei: bigint;
   dryRun: boolean;
 }
+
+/** Server-initiated: every field comes from the stored agent, never from a request body. */
+export interface AgentDripCommand {
+  /** The hiring user; counts toward their per-day agent cap. */
+  userId: string;
+  agentId: string;
+  /** The agent's EOA. */
+  address: string;
+}
+
+export interface AgentDripReceipt {
+  address: Address;
+  amountWei: bigint;
+  txHash: Hash;
+  sender: Address;
+  nonce: number;
+  /** Earlier attempts that reverted on the reserve balance (gas spent, no MON moved). */
+  revertedTxHashes: Hash[];
+  dailyTotalWei: bigint;
+  dryRun: boolean;
+}
+
+/** Never an exception: a hire must not fail because its agent could not be funded. */
+export type AgentDripOutcome =
+  | { funded: true; receipt: AgentDripReceipt }
+  | { funded: false; reason: AgentDripRefusalReason; message: string; txHash?: Hash };
 
 export interface FaucetStatus {
   configured: boolean;
@@ -68,6 +106,7 @@ export class GasDripService {
     @Inject(BALANCE_READER) private readonly balances: BalanceReader,
     @Inject(IP_RATE_LIMITER) private readonly rateLimiter: IpRateLimiter,
     @Inject(CODE_READER) private readonly code: CodeReader,
+    @Inject(AGENT_DRIP_DISPATCHER) private readonly agentDispatcher: AgentDripDispatcher,
   ) {}
 
   async status(now: Date = new Date()): Promise<FaucetStatus> {
@@ -192,6 +231,143 @@ export class GasDripService {
   }
 
   /**
+   * The agent drip (SEN-14): MON for a freshly hired agent's own EOA, which
+   * pays gas on every Kuru transaction and on its Perpl onboarding.
+   *
+   * It cannot reuse `drip`: that one is keyed on the user, so a user who took
+   * their own drip could never fund an agent, and funding an agent would use
+   * up the user's own. Instead:
+   *   - one drip per agent id, ever, and one per address, ever (the address
+   *     table is shared with user drips);
+   *   - at most `agent.maxPerUserPerDay` agents per hiring user per UTC day;
+   *   - the same global daily cap as `drip`;
+   *   - refused when the address already holds at least the drip amount.
+   * No per-IP limit: the caller is the server, after an authenticated hire.
+   *
+   * Sends go through `ReserveAwareDispatcher`, which spaces sends per faucet
+   * key and waits for the receipt — see that file for the reserve balance.
+   *
+   * Never throws. Every refusal and failure comes back as `funded: false`
+   * with a stable reason, because the hire it follows must still succeed.
+   */
+  async dripToAgent(command: AgentDripCommand): Promise<AgentDripOutcome> {
+    try {
+      return await this.fundAgent(command, new Date());
+    } catch (error) {
+      this.logger.error(
+        `agent drip failed agent=${command.agentId} user=${command.userId}: ${describeError(error)}`,
+      );
+      return agentRefusal('drip_failed', 'The gas drip failed; fund the agent manually');
+    }
+  }
+
+  private async fundAgent(command: AgentDripCommand, now: Date): Promise<AgentDripOutcome> {
+    if (this.senders.size === 0) {
+      return agentRefusal(
+        'faucet_unconfigured',
+        'No faucet senders configured; set GAS_DRIP_PRIVATE_KEYS',
+      );
+    }
+    if (!isAddress(command.address)) {
+      // The address comes from the wallet provider, so this is a bug upstream.
+      throw new Error(`agent ${command.agentId} has no valid address`);
+    }
+    const address = getAddress(command.address);
+    const ledgerAddress = address.toLowerCase() as Address;
+    const amountWei = this.config.agent.amountWei;
+
+    // Cheap checks first, for the most specific reason; `claimAgent` below is
+    // the authoritative, race-free one.
+    if (await this.ledger.findByAgentId(command.agentId)) {
+      return agentRefusal('agent_already_dripped', agentRefusalMessage('agent_already_dripped'));
+    }
+    if (await this.ledger.findByAddress(ledgerAddress)) {
+      return agentRefusal(
+        'address_already_dripped',
+        agentRefusalMessage('address_already_dripped'),
+      );
+    }
+    const balance = await this.balances.getBalance({ address });
+    if (balance >= amountWei) {
+      return agentRefusal(
+        'address_already_funded',
+        `Address already holds ${formatEther(balance)} MON`,
+      );
+    }
+
+    const claim = await this.ledger.claimAgent({
+      userId: command.userId,
+      agentId: command.agentId,
+      address: ledgerAddress,
+      amountWei,
+      dailyCapWei: this.config.dailyCapWei,
+      maxPerUserPerDay: this.config.agent.maxPerUserPerDay,
+      now,
+    });
+    if (!claim.ok) {
+      return agentRefusal(claim.reason, agentRefusalMessage(claim.reason));
+    }
+
+    let sent: ConfirmedSend;
+    let gasLimit: bigint;
+    try {
+      gasLimit = await this.gasLimitFor(address);
+      sent = await this.agentDispatcher.send(address, amountWei, gasLimit);
+    } catch (error) {
+      if (error instanceof DripUnconfirmedError) {
+        // It may still land, so the budget and the dedupe keys stay spent and
+        // it is never re-sent. Worst case the agent is unfunded and says so.
+        await this.ledger.confirm(claim.reservation.id, error.sent.hash);
+        this.logger.warn(`agent drip unconfirmed agent=${command.agentId}: ${error.message}`);
+        return {
+          ...agentRefusal('drip_unconfirmed', `Drip ${error.sent.hash} was not confirmed in time`),
+          txHash: error.sent.hash,
+        };
+      }
+      // Nothing moved: give the budget back so the agent can be funded later.
+      await this.ledger.release(claim.reservation.id);
+      if (error instanceof ReserveBalanceBusyError) {
+        this.logger.warn(`agent drip refused agent=${command.agentId}: ${error.message}`);
+        return agentRefusal(
+          'reserve_balance_busy',
+          'Every faucet key is inside its reserve-balance window; try again shortly',
+        );
+      }
+      if (error instanceof GasDripRefusedError && error.reason === 'faucet_unconfigured') {
+        return agentRefusal('faucet_unconfigured', error.message);
+      }
+      this.logger.error(
+        `agent drip send failed address=${address} agent=${command.agentId}: ${describeError(error)}`,
+      );
+      return agentRefusal('drip_failed', 'Faucet transfer failed');
+    }
+
+    await this.ledger.confirm(claim.reservation.id, sent.hash);
+
+    this.logger.log(
+      `agent drip ok agent=${command.agentId} address=${address} ` +
+        `amount=${formatEther(amountWei)} MON tx=${sent.hash} sender=${sent.sender} ` +
+        `nonce=${sent.nonce} gas=${gasLimit} reverted=${sent.reverted.length} ` +
+        `dailyTotal=${formatEther(claim.dailyTotalWei)}/${formatEther(this.config.dailyCapWei)} MON ` +
+        `user=${command.userId}${this.config.dryRun ? ' (DRY RUN)' : ''}`,
+    );
+
+    return {
+      funded: true,
+      receipt: {
+        address,
+        amountWei,
+        txHash: sent.hash,
+        sender: sent.sender,
+        nonce: sent.nonce,
+        revertedTxHashes: sent.reverted,
+        dailyTotalWei: claim.dailyTotalWei,
+        dryRun: this.config.dryRun,
+      },
+    };
+  }
+
+  /**
    * A MON send into an address with code runs that code: a deployed Kernel
    * account's `receive()` measured 40,995 gas, so the 21k EOA limit reverts
    * and burns the gas. No code (an EOA, or a Kernel account that is still
@@ -214,6 +390,26 @@ function refusalMessage(
       return 'This address has already been funded';
     case 'daily_cap_reached':
       return 'The faucet has reached its daily limit; try again tomorrow';
+  }
+}
+
+function agentRefusal(
+  reason: AgentDripRefusalReason,
+  message: string,
+): { funded: false; reason: AgentDripRefusalReason; message: string } {
+  return { funded: false, reason, message };
+}
+
+function agentRefusalMessage(reason: AgentLedgerRefusalReason): string {
+  switch (reason) {
+    case 'agent_already_dripped':
+      return 'This agent has already been funded';
+    case 'address_already_dripped':
+      return 'This address has already been funded';
+    case 'agent_daily_limit_reached':
+      return 'You have funded the most agents allowed today; fund this one manually';
+    case 'daily_cap_reached':
+      return 'The faucet has reached its daily limit; fund this agent manually';
   }
 }
 

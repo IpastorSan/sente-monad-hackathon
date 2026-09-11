@@ -27,11 +27,24 @@ import type { Address, Hash } from 'viem';
 export type LedgerRefusalReason =
   'user_already_dripped' | 'address_already_dripped' | 'daily_cap_reached';
 
+/** Refusals `claimAgent` can produce. A subset of AgentDripRefusalReason. */
+export type AgentLedgerRefusalReason =
+  | 'agent_already_dripped'
+  | 'address_already_dripped'
+  | 'agent_daily_limit_reached'
+  | 'daily_cap_reached';
+
 export type DripStatus = 'reserved' | 'confirmed';
 
 export interface DripRecord {
   id: string;
+  /** The user who received it or, for an agent drip, who hired the agent. */
   userId: string;
+  /**
+   * Set only for an agent drip (SEN-14). Such a record is keyed by agent id,
+   * never by user id, so funding an agent does not use up the user's own drip.
+   */
+  agentId?: string;
   /** Lowercased. The service normalises before it reaches the ledger. */
   address: Address;
   amountWei: bigint;
@@ -54,6 +67,21 @@ export type DripClaimResult =
   | { ok: true; reservation: DripRecord; dailyTotalWei: bigint }
   | { ok: false; reason: LedgerRefusalReason };
 
+export interface AgentDripClaimInput {
+  /** The hiring user; counts toward their per-day agent cap. */
+  userId: string;
+  agentId: string;
+  address: Address;
+  amountWei: bigint;
+  dailyCapWei: bigint;
+  maxPerUserPerDay: number;
+  now: Date;
+}
+
+export type AgentDripClaimResult =
+  | { ok: true; reservation: DripRecord; dailyTotalWei: bigint }
+  | { ok: false; reason: AgentLedgerRefusalReason };
+
 export interface DripLedger {
   /**
    * Atomically check the per-user, per-address and per-day limits and reserve
@@ -61,6 +89,15 @@ export interface DripLedger {
    * or address, or that together cross the cap, cannot both return ok.
    */
   claim(input: DripClaimInput): Promise<DripClaimResult>;
+  /**
+   * The agent drip's claim, with the same all-or-nothing contract: one drip
+   * per agent id ever, one per address ever (shared with user drips), at most
+   * `maxPerUserPerDay` agents per hiring user per UTC day, and the same global
+   * daily cap as `claim`. A SQL store adds a UNIQUE (agent_id) index and a
+   * per-(user, day) counter row locked with the day row.
+   */
+  claimAgent(input: AgentDripClaimInput): Promise<AgentDripClaimResult>;
+  findByAgentId(agentId: string): Promise<DripRecord | undefined>;
   /** Promote a reservation to confirmed once the transaction is broadcast. */
   confirm(reservationId: string, txHash: Hash): Promise<void>;
   /** Roll a reservation back — the send failed, so it must not consume budget. */

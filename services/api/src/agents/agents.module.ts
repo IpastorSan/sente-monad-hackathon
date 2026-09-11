@@ -2,6 +2,7 @@ import { Logger, Module, type Provider } from '@nestjs/common';
 
 import { GasDripAuth, RequestContextGasDripAuth } from '../gas/auth/gas-drip-auth';
 import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { GasModule } from '../gas/gas.module';
 import {
   AGENT_WALLETS,
   UnconfiguredAgentWalletProvider,
@@ -81,6 +82,8 @@ const authProvider: Provider = {
  * mandate (SEN-3), on venue accounts its own wallet owns (SEN-6).
  */
 @Module({
+  // GasDripService: the MON gas drip to each hired agent's wallet (SEN-14).
+  imports: [GasModule],
   controllers: [AgentsController],
   providers: [
     configProvider,

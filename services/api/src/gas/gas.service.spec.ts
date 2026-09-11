@@ -1,21 +1,34 @@
 import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
-import type { Address, Hash, Hex } from 'viem';
+import { getAddress, type Address, type Hash, type Hex } from 'viem';
 
 import type { BalanceReader, CodeReader } from './chain/monad-chain.providers';
-import type { GasDripConfig } from './gas.config';
+import type { GasDripAgentConfig, GasDripConfig } from './gas.config';
 import { GasDripRefusedError } from './gas.errors';
 import { GasDripService } from './gas.service';
 import { InMemoryDripLedger } from './ledger/in-memory-drip-ledger';
-import type { DripLedger } from './ledger/drip-ledger';
+import { utcDay, type DripLedger } from './ledger/drip-ledger';
 import type { IpRateLimiter } from './rate-limit/ip-rate-limiter';
 import type { DripSendResult } from './sender/drip-sender';
+import {
+  DripUnconfirmedError,
+  ReserveBalanceBusyError,
+  type AgentDripDispatcher,
+} from './sender/reserve-aware-dispatcher';
 import type { SenderPool } from './sender/sender-pool';
 
 const ONE_TENTH_MON = 100_000_000_000_000_000n;
+const AGENT_AMOUNT = 150_000_000_000_000_000n;
 const USER = { userId: 'user-1' };
 const ADDRESS = '0x1111111111111111111111111111111111111111';
 const SENDER = '0x9999999999999999999999999999999999999999' as Address;
 const IP = '203.0.113.7';
+
+const AGENT_DEFAULTS: GasDripAgentConfig = {
+  amountWei: AGENT_AMOUNT,
+  maxPerUserPerDay: 3,
+  senderSpacingMs: 5_000,
+  receiptTimeoutMs: 15_000,
+};
 
 const config = (over: Partial<GasDripConfig> = {}): GasDripConfig => ({
   senderKeys: [],
@@ -25,6 +38,7 @@ const config = (over: Partial<GasDripConfig> = {}): GasDripConfig => ({
   gasLimitContract: 46_000n,
   rpcUrl: undefined,
   rateLimit: { max: 100, windowMs: 60_000 },
+  agent: AGENT_DEFAULTS,
   dryRun: false,
   ...over,
 });
@@ -66,27 +80,61 @@ function senderPool(behaviour: 'ok' | 'throw' | 'empty' = 'ok') {
   return { pool, sends };
 }
 
+const AGENT_TX = `0x${'a9'.repeat(32)}` as Hash;
+const UNCONFIRMED_TX = `0x${'be'.repeat(32)}` as Hash;
+
+type DispatchBehaviour = 'ok' | 'busy' | 'unconfirmed' | 'throw';
+
+/** A fake of the reserve-aware dispatcher; its own behaviour is specced in its file. */
+function agentDispatcher(behaviour: DispatchBehaviour) {
+  const sends: { to: Address; value: bigint; gasLimit: bigint }[] = [];
+  const dispatcher: AgentDripDispatcher = {
+    send: async (to, value, gasLimit) => {
+      sends.push({ to, value, gasLimit });
+      switch (behaviour) {
+        case 'busy':
+          throw new ReserveBalanceBusyError([`0x${'de'.repeat(32)}` as Hash]);
+        case 'unconfirmed':
+          throw new DripUnconfirmedError(
+            { hash: UNCONFIRMED_TX, nonce: 1, sender: SENDER },
+            new Error('timed out'),
+          );
+        case 'throw':
+          throw new Error('rpc exploded');
+        case 'ok':
+          return { hash: AGENT_TX, nonce: 9, sender: SENDER, reverted: [] };
+      }
+    },
+  };
+  return { dispatcher, sends };
+}
+
 function build(
   over: {
     cfg?: Partial<GasDripConfig>;
+    agent?: Partial<GasDripAgentConfig>;
     ledger?: DripLedger;
     balanceWei?: bigint;
+    balances?: BalanceReader;
     allowIp?: boolean;
     senders?: 'ok' | 'throw' | 'empty';
     code?: Hex | undefined | Error;
+    dispatch?: DispatchBehaviour;
   } = {},
 ) {
   const ledger = over.ledger ?? new InMemoryDripLedger();
   const { pool, sends } = senderPool(over.senders ?? 'ok');
+  const agent = agentDispatcher(over.dispatch ?? 'ok');
   const service = new GasDripService(
-    config(over.cfg),
+    config({ ...over.cfg, agent: { ...AGENT_DEFAULTS, ...over.agent } }),
     ledger,
     pool,
-    balances(over.balanceWei ?? 0n),
+    over.balances ?? balances(over.balanceWei ?? 0n),
     rateLimiter(over.allowIp ?? true),
     codeReader(over.code),
+    agent.dispatcher,
   );
-  return { service, ledger, sends };
+  return { service, ledger, sends, agentSends: agent.sends };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -231,6 +279,7 @@ describe('GasDripService.drip', () => {
         balances(1n),
         rateLimiter(),
         { getCode },
+        agentDispatcher('ok').dispatcher,
       );
 
       expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
@@ -267,6 +316,167 @@ describe('GasDripService.drip', () => {
 
     expect(settled.filter((s) => s.status === 'fulfilled')).toHaveLength(1);
     expect(sends).toHaveLength(1);
+  });
+});
+
+describe('GasDripService.dripToAgent', () => {
+  const agent = (n: number, userId = 'user-1') => ({
+    userId,
+    agentId: `agent-${n}`,
+    address: `0x${(0xa0 + n).toString(16).padStart(40, '0')}`,
+  });
+  const today = () => utcDay(new Date());
+
+  it('funds an agent once, with the agent amount, keyed on the agent id and the address', async () => {
+    const { service, agentSends } = build();
+
+    const first = await service.dripToAgent(agent(1));
+
+    expect(first).toMatchObject({
+      funded: true,
+      receipt: { amountWei: AGENT_AMOUNT, txHash: AGENT_TX, revertedTxHashes: [] },
+    });
+    expect(agentSends).toEqual([
+      { to: getAddress(agent(1).address), value: AGENT_AMOUNT, gasLimit: 21_000n },
+    ]);
+    // The same agent again, even at another address.
+    expect(await service.dripToAgent({ ...agent(1), address: agent(9).address })).toMatchObject({
+      funded: false,
+      reason: 'agent_already_dripped',
+    });
+    // Another agent at an address already funded.
+    expect(await service.dripToAgent({ ...agent(2), address: agent(1).address })).toMatchObject({
+      funded: false,
+      reason: 'address_already_dripped',
+    });
+    expect(agentSends).toHaveLength(1);
+  });
+
+  it('lets one user fund several agents, up to the per-user daily cap', async () => {
+    const { service, agentSends } = build({ agent: { maxPerUserPerDay: 2 } });
+
+    expect((await service.dripToAgent(agent(1))).funded).toBe(true);
+    expect((await service.dripToAgent(agent(2))).funded).toBe(true);
+    expect(await service.dripToAgent(agent(3))).toMatchObject({
+      funded: false,
+      reason: 'agent_daily_limit_reached',
+    });
+    // The cap is per user.
+    expect((await service.dripToAgent(agent(4, 'user-2'))).funded).toBe(true);
+    expect(agentSends).toHaveLength(3);
+  });
+
+  it('neither uses up nor is blocked by the user’s own drip', async () => {
+    const userFirst = build();
+    await userFirst.service.drip(USER, { address: ADDRESS, ip: IP });
+    expect((await userFirst.service.dripToAgent(agent(1))).funded).toBe(true);
+
+    const agentFirst = build();
+    expect((await agentFirst.service.dripToAgent(agent(1))).funded).toBe(true);
+    const receipt = await agentFirst.service.drip(USER, { address: ADDRESS, ip: IP });
+    expect(receipt.amountWei).toBe(ONE_TENTH_MON);
+  });
+
+  it('shares the global daily cap with user drips', async () => {
+    const { service, agentSends } = build({
+      cfg: { dailyCapWei: ONE_TENTH_MON + AGENT_AMOUNT },
+    });
+    await service.drip(USER, { address: ADDRESS, ip: IP });
+    expect((await service.dripToAgent(agent(1))).funded).toBe(true);
+
+    expect(await service.dripToAgent(agent(2))).toMatchObject({
+      funded: false,
+      reason: 'daily_cap_reached',
+    });
+    expect(agentSends).toHaveLength(1);
+  });
+
+  it('refuses an address already holding the drip amount, and tops up one holding less', async () => {
+    const full = build({ balanceWei: AGENT_AMOUNT });
+    expect(await full.service.dripToAgent(agent(1))).toMatchObject({
+      funded: false,
+      reason: 'address_already_funded',
+    });
+    expect(full.agentSends).toHaveLength(0);
+
+    const low = build({ balanceWei: AGENT_AMOUNT - 1n });
+    expect((await low.service.dripToAgent(agent(1))).funded).toBe(true);
+  });
+
+  it('refuses when no faucet keys are configured', async () => {
+    const { service, agentSends } = build({ senders: 'empty' });
+    expect(await service.dripToAgent(agent(1))).toMatchObject({
+      funded: false,
+      reason: 'faucet_unconfigured',
+    });
+    expect(agentSends).toHaveLength(0);
+  });
+
+  it('sizes the gas limit from the code at the agent address', async () => {
+    // An EIP-7702-delegated EOA has code; its receive() runs on the send.
+    const { service, agentSends } = build({ code: KERNEL_CODE });
+    await service.dripToAgent(agent(1));
+    expect(agentSends[0]?.gasLimit).toBe(46_000n);
+  });
+
+  it('gives the budget back when every key is inside its reserve window', async () => {
+    const { service, ledger } = build({ dispatch: 'busy' });
+
+    expect(await service.dripToAgent(agent(1))).toMatchObject({
+      funded: false,
+      reason: 'reserve_balance_busy',
+    });
+
+    // Nothing moved, so the agent can still be funded later.
+    expect(await ledger.dailyTotalWei(today())).toBe(0n);
+    expect(await ledger.findByAgentId('agent-1')).toBeUndefined();
+  });
+
+  it('keeps an unconfirmed drip spent and never sends it twice', async () => {
+    const { service, ledger, agentSends } = build({ dispatch: 'unconfirmed' });
+
+    expect(await service.dripToAgent(agent(1))).toMatchObject({
+      funded: false,
+      reason: 'drip_unconfirmed',
+      txHash: UNCONFIRMED_TX,
+    });
+    // It may still land: the budget stays spent and a retry is refused.
+    expect(await ledger.dailyTotalWei(today())).toBe(AGENT_AMOUNT);
+    expect(await service.dripToAgent(agent(1))).toMatchObject({ reason: 'agent_already_dripped' });
+    expect(agentSends).toHaveLength(1);
+  });
+
+  it('reports a failed send as drip_failed and gives the budget back', async () => {
+    const { service, ledger } = build({ dispatch: 'throw' });
+
+    expect(await service.dripToAgent(agent(1))).toMatchObject({
+      funded: false,
+      reason: 'drip_failed',
+    });
+    expect(await ledger.dailyTotalWei(today())).toBe(0n);
+  });
+
+  it('never throws, even when a read fails before the claim', async () => {
+    const { service, ledger } = build({
+      balances: { getBalance: () => Promise.reject(new Error('rpc down')) },
+    });
+
+    expect(await service.dripToAgent(agent(1))).toMatchObject({
+      funded: false,
+      reason: 'drip_failed',
+    });
+    expect(await ledger.findByAgentId('agent-1')).toBeUndefined();
+  });
+
+  it('lets only one of several concurrent drips for the same agent through', async () => {
+    const { service, agentSends } = build();
+
+    const outcomes = await Promise.all(
+      Array.from({ length: 5 }, () => service.dripToAgent(agent(1))),
+    );
+
+    expect(outcomes.filter((o) => o.funded)).toHaveLength(1);
+    expect(agentSends).toHaveLength(1);
   });
 });
 

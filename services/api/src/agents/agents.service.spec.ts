@@ -1,9 +1,16 @@
 import { compileMandate, parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import type { Address, Hash } from 'viem';
 
+import { loadGasDripConfig } from '../gas/gas.config';
+import { GasDripService, type AgentDripCommand, type AgentDripOutcome } from '../gas/gas.service';
+import { InMemoryDripLedger } from '../gas/ledger/in-memory-drip-ledger';
+import type { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
+import type { SenderPool } from '../gas/sender/sender-pool';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentRefusedError, AgentWalletsUnconfiguredError } from './agents.errors';
-import { AgentsService, type HireAgentInput } from './agents.service';
+import { AgentsService, type AgentGasFunder, type HireAgentInput } from './agents.service';
+import { toAgentResponse } from './dto/agent.dto';
 import { InMemoryAgentStore, type AgentRecord } from './store/agent-store';
 import { hashMcpToken } from './store/mcp-token';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
@@ -134,6 +141,147 @@ describe('AgentsService', () => {
       await expect(service.hire(ALICE, hireInput())).rejects.toBeInstanceOf(
         AgentWalletsUnconfiguredError,
       );
+    });
+  });
+
+  describe('the gas drip at hire', () => {
+    const TX = `0x${'a9'.repeat(32)}` as Hash;
+    const AMOUNT = 150_000_000_000_000_000n;
+
+    /** Records every drip and answers with `outcome`, or throws it. */
+    class FakeGasFunder implements AgentGasFunder {
+      readonly calls: AgentDripCommand[] = [];
+      outcome: AgentDripOutcome | Error = {
+        funded: true,
+        receipt: {
+          address: '0x0000000000000000000000000000000000000001',
+          amountWei: AMOUNT,
+          txHash: TX,
+          sender: '0x0000000000000000000000000000000000000002',
+          nonce: 0,
+          revertedTxHashes: [],
+          dailyTotalWei: AMOUNT,
+          dryRun: false,
+        },
+      };
+
+      dripToAgent(command: AgentDripCommand): Promise<AgentDripOutcome> {
+        this.calls.push(command);
+        return this.outcome instanceof Error
+          ? Promise.reject(this.outcome)
+          : Promise.resolve(this.outcome);
+      }
+    }
+
+    function withGas(gas: AgentGasFunder = new FakeGasFunder()) {
+      const store = new InMemoryAgentStore();
+      return { store, service: new AgentsService(store, new FakeAgentWalletProvider(), gas) };
+    }
+
+    it('drips MON to the new agent’s own address, once, and records it', async () => {
+      const gas = new FakeGasFunder();
+      const { service, store } = withGas(gas);
+
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(gas.calls).toEqual([{ userId: 'alice', agentId: agent.id, address: agent.address }]);
+      expect(agent.gasFunding).toEqual({ funded: true, txHash: TX, amountWei: AMOUNT });
+      expect(await store.get(agent.id)).toEqual(agent);
+      const wire = toAgentResponse(agent);
+      expect(wire).toMatchObject({ gasFunded: true, gasFundingTxHash: TX });
+      expect(wire).not.toHaveProperty('gasFundingReason');
+    });
+
+    it('leaves the hire successful when the drip is refused, with gasFunded false and the reason', async () => {
+      const gas = new FakeGasFunder();
+      gas.outcome = { funded: false, reason: 'daily_cap_reached', message: 'out of budget' };
+      const { service } = withGas(gas);
+
+      const { agent, mcpToken } = await service.hire(ALICE, hireInput());
+
+      expect(mcpToken).toMatch(/^sente_mcp_/);
+      expect(agent.status).toBe('active');
+      expect(await service.get(ALICE, agent.id)).toEqual(agent);
+      expect(toAgentResponse(agent)).toMatchObject({
+        gasFunded: false,
+        gasFundingReason: 'daily_cap_reached',
+      });
+    });
+
+    it('keeps the tx hash of a drip that was sent but not confirmed', async () => {
+      const gas = new FakeGasFunder();
+      gas.outcome = { funded: false, reason: 'drip_unconfirmed', message: 'slow', txHash: TX };
+      const { service } = withGas(gas);
+
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(toAgentResponse(agent)).toMatchObject({
+        gasFunded: false,
+        gasFundingReason: 'drip_unconfirmed',
+        gasFundingTxHash: TX,
+      });
+    });
+
+    it('still hires when the drip throws', async () => {
+      const gas = new FakeGasFunder();
+      gas.outcome = new Error('bug in the drip');
+      const { service } = withGas(gas);
+
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(agent.gasFunding).toEqual({ funded: false, reason: 'drip_failed' });
+    });
+
+    it('hires unfunded, and says so, without the gas module', async () => {
+      const { service } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      expect(toAgentResponse(agent)).toMatchObject({
+        gasFunded: false,
+        gasFundingReason: 'gas_drip_unavailable',
+      });
+    });
+
+    it('does not drip for a refused hire', async () => {
+      const gas = new FakeGasFunder();
+      const { service } = withGas(gas);
+      await refusal(service.hire(ALICE, hireInput({ model: 'openai/gpt-9' })));
+      expect(gas.calls).toHaveLength(0);
+    });
+
+    it('with the real drip: funds each agent a user hires up to the per-user cap, and hires past it', async () => {
+      const sent: Address[] = [];
+      const gas = new GasDripService(
+        loadGasDripConfig({ GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY: '2' }),
+        new InMemoryDripLedger(),
+        { size: 1 } as unknown as SenderPool,
+        { getBalance: () => Promise.resolve(0n) },
+        { hit: () => true } as unknown as IpRateLimiter,
+        { getCode: () => Promise.resolve(undefined) },
+        {
+          send: (to) => {
+            sent.push(to);
+            return Promise.resolve({
+              hash: TX,
+              nonce: sent.length,
+              sender: '0x0000000000000000000000000000000000000002',
+              reverted: [],
+            });
+          },
+        },
+      );
+      const { service } = withGas(gas);
+
+      const hired = [];
+      for (const name of ['one', 'two', 'three']) {
+        hired.push((await service.hire(ALICE, hireInput({ name }))).agent);
+      }
+      const bobs = (await service.hire(BOB, hireInput())).agent;
+
+      expect(hired.map((a) => toAgentResponse(a).gasFunded)).toEqual([true, true, false]);
+      expect(hired[2]!.gasFunding?.reason).toBe('agent_daily_limit_reached');
+      expect(hired.every((a) => a.status === 'active')).toBe(true);
+      expect(bobs.gasFunding?.funded).toBe(true);
+      expect(sent).toEqual([hired[0]!.address, hired[1]!.address, bobs.address]);
     });
   });
 
