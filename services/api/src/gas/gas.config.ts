@@ -61,13 +61,17 @@ export interface GasDripAgentConfig {
    */
   maxPerUserPerDay: number;
   /**
-   * Minimum gap between two agent-drip sends from the same faucet key,
-   * measured from the previous send's receipt. Keeps each send its key's first
-   * transaction in the reserve-balance window — see
-   * `sender/reserve-aware-dispatcher.ts` and CLAUDE.md gotcha 12.
+   * Minimum gap between two drip sends from the same faucet key, user and
+   * agent drips alike (SEN-16), measured from the previous send's receipt.
+   * Keeps each send its key's first transaction in the reserve-balance window
+   * — see `sender/reserve-aware-dispatcher.ts` and CLAUDE.md gotcha 12. It
+   * lives under `agent` because SEN-14 introduced it there.
    */
   senderSpacingMs: number;
-  /** How long to wait for a drip's receipt before calling it unconfirmed. */
+  /**
+   * How long to wait for a drip's receipt, user or agent, before calling it
+   * unconfirmed.
+   */
   receiptTimeoutMs: number;
 }
 
@@ -93,12 +97,15 @@ export const GAS_DRIP_DEFAULTS = {
   agentAmountMon: '0.15',
   agentMaxPerUserPerDay: 3,
   /**
-   * Monad's execution delay is a few blocks at ~400 ms each; the exact
-   * reserve-balance window was never measured (gotcha 12). 5 s from the
-   * previous receipt is roughly 12 blocks — deliberately generous, since agent
-   * hires are rare and a violation costs gas.
+   * Monad's reserve-balance window, measured on testnet in SEN-16: a second
+   * MON transfer from an under-reserve key included 0 or 2 blocks after the
+   * first reverted; 3 or more blocks after, it landed (docs/monad-testnet-
+   * assets.md, "Reserve balance window"; CLAUDE.md gotcha 12). 3 blocks is
+   * about 1.2 s at ~400 ms a block. Counted from the previous receipt, which
+   * arrives no earlier than that send's block, 2 s is about 5 blocks: the
+   * window plus a margin. It was a guessed 5 s before the measurement.
    */
-  senderSpacingMs: 5_000,
+  senderSpacingMs: 2_000,
   /** Monad finalises in about a second; 15 s is an RPC in trouble. */
   agentReceiptTimeoutMs: 15_000,
 } as const;

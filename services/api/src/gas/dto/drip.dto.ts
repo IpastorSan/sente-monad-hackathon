@@ -23,6 +23,11 @@ export interface DripResponseDto {
   nonce: number;
   dailyTotalMon: string;
   dailyCapMon: string;
+  /**
+   * True once the receipt is in. False when it did not arrive in time; the
+   * drip is still counted as spent and is never re-sent — follow `txHash`.
+   */
+  confirmed: boolean;
   /** True when nothing was broadcast (GAS_DRIP_DRY_RUN). */
   dryRun: boolean;
 }

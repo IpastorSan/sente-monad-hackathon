@@ -8,13 +8,14 @@ import { GasDripService } from './gas.service';
 import { InMemoryDripLedger } from './ledger/in-memory-drip-ledger';
 import { utcDay, type DripLedger } from './ledger/drip-ledger';
 import type { IpRateLimiter } from './rate-limit/ip-rate-limiter';
-import type { DripSendResult } from './sender/drip-sender';
+import type { DripSender } from './sender/drip-sender';
 import {
   DripUnconfirmedError,
+  ReserveAwareDispatcher,
   ReserveBalanceBusyError,
-  type AgentDripDispatcher,
+  type DripDispatcher,
 } from './sender/reserve-aware-dispatcher';
-import type { SenderPool } from './sender/sender-pool';
+import { SenderPool } from './sender/sender-pool';
 
 const ONE_TENTH_MON = 100_000_000_000_000_000n;
 const AGENT_AMOUNT = 150_000_000_000_000_000n;
@@ -64,31 +65,22 @@ const codeReader = (code: Hex | undefined | Error): CodeReader => ({
 /** Runtime code of a deployed Kernel account — the content is irrelevant, only its presence. */
 const KERNEL_CODE = '0x363d3d373d3d363d7f360894a13ba1a3210667c828492db98dca3e2076cc3735a9' as Hex;
 
-function senderPool(behaviour: 'ok' | 'throw' | 'empty' = 'ok') {
-  const sends: { to: Address; value: bigint; gasLimit: bigint }[] = [];
-  const pool = {
-    size: behaviour === 'empty' ? 0 : 3,
-    addresses: () => [SENDER],
-    send: async (to: Address, value: bigint, gasLimit: bigint): Promise<DripSendResult> => {
-      if (behaviour === 'throw') {
-        throw new Error('rpc exploded');
-      }
-      sends.push({ to, value, gasLimit });
-      return { hash: '0xfeed' as Hash, nonce: 4, sender: SENDER };
-    },
-  } as unknown as SenderPool;
-  return { pool, sends };
-}
+/** Only its size matters here: every send goes through the dispatcher. */
+const senderPool = (empty = false): SenderPool =>
+  ({ size: empty ? 0 : 3, addresses: () => [SENDER] }) as unknown as SenderPool;
 
-const AGENT_TX = `0x${'a9'.repeat(32)}` as Hash;
+const DRIP_TX = `0x${'a9'.repeat(32)}` as Hash;
 const UNCONFIRMED_TX = `0x${'be'.repeat(32)}` as Hash;
 
 type DispatchBehaviour = 'ok' | 'busy' | 'unconfirmed' | 'throw';
 
-/** A fake of the reserve-aware dispatcher; its own behaviour is specced in its file. */
-function agentDispatcher(behaviour: DispatchBehaviour) {
+/**
+ * A fake of the reserve-aware dispatcher, shared by user and agent drips; its
+ * own behaviour is specced in its file, and wired for real further down.
+ */
+function dripDispatcher(behaviour: DispatchBehaviour) {
   const sends: { to: Address; value: bigint; gasLimit: bigint }[] = [];
-  const dispatcher: AgentDripDispatcher = {
+  const dispatcher: DripDispatcher = {
     send: async (to, value, gasLimit) => {
       sends.push({ to, value, gasLimit });
       switch (behaviour) {
@@ -102,7 +94,7 @@ function agentDispatcher(behaviour: DispatchBehaviour) {
         case 'throw':
           throw new Error('rpc exploded');
         case 'ok':
-          return { hash: AGENT_TX, nonce: 9, sender: SENDER, reverted: [] };
+          return { hash: DRIP_TX, nonce: 9, sender: SENDER, reverted: [] };
       }
     },
   };
@@ -117,24 +109,23 @@ function build(
     balanceWei?: bigint;
     balances?: BalanceReader;
     allowIp?: boolean;
-    senders?: 'ok' | 'throw' | 'empty';
+    noSenders?: boolean;
     code?: Hex | undefined | Error;
     dispatch?: DispatchBehaviour;
   } = {},
 ) {
   const ledger = over.ledger ?? new InMemoryDripLedger();
-  const { pool, sends } = senderPool(over.senders ?? 'ok');
-  const agent = agentDispatcher(over.dispatch ?? 'ok');
+  const { dispatcher, sends } = dripDispatcher(over.dispatch ?? 'ok');
   const service = new GasDripService(
     config({ ...over.cfg, agent: { ...AGENT_DEFAULTS, ...over.agent } }),
     ledger,
-    pool,
+    senderPool(over.noSenders),
     over.balances ?? balances(over.balanceWei ?? 0n),
     rateLimiter(over.allowIp ?? true),
     codeReader(over.code),
-    agent.dispatcher,
+    dispatcher,
   );
-  return { service, ledger, sends, agentSends: agent.sends };
+  return { service, ledger, sends };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -155,7 +146,8 @@ describe('GasDripService.drip', () => {
 
     const receipt = await service.drip(USER, { address: ADDRESS, ip: IP });
 
-    expect(receipt.txHash).toBe('0xfeed');
+    expect(receipt.txHash).toBe(DRIP_TX);
+    expect(receipt.confirmed).toBe(true);
     expect(receipt.amountWei).toBe(ONE_TENTH_MON);
     expect(receipt.dailyTotalWei).toBe(ONE_TENTH_MON);
     expect(sends).toHaveLength(1);
@@ -170,7 +162,7 @@ describe('GasDripService.drip', () => {
   });
 
   it('refuses when no faucet keys are configured', async () => {
-    const { service } = build({ senders: 'empty' });
+    const { service } = build({ noSenders: true });
     expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
       'faucet_unconfigured',
     );
@@ -224,7 +216,7 @@ describe('GasDripService.drip', () => {
   });
 
   it('gives the budget back when the send fails, so a broken RPC cannot drain the cap', async () => {
-    const { service, ledger } = build({ senders: 'throw' });
+    const { service, ledger } = build({ dispatch: 'throw' });
 
     await expect(service.drip(USER, { address: ADDRESS, ip: IP })).rejects.toBeInstanceOf(
       ServiceUnavailableException,
@@ -271,15 +263,14 @@ describe('GasDripService.drip', () => {
 
     it('does not read code for a refused drip', async () => {
       const getCode = jest.fn(async (): Promise<Hex | undefined> => undefined);
-      const { pool } = senderPool();
       const service = new GasDripService(
         config(),
         new InMemoryDripLedger(),
-        pool,
+        senderPool(),
         balances(1n),
         rateLimiter(),
         { getCode },
-        agentDispatcher('ok').dispatcher,
+        dripDispatcher('ok').dispatcher,
       );
 
       expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
@@ -299,6 +290,45 @@ describe('GasDripService.drip', () => {
       const day = new Date().toISOString().slice(0, 10);
       expect(await ledger.dailyTotalWei(day)).toBe(0n);
       expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
+    });
+  });
+
+  describe('through the reserve-aware dispatcher (SEN-16)', () => {
+    it('refuses with reserve_balance_busy and gives the budget back when every key is busy', async () => {
+      const { service, ledger } = build({ dispatch: 'busy' });
+
+      expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
+        'reserve_balance_busy',
+      );
+
+      // Nothing moved, so the user may retry.
+      const day = new Date().toISOString().slice(0, 10);
+      expect(await ledger.dailyTotalWei(day)).toBe(0n);
+      expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
+      expect(await ledger.findByAddress(ADDRESS)).toBeUndefined();
+    });
+
+    it('keeps an unconfirmed drip spent, reports it unconfirmed, and never sends it twice', async () => {
+      const { service, ledger, sends } = build({ dispatch: 'unconfirmed' });
+
+      const receipt = await service.drip(USER, { address: ADDRESS, ip: IP });
+
+      expect(receipt).toMatchObject({ txHash: UNCONFIRMED_TX, confirmed: false });
+      const day = new Date().toISOString().slice(0, 10);
+      expect(await ledger.dailyTotalWei(day)).toBe(ONE_TENTH_MON);
+      expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
+        'user_already_dripped',
+      );
+      expect(sends).toHaveLength(1);
+    });
+
+    it('still reports dry run, with the dispatcher doing the send', async () => {
+      const { service, sends } = build({ cfg: { dryRun: true } });
+
+      const receipt = await service.drip(USER, { address: ADDRESS, ip: IP });
+
+      expect(receipt).toMatchObject({ dryRun: true, confirmed: true, txHash: DRIP_TX });
+      expect(sends).toHaveLength(1);
     });
   });
 
@@ -328,15 +358,15 @@ describe('GasDripService.dripToAgent', () => {
   const today = () => utcDay(new Date());
 
   it('funds an agent once, with the agent amount, keyed on the agent id and the address', async () => {
-    const { service, agentSends } = build();
+    const { service, sends } = build();
 
     const first = await service.dripToAgent(agent(1));
 
     expect(first).toMatchObject({
       funded: true,
-      receipt: { amountWei: AGENT_AMOUNT, txHash: AGENT_TX, revertedTxHashes: [] },
+      receipt: { amountWei: AGENT_AMOUNT, txHash: DRIP_TX, revertedTxHashes: [] },
     });
-    expect(agentSends).toEqual([
+    expect(sends).toEqual([
       { to: getAddress(agent(1).address), value: AGENT_AMOUNT, gasLimit: 21_000n },
     ]);
     // The same agent again, even at another address.
@@ -349,11 +379,11 @@ describe('GasDripService.dripToAgent', () => {
       funded: false,
       reason: 'address_already_dripped',
     });
-    expect(agentSends).toHaveLength(1);
+    expect(sends).toHaveLength(1);
   });
 
   it('lets one user fund several agents, up to the per-user daily cap', async () => {
-    const { service, agentSends } = build({ agent: { maxPerUserPerDay: 2 } });
+    const { service, sends } = build({ agent: { maxPerUserPerDay: 2 } });
 
     expect((await service.dripToAgent(agent(1))).funded).toBe(true);
     expect((await service.dripToAgent(agent(2))).funded).toBe(true);
@@ -363,7 +393,7 @@ describe('GasDripService.dripToAgent', () => {
     });
     // The cap is per user.
     expect((await service.dripToAgent(agent(4, 'user-2'))).funded).toBe(true);
-    expect(agentSends).toHaveLength(3);
+    expect(sends).toHaveLength(3);
   });
 
   it('neither uses up nor is blocked by the user’s own drip', async () => {
@@ -378,7 +408,7 @@ describe('GasDripService.dripToAgent', () => {
   });
 
   it('shares the global daily cap with user drips', async () => {
-    const { service, agentSends } = build({
+    const { service, sends } = build({
       cfg: { dailyCapWei: ONE_TENTH_MON + AGENT_AMOUNT },
     });
     await service.drip(USER, { address: ADDRESS, ip: IP });
@@ -388,7 +418,8 @@ describe('GasDripService.dripToAgent', () => {
       funded: false,
       reason: 'daily_cap_reached',
     });
-    expect(agentSends).toHaveLength(1);
+    // The user drip and the first agent drip; the refused one never sent.
+    expect(sends.map((s) => s.value)).toEqual([ONE_TENTH_MON, AGENT_AMOUNT]);
   });
 
   it('refuses an address already holding the drip amount, and tops up one holding less', async () => {
@@ -397,26 +428,26 @@ describe('GasDripService.dripToAgent', () => {
       funded: false,
       reason: 'address_already_funded',
     });
-    expect(full.agentSends).toHaveLength(0);
+    expect(full.sends).toHaveLength(0);
 
     const low = build({ balanceWei: AGENT_AMOUNT - 1n });
     expect((await low.service.dripToAgent(agent(1))).funded).toBe(true);
   });
 
   it('refuses when no faucet keys are configured', async () => {
-    const { service, agentSends } = build({ senders: 'empty' });
+    const { service, sends } = build({ noSenders: true });
     expect(await service.dripToAgent(agent(1))).toMatchObject({
       funded: false,
       reason: 'faucet_unconfigured',
     });
-    expect(agentSends).toHaveLength(0);
+    expect(sends).toHaveLength(0);
   });
 
   it('sizes the gas limit from the code at the agent address', async () => {
     // An EIP-7702-delegated EOA has code; its receive() runs on the send.
-    const { service, agentSends } = build({ code: KERNEL_CODE });
+    const { service, sends } = build({ code: KERNEL_CODE });
     await service.dripToAgent(agent(1));
-    expect(agentSends[0]?.gasLimit).toBe(46_000n);
+    expect(sends[0]?.gasLimit).toBe(46_000n);
   });
 
   it('gives the budget back when every key is inside its reserve window', async () => {
@@ -433,7 +464,7 @@ describe('GasDripService.dripToAgent', () => {
   });
 
   it('keeps an unconfirmed drip spent and never sends it twice', async () => {
-    const { service, ledger, agentSends } = build({ dispatch: 'unconfirmed' });
+    const { service, ledger, sends } = build({ dispatch: 'unconfirmed' });
 
     expect(await service.dripToAgent(agent(1))).toMatchObject({
       funded: false,
@@ -443,7 +474,7 @@ describe('GasDripService.dripToAgent', () => {
     // It may still land: the budget stays spent and a retry is refused.
     expect(await ledger.dailyTotalWei(today())).toBe(AGENT_AMOUNT);
     expect(await service.dripToAgent(agent(1))).toMatchObject({ reason: 'agent_already_dripped' });
-    expect(agentSends).toHaveLength(1);
+    expect(sends).toHaveLength(1);
   });
 
   it('reports a failed send as drip_failed and gives the budget back', async () => {
@@ -469,14 +500,123 @@ describe('GasDripService.dripToAgent', () => {
   });
 
   it('lets only one of several concurrent drips for the same agent through', async () => {
-    const { service, agentSends } = build();
+    const { service, sends } = build();
 
     const outcomes = await Promise.all(
       Array.from({ length: 5 }, () => service.dripToAgent(agent(1))),
     );
 
     expect(outcomes.filter((o) => o.funded)).toHaveLength(1);
-    expect(agentSends).toHaveLength(1);
+    expect(sends).toHaveLength(1);
+  });
+});
+
+/**
+ * SEN-16: the user drip and the agent drip share one real `ReserveAwareDispatcher`
+ * over a real `SenderPool`. Only the keys, the chain and the clock are fake;
+ * `sleep` moves the clock forward instantly, so spacing costs no real time.
+ */
+describe('GasDripService spacing across user and agent drips', () => {
+  const SPACING_MS = 5_000;
+  const RECEIPT_MS = 1_000;
+  const AGENT = {
+    userId: 'user-9',
+    agentId: 'agent-1',
+    address: '0x00000000000000000000000000000000000000a1',
+  };
+
+  function wired(keys: number) {
+    let t = 1_000_000;
+    const now = () => t;
+    const sends: { from: Address; value: bigint; at: number }[] = [];
+    const receiptAt: number[] = [];
+    const members: DripSender[] = Array.from({ length: keys }, (_, i) => {
+      const address = `0x${(0xf0 + i).toString(16).padStart(40, '0')}` as Address;
+      let nonce = 0;
+      return {
+        address,
+        send: (_to, value) => {
+          sends.push({ from: address, value, at: t });
+          const n = nonce++;
+          const hash = `0x${(0xf0 + i).toString(16)}${n.toString(16).padStart(62, '0')}` as Hash;
+          return Promise.resolve({ hash, nonce: n, sender: address });
+        },
+      };
+    });
+    const pool = new SenderPool(members, now);
+    const dispatcher = new ReserveAwareDispatcher(
+      pool,
+      { simulateTransfer: () => Promise.resolve() },
+      {
+        waitForReceipt: () => {
+          t += RECEIPT_MS;
+          receiptAt.push(t);
+          return Promise.resolve('success');
+        },
+      },
+      {
+        spacingMs: SPACING_MS,
+        receiptTimeoutMs: 15_000,
+        now,
+        sleep: (ms) => {
+          t += ms;
+          return Promise.resolve();
+        },
+      },
+    );
+    const service = new GasDripService(
+      config(),
+      new InMemoryDripLedger(),
+      pool,
+      balances(0n),
+      rateLimiter(),
+      codeReader(undefined),
+      dispatcher,
+    );
+    return { service, sends, receiptAt };
+  }
+
+  it.each([
+    ['a user drip, then an agent drip', ['user', 'agent'] as const],
+    ['an agent drip, then a user drip', ['agent', 'user'] as const],
+  ])('spaces %s from the same key', async (_label, order) => {
+    const { service, sends, receiptAt } = wired(1);
+    const run = (kind: 'user' | 'agent') =>
+      kind === 'user'
+        ? service.drip(USER, { address: ADDRESS, ip: IP })
+        : service.dripToAgent(AGENT);
+
+    await run(order[0]);
+    await run(order[1]);
+
+    expect(sends).toHaveLength(2);
+    expect(sends[1]!.from).toBe(sends[0]!.from);
+    expect(sends[1]!.at).toBeGreaterThanOrEqual(receiptAt[0]! + SPACING_MS);
+  });
+
+  it('spaces them even when they arrive together', async () => {
+    const { service, sends, receiptAt } = wired(1);
+
+    const [user, agent] = await Promise.all([
+      service.drip(USER, { address: ADDRESS, ip: IP }),
+      service.dripToAgent(AGENT),
+    ]);
+
+    expect(user.confirmed).toBe(true);
+    expect(agent.funded).toBe(true);
+    expect(sends[1]!.at).toBeGreaterThanOrEqual(receiptAt[0]! + SPACING_MS);
+  });
+
+  it('takes the fast path: a user drip after an agent drip uses a free key at once', async () => {
+    const { service, sends, receiptAt } = wired(2);
+
+    await service.dripToAgent(AGENT);
+    await service.drip(USER, { address: ADDRESS, ip: IP });
+
+    expect(sends.map((s) => s.value)).toEqual([AGENT_AMOUNT, ONE_TENTH_MON]);
+    expect(sends[1]!.from).not.toBe(sends[0]!.from);
+    // No spacing wait: the user drip went out as soon as the agent drip's receipt was in.
+    expect(sends[1]!.at).toBe(receiptAt[0]);
   });
 });
 

@@ -116,11 +116,11 @@ describe('loadGasDripConfig', () => {
       );
     });
 
-    it('defaults to 0.15 MON, 3 agents per user per day, 5 s spacing, 15 s receipt timeout', () => {
+    it('defaults to 0.15 MON, 3 agents per user per day, 2 s spacing, 15 s receipt timeout', () => {
       expect(loadGasDripConfig({}).agent).toEqual({
         amountWei: parseEther('0.15'),
         maxPerUserPerDay: 3,
-        senderSpacingMs: 5_000,
+        senderSpacingMs: 2_000,
         receiptTimeoutMs: 15_000,
       });
     });
