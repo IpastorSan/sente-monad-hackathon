@@ -20,3 +20,4 @@ minimumReleaseAgeExclude:
   - '@typescript-eslint/utils@8.70.0'
   - '@typescript-eslint/visitor-keys@8.70.0'
   - typescript-eslint@8.70.0
+  - '@anthropic-ai/sdk@0.125.0'
