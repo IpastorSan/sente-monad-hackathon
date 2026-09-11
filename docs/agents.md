@@ -442,6 +442,13 @@ It exits 1 unless the run produced at least one `thesis` event and one
 `pending credentials: OPENROUTER_MANAGEMENT_KEY not set` and exits 0. Copy
 its output here and replace this heading.
 
+**Correction (2026-09-11, SEN-9):** the refusal demo is no longer this
+script with an instruction. It is `pnpm --filter @sente/api run demo:refusal
+-- --mode scripted|model`, runbook in [`demo-refusal.md`](./demo-refusal.md).
+It runs both layers (pre-check off, then on), the owner-only amend and the
+revoke, and asserts on the event log, the Privy call count and the nonce. What
+follows still holds for a one-off enclave-only run.
+
 **For SEN-9 (the refusal demo):** `AGENT_PRECHECK=off` passes through to the
 script, so
 `AGENT_PRECHECK=off pnpm --filter @sente/api run agent:run-live -- --instruction "<a trade over the mandate>"`
