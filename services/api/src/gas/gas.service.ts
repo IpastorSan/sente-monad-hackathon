@@ -7,7 +7,12 @@ import {
 } from '@nestjs/common';
 import { formatEther, getAddress, isAddress, type Address, type Hash } from 'viem';
 
-import { BALANCE_READER, type BalanceReader } from './chain/monad-chain.providers';
+import {
+  BALANCE_READER,
+  CODE_READER,
+  type BalanceReader,
+  type CodeReader,
+} from './chain/monad-chain.providers';
 import { GAS_DRIP_CONFIG, type GasDripConfig } from './gas.config';
 import { GasDripRefusedError } from './gas.errors';
 import type { GasDripPrincipal } from './auth/gas-drip-auth';
@@ -62,6 +67,7 @@ export class GasDripService {
     @Inject(SENDER_POOL) private readonly senders: SenderPool,
     @Inject(BALANCE_READER) private readonly balances: BalanceReader,
     @Inject(IP_RATE_LIMITER) private readonly rateLimiter: IpRateLimiter,
+    @Inject(CODE_READER) private readonly code: CodeReader,
   ) {}
 
   async status(now: Date = new Date()): Promise<FaucetStatus> {
@@ -145,10 +151,14 @@ export class GasDripService {
       throw new GasDripRefusedError(claim.reason, refusalMessage(claim.reason));
     }
 
-    // 7. Send. Budget is already reserved, so a failure must give it back.
+    // 7. Size the gas limit for this recipient, then send. Budget is already
+    //    reserved, so a failure of either must give it back. The code read sits
+    //    right before the send to keep the "deployed in between" window small.
     let sent: DripSendResult;
+    let gasLimit: bigint;
     try {
-      sent = await this.senders.send(address, this.config.amountWei);
+      gasLimit = await this.gasLimitFor(address);
+      sent = await this.senders.send(address, this.config.amountWei, gasLimit);
     } catch (error) {
       await this.ledger.release(claim.reservation.id);
       if (error instanceof GasDripRefusedError) {
@@ -164,7 +174,7 @@ export class GasDripService {
 
     this.logger.log(
       `drip ok address=${address} amount=${formatEther(this.config.amountWei)} MON ` +
-        `tx=${sent.hash} sender=${sent.sender} nonce=${sent.nonce} ` +
+        `tx=${sent.hash} sender=${sent.sender} nonce=${sent.nonce} gas=${gasLimit} ` +
         `dailyTotal=${formatEther(claim.dailyTotalWei)}/${formatEther(this.config.dailyCapWei)} MON ` +
         `user=${principal.userId}${this.config.dryRun ? ' (DRY RUN)' : ''}`,
     );
@@ -179,6 +189,18 @@ export class GasDripService {
       dailyCapWei: this.config.dailyCapWei,
       dryRun: this.config.dryRun,
     };
+  }
+
+  /**
+   * A MON send into an address with code runs that code: a deployed Kernel
+   * account's `receive()` measured 40,995 gas, so the 21k EOA limit reverts
+   * and burns the gas. No code (an EOA, or a Kernel account that is still
+   * counterfactual) keeps the 21k limit — Monad charges the LIMIT, so the
+   * higher one is paid only where it is needed (CLAUDE.md gotcha 4).
+   */
+  private async gasLimitFor(address: Address): Promise<bigint> {
+    const code = await this.code.getCode({ address });
+    return code && code !== '0x' ? this.config.gasLimitContract : this.config.gasLimit;
   }
 }
 

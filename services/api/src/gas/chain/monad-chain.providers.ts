@@ -1,5 +1,12 @@
 import { Logger, type Provider } from '@nestjs/common';
-import { createPublicClient, createWalletClient, http, type Address, type Hash } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  type Address,
+  type Hash,
+  type Hex,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 // viem ships Monad upstream — never hand-roll defineChain for it. Matches
 // apps/mobile/src/chain/client.ts.
@@ -16,6 +23,17 @@ export const BALANCE_READER = Symbol('BALANCE_READER');
 /** Narrow slice of a viem public client, so tests fake two lines instead of a client. */
 export interface BalanceReader {
   getBalance(args: { address: Address }): Promise<bigint>;
+}
+
+/** DI token for the "does this address have code?" read that sizes the gas limit. */
+export const CODE_READER = Symbol('CODE_READER');
+
+/**
+ * Narrow slice of a viem public client (`eth_getCode`). viem returns
+ * `undefined` for an address with no code; some nodes return `0x`.
+ */
+export interface CodeReader {
+  getCode(args: { address: Address }): Promise<Hex | undefined>;
 }
 
 const MONAD_PUBLIC_CLIENT = Symbol('MONAD_PUBLIC_CLIENT');
@@ -43,6 +61,14 @@ const balanceReaderProvider: Provider = {
   }),
 };
 
+const codeReaderProvider: Provider = {
+  provide: CODE_READER,
+  inject: [MONAD_PUBLIC_CLIENT],
+  useFactory: (client: MonadPublicClient): CodeReader => ({
+    getCode: (args) => client.getCode(args),
+  }),
+};
+
 /**
  * Dry-run broadcaster: runs every guard for real, never touches the network,
  * and hands back a well-formed but meaningless hash. Local demos and CI only —
@@ -58,7 +84,8 @@ function dryRunPlumbing(address: Address): {
     broadcaster: {
       sendTransaction: (args) => {
         logger.warn(
-          `DRY RUN: not broadcasting ${args.value} wei from ${address} to ${args.to} nonce=${args.nonce}`,
+          `DRY RUN: not broadcasting ${args.value} wei from ${address} to ${args.to} ` +
+            `nonce=${args.nonce} gas=${args.gas}`,
         );
         const body = `${address}${args.to}${args.nonce}`.replace(/0x/g, '').padEnd(64, '0');
         return Promise.resolve(`0x${body.slice(0, 64)}` as Hash);
@@ -88,7 +115,7 @@ function buildSenderPool(config: GasDripConfig, client: MonadPublicClient): Send
 
     if (config.dryRun) {
       const { nonces, broadcaster } = dryRunPlumbing(account.address);
-      return new NonceManagedSender(account.address, nonces, broadcaster, config.gasLimit);
+      return new NonceManagedSender(account.address, nonces, broadcaster);
     }
 
     const wallet = createWalletClient({
@@ -110,7 +137,7 @@ function buildSenderPool(config: GasDripConfig, client: MonadPublicClient): Send
           nonce: args.nonce,
         }),
     };
-    return new NonceManagedSender(account.address, nonces, broadcaster, config.gasLimit);
+    return new NonceManagedSender(account.address, nonces, broadcaster);
   });
 
   logger.log(`faucet senders: ${senders.map((sender) => sender.address).join(', ')}`);
@@ -127,5 +154,6 @@ const senderPoolProvider: Provider = {
 export const monadChainProviders: Provider[] = [
   publicClientProvider,
   balanceReaderProvider,
+  codeReaderProvider,
   senderPoolProvider,
 ];

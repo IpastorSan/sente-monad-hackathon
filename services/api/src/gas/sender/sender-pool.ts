@@ -26,7 +26,7 @@ export class SenderPool {
     return this.senders.map((sender) => sender.address);
   }
 
-  send(to: Address, valueWei: bigint): Promise<DripSendResult> {
+  send(to: Address, valueWei: bigint, gasLimit: bigint): Promise<DripSendResult> {
     if (this.senders.length === 0) {
       return Promise.reject(
         new GasDripRefusedError(
@@ -37,6 +37,6 @@ export class SenderPool {
     }
     const sender = this.senders[this.cursor] as DripSender;
     this.cursor = (this.cursor + 1) % this.senders.length;
-    return sender.send(to, valueWei);
+    return sender.send(to, valueWei, gasLimit);
   }
 }

@@ -42,16 +42,15 @@ export class NonceManagedSender implements DripSender {
     readonly address: Address,
     private readonly nonces: NonceSource,
     private readonly broadcaster: TransactionBroadcaster,
-    /**
-     * Explicit gas limit. Monad charges `value + gas_bid * gas_limit`, so an
-     * over-estimate is money spent, not reserved — never pass an estimateGas
-     * result here. See CLAUDE.md gotcha 4.
-     */
-    private readonly gasLimit: bigint,
   ) {}
 
-  send(to: Address, valueWei: bigint): Promise<DripSendResult> {
-    return this.enqueue(() => this.sendSerialised(to, valueWei));
+  /**
+   * `gasLimit` is explicit and per send. Monad charges
+   * `value + gas_bid * gas_limit`, so an over-estimate is money spent, not
+   * reserved — never pass an estimateGas result here. See CLAUDE.md gotcha 4.
+   */
+  send(to: Address, valueWei: bigint, gasLimit: bigint): Promise<DripSendResult> {
+    return this.enqueue(() => this.sendSerialised(to, valueWei, gasLimit));
   }
 
   /** Appends `task` to this key's single-writer chain. */
@@ -65,7 +64,11 @@ export class NonceManagedSender implements DripSender {
     return run;
   }
 
-  private async sendSerialised(to: Address, valueWei: bigint): Promise<DripSendResult> {
+  private async sendSerialised(
+    to: Address,
+    valueWei: bigint,
+    gasLimit: bigint,
+  ): Promise<DripSendResult> {
     if (this.nextNonce === null) {
       this.nextNonce = await this.nonces.getTransactionCount({
         address: this.address,
@@ -78,7 +81,7 @@ export class NonceManagedSender implements DripSender {
       const hash = await this.broadcaster.sendTransaction({
         to,
         value: valueWei,
-        gas: this.gasLimit,
+        gas: gasLimit,
         nonce,
       });
       this.nextNonce = nonce + 1;

@@ -6,6 +6,7 @@ import { NonceManagedSender } from './nonce-managed-sender';
 import { SenderPool } from './sender-pool';
 
 const GAS_LIMIT = 21_000n;
+const CONTRACT_GAS_LIMIT = 46_000n;
 const ONE_TENTH_MON = 100_000_000_000_000_000n;
 
 const to = (n: number): Address => `0x${n.toString(16).padStart(40, '0')}` as Address;
@@ -55,11 +56,11 @@ describe('NonceManagedSender', () => {
   it('reads the chain nonce once, then counts locally', async () => {
     const { nonces, reads } = fakeNonces(7);
     const { broadcaster, calls } = fakeBroadcaster();
-    const sender = new NonceManagedSender(to(1), nonces, broadcaster, GAS_LIMIT);
+    const sender = new NonceManagedSender(to(1), nonces, broadcaster);
 
-    await sender.send(to(2), ONE_TENTH_MON);
-    await sender.send(to(3), ONE_TENTH_MON);
-    await sender.send(to(4), ONE_TENTH_MON);
+    await sender.send(to(2), ONE_TENTH_MON, GAS_LIMIT);
+    await sender.send(to(3), ONE_TENTH_MON, GAS_LIMIT);
+    await sender.send(to(4), ONE_TENTH_MON, GAS_LIMIT);
 
     // Asking the node again mid-flight would re-read a stale value, because the
     // previous transaction is not mined yet.
@@ -70,10 +71,10 @@ describe('NonceManagedSender', () => {
   it('gives ten concurrent sends distinct consecutive nonces', async () => {
     const { nonces } = fakeNonces(100);
     const { broadcaster, calls } = fakeBroadcaster();
-    const sender = new NonceManagedSender(to(1), nonces, broadcaster, GAS_LIMIT);
+    const sender = new NonceManagedSender(to(1), nonces, broadcaster);
 
     const results = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => sender.send(to(i + 10), ONE_TENTH_MON)),
+      Array.from({ length: 10 }, (_, i) => sender.send(to(i + 10), ONE_TENTH_MON, GAS_LIMIT)),
     );
 
     const used = results.map((r) => r.nonce).sort((a, b) => a - b);
@@ -85,9 +86,9 @@ describe('NonceManagedSender', () => {
   it('always sends the explicit gas limit, never an estimate', async () => {
     const { nonces } = fakeNonces(0);
     const { broadcaster, calls } = fakeBroadcaster();
-    const sender = new NonceManagedSender(to(1), nonces, broadcaster, GAS_LIMIT);
+    const sender = new NonceManagedSender(to(1), nonces, broadcaster);
 
-    await sender.send(to(2), ONE_TENTH_MON);
+    await sender.send(to(2), ONE_TENTH_MON, GAS_LIMIT);
 
     // Monad charges value + gas_bid * gas_limit, so an over-estimate is money
     // spent rather than reserved.
@@ -95,17 +96,35 @@ describe('NonceManagedSender', () => {
     expect(calls[0]?.value).toBe(ONE_TENTH_MON);
   });
 
+  it('takes the gas limit per send, so one key serves EOAs and contracts alike', async () => {
+    const { nonces } = fakeNonces(0);
+    const { broadcaster, calls } = fakeBroadcaster();
+    const sender = new NonceManagedSender(to(1), nonces, broadcaster);
+
+    await Promise.all([
+      sender.send(to(2), ONE_TENTH_MON, GAS_LIMIT),
+      sender.send(to(3), ONE_TENTH_MON, CONTRACT_GAS_LIMIT),
+      sender.send(to(4), ONE_TENTH_MON, GAS_LIMIT),
+    ]);
+
+    expect(calls.map((c) => [c.to, c.gas, c.nonce])).toEqual([
+      [to(2), GAS_LIMIT, 0],
+      [to(3), CONTRACT_GAS_LIMIT, 1],
+      [to(4), GAS_LIMIT, 2],
+    ]);
+  });
+
   it('resyncs from the node after a failed broadcast', async () => {
     const { nonces, reads } = fakeNonces(5);
     const { broadcaster, failOnce } = fakeBroadcaster();
-    const sender = new NonceManagedSender(to(1), nonces, broadcaster, GAS_LIMIT);
+    const sender = new NonceManagedSender(to(1), nonces, broadcaster);
 
     failOnce(new Error('rpc down'));
-    await expect(sender.send(to(2), ONE_TENTH_MON)).rejects.toThrow('rpc down');
+    await expect(sender.send(to(2), ONE_TENTH_MON, GAS_LIMIT)).rejects.toThrow('rpc down');
 
     // We cannot tell "rejected, nonce unused" from "accepted, response lost",
     // so the only safe move is to drop the local counter and re-read.
-    const after = await sender.send(to(3), ONE_TENTH_MON);
+    const after = await sender.send(to(3), ONE_TENTH_MON, GAS_LIMIT);
     expect(reads()).toBe(2);
     expect(after.nonce).toBe(5);
   });
@@ -113,13 +132,13 @@ describe('NonceManagedSender', () => {
   it('does not let one failure poison the queue', async () => {
     const { nonces } = fakeNonces(0);
     const { broadcaster, failOnce } = fakeBroadcaster();
-    const sender = new NonceManagedSender(to(1), nonces, broadcaster, GAS_LIMIT);
+    const sender = new NonceManagedSender(to(1), nonces, broadcaster);
 
     failOnce(new Error('boom'));
     const settled = await Promise.allSettled([
-      sender.send(to(2), ONE_TENTH_MON),
-      sender.send(to(3), ONE_TENTH_MON),
-      sender.send(to(4), ONE_TENTH_MON),
+      sender.send(to(2), ONE_TENTH_MON, GAS_LIMIT),
+      sender.send(to(3), ONE_TENTH_MON, GAS_LIMIT),
+      sender.send(to(4), ONE_TENTH_MON, GAS_LIMIT),
     ]);
 
     expect(settled.filter((s) => s.status === 'rejected')).toHaveLength(1);
@@ -133,7 +152,7 @@ describe('SenderPool', () => {
       const { nonces } = fakeNonces(0);
       const { broadcaster, calls } = fakeBroadcaster();
       return {
-        sender: new NonceManagedSender(to(i + 1), nonces, broadcaster, GAS_LIMIT),
+        sender: new NonceManagedSender(to(i + 1), nonces, broadcaster),
         calls,
       };
     });
@@ -142,8 +161,10 @@ describe('SenderPool', () => {
 
   it('refuses when no keys are configured', async () => {
     const pool = new SenderPool([]);
-    await expect(pool.send(to(2), ONE_TENTH_MON)).rejects.toBeInstanceOf(GasDripRefusedError);
-    await expect(pool.send(to(2), ONE_TENTH_MON)).rejects.toMatchObject({
+    await expect(pool.send(to(2), ONE_TENTH_MON, GAS_LIMIT)).rejects.toBeInstanceOf(
+      GasDripRefusedError,
+    );
+    await expect(pool.send(to(2), ONE_TENTH_MON, GAS_LIMIT)).rejects.toMatchObject({
       reason: 'faucet_unconfigured',
     });
   });
@@ -152,16 +173,26 @@ describe('SenderPool', () => {
     const { pool } = build(3);
     const results = [];
     for (let i = 0; i < 6; i += 1) {
-      results.push(await pool.send(to(i + 20), ONE_TENTH_MON));
+      results.push(await pool.send(to(i + 20), ONE_TENTH_MON, GAS_LIMIT));
     }
     expect(results.map((r) => r.sender)).toEqual([to(1), to(2), to(3), to(1), to(2), to(3)]);
+  });
+
+  it('forwards the per-send gas limit to whichever key it picks', async () => {
+    const { pool, senders } = build(2);
+
+    await pool.send(to(20), ONE_TENTH_MON, CONTRACT_GAS_LIMIT);
+    await pool.send(to(21), ONE_TENTH_MON, GAS_LIMIT);
+
+    expect(senders[0]?.calls.map((c) => c.gas)).toEqual([CONTRACT_GAS_LIMIT]);
+    expect(senders[1]?.calls.map((c) => c.gas)).toEqual([GAS_LIMIT]);
   });
 
   it('spreads ten concurrent drips over three keys with no nonce collision', async () => {
     const { pool } = build(3);
 
     const results = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => pool.send(to(i + 30), ONE_TENTH_MON)),
+      Array.from({ length: 10 }, (_, i) => pool.send(to(i + 30), ONE_TENTH_MON, GAS_LIMIT)),
     );
 
     expect(results).toHaveLength(10);
