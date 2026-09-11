@@ -9,7 +9,8 @@
 /** DI token for the agent event log. */
 export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
 
-export const AGENT_EVENT_KINDS = ['thesis', 'order', 'fill', 'refusal'] as const;
+/** `run`: one summary per Tool Runner run (SEN-8) — trigger, stop reason, iterations, cost. */
+export const AGENT_EVENT_KINDS = ['thesis', 'order', 'fill', 'refusal', 'run'] as const;
 export type AgentEventKind = (typeof AGENT_EVENT_KINDS)[number];
 
 /**

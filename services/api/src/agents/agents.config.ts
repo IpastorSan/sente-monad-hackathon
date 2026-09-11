@@ -18,6 +18,28 @@ export function isAgentModel(model: string): model is AgentModel {
   return (AGENT_MODELS as readonly string[]).includes(model);
 }
 
+/** OpenRouter's provider routing object. Not in the Anthropic SDK's types; sent as-is. */
+export interface OpenRouterProviderRouting {
+  readonly order: readonly string[];
+  readonly allow_fallbacks: boolean;
+}
+
+/** Body fields OpenRouter reads on `/v1/messages` that the Anthropic SDK does not type. */
+export interface OpenRouterRequestExtras {
+  readonly provider?: OpenRouterProviderRouting;
+}
+
+/**
+ * Per-model extras the runner adds to every Messages request (SEN-8). Kimi is
+ * pinned to Moonshot's own endpoint with no fallback, exactly as the credits
+ * probe calls it (docs/openrouter.md): a silent fallback to another host would
+ * make a tool-use failure there look like Kimi's.
+ */
+export const AGENT_MODEL_REQUEST_EXTRAS: Readonly<Record<AgentModel, OpenRouterRequestExtras>> = {
+  'anthropic/claude-sonnet-5': {},
+  'moonshotai/kimi-k2.6': { provider: { order: ['Moonshot AI'], allow_fallbacks: false } },
+};
+
 /**
  * Privy credentials plus the TWO authorization keys, and why they are two.
  *

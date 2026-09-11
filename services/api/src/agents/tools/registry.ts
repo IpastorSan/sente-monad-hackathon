@@ -192,8 +192,12 @@ async function currentMandate(ctx: ToolContext): Promise<{ agent: AgentRecord; m
 
 const KURU_TOKENS = Object.values(KURU_TESTNET_TOKENS);
 
-/** The mandate as the model should read it: symbols and human amounts next to the raw form. */
-function describeMandate(agent: AgentRecord, now: number) {
+/**
+ * The mandate as the model should read it: symbols and human amounts next to
+ * the raw form. `get_mandate` returns it, and the runner's system prompt
+ * renders it (SEN-8).
+ */
+export function describeMandate(agent: AgentRecord, now: number) {
   const { mandate } = agent;
   const kuruMarkets = mandate.kuru.markets.map((address) => ({
     symbol: KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, address))?.symbol,

@@ -18,6 +18,11 @@ import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
+import {
+  agentRunnerExports,
+  agentRunnerImports,
+  agentRunnerProviders,
+} from './runner/agent-runner.providers';
 import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './store/agent-store';
 import {
   agentToolsControllers,
@@ -89,7 +94,8 @@ const authProvider: Provider = {
  */
 @Module({
   // GasDripService: the MON gas drip to each hired agent's wallet (SEN-14).
-  imports: [GasModule],
+  // CreditsService: the owner's OpenRouter key the runner bills (SEN-8).
+  imports: [GasModule, ...agentRunnerImports],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   controllers: [AgentsController, ...agentToolsControllers],
   providers: [
@@ -101,7 +107,16 @@ const authProvider: Provider = {
     AgentsService,
     ...agentVenuesProviders,
     ...agentToolsProviders,
+    // The Tool Runner loop, POST /agents/:id/run and AGENT_TICK_SECONDS (SEN-8).
+    ...agentRunnerProviders,
   ],
-  exports: [AgentsService, AGENT_WALLETS, AGENT_STORE, ...agentVenuesExports, ...agentToolsExports],
+  exports: [
+    AgentsService,
+    AGENT_WALLETS,
+    AGENT_STORE,
+    ...agentVenuesExports,
+    ...agentToolsExports,
+    ...agentRunnerExports,
+  ],
 })
 export class AgentsModule {}

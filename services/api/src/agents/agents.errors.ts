@@ -70,6 +70,16 @@ export const AGENT_REFUSAL_REASONS = [
    * but its policy still holds the old rules until a retried revoke succeeds.
    */
   'wallet_policy_update_failed',
+  /** `POST /agents/:id/run` while a run of the same agent is still going (SEN-8). One at a time. */
+  'run_in_progress',
+  /**
+   * The run stopped because the owner's OpenRouter key is out of budget: a 402
+   * from OpenRouter, or a key whose `limit_remaining` is 0. The body carries
+   * the run. It resets with the key's monthly limit.
+   */
+  'credits_exhausted',
+  /** The run stopped on any other model API failure. The body carries the run. */
+  'model_error',
 ] as const;
 
 export type AgentRefusalReason = (typeof AGENT_REFUSAL_REASONS)[number];
@@ -101,6 +111,10 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   agent_revoked: 409,
   wallet_provision_failed: 502,
   wallet_policy_update_failed: 502,
+  run_in_progress: 409,
+  // 402 Payment Required: exactly what OpenRouter itself answered.
+  credits_exhausted: 402,
+  model_error: 502,
   agent_wallets_unconfigured: 503,
   // The enclave refused to sign: the mandate working, not an outage.
   policy_violation: 403,

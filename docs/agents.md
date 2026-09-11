@@ -240,3 +240,213 @@ pnpm --filter @sente/api run agent:venues-live -- --skip-kuru             # Perp
 When the agent is short, the script prints the exact `agent:fund` command and
 stops. Each run enrolls one new Perpl key, because the secret store is in
 memory.
+
+## The runner (SEN-8)
+
+An agent **runs** as one bounded Tool Runner loop
+(`client.beta.messages.toolRunner`, `@anthropic-ai/sdk` 0.125.0) over the gated
+tools (SEN-7). The loop uses the agent's own model, prompt and strategy, and it
+is billed to its owner's OpenRouter key (SEN-4). It does not use the Claude
+Agent SDK: that SDK's Bash and file tools are the wrong shape for a trading
+agent, and the Tool Runner loops only over tools we define.
+
+### The code (`services/api/src/agents/runner/`)
+
+| File                        | What it is                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `agent-runner.service.ts`   | `AgentRunnerService.run(principal, agentId, {instruction?, trigger?}) → RunResult`.                     |
+| `prompt.ts`                 | The three-part system prompt and the tick message.                                                      |
+| `openrouter-client.ts`      | `createOpenRouterClient(key)`, `classifyModelError`, `redactSecrets`.                                   |
+| `write-spacing.ts`          | `WriteSpacer` and `spaceWrites`: the one place signing writes are slowed down.                          |
+| `agent-run.scheduler.ts`    | `AGENT_TICK_SECONDS`: runs every active agent on an interval. Off by default.                           |
+| `runner.config.ts`          | The env → config loader. A malformed value fails the boot.                                              |
+| `agent-runner.providers.ts` | Nest wiring. `AgentsModule` imports `CreditsModule`, spreads these in and exports `AgentRunnerService`. |
+
+### One run
+
+1. **Refused before anything is spent** (it throws):
+   - `agent_not_found`: no such agent, or another user's;
+   - `agent_revoked`;
+   - `run_in_progress`: one run per agent at a time, per process;
+   - `credits_unconfigured` / `provision_failed`.
+2. **The key.** `CreditsService.keyFor(userId)` supplies it. A user without one
+   is provisioned first. The client is
+   `new Anthropic({ baseURL: 'https://openrouter.ai/api', authToken: key, apiKey: null })`.
+   `apiKey: null` is load-bearing: without it the SDK sends an ambient
+   `ANTHROPIC_API_KEY` to OpenRouter. A spec pins that no `x-api-key` header
+   goes out even with one set. If the key's `limit_remaining` is already 0,
+   the run ends `credits_exhausted` without calling the model.
+3. **The prompt.** The system prompt has three parts:
+   - (a) a fixed Sente preamble: the mandate can't be changed; `record_thesis`
+     comes before any trade; refusals are final, so don't route around them;
+     stop when there is nothing to do;
+   - (b) the mandate, rendered by the same `describeMandate` that
+     `get_mandate` returns;
+   - (c) the user's `systemPrompt` and `strategy`, fenced in
+     `<user_instructions>`.
+
+   Any look-alike tag inside the user's text is defused. The first message is
+   the tick snapshot: time, balances, positions, open orders and 5 levels of
+   depth for every allowed market. It is read through the same gated read
+   tools, followed by the optional `instruction`, fenced in
+   `<user_run_instruction>`. The fence is hygiene, not the boundary: the
+   mandate and the enclave are.
+
+4. **The loop.** The call is
+   `toolRunner({model, max_tokens: 4096, system, tools: toRunnerTools(ctx), messages, max_iterations: 12}, {signal})`,
+   iterated with `for await`. Each turn's `tool_use` blocks are logged (name
+   and truncated input). Before each turn's tools run, the agent is re-read,
+   so an agent revoked mid-run stops there (`agent_revoked`). An
+   `AbortController` enforces the wall-clock budget.
+5. **After the loop**, the runner reads the last `stop_reason` itself. The
+   Tool Runner ends quietly on `refusal`, `max_tokens` and
+   `model_context_window_exceeded`, so without this check those look like
+   success.
+6. **A summary event**, kind `run`, is appended to the event log. It records
+   the trigger, model, stop reason, iterations, tool calls, start, end and
+   duration, whether the precheck was on, the instruction, the final text, a
+   redacted error if any, and the cost.
+
+Per-model request extras live in `AGENT_MODEL_REQUEST_EXTRAS`
+(`agents.config.ts`). Kimi is pinned to
+`provider: { order: ['Moonshot AI'], allow_fallbacks: false }`, as the credits
+probe calls it. They reach the wire through a
+`BetaToolRunnerParams & OpenRouterRequestExtras` value.
+
+What is left out:
+
+- `thinking` is behind `AGENT_RUNNER_THINKING=adaptive` and off by default,
+  because the probe that would show it passes through OpenRouter is pending
+  credentials.
+- The server-side `fallbacks` beta is not used.
+
+### `RunResult`
+
+```ts
+{
+  runId, agentId, trigger: 'manual' | 'schedule', model,
+  stopReason, iterations, toolCalls, startedAt, endedAt, durationMs,
+  finalText?,   // the model's last words, truncated
+  error?,       // redacted; never the key
+  costUsd?,     // Σ OpenRouter usage.cost, else the key's usage_monthly delta
+  events,       // this run's thesis/order/fill/refusal events, then its `run` summary
+}
+```
+
+| `stopReason`                                             | Means                                                            |
+| -------------------------------------------------------- | ---------------------------------------------------------------- |
+| `end_turn`, `stop_sequence`                              | The model finished.                                              |
+| `refusal`, `max_tokens`, `model_context_window_exceeded` | The model stopped for that reason. Recorded, not hidden.         |
+| `max_iterations`                                         | The loop hit its cap while the model still wanted tools.         |
+| `timeout`                                                | The wall-clock budget (`AGENT_RUN_TIMEOUT_MS`) ran out.          |
+| `agent_revoked`                                          | Revoked while the run was open.                                  |
+| `credits_exhausted`                                      | OpenRouter's 402 (or a 403 about the key limit), or a spent key. |
+| `model_error`                                            | Any other API failure; `error` says which.                       |
+
+`costUsd` is best effort, because OpenRouter records key usage
+asynchronously. The summary event keeps `reportedCostUsd` and
+`keyUsageDeltaUsd` separately.
+
+### `POST /agents/:id/run {instruction?}`
+
+The endpoint uses the same placeholder auth as every agents route
+(`x-sente-user-id`), and it is refused under `NODE_ENV=production`. The body
+is `{instruction?: string}`, at most 2,000 characters, and nothing else is
+allowed.
+
+| Status | `reason`                           | When                                                              |
+| ------ | ---------------------------------- | ----------------------------------------------------------------- |
+| 200    | —                                  | Any run that ended on its own terms; the body is the `RunResult`. |
+| 402    | `credits_exhausted`                | Out of credits; `run` carries the `RunResult`.                    |
+| 502    | `model_error`                      | Upstream failure; `run` carries the `RunResult`.                  |
+| 404    | `agent_not_found`                  | No such agent, or not yours.                                      |
+| 409    | `agent_revoked`, `run_in_progress` | Revoked, or already running.                                      |
+| 503    | `credits_unconfigured`             | `OPENROUTER_MANAGEMENT_KEY` unset.                                |
+| 401    | —                                  | No or malformed `x-sente-user-id`.                                |
+
+### Write spacing
+
+Privy enforces its rolling-cap aggregation late (SEN-3 checks 5 and 5d):
+
+- a second sign straight after the first overshot the cap;
+- the same sign 5 s later was refused;
+- a sign right after a policy PATCH can run under the old rule.
+
+The Tool Runner runs a turn's tool calls with `Promise.all`, so a model that
+fires two orders at once would hit exactly that gap. `WriteSpacer` therefore
+queues the **signing** writes per agent, process-wide: the next one starts no
+sooner than `AGENT_WRITE_SPACING_MS` (default **5000**, 0 = off) after the
+previous one finished.
+
+- `record_thesis` and the reads are never spaced.
+- A write still waiting when the run times out is not sent. The model is told
+  so, and nothing is signed.
+- This narrows Privy's window. It does not make the rolling cap exact. The
+  per-order cap and the enclave's per-transaction rules are exact; the
+  rolling cap is a best-effort bound.
+- MCP sessions are not spaced.
+
+### Scheduler
+
+`AGENT_TICK_SECONDS` is unset (off) by default, because a timer spends users'
+credits unprompted. Set it to 30 or more and every active agent runs once per
+interval, concurrently. An agent whose previous run is still open is skipped.
+Chainlink CRE replaces this timer in Phase 5.
+
+The other knobs:
+
+- `AGENT_RUN_TIMEOUT_MS`, default 180000;
+- `AGENT_RUN_MAX_ITERATIONS`, default 12;
+- `AGENT_RUN_MAX_TOKENS`, default 4096;
+- `AGENT_RUNNER_THINKING`, default `off`.
+
+### Live check: PENDING CREDENTIALS
+
+**Not run.** `OPENROUTER_MANAGEMENT_KEY` is not set in `sente/.env` (checked
+2026-09-11, by name only). No live run exists, so no thesis or order event
+from one is recorded here. What is proven without credentials comes from the
+jest specs in `runner/`, which run the real SDK `BetaToolRunner` against a
+stubbed `fetch`:
+
+- tool_use → tool_result → end_turn;
+- `max_iterations`;
+- `refusal`, `max_tokens` and `model_context_window_exceeded`;
+- 402 → `credits_exhausted`;
+- `run_in_progress`, revoked and mid-run revoke;
+- timeout, and write spacing;
+- the key never appearing in logs, results or events.
+
+To run it once the key exists (put it in the repo-root `.env`; never print
+it), from the main checkout, where the funded SEN-6 probe wallet is recorded
+as `PRIVY_AGENT_VENUES_*`:
+
+```bash
+mise exec -- pnpm --filter @sente/api run build
+mise exec -- pnpm --filter @sente/api run agent:run-live
+# options: -- --model moonshotai/kimi-k2.6   -- --instruction "..."   -- --out run.json
+```
+
+The script is `services/api/scripts/agent-run-live.ts`. It:
+
+1. boots the compiled API;
+2. re-PATCHes the probe wallet's policy to a small mandate (Kuru MON-USDC and
+   Perpl BTC-PERP, no order over 20 USDC);
+3. registers the wallet as an agent;
+4. runs it with an instruction to record a thesis, rest one tiny Kuru bid far
+   under the touch, and cancel it;
+5. prints the `RunResult` and every event;
+6. deletes the OpenRouter key it minted.
+
+It exits 1 unless the run produced at least one `thesis` event and one
+`order` event that landed. Without the key it prints
+`pending credentials: OPENROUTER_MANAGEMENT_KEY not set` and exits 0. Copy
+its output here and replace this heading.
+
+**For SEN-9 (the refusal demo):** `AGENT_PRECHECK=off` passes through to the
+script, so
+`AGENT_PRECHECK=off pnpm --filter @sente/api run agent:run-live -- --instruction "<a trade over the mandate>"`
+runs the agent with only the enclave in the way. The events come back in
+`RunResult.events`, including any `refusal` events with `layer: 'enclave'`.
+Over HTTP it is the same:
+`POST /agents/:id/run {"instruction": "…"}` against an API started with
+`AGENT_PRECHECK=off`; the response body is the `RunResult`, events included.

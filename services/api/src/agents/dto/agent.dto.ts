@@ -1,5 +1,13 @@
 import { MANDATE_CHAIN_ID, type Mandate } from '@sente/mandate';
-import { IsObject, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 import type { AgentRecord, AgentStatus } from '../store/agent-store';
 
@@ -54,6 +62,16 @@ export class AmendMandateDto {
 export class AgentIdParamDto {
   @IsUUID('4')
   id!: string;
+}
+
+export const AGENT_RUN_INSTRUCTION_MAX_LENGTH = 2_000;
+
+/** `POST /agents/:id/run`. The instruction is untrusted guidance, fenced in the prompt. */
+export class RunAgentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(AGENT_RUN_INSTRUCTION_MAX_LENGTH)
+  instruction?: string;
 }
 
 // ---------------------------------------------------------------------------
