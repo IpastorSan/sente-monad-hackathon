@@ -18,6 +18,11 @@ import { AgentsService } from './agents.service';
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
 import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './store/agent-store';
+import {
+  agentToolsControllers,
+  agentToolsExports,
+  agentToolsProviders,
+} from './tools/agent-tools.providers';
 import { agentVenuesExports, agentVenuesProviders } from './venues/agent-venues.providers';
 
 const configProvider: Provider = {
@@ -78,10 +83,11 @@ const authProvider: Provider = {
 /**
  * The agent lifecycle (SEN-5): hire, read, amend mandate, revoke. Each agent
  * trades with an enclave-held key from AGENT_WALLETS, bounded by its compiled
- * mandate (SEN-3), on venue accounts its own wallet owns (SEN-6).
+ * mandate (SEN-3), on venue accounts its own wallet owns (SEN-6), through the
+ * gated tools and the `/mcp` server (SEN-7).
  */
 @Module({
-  controllers: [AgentsController],
+  controllers: [AgentsController, ...agentToolsControllers],
   providers: [
     configProvider,
     agentWalletsProvider,
@@ -90,7 +96,8 @@ const authProvider: Provider = {
     PlaceholderGasDripAuthGuard,
     AgentsService,
     ...agentVenuesProviders,
+    ...agentToolsProviders,
   ],
-  exports: [AgentsService, AGENT_WALLETS, AGENT_STORE, ...agentVenuesExports],
+  exports: [AgentsService, AGENT_WALLETS, AGENT_STORE, ...agentVenuesExports, ...agentToolsExports],
 })
 export class AgentsModule {}
