@@ -21,3 +21,7 @@ minimumReleaseAgeExclude:
   - '@typescript-eslint/visitor-keys@8.70.0'
   - typescript-eslint@8.70.0
   - '@anthropic-ai/sdk@0.125.0'
+
+# Metro cannot resolve the isolated (symlinked) layout — CLAUDE.md gotcha 1.
+# pnpm 12 ignores node-linker in .npmrc, so the setting has to live here.
+nodeLinker: hoisted

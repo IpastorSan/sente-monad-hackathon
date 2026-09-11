@@ -119,11 +119,33 @@ equally permanent. Add namespaces; never rename one.
 
 ## Gotchas that will burn you
 
-### 1. `node-linker=hoisted` in `.npmrc` is load-bearing
+### 1. The hoisted `node_modules` is load-bearing — and pnpm 12 only reads it from `pnpm-workspace.yaml`
 
-Metro cannot resolve pnpm's default symlinked store layout. Without a hoisted `node_modules`,
-`apps/mobile` fails with "Unable to resolve module ..." for transitive dependencies that plainly
-exist on disk. Do not switch this to `isolated`, and do not delete `.npmrc`.
+Metro cannot resolve pnpm's default symlinked (isolated) store layout. Without a hoisted
+`node_modules`, `apps/mobile` fails with "Unable to resolve module ..." for transitive dependencies
+that plainly exist on disk.
+
+**The setting is `nodeLinker: hoisted` in `pnpm-workspace.yaml`.** pnpm 12 ignores
+`node-linker=hoisted` in `.npmrc`: from at least 2026-09-10 to 2026-09-11 the repo installed
+*isolated* while `.npmrc` said hoisted, and nothing complained (found in SEN-10:
+`pnpm config get node-linker` → `undefined`, `node_modules/.modules.yaml` → `"nodeLinker":
+"isolated"`). `.npmrc` keeps the line only as a pointer. To check what you actually have, don't
+read either config file; read the result:
+
+```bash
+grep nodeLinker node_modules/.modules.yaml     # must say "hoisted"
+ls node_modules/isows                          # a transitive dep must be at the top level
+```
+
+Do not switch this to `isolated`. **Changing the layout needs a clean install**: a plain `pnpm install`
+after isolated → hoisted leaves stale per-package bin shims (`packages/venues/node_modules/.bin/tsc`
+pointing at a `typescript` that no longer exists there), and typecheck, lint, test and `expo export`
+all fail with `Cannot find module …/bin/…`. Delete every `node_modules` first:
+
+```bash
+rm -rf node_modules apps/*/node_modules services/*/node_modules packages/*/node_modules
+mise exec -- pnpm install
+```
 
 ### 2. Metro package exports must stay off
 
