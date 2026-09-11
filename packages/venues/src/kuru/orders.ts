@@ -45,6 +45,7 @@ import {
   size,
   toBytes,
   type Abi,
+  type AbiFunction,
   type Address,
   type Hex,
 } from 'viem';
@@ -199,6 +200,30 @@ function toCall(request: ContractRequest): KuruCall {
     }),
   };
 }
+
+/** The `batch` overloads this module encodes: without and with a `clientOrderId`. */
+const BATCH_SIGNATURES = new Set(['uint40,tuple[],uint8[]', 'uint40,tuple[],uint8[],bytes32']);
+
+function abiFunctions(abi: Abi, keep: (fn: AbiFunction) => boolean): Abi {
+  return abi.filter((item): item is AbiFunction => item.type === 'function' && keep(item));
+}
+
+/**
+ * `OrderBook.batch`, exactly the two overloads `placeOrderCall` and
+ * `cancelOrderCall` emit. Exported for `@sente/mandate`, which hands Privy an
+ * ABI to decode calldata with; cut from the SDK's own ABI rather than retyped,
+ * so the selectors cannot drift from what this module signs.
+ */
+export const KURU_ORDERBOOK_BATCH_ABI: Abi = abiFunctions(
+  kuruAbi.spotOrderBookAbi as Abi,
+  (fn) => fn.name === 'batch' && BATCH_SIGNATURES.has(fn.inputs.map((i) => i.type).join(',')),
+);
+
+/** `AccountCore.deposit(token, amount)`, cut from the SDK's ABI for the same reason. */
+export const KURU_ACCOUNT_CORE_DEPOSIT_ABI: Abi = abiFunctions(
+  kuruAbi.accountCoreAbi as Abi,
+  (fn) => fn.name === 'deposit',
+);
 
 /** `batch(0, [order], [])`: one order for the calling account. */
 export function placeOrderCall(

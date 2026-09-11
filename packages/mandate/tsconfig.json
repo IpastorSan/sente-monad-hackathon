@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    // Same arrangement as packages/venues: sources import each other as `./x.ts`
+    // so `node --test` runs them with native type stripping; tsc rewrites the
+    // specifiers to `./x.js` on emit. Erasable syntax only, for the same reason.
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    // TypeScript 6 no longer loads @types/* implicitly; the tests need node's.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

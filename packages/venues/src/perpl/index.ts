@@ -4,6 +4,7 @@
  * A subpath rather than part of the root entry, so consumers of the shared
  * interface do not load viem and noble just to import a type.
  */
+export * from './constants.ts';
 export * from './decimal.ts';
 export * from './enroll.ts';
 export * from './onboarding.ts';

@@ -9,14 +9,17 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
+      "source": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./kuru": {
       "types": "./src/kuru/index.ts",
+      "source": "./src/kuru/index.ts",
       "default": "./dist/kuru/index.js"
     },
     "./perpl": {
       "types": "./src/perpl/index.ts",
+      "source": "./src/perpl/index.ts",
       "default": "./dist/perpl/index.js"
     }
   },
