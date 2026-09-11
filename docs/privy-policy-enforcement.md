@@ -238,6 +238,18 @@ Refusals all read `"RPC request denied due to policy violation"`, code
    `PERPL_ENROLL_TYPED_DATA` now derives `EIP712Domain` with viem's
    `getTypesForEIP712Domain`, exactly as the client sends it (Perpl's domain has
    a `salt`, so the domain type has five fields). Check 6 then signed.
+
+   **Correction (2026-09-11, SEN-6):** check 6 signed typed data built from
+   `PERPL_API_KEY_TYPED_DATA`, not from a live Perpl payload. By 2026-09-11 the
+   live `PerplRegisterApiKey` struct had grown from 6 fields to 11
+   (`expiresAt`, `ipCidrs`, `origin`, `builderId`, `maxBuilderFeePer100K`), and
+   because the condition's `types` must equal the request's exactly, the first
+   real agent enrollment was refused `policy_violation` (docs/agents.md). The
+   finding above still holds — `EIP712Domain` must be present — and so does
+   its corollary: the struct in the policy must track Perpl's byte for byte.
+   The constant is updated; every policy compiled before the change must be
+   PATCHed. The rule JSON quoted below shows the old 6-field struct.
+
 5. **Aggregation body: `window.seconds`, not `duration_seconds`** —
    `400 invalid_aggregation_format`, "Required at window.seconds; Unrecognized
    key(s) in object: 'duration_seconds'". `compileRollingCap` fixed. A rule

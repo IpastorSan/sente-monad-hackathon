@@ -1,2 +1,2 @@
-export * from './types.js';
-export * from './venue.js';
+export * from './types.ts';
+export * from './venue.ts';

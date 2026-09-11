@@ -15,7 +15,7 @@ import type {
   Position,
   Quote,
   QuoteRequest,
-} from './types.js';
+} from './types.ts';
 
 /**
  * The one interface every Sente venue adapter implements.
