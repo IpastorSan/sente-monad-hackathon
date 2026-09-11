@@ -7,8 +7,8 @@ import type { AgentEventLog } from '../events/agent-event-log';
 import type { AgentRecord, AgentStore } from '../store/agent-store';
 import { KeyedMutex } from './keyed-mutex';
 
-/** The Kuru surface the tools use: the shared `Venue` plus market lookup and deposits. */
-export type KuruToolVenue = Venue & Pick<KuruVenue, 'market' | 'deposit'>;
+/** The Kuru surface the tools use: the shared `Venue` plus market lookup, deposits and withdrawals. */
+export type KuruToolVenue = Venue & Pick<KuruVenue, 'market' | 'deposit' | 'withdraw'>;
 
 /** What `AgentVenues.forAgent` returns, narrowed to what the tools touch. */
 export interface ToolVenues {

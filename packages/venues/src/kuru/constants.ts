@@ -176,6 +176,17 @@ export const KURU_MEASURED_GAS = {
   placeTakingOneLevel: 425_430n,
   cancelOne: 242_923n,
   /**
+   * `AccountCore.withdraw` of USDC from an EOA's own account, the recipient
+   * holding none yet (its balance slot goes 0 → nonzero, the dear case).
+   * `eth_estimateGas` from agent 0xE05F…0B6E for its whole 14 USDC (SEN-15).
+   */
+  withdraw: 150_407n,
+  /**
+   * ERC-20 `transfer` of USDC between two holders (`eth_estimateGas`, SEN-15),
+   * as an agent returns funds to its owner.
+   */
+  erc20Transfer: 46_525n,
+  /**
    * claim + approve + deposit + place as one Kernel `execute`: the UserOperation's
    * `callGasLimit`. Landed for real in userOp 0x1c46d264…859857a; the
    * self-bundled `handleOps` transaction around it took 1,038,005.

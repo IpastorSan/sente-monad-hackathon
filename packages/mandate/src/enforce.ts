@@ -10,11 +10,13 @@
  * mandate does not name is refused, and a missing amount, notional or leverage
  * is treated as over the cap rather than as zero.
  *
- * **Cancel and close are always allowed on an allowed venue** — including
- * after expiry and on markets no longer listed — because reducing risk must
- * never be blocked. Note that layer 2 is stricter here for Kuru: its `batch`
- * rules expire with the mandate, so after `expiresAt` a Kuru cancel passes this
- * check and is still refused by the enclave; the account owner cancels then.
+ * **Cancel, close and withdraw are always allowed on an allowed venue** —
+ * including after expiry and on markets no longer listed — because reducing
+ * risk must never be blocked. Layer 2 agrees for withdraw: its rule carries no
+ * expiry (the money can only go back to the agent's own wallet, see policy.ts).
+ * It is stricter for a Kuru cancel: the `batch` rules expire with the mandate,
+ * so after `expiresAt` a Kuru cancel passes this check and is still refused by
+ * the enclave; the account owner cancels then.
  */
 import type { Decimal } from '@sente/venues';
 import { isAddress, isAddressEqual, type Address } from 'viem';
@@ -37,7 +39,11 @@ export interface Refusal {
   readonly detail: string;
 }
 
-export type IntentKind = 'deposit' | 'order' | 'cancel' | 'close';
+/** `withdraw`: collateral from the venue back to the agent's own wallet. */
+export type IntentKind = 'deposit' | 'order' | 'cancel' | 'close' | 'withdraw';
+
+/** Kinds that only ever reduce risk: allowed on any allowed venue, even after expiry. */
+const RISK_REDUCING: readonly IntentKind[] = ['cancel', 'close', 'withdraw'];
 
 export interface Intent {
   /** Untrusted — any string. Only a venue the mandate lists passes. */
@@ -143,14 +149,14 @@ function checkPerpl(mandate: Mandate, intent: Intent): Refusal | null {
 
 /**
  * `null` when the mandate allows the intent at unix second `now`, otherwise the
- * first refusal. Order: venue, then cancel/close pass, then expiry, then market,
- * then the caps.
+ * first refusal. Order: venue, then cancel/close/withdraw pass, then expiry,
+ * then market, then the caps.
  */
 export function checkIntent(mandate: Mandate, intent: Intent, now: number): Refusal | null {
   if (!mandate.venues.includes(intent.venue as VenueId)) {
     return refuse('venue_not_allowed', `venue ${intent.venue} is not in the mandate`);
   }
-  if (intent.kind === 'cancel' || intent.kind === 'close') return null;
+  if (RISK_REDUCING.includes(intent.kind)) return null;
   // Written so that a NaN `now` is refused too.
   if (!(now <= mandate.expiresAt)) {
     return refuse('mandate_expired', `the mandate expired at ${mandate.expiresAt}; now is ${now}`);

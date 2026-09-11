@@ -6,7 +6,8 @@
  *
  * A write tool can declare two hooks the gate reads:
  * - `thesisMarket`: the market whose `record_thesis` must already be on record
- *   in this run. Cancel and close have none: reducing risk is never gated.
+ *   in this run. Cancel, close and withdraw have none: reducing risk is never
+ *   gated.
  * - `intent`: what `checkIntent` (layer 1) judges.
  */
 import { type Intent, type Mandate } from '@sente/mandate';
@@ -228,6 +229,8 @@ export function describeMandate(agent: AgentRecord, now: number) {
       'maxOrderNotional caps every single order in quote units: size x price (a market order ' +
         'at its slippage bound; a sell at no less than the book price).',
       'cancel_order and close_position are always allowed on a venue you may use.',
+      'withdraw (Kuru collateral back to your own wallet) is always allowed on Kuru, even ' +
+        'after the mandate expires.',
       'The Privy enclave independently refuses to sign anything outside the mandate.',
     ],
     raw: toMandateDto(mandate),
@@ -503,6 +506,51 @@ const deposit = defineTool({
   },
 });
 
+function kuruToken(asset: string): KuruToken {
+  const token = KURU_TOKENS.find((t) => t.symbol === asset);
+  if (!token) {
+    throw invalidInput(
+      `Kuru has no asset ${asset}; withdraw one of ${KURU_TOKENS.map((t) => t.symbol).join(', ')}`,
+    );
+  }
+  return token;
+}
+
+const withdraw = defineTool({
+  name: 'withdraw',
+  kind: 'write',
+  description:
+    'Move free funds out of your Kuru AccountCore balance, back to your own wallet. Always ' +
+    'allowed on Kuru, even after your mandate expires, with no thesis needed: taking ' +
+    'collateral off the venue reduces risk. Funds reserved by resting orders stay until you ' +
+    'cancel them. The money can only ever come back to your own wallet.',
+  input: z.strictObject({
+    asset: z.string().min(1).max(16).describe('The token, e.g. "USDC".'),
+    amount: positive.describe('Human units, e.g. "14" for 14 USDC.'),
+  }),
+  async intent(_ctx, args) {
+    const token = kuruToken(args.asset);
+    return {
+      venue: 'kuru',
+      kind: 'withdraw',
+      market: token.address,
+      amountAtoms: atoms(args.amount, token),
+    };
+  },
+  async handler(ctx, args) {
+    const token = kuruToken(args.asset);
+    atoms(args.amount, token); // precision, before anything is signed
+    const { kuru } = await ctx.venues();
+    const execution = await kuru.withdraw(token.symbol, args.amount);
+    return {
+      withdrawn: args.amount,
+      asset: token.symbol,
+      hash: execution.hash,
+      transactionHash: execution.transactionHash,
+    };
+  },
+});
+
 const cancelOrder = defineTool({
   name: 'cancel_order',
   kind: 'write',
@@ -567,6 +615,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   placeLimit,
   placeMarket,
   deposit,
+  withdraw,
   cancelOrder,
   closePosition,
 ];

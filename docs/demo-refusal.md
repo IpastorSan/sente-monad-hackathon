@@ -33,8 +33,14 @@ SEN-3), from the compiled mandate (`compileMandate`):
 - **Kuru deposits**: `approve` and `AccountCore.deposit` capped per
   transaction, per token.
 - **Kuru markets**: `batch` may only be sent to allowlisted OrderBooks.
+- **Kuru withdraw** (SEN-15): `AccountCore.withdraw` only, which pays the
+  agent's own wallet and nothing else.
 - **Chain**: `chain_id == 10143` on every rule.
-- **Expiry**: `current_unix_timestamp <= expiresAt` on every rule.
+- **Expiry**: `current_unix_timestamp <= expiresAt` on every rule that takes
+  risk. The recovery rules deliberately carry none: the withdraw to the agent's
+  own wallet, and, when the mandate names a `returnTo`, an ERC-20 transfer to
+  that address (see [`agents.md`](./agents.md)). The demo mandate has no
+  `returnTo`.
 
 Not enforced by the enclave. Sente's layer 1 (`checkIntent`) checks these,
 and `AGENT_PRECHECK=off` removes them:
@@ -146,12 +152,14 @@ broadcast**. The only transactions that reached the chain are act 4's two.
   policy is touched; nothing else in the shared Privy app.
 - Reusing a revoked agent's wallet is a demo shortcut. In the product a
   revoked agent stays revoked, and every run registers a new agent record.
-- After this run the wallet holds 0 USDC and about 0.028 MON, so the next run
-  needs a top-up of about 0.02 MON and 2 USDC. The script prints the exact
-  `agent:fund` command.
-- Each run moves 2 more USDC into the agent's Kuru account. The compiled
-  mandate has no withdraw rule, so the agent wallet cannot take collateral
-  back out of AccountCore today. That is a follow-up, not part of this demo.
+- After this run the wallet held 0 USDC and about 0.028 MON. SEN-15 then
+  withdrew the 14 USDC from Kuru and returned it to the treasury, leaving about
+  0.0078 MON. So the next run needs a top-up of about 0.04 MON and 2 USDC, and
+  the script prints the exact `agent:fund` command.
+- Each run moves 2 more USDC into the agent's Kuru account. The agent can take
+  it back out to its own wallet (the `withdraw` tool), and
+  `agent:withdraw-live` also returns it to the treasury; see
+  [`agents.md`](./agents.md).
 
 ## Voice-over
 

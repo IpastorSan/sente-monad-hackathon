@@ -14,6 +14,7 @@
  */
 import {
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+  KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_FAUCET,
   KURU_MEASURED_GAS,
   KURU_ORDERBOOK_BATCH_ABI,
@@ -73,6 +74,7 @@ export function kuruGasLimit(call: KuruCall): bigint {
   if (selector === KURU_FAUCET.claimSelector) return KURU_FAUCET.claimGas;
   // The first deposit also registers the account; later ones cost less.
   if (decode(KURU_ACCOUNT_CORE_DEPOSIT_ABI, call)) return KURU_MEASURED_GAS.firstDeposit;
+  if (decode(KURU_ACCOUNT_CORE_WITHDRAW_ABI, call)) return KURU_MEASURED_GAS.withdraw;
 
   const batch = decode(KURU_ORDERBOOK_BATCH_ABI, call);
   if (batch?.functionName === 'batch') {

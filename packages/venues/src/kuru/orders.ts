@@ -32,6 +32,7 @@ import {
   buildApproveErc20Request,
   buildBatchRequest,
   buildDepositRequest,
+  buildWithdrawRequest,
   decodeBookUpdatesPacked,
   decodeTradesPacked,
   type NativeOrderInput,
@@ -225,6 +226,35 @@ export const KURU_ACCOUNT_CORE_DEPOSIT_ABI: Abi = abiFunctions(
   (fn) => fn.name === 'deposit',
 );
 
+/**
+ * `AccountCore.withdraw(token, amount)` ONLY — not `withdrawFromAccount`, not
+ * `transferBetweenAccounts`. `withdraw` names no recipient: AccountCore debits
+ * the caller's own account and pays the caller (`Withdrawal.recipient` =
+ * `msg.sender`, traced on testnet in SEN-15). So a policy that allows this one
+ * function pins the recipient to the signing wallet itself.
+ */
+export const KURU_ACCOUNT_CORE_WITHDRAW_ABI: Abi = abiFunctions(
+  kuruAbi.accountCoreAbi as Abi,
+  (fn) => fn.name === 'withdraw',
+);
+
+/**
+ * ERC-20 `transfer(to, amount)`. `@sente/mandate` pins `transfer.to` to the
+ * owner's return address, so the policy field names are these parameter names.
+ */
+export const ERC20_TRANSFER_ABI = [
+  {
+    type: 'function',
+    name: 'transfer',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+] as const satisfies Abi;
+
 /** `batch(0, [order], [])`: one order for the calling account. */
 export function placeOrderCall(
   market: Address,
@@ -258,6 +288,34 @@ export function depositCalls(accountCore: Address, token: KuruToken, amount: big
     toCall(buildApproveErc20Request({ token: token.address, spender: accountCore, amount })),
     toCall(buildDepositRequest({ token: token.address, amount, accountCore })),
   ];
+}
+
+/**
+ * Take `amount` of `token` out of the calling account's AccountCore balance,
+ * back to the calling address. Only free balance can leave; what resting
+ * orders reserve stays until they are cancelled.
+ */
+export function withdrawCall(accountCore: Address, token: KuruToken, amount: bigint): KuruCall {
+  if (amount <= 0n) {
+    throw new KuruOrderError('withdraw amount must be positive');
+  }
+  return toCall(buildWithdrawRequest({ token: token.address, amount, accountCore }));
+}
+
+/** ERC-20 `transfer(to, amount)` from the calling address: how an agent returns funds to its owner. */
+export function erc20TransferCall(token: Address, to: Address, amount: bigint): KuruCall {
+  if (amount <= 0n) {
+    throw new KuruOrderError('transfer amount must be positive');
+  }
+  return {
+    to: token,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC20_TRANSFER_ABI,
+      functionName: 'transfer',
+      args: [to, amount],
+    }),
+  };
 }
 
 /** The testnet faucet's `claim()`. Pays whoever calls it. */

@@ -39,6 +39,7 @@ const WRITES = new Set([
   'placeMarket',
   'cancel',
   'deposit',
+  'withdraw',
   'closePosition',
   'setLeverage',
 ]);
@@ -165,6 +166,16 @@ export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
     return {
       hash: `0x${'d'.repeat(64)}`,
       transactionHash: `0x${'d'.repeat(64)}`,
+      success: true,
+      logs: [],
+    };
+  }
+
+  async withdraw(asset: string, amount: string): Promise<KuruExecution> {
+    await this.write('withdraw', { asset, amount });
+    return {
+      hash: `0x${'e'.repeat(64)}`,
+      transactionHash: `0x${'e'.repeat(64)}`,
       success: true,
       logs: [],
     };
