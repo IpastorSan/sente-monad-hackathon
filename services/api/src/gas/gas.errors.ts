@@ -11,6 +11,8 @@ export const DRIP_REFUSAL_REASONS = [
   'address_already_funded',
   'daily_cap_reached',
   'faucet_unconfigured',
+  /** Every faucet key is inside its reserve-balance window (CLAUDE.md gotcha 12); retry shortly. */
+  'reserve_balance_busy',
 ] as const;
 
 export type DripRefusalReason = (typeof DRIP_REFUSAL_REASONS)[number];
@@ -60,6 +62,8 @@ const REFUSAL_STATUS: Record<DripRefusalReason, HttpStatus> = {
   // The faucet is fine, it is just out of budget for today / not set up.
   daily_cap_reached: HttpStatus.SERVICE_UNAVAILABLE,
   faucet_unconfigured: HttpStatus.SERVICE_UNAVAILABLE,
+  // Nothing moved and the budget was given back, so a retry is safe.
+  reserve_balance_busy: HttpStatus.SERVICE_UNAVAILABLE,
 };
 
 export function refusalStatus(reason: DripRefusalReason): HttpStatus {

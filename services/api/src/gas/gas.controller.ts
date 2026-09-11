@@ -52,6 +52,7 @@ function toResponse(receipt: DripReceipt): DripResponseDto {
     nonce: receipt.nonce,
     dailyTotalMon: formatEther(receipt.dailyTotalWei),
     dailyCapMon: formatEther(receipt.dailyCapWei),
+    confirmed: receipt.confirmed,
     dryRun: receipt.dryRun,
   };
 }

@@ -13,10 +13,11 @@ import type { DripSendResult, DripSender } from './drip-sender';
  * here is almost always "faucet is out of MON" or "RPC is down", and both keys
  * would fail identically while the retry burned a second nonce.
  *
- * The pool also remembers when each key last sent, whoever sent it. The agent
- * drip's `ReserveAwareDispatcher` reads that to keep its sends clear of a
- * key's previous one (Monad's reserve balance, CLAUDE.md gotcha 12); `send`
- * itself only records it and behaves exactly as before.
+ * The pool also remembers when each key last sent, whoever sent it.
+ * `ReserveAwareDispatcher`, which every drip goes through since SEN-16, reads
+ * that to keep its sends clear of a key's previous one (Monad's reserve
+ * balance, CLAUDE.md gotcha 12). `send` here is the bare, unspaced path: it
+ * only records the send, and no drip uses it any more.
  */
 export class SenderPool {
   private cursor = 0;

@@ -23,13 +23,13 @@ import {
   type DripLedger,
 } from './ledger/drip-ledger';
 import { IP_RATE_LIMITER, type IpRateLimiter } from './rate-limit/ip-rate-limiter';
-import { SENDER_POOL, type DripSendResult } from './sender/drip-sender';
+import { SENDER_POOL } from './sender/drip-sender';
 import {
-  AGENT_DRIP_DISPATCHER,
+  DRIP_DISPATCHER,
   DripUnconfirmedError,
   ReserveBalanceBusyError,
-  type AgentDripDispatcher,
   type ConfirmedSend,
+  type DripDispatcher,
 } from './sender/reserve-aware-dispatcher';
 import type { SenderPool } from './sender/sender-pool';
 
@@ -49,6 +49,12 @@ export interface DripReceipt {
   /** Faucet outflow so far today, including this drip. */
   dailyTotalWei: bigint;
   dailyCapWei: bigint;
+  /**
+   * True once the receipt is in. False when it did not arrive in time: the
+   * transaction may still land, so it is never re-sent and the drip counts as
+   * spent — the caller can follow `txHash` itself.
+   */
+  confirmed: boolean;
   dryRun: boolean;
 }
 
@@ -106,7 +112,7 @@ export class GasDripService {
     @Inject(BALANCE_READER) private readonly balances: BalanceReader,
     @Inject(IP_RATE_LIMITER) private readonly rateLimiter: IpRateLimiter,
     @Inject(CODE_READER) private readonly code: CodeReader,
-    @Inject(AGENT_DRIP_DISPATCHER) private readonly agentDispatcher: AgentDripDispatcher,
+    @Inject(DRIP_DISPATCHER) private readonly dispatcher: DripDispatcher,
   ) {}
 
   async status(now: Date = new Date()): Promise<FaucetStatus> {
@@ -193,15 +199,45 @@ export class GasDripService {
     // 7. Size the gas limit for this recipient, then send. Budget is already
     //    reserved, so a failure of either must give it back. The code read sits
     //    right before the send to keep the "deployed in between" window small.
-    let sent: DripSendResult;
+    //    The send goes through the same reserve-aware dispatcher as the agent
+    //    drip (SEN-16), so the two are spaced per key against each other. A free
+    //    key past its spacing sends at once; the cost over a bare send is the
+    //    advisory `eth_call` and waiting for the receipt (about a second).
+    let sent: ConfirmedSend;
     let gasLimit: bigint;
     try {
       gasLimit = await this.gasLimitFor(address);
-      sent = await this.senders.send(address, this.config.amountWei, gasLimit);
+      sent = await this.dispatcher.send(address, this.config.amountWei, gasLimit);
     } catch (error) {
+      if (error instanceof DripUnconfirmedError) {
+        // Broadcast but not confirmed in time. It may still land, so the
+        // budget and both dedupe keys stay spent and it is never re-sent —
+        // the same outcome as before SEN-16, when no drip waited for a receipt.
+        await this.ledger.confirm(claim.reservation.id, error.sent.hash);
+        this.logger.warn(`drip unconfirmed user=${principal.userId}: ${error.message}`);
+        return {
+          address,
+          amountWei: this.config.amountWei,
+          txHash: error.sent.hash,
+          sender: error.sent.sender,
+          nonce: error.sent.nonce,
+          dailyTotalWei: claim.dailyTotalWei,
+          dailyCapWei: this.config.dailyCapWei,
+          confirmed: false,
+          dryRun: this.config.dryRun,
+        };
+      }
+      // Nothing moved: give the budget back so the user can retry.
       await this.ledger.release(claim.reservation.id);
       if (error instanceof GasDripRefusedError) {
         throw error;
+      }
+      if (error instanceof ReserveBalanceBusyError) {
+        this.logger.warn(`drip refused user=${principal.userId}: ${error.message}`);
+        throw new GasDripRefusedError(
+          'reserve_balance_busy',
+          'Every faucet key is inside its reserve-balance window; try again shortly',
+        );
       }
       this.logger.error(
         `drip send failed address=${address} user=${principal.userId}: ${describeError(error)}`,
@@ -214,6 +250,7 @@ export class GasDripService {
     this.logger.log(
       `drip ok address=${address} amount=${formatEther(this.config.amountWei)} MON ` +
         `tx=${sent.hash} sender=${sent.sender} nonce=${sent.nonce} gas=${gasLimit} ` +
+        `reverted=${sent.reverted.length} ` +
         `dailyTotal=${formatEther(claim.dailyTotalWei)}/${formatEther(this.config.dailyCapWei)} MON ` +
         `user=${principal.userId}${this.config.dryRun ? ' (DRY RUN)' : ''}`,
     );
@@ -226,6 +263,7 @@ export class GasDripService {
       nonce: sent.nonce,
       dailyTotalWei: claim.dailyTotalWei,
       dailyCapWei: this.config.dailyCapWei,
+      confirmed: true,
       dryRun: this.config.dryRun,
     };
   }
@@ -312,7 +350,7 @@ export class GasDripService {
     let gasLimit: bigint;
     try {
       gasLimit = await this.gasLimitFor(address);
-      sent = await this.agentDispatcher.send(address, amountWei, gasLimit);
+      sent = await this.dispatcher.send(address, amountWei, gasLimit);
     } catch (error) {
       if (error instanceof DripUnconfirmedError) {
         // It may still land, so the budget and the dedupe keys stay spent and

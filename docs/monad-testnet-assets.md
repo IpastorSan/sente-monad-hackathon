@@ -286,6 +286,53 @@ limit for each failure (two reverts on 2026-09-10: `0x9a0bd10d…`,
 `0x16a7c0e6…`). `apps/mobile/src/chain/client.test.ts` now fails if a limit
 drops below its measurement or pads more than 20% over it.
 
+## Reserve balance window
+
+Measured 2026-09-11 (SEN-16), around block 61,668,000. An account holding under
+Monad's 10 MON reserve may send MON only if it has sent nothing in the last few
+blocks (CLAUDE.md gotcha 12). This measures "few".
+
+**Setup.** A fresh throwaway EOA, `0x8837e9697df234c8b47544e35956D0D766Fc8447`,
+got 0.2 MON from the treasury (`0xf9f69730…fdfed8`), so every send it made was
+far below the reserve. It then sent pairs of 0.001 MON transfers back to the
+treasury, each with gas 21,000. The second of each pair was broadcast N × 400 ms
+after the first, and the key sat idle 10 s between pairs. "Gap" is the
+inclusion-block difference between the two transfers.
+
+| N   | Delay   | Gap (blocks) | First                  | Second                           |
+| --- | ------- | ------------ | ---------------------- | -------------------------------- |
+| 0   | 0 ms    | 0            | ok `0x1be38416…0fe9ab` | **reverted** `0x69b70caa…e1475d` |
+| 1   | 400 ms  | 2            | ok `0x7c3fbc21…59cc23` | **reverted** `0xd51baa41…96eb6f` |
+| 2   | 800 ms  | 3            | ok `0x9217ea0e…2bc7b4` | ok `0xf738fdfd…f450eb`           |
+| 3   | 1200 ms | 5            | ok `0x16c3b9d5…db989a` | ok `0x7721d98d…386b8a`           |
+| 4   | 1600 ms | 6            | ok `0x1dcd487d…c3a7ef` | ok `0x2b376778…49eaa9`           |
+| 5   | 2000 ms | 7            | ok `0x25dcf380…612ec9` | ok `0x5833be02…4724da`           |
+| 6   | 2400 ms | 8            | ok `0x9f40479a…781bda` | ok `0xc6dfa285…d04995`           |
+
+Full hashes of the reverts: `0x69b70caa94efaeebc88c00d25b38fa8ed6aff669f9bf404cbc6a6bdb94e1475d`
+(gap 0) and `0xd51baa41c4b1dde73c6183c354e79ce7acba996c706ede453e15d5187396eb6f`
+(gap 2). The leftover was swept back in `0xf7862b2df3478e8d07428eace594613de6d0c08b18c7ca283e09d26f53cb13a5`.
+
+**Result.** A second transfer 0 or 2 blocks after the first reverts; 3 or more
+blocks after, it lands. Gap 1 was not hit directly, but it lies between two
+reverts. So the window is the **2 blocks after a send**, consistent with Monad's
+3-block execution delay (that link is inferred, not read from the client). Each
+revert still used and was charged the full 21,000 gas.
+
+`GAS_DRIP_SENDER_SPACING_MS` defaults to **2000** from this: it is counted from
+the previous send's receipt, which arrives no earlier than that send's block,
+so 2 s is about 5 blocks, the 3-block window plus a margin. The dispatcher
+still treats a reverted drip as a reserve violation and retries it on another
+key, in case block times stretch.
+
+**Spend: 0.034692 MON from the treasury** (3.8380882655 → 3.8033962655; its
+nonce moved by exactly 1, so nothing else touched it). That is 16 transactions
+(fund, 14 pair sends, sweep) × 21,000 gas × 102 gwei = 0.034272 MON, plus
+0.00042 MON left on the discarded throwaway key. The two reverts cost 0.004284
+MON of it. The leftover is exactly 21,000 × 20 gwei, the gap between the 122
+gwei `maxFeePerGas` bid and the 100 + 2 gwei actually charged. So Monad charges
+the gas limit at the **effective** price, not at `maxFeePerGas`.
+
 ## The gotcha that nearly produced a wrong answer
 
 Reading the **proxy's** bytecode shows three selectors and `requestFunds` is not

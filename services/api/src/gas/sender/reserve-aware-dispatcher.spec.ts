@@ -157,10 +157,10 @@ describe('ReserveAwareDispatcher', () => {
       expect(senders[0]!.sends[1]!.at).toBeGreaterThanOrEqual(receiptAt[0]! + SPACING_MS);
     });
 
-    it('stays clear of a key the user drip has just used', async () => {
+    it('stays clear of a key that has just sent outside the dispatcher', async () => {
       const { dispatcher, pool } = setup(2);
 
-      await pool.send(to(0xb0), AMOUNT, GAS_LIMIT); // SenderPool.send takes key 1
+      await pool.send(to(0xb0), AMOUNT, GAS_LIMIT); // the bare SenderPool.send takes key 1
 
       expect((await dispatcher.send(RECIPIENT, AMOUNT, GAS_LIMIT)).sender).toBe(to(2));
     });

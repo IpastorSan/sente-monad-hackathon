@@ -16,7 +16,7 @@ import { GAS_DRIP_CONFIG, type GasDripConfig } from '../gas.config';
 import { SENDER_POOL, type NonceSource, type TransactionBroadcaster } from '../sender/drip-sender';
 import { NonceManagedSender } from '../sender/nonce-managed-sender';
 import {
-  AGENT_DRIP_DISPATCHER,
+  DRIP_DISPATCHER,
   ReserveAwareDispatcher,
   type ReceiptWaiter,
   type TransferSimulator,
@@ -158,12 +158,13 @@ const senderPoolProvider: Provider = {
 };
 
 /**
- * The agent drip's sends: spaced per key, simulated, confirmed by receipt —
- * see `sender/reserve-aware-dispatcher.ts`. In dry run nothing is broadcast,
- * so there is nothing to simulate or wait for; spacing still runs for real.
+ * Every drip's sends, user and agent alike: spaced per key, simulated,
+ * confirmed by receipt — see `sender/reserve-aware-dispatcher.ts`. In dry run
+ * nothing is broadcast, so there is nothing to simulate or wait for; spacing
+ * still runs for real.
  */
-const agentDripDispatcherProvider: Provider = {
-  provide: AGENT_DRIP_DISPATCHER,
+const dripDispatcherProvider: Provider = {
+  provide: DRIP_DISPATCHER,
   inject: [GAS_DRIP_CONFIG, MONAD_PUBLIC_CLIENT, SENDER_POOL],
   useFactory: (
     config: GasDripConfig,
@@ -186,7 +187,7 @@ const agentDripDispatcherProvider: Provider = {
     return new ReserveAwareDispatcher(pool, simulator, receipts, {
       spacingMs: config.agent.senderSpacingMs,
       receiptTimeoutMs: config.agent.receiptTimeoutMs,
-      logger: new Logger('AgentDripDispatcher'),
+      logger: new Logger('DripDispatcher'),
     });
   },
 };
@@ -196,5 +197,5 @@ export const monadChainProviders: Provider[] = [
   balanceReaderProvider,
   codeReaderProvider,
   senderPoolProvider,
-  agentDripDispatcherProvider,
+  dripDispatcherProvider,
 ];

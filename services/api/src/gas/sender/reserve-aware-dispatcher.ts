@@ -14,13 +14,20 @@ import type { SenderPool } from './sender-pool';
  * violation`, and is charged its full gas limit. Faucet keys are small hot
  * wallets, so they live under 10 MON, and a drip is exactly a MON transfer.
  *
+ * The window, measured on testnet in SEN-16 (docs/monad-testnet-assets.md,
+ * "Reserve balance window"): a second transfer included 0 or 2 blocks after the
+ * first reverted; 3 or more blocks after, it landed. `GAS_DRIP_SENDER_SPACING_MS`
+ * (2 s, counted from the receipt) clears it with about 2 blocks to spare.
+ *
  * What this class does, and why each layer is there:
  *
  *   1. SPACING, the primary defence. A key is handed at most one send at a
  *      time, and the next send waits until `spacingMs` after the previous one's
  *      receipt, so every drip is its key's first transaction in the window.
- *      Other keys are tried before waiting. The pool records sends from the
- *      user drip too, so an agent drip also stays clear of those. Spacing is
+ *      Other keys are tried before waiting, so a free key whose spacing has
+ *      passed sends at once: the fast path costs no wait at all. Both the user
+ *      drip and the agent drip go through here (SEN-16), so they are spaced
+ *      against each other as well as against themselves. Spacing is
  *      chosen over "keep every key above 10 MON" because that parks 10 MON per
  *      key for nothing, and over "retry the revert on another key" alone
  *      because every revert costs the gas limit.
@@ -44,16 +51,12 @@ import type { SenderPool } from './sender-pool';
  *      that many gas limits (3 x 21k at ~100 gwei ≈ 0.006 MON).
  *
  * A receipt that does not arrive in time is NOT retried: the transaction may
- * still land, and a second send would fund the agent twice.
- *
- * The user drip (`GasDripService.drip`) still goes through `SenderPool.send`
- * directly, unchanged, so it is not spaced. Moving it here is a one-line change
- * left out of SEN-14 on purpose.
+ * still land, and a second send would fund the recipient twice.
  * ---------------------------------------------------------------------------
  */
 
-/** DI token for the agent drip's dispatcher. */
-export const AGENT_DRIP_DISPATCHER = Symbol('AGENT_DRIP_DISPATCHER');
+/** DI token for the dispatcher every drip (user and agent) sends through. */
+export const DRIP_DISPATCHER = Symbol('DRIP_DISPATCHER');
 
 /** Narrow slice of a viem public client (`eth_call`). Rejects with the node's error. */
 export interface TransferSimulator {
@@ -71,7 +74,7 @@ export interface ConfirmedSend extends DripSendResult {
 }
 
 /** What `GasDripService` depends on. `ReserveAwareDispatcher` is the implementation. */
-export interface AgentDripDispatcher {
+export interface DripDispatcher {
   send(to: Address, valueWei: bigint, gasLimit: bigint): Promise<ConfirmedSend>;
 }
 
@@ -114,7 +117,7 @@ const RESERVE_VIOLATION = /reserve balance/i;
 /** Upper bound on one wait, so a key freed early (a receipt) is noticed. */
 const POLL_MS = 250;
 
-export class ReserveAwareDispatcher implements AgentDripDispatcher {
+export class ReserveAwareDispatcher implements DripDispatcher {
   private readonly inFlight = new Set<Address>();
   private cursor = 0;
   private readonly spacingMs: number;

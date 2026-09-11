@@ -361,16 +361,26 @@ keys. On mainnet, sweeper bots drain them within a block.
 ### 12. Monad's reserve balance bites senders holding under 10 MON
 
 Monad keeps a **10 MON reserve balance** per account. An EOA below it may still send MON, but
-only as its first transaction within the last few blocks; a second MON transfer in quick
-succession reverts with `reserve balance violation` — and on Monad the gas limit is still charged.
-Seen in SEN-6: the treasury (≈4 MON) sent a MON transfer right after its Kuru faucet claim and it
-reverted; sent on its own, it landed. `scripts/fund-agent.ts` therefore sends MON first. The gas
-drip's agent drips go through `services/api/src/gas/sender/reserve-aware-dispatcher.ts` (SEN-14):
-one send per key at a time, `GAS_DRIP_SENDER_SPACING_MS` (default 5 s) between sends from the same
-key, an advisory `eth_call` first, and a reverted plain transfer retried on another key (at most 3
-sends). The user `drip()` still sends unspaced, so it can still hit this. The exact window was not
-measured, and Monad's `eth_call` accepts a single below-reserve transfer. EIP-7702-delegated EOAs get no exception at all: their balance cannot drop
-below 10 MON.
+only if it has sent nothing in the **previous 2 blocks**; a second MON transfer sooner reverts
+with `reserve balance violation`, and on Monad the gas limit is still charged. Measured in SEN-16
+with a throwaway key holding 0.2 MON: a second transfer included 0 or 2 blocks after the first
+reverted, and one included 3 to 8 blocks after landed (tx hashes and spend in
+`docs/monad-testnet-assets.md`, "Reserve balance window"). Seen first in SEN-6: the treasury
+(≈4 MON) sent a MON transfer right after its Kuru faucet claim and it reverted; sent on its own,
+it landed. `scripts/fund-agent.ts` therefore sends MON first.
+
+Every gas drip, the user `drip()` (SEN-16) and the agent drips (SEN-14) alike, goes through
+`services/api/src/gas/sender/reserve-aware-dispatcher.ts`. It does four things:
+
+- one send per key at a time;
+- `GAS_DRIP_SENDER_SPACING_MS` (default 2 s, about 5 blocks, counted from the previous receipt)
+  between sends from the same key; a free key past its spacing sends at once;
+- an advisory `eth_call` first;
+- a reverted plain transfer retried on another key, at most 3 sends in all.
+
+Monad's `eth_call` accepts a single below-reserve transfer; whether it flags the second one inside
+the window is unmeasured. EIP-7702-delegated EOAs get no exception at all: their balance cannot
+drop below 10 MON.
 
 ### 13. Perpl's enrollment struct drifts, and the Privy policy pins it exactly
 
