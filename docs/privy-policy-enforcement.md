@@ -118,14 +118,17 @@ Privy is explicit that stateful policies are not real-time:
 **There is no fixed staleness window**, and that is the actual answer rather than
 a gap in the research. It is not a cache TTL — the exposure is precisely the
 in-flight interval between a request passing evaluation and its value being
-recorded after signing. **Serial requests are exact.** The gap only opens under
-concurrency, and its width is set by our own request pattern.
+recorded after signing. ~~Serial requests are exact.~~ **Measured on 10143, they
+are not** (see "Verified live on 10143" below): the recording itself lags the
+signature by somewhere between ~0.1 s and 5 s, so even strictly serial signs
+overshoot when they come faster than that.
 
 Worst case with N requests in flight: an overshoot of up to
 **(N − 1) × per-transaction maximum** above the cap. Two levers, both ours:
 
 - **Drive N to 1.** Serialize the agent's submissions — one in-flight signing
-  request at a time. At N = 1 the cap is exact. Natural for a trading agent
+  request at a time. That removes the in-flight race, but not the recording
+  lag measured below — also space signs by a few seconds. Natural for a trading agent
   anyway, and we already serialize per-key in the drip relayer for nonce reasons.
 - **Shrink the per-transaction max.** Pair the rolling cap with a tight
   per-transaction `value` limit so any breach is bounded and small. Privy's own
@@ -147,9 +150,292 @@ A 24h cap sits comfortably inside, and is Privy's own worked example.
   **Largely defused** by choosing `eth_signTransaction`, which keeps simulation
   out of the path. Conditions on `to`/`value`/calldata are chain-agnostic
   regardless.
-- None of the enforcement claims here were tested empirically — they are a
-  careful reading of primary documentation. Verify the refusal path for real in
-  Phase 3, since it is the demo centrepiece.
+- ~~None of the enforcement claims here were tested empirically.~~ The refusal
+  path was exercised for real on 2026-09-11 — see the next section. What the
+  API cannot tell us is whether the app runs Privy's TEE execution mode.
+
+## Verified live on 10143
+
+SEN-3, 2026-09-11. `services/api/scripts/privy-probe.ts`, which only signs and
+**never broadcasts**. Every outcome below is what Privy actually answered; the
+two failures are recorded as failures.
+
+```bash
+pnpm --filter @sente/api run privy:keys     # the two authorization keys, into .env, unprinted
+pnpm --filter @sente/api run probe:privy    # [-- --env-file <path>] [-- --out report.json]
+```
+
+**The Privy app is shared.** It is turnstile's app (`cmtr2xx7101zp0cl1qxy3m9zc`),
+reused rather than a new Sente app. The probe only _creates_ objects, all named
+`sente-probe-…` (the owner quorums "Sente agent key" / "Sente mandate owner"),
+and only PATCHes policies it created in the same run. Turnstile's quorums,
+policy and wallet were never read or touched.
+
+**Execution mode (TEE or not): unknown, and not determinable from the API.**
+The wallet object has no execution-mode field (`id, address, display_name,
+chain_type, policy_ids, additional_signers, exported_at, imported_at,
+archived_at, created_at, owner_id, entity`), and `GET /v1/apps/{id}` returns 59
+keys, none of which names TEE, enclave or execution mode. Nothing observed
+suggests enforcement happens somewhere other than the enclave — every refusal
+is Privy's own `policy_violation`, before any signature exists — but nothing
+observed proves it happens inside one either: the API behaves the same either
+way. **Check the app's dashboard setting before claiming "enclave-enforced"
+for this app.** The two lags below (aggregation, policy PATCH) are consistent
+with either mode.
+
+### Results (run 6 of 6 — earlier runs found the fixes below)
+
+| #    | Check                                                                   | Expected | Got                                           |
+| ---- | ----------------------------------------------------------------------- | -------- | --------------------------------------------- |
+| 0    | a `to`-only rule signs at all                                           | signed   | signed; signer recovered = wallet             |
+| 0a   | `chain_id` + expiry exactly as `@sente/mandate` emits them              | signed   | signed                                        |
+| 0b   | same, expiry in the past                                                | refused  | refused                                       |
+| 0c   | same, `chain_id` 1                                                      | refused  | refused                                       |
+| 0d   | `chain_id` as hex `"0x279f"`                                            | —        | accepted, signed                              |
+| 0e   | `chain_id` as decimal `"10143"`                                         | —        | accepted, signed                              |
+| 0f   | expiry as hex                                                           | —        | **400 at write** (see finding 1)              |
+| 0g   | expiry as decimal                                                       | —        | accepted, signed                              |
+| M    | `compileMandate` output (7 rules) accepted as a policy                  | ok       | ok                                            |
+| 1    | Kuru `deposit` 5 USDC, under the 10 USDC cap                            | signed   | signed; chain 10143, `to`, signer verified    |
+| 1b   | USDC `approve` 5 to AccountCore                                         | signed   | signed; verified                              |
+| 2    | `deposit` 11 USDC, over the cap                                         | refused  | refused `policy_violation`                    |
+| 3a   | `OrderBook.batch` to the allowlisted MON-USDC (ABI with both overloads) | signed   | signed; verified                              |
+| 3    | `OrderBook.batch` to WETH-USDC, not allowlisted                         | refused  | refused `policy_violation`                    |
+| 4    | check 1 with `chain_id: 1`                                              | refused  | refused `policy_violation`                    |
+| 5a   | rolling cap 15 USDC/1 h: 1st `approve` of 8                             | signed   | signed                                        |
+| 5    | rolling cap: 2nd `approve` of 8 **immediately** (16 > 15)               | refused  | **SIGNED — FAILED** (finding 6)               |
+| 5+   | rolling cap: another `approve` of 8 after 5 s, and after 30 s           | refused  | refused, refused                              |
+| 5d   | the same four with the cap spelled in decimal                           | —        | same pattern: signed, **signed**, refused ×2  |
+| 6    | Perpl API-key enrollment typed data                                     | signed   | signed; signer recovered = wallet             |
+| 6b   | the same typed data with a different `statement`                        | refused  | refused `policy_violation`                    |
+| 6c–h | one enrollment condition at a time (bisection)                          | —        | see finding 4                                 |
+| 7a   | PATCH the policy with no signature                                      | 401      | 401 "Missing `privy-authorization-signature`" |
+| 7    | PATCH the policy signed by the **agent** key alone                      | 401      | 401 "No valid authorization signatures"       |
+| 7b   | PATCH the policy signed by the **mandate-owner** key                    | ok       | ok                                            |
+| 7c   | owner lowers the cap to 1 USDC; re-sign the 5 USDC deposit              | refused  | refused on the first try, 336 ms after        |
+| 8    | `eth_signTransaction` round trip, p50 of 10 serial calls                | —        | **123 ms** (111–481); runs 3–5: 121, 117, 124 |
+
+Refusals all read `"RPC request denied due to policy violation"`, code
+`policy_violation`, status 400 — never which rule or condition decided.
+
+### Findings, and what changed because of them
+
+1. **`system.current_unix_timestamp` must be a decimal string.** Hex is refused
+   when the policy is written: `400 invalid_policy_format`, "Condition value
+   must be a numerical string value for the current_unix_timestamp field". The
+   first run died on this. `unixTimestampLte` in `@sente/mandate` now emits
+   decimal. 0a/0b show the decimal bound is really compared.
+2. **`ethereum_typed_data_domain.chainId` must be a decimal string** too:
+   `400 invalid_policy_format`, "Condition value must be a numerical string when
+   using the 'chainId' field". `typedDataChainIdEq` now emits decimal.
+3. **`ethereum_transaction.chain_id` takes hex or decimal** alike (0d, 0e), and
+   is really compared (0c, 4). Left as hex. Calldata `lte` bounds stay hex, as
+   turnstile proved and checks 1/2 re-prove.
+4. **A typed-data message condition matches only when its `typed_data.types`
+   carries `EIP712Domain` as well as the struct.** With the struct alone (the
+   shape SEN-2 shipped) the condition never matched and every enrollment was
+   refused — check 6 failed in runs 3 and 4. Bisection: expiry-only,
+   chainId-only, verifyingContract-only and `message.signer`-only rules all
+   signed (6c, 6d, 6e, 6h); `message.statement` with the struct alone refused
+   (6f); the same condition with `EIP712Domain` added signed (6g).
+   `PERPL_ENROLL_TYPED_DATA` now derives `EIP712Domain` with viem's
+   `getTypesForEIP712Domain`, exactly as the client sends it (Perpl's domain has
+   a `salt`, so the domain type has five fields). Check 6 then signed.
+5. **Aggregation body: `window.seconds`, not `duration_seconds`** —
+   `400 invalid_aggregation_format`, "Required at window.seconds; Unrecognized
+   key(s) in object: 'duration_seconds'". `compileRollingCap` fixed. A rule
+   references an aggregation as `field_source: "reference"`,
+   `field: "aggregation.<id>"` (Privy's own error message spells this out; a
+   bare id, or `field_source: "aggregation"`, is refused). The cap is accepted
+   in hex or decimal. New builder: `aggregationLte(id, cap)`.
+6. **The rolling cap is enforced, but late.** A second `approve` sent right
+   after the first (~0.1 s, strictly serial) passed a cap it pushed over; the
+   next one, 5 s later, was refused, and so was one 30 s after that. Same in
+   runs 4, 5 and 6, and the same with the cap in hex or decimal. So Privy
+   records the aggregate some time after it signs, not at signing. **A rolling
+   cap is a bound with a small, measurable overshoot, not an exact one**: up to
+   one per-transaction maximum per few seconds of signing. The runner must
+   pace signs (seconds apart) as well as serialise them, and the per-trade cap
+   must stay tight — which is Privy's own advice.
+7. **A policy PATCH can also lag.** In run 5, a sign straight after the owner
+   PATCHed in an already-expired rule was still signed under the previous rule
+   (0b); in run 6, with a 5 s pause after every PATCH, all variants behaved,
+   and 7c's amendment bit on the first try at 336 ms. So propagation is usually
+   sub-second but not guaranteed immediate: **do not promise a revocation is
+   instant; treat it as effective after a few seconds.**
+8. **The owner split holds, enforced by Privy.** The agent key, which owns the
+   wallet, gets a 401 on the policy; only the mandate-owner key can change it.
+9. Signatures are real: every signed transaction parsed to chain 10143 with the
+   requested `to` and recovered to the wallet's address; typed-data signatures
+   recovered to the wallet. Nonce, gas and fees were filled from Monad RPC as
+   `0x` hex.
+
+### The JSON that worked
+
+A compiled transaction rule (`abi` elided; it is the one-fragment `deposit`
+ABI — the `batch` rule carries both overloads, two fragments, and that is
+accepted):
+
+```json
+{
+  "name": "Kuru: deposit USDC",
+  "method": "eth_signTransaction",
+  "action": "ALLOW",
+  "conditions": [
+    {
+      "field_source": "ethereum_transaction",
+      "field": "chain_id",
+      "operator": "eq",
+      "value": "0x279f"
+    },
+    {
+      "field_source": "system",
+      "field": "current_unix_timestamp",
+      "operator": "lte",
+      "value": "1789718333"
+    },
+    {
+      "field_source": "ethereum_transaction",
+      "field": "to",
+      "operator": "eq",
+      "value": "0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "deposit.token",
+      "abi": ["…"],
+      "operator": "eq",
+      "value": "0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "deposit.amount",
+      "abi": ["…"],
+      "operator": "lte",
+      "value": "0x989680"
+    }
+  ]
+}
+```
+
+The typed-data rule:
+
+```json
+{
+  "name": "Perpl: enroll an API key",
+  "method": "eth_signTypedData_v4",
+  "action": "ALLOW",
+  "conditions": [
+    {
+      "field_source": "ethereum_typed_data_domain",
+      "field": "chainId",
+      "operator": "eq",
+      "value": "10143"
+    },
+    {
+      "field_source": "system",
+      "field": "current_unix_timestamp",
+      "operator": "lte",
+      "value": "1789718333"
+    },
+    {
+      "field_source": "ethereum_typed_data_domain",
+      "field": "verifyingContract",
+      "operator": "eq",
+      "value": "0x0000000000000000000000000000000000000000"
+    },
+    {
+      "field_source": "ethereum_typed_data_message",
+      "field": "statement",
+      "operator": "eq",
+      "value": "I authorize the creation of Perpl API key with the specified scope and parameters",
+      "typed_data": {
+        "primary_type": "PerplRegisterApiKey",
+        "types": {
+          "EIP712Domain": [
+            { "name": "name", "type": "string" },
+            { "name": "version", "type": "string" },
+            { "name": "chainId", "type": "uint256" },
+            { "name": "verifyingContract", "type": "address" },
+            { "name": "salt", "type": "bytes32" }
+          ],
+          "PerplRegisterApiKey": [
+            { "name": "signer", "type": "address" },
+            { "name": "statement", "type": "string" },
+            { "name": "publicKey", "type": "string" },
+            { "name": "scope", "type": "string" },
+            { "name": "label", "type": "string" },
+            { "name": "time", "type": "uint64" }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+The `eth_signTypedData_v4` RPC body (`POST /v1/wallets/{id}/rpc`) is
+`{ "method": "eth_signTypedData_v4", "params": { "typed_data": { domain, types,
+primary_type, message } } }`. `types` repeats `EIP712Domain`, the domain carries
+a numeric `chainId` (`10143`) and Perpl's `salt`, and `message.time` is a JSON
+number. The response's signature is at `data.signature`.
+
+The aggregation (`POST /v1/aggregations`), and the condition that references it:
+
+```json
+{
+  "name": "Sente rolling cap, 3600s",
+  "method": "eth_signTransaction",
+  "metric": {
+    "field_source": "ethereum_calldata",
+    "field": "approve.amount",
+    "abi": ["…"],
+    "function": "sum"
+  },
+  "window": { "type": "rolling", "seconds": 3600 },
+  "conditions": [
+    {
+      "field_source": "ethereum_transaction",
+      "field": "chain_id",
+      "operator": "eq",
+      "value": "0x279f"
+    },
+    {
+      "field_source": "ethereum_transaction",
+      "field": "to",
+      "operator": "eq",
+      "value": "0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E"
+    }
+  ]
+}
+```
+
+```json
+{ "field_source": "reference", "field": "aggregation.<id>", "operator": "lte", "value": "0xe4e1c0" }
+```
+
+`GET /v1/aggregations/{id}` echoes the definition back with `"group_by": []` and
+`"owner_id": null` — and **no running value**, so the aggregate cannot be read
+back to check it. Note `group_by: []`: whether one aggregation sums across
+every wallet whose policy references it was not tested; the probe gave each
+wallet its own aggregation.
+
+### Ids (run 6)
+
+Also written to the repo-root `.env` as `PRIVY_PROBE_*` (the list endpoints
+answer 405, so this is the record). None of these is secret.
+
+| Object                               | Id                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| agent-key quorum (owns wallets)      | `v4akc7n2q006kndzefpksv0j` (also `PRIVY_AGENT_QUORUM_ID`)                 |
+| mandate-owner quorum (owns policies) | `bnpobexc7e0c4rcli6k6uqfw` (also `PRIVY_MANDATE_QUORUM_ID`)               |
+| mandate wallet                       | `j1vvfuszwb4vzw2z3gb613oh` → `0x9c3cf0f7D73C4386E63754d9e42593141DDCDb3c` |
+| its policy (cap now 1 USDC after 7c) | `giux7b2ttmictttqdixije9n`                                                |
+| aggregation, hex cap / decimal cap   | `bhcefi3oxa8kon1gbkte13hp` / `najd1wrbb43bky18am1wz7mf`                   |
+
+Runs 1–5 left their own `sente-probe-…` wallets and policies in the app. They
+are unfunded, owned by the two quorums above (so still controllable with our
+keys), and their ids were not kept — only the last run's are in `.env`.
 
 ## Plan availability
 

@@ -1,0 +1,14 @@
+{
+  // ts-jest's tsconfig. Same as tsconfig.json except for one thing: relative
+  // `.ts` specifiers (in src/agents/privy/* and in the workspace packages'
+  // sources) are emitted VERBATIM, because jest's own resolver loads `./x.ts`
+  // literally. Rewriting them to `./x.js`, as the build must, would point jest
+  // at files that do not exist — or, in packages/venues/src, at stale committed
+  // `.js` twins. See CLAUDE.md gotcha 10.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rewriteRelativeImportExtensions": false,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  }
+}

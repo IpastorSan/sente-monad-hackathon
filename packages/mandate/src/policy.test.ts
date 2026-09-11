@@ -81,16 +81,23 @@ test('every address is EIP-55 checksummed, even from a lowercase mandate', () =>
   assert.ok(rules.some((r) => toOf(r) === USDC));
 });
 
-test('every uint bound is a 0x hex string, and the caps are the right numbers', () => {
+test('every uint bound is a 0x hex string except the expiry, and the caps are the right numbers', () => {
   const rules = compileMandate(demoMandate());
-  const numeric = conditionsOf(rules).filter(
+  const conditions = conditionsOf(rules);
+  // Privy refuses hex for these two (SEN-3 live probe): decimal only.
+  const decimalOnly = (c: { field_source: string; field: string }) =>
+    c.field === 'current_unix_timestamp' ||
+    (c.field_source === 'ethereum_typed_data_domain' && c.field === 'chainId');
+  const numeric = conditions.filter(
     (c) =>
-      ['lt', 'lte', 'gt', 'gte'].includes(c.operator) ||
-      c.field === 'chain_id' ||
-      c.field === 'chainId',
+      !decimalOnly(c) &&
+      (['lt', 'lte', 'gt', 'gte'].includes(c.operator) || c.field === 'chain_id'),
   );
   assert.ok(numeric.length > 10);
   for (const c of numeric) assert.match(c.value, HEX_UINT, `${c.field} = ${c.value}`);
+  const decimals = conditions.filter(decimalOnly);
+  assert.equal(decimals.length, rules.length + 1); // an expiry per rule + the typed-data chainId
+  for (const c of decimals) assert.match(c.value, /^(0|[1-9][0-9]*)$/, `${c.field} = ${c.value}`);
 
   const usdcApprove = rules.find((r) => r.name === 'Kuru: approve USDC to AccountCore')!;
   assert.equal(find(usdcApprove, 'ethereum_calldata', 'approve.amount')?.value, '0x3b9aca00'); // 1e9
@@ -109,10 +116,11 @@ test('every rule carries the chain id and the expiry', () => {
         ? find(r, 'ethereum_transaction', 'chain_id')
         : find(r, 'ethereum_typed_data_domain', 'chainId');
     assert.equal(chain?.operator, 'eq', r.name);
-    assert.equal(chain?.value, '0x279f', r.name); // 10143
+    // 10143: hex on the transaction, decimal in the typed-data domain (Privy refuses hex there).
+    assert.equal(chain?.value, r.method === 'eth_signTransaction' ? '0x279f' : '10143', r.name);
     const expiry = find(r, 'system', 'current_unix_timestamp');
     assert.equal(expiry?.operator, 'lte', r.name);
-    assert.equal(expiry?.value, `0x${EXPIRES_AT.toString(16)}`, r.name);
+    assert.equal(expiry?.value, String(EXPIRES_AT), r.name);
   }
 });
 
@@ -189,6 +197,12 @@ test('Perpl: AUSD approve to the Exchange, createAccount and forwarding, plus AP
   const statement = find(enroll, 'ethereum_typed_data_message', 'statement');
   assert.ok(statement && 'typed_data' in statement);
   assert.equal(statement.typed_data.primary_type, 'PerplRegisterApiKey');
+  // Privy matched the message condition only with EIP712Domain spelled out, as
+  // the request carries it — Perpl's domain includes `salt` (SEN-3 live probe).
+  assert.deepEqual(
+    statement.typed_data.types['EIP712Domain']?.map((f) => f.name),
+    ['name', 'version', 'chainId', 'verifyingContract', 'salt'],
+  );
 });
 
 test('the rules are plain JSON Privy can take: canonicalizable, and they survive a round trip', () => {
@@ -295,7 +309,7 @@ test('the rolling cap compiles to a hex-bounded aggregation over one token, or t
     demoMandate({ rollingCap: { windowSeconds: 86_400, capAtoms: 2_000_000_000n, token: USDC } }),
   )!;
   assert.equal(draft.cap, '0x77359400');
-  assert.equal(draft.window.duration_seconds, 86_400);
+  assert.equal(draft.window.seconds, 86_400); // Privy refuses `duration_seconds` (SEN-3)
   assert.equal(draft.metric.field, 'approve.amount');
   assert.ok(draft.conditions.some((c) => c.field === 'to' && c.value === USDC));
   assert.doesNotThrow(() => canonicalize(draft));
