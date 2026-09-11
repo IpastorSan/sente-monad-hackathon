@@ -94,7 +94,12 @@ export const PERPL_EXCHANGE_ABI = [
   },
 ] as const;
 
-const ERC20_APPROVE_ABI = [
+/**
+ * `approve(spender, amount)`. Exported because `@sente/mandate` hands Privy
+ * this ABI to decode approvals with, and its policy fields (`approve.spender`,
+ * `approve.amount`) are these parameter names.
+ */
+export const ERC20_APPROVE_ABI = [
   {
     type: 'function',
     name: 'approve',
