@@ -324,6 +324,33 @@ Unit tests and some live runs use the Anvil/Hardhat default accounts (`0xf39Fd6e
 Fine for worthless testnet tokens; never send anything of value to an address derived from these
 keys. On mainnet, sweeper bots drain them within a block.
 
+### 12. Monad's reserve balance bites senders holding under 10 MON
+
+Monad keeps a **10 MON reserve balance** per account. An EOA below it may still send MON, but
+only as its first transaction within the last few blocks; a second MON transfer in quick
+succession reverts with `reserve balance violation` — and on Monad the gas limit is still charged.
+Seen in SEN-6: the treasury (≈4 MON) sent a MON transfer right after its Kuru faucet claim and it
+reverted; sent on its own, it landed. `scripts/fund-agent.ts` therefore sends MON first. The gas
+drip's senders do back-to-back MON sends and are exposed to the same rule (SEN-14). The exact
+window was not measured. EIP-7702-delegated EOAs get no exception at all: their balance cannot drop
+below 10 MON.
+
+### 13. Perpl's enrollment struct drifts, and the Privy policy pins it exactly
+
+Agent wallets enroll Perpl API keys by signing Perpl's EIP-712 payload through Privy, and the
+compiled mandate policy has a typed-data rule that pins the **exact** `types`
+(`PERPL_ENROLL_TYPED_DATA` in `packages/venues/src/perpl/constants.ts`). Privy matches only when
+the types are exactly equal. Between 2026-09-10 and 2026-09-11 Perpl's live payload grew from 6
+fields to 11, so every enrollment was refused as a bare `policy_violation` — the enclave working
+correctly against a stale constant. Consequences:
+
+- When enrollment starts failing with `policy_violation`, diff the live payload against the
+  constant first.
+- After changing the constant, every existing agent policy must be re-PATCHed (via
+  `AgentsService.amendMandate` or the mandate-owner key), or those agents can never enroll.
+- A probe that signs only our own constant proves nothing about the live shape (SEN-3 missed this
+  for exactly that reason); the SEN-6 live script signs the payload Perpl actually serves.
+
 ---
 
 ## Conventions
