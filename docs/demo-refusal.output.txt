@@ -1,0 +1,75 @@
+SENTE — THE REFUSAL (SEN-9)
+mode: SCRIPTED — no model; the same gated tools a model would call
+Nothing below is an agent deciding anything: a fixed script calls the gated tools.
+run at 2026-09-11T16:44:02.972Z on Monad testnet (10143)
+agent 0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E before: MON 0.061747976, wallet USDC 2, Kuru AccountCore USDC 12, nonce 7
+
+=== ACT 1 — HIRE: a tight mandate ===
+[SCRIPTED — no model; the same gated tools a model would call]
+  agent c670e82b-c428-466b-8b87-ca48673e9520
+  wallet qqhg4rxobx0qnjg398tjzgi9 0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E, policy nmfedw3sc6i1pkndz3a38msh
+  mandate: Kuru only; market MON-USDC only; deposits ≤ 1 USDC per transaction; expires 2026-09-12T16:44:03.000Z
+  reused the funded SEN-6 probe wallet rather than minting one (a hire mints an unfunded wallet); no funds were moved by this script
+  owner-key PATCH of its policy to the demo mandate returned in 383 ms
+  registered as agent c670e82b-c428-466b-8b87-ca48673e9520 of user sente-demo-refusal (in-memory store); the record names a model, but no model is called
+  the off-allowlist order used below: buy 0.0161622692 WETH @ 1237.45 (half the WETH-USDC reference 2474.91), a valid order for that market
+  PASS  the enclave enforces the demo mandate — sign-only probes (never broadcast): approve 1 USDC signs, 2 USDC is refused; 2 in a row after 1334 ms, 2 probe round(s)
+
+=== ACT 2 — THE ENCLAVE REFUSES (Sente pre-check OFF) ===
+[SCRIPTED — no model; the same gated tools a model would call]
+  AGENT_PRECHECK=off for these calls: nothing of ours stands between them and Privy.
+  record_thesis MON-USDC                           → OK  {"recorded":true,"market":"MON-USDC","direction":"long"}
+  deposit       2 USDC for MON-USDC                → REFUSED by the Privy enclave [policy_violation] — "Refused by the Privy enclave (policy_violation): the signing key would not sign this"
+  record_thesis WETH-USDC                          → OK  {"recorded":true,"market":"WETH-USDC","direction":"long"}
+  place_limit   buy 0.0161622692 @ 1237.45 on WETH-USDC → REFUSED by the Privy enclave [policy_violation] — "Refused by the Privy enclave (policy_violation): the signing key would not sign this"
+  PASS  deposit 2 USDC over the 1 USDC cap — REFUSED by the Privy enclave [policy_violation] — "Refused by the Privy enclave (policy_violation): the signing key would not sign this"
+  PASS  buy on WETH-USDC, not on the allowlist — REFUSED by the Privy enclave [policy_violation] — "Refused by the Privy enclave (policy_violation): the signing key would not sign this"
+  PASS  the refusals reached the caller as tool errors — 2/2 tool results were errors
+  PASS  nothing was broadcast — nonce 7 → 7
+  PASS  refusal events carry layer 'enclave' — 2 enclave refusal event(s) in run demo-act2-scripted-50ffeced-442e-419a-bd2c-3b60ed8d3a79: seq 2, 4
+  PASS  Privy was asked, and refused, every time — 2 Privy signing call(s), 2 refused
+
+=== ACT 3 — SENTE REFUSES FIRST (pre-check ON) ===
+[SCRIPTED — no model; the same gated tools a model would call]
+  The same attempts with layer 1 on: refused before a signature is ever requested.
+  record_thesis MON-USDC                           → OK  {"recorded":true,"market":"MON-USDC","direction":"long"}
+  deposit       2 USDC for MON-USDC                → REFUSED by Sente (layer 1) [deposit_over_cap] — "Refused by Sente mandate: deposit_over_cap. 2000000 atoms of 0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E exceeds the mandate's cap of 1000000"
+  record_thesis WETH-USDC                          → OK  {"recorded":true,"market":"WETH-USDC","direction":"long"}
+  place_limit   buy 0.0161622692 @ 1237.45 on WETH-USDC → REFUSED by Sente (layer 1) [market_not_allowed] — "Refused by Sente mandate: market_not_allowed. Kuru market 0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7 is not in the mandate"
+  PASS  deposit refused by Sente: deposit_over_cap — REFUSED by Sente (layer 1) [deposit_over_cap] — "Refused by Sente mandate: deposit_over_cap. 2000000 atoms of 0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E exceeds the mandate's cap of 1000000"
+  PASS  buy refused by Sente: market_not_allowed — REFUSED by Sente (layer 1) [market_not_allowed] — "Refused by Sente mandate: market_not_allowed. Kuru market 0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7 is not in the mandate"
+  PASS  zero Privy calls — 0 Privy call(s) during act 3
+  PASS  nothing was broadcast — nonce 7 → 7
+
+=== ACT 4 — AMEND: only the owner key can raise the limit ===
+[SCRIPTED — no model; the same gated tools a model would call]
+  PASS  no agent tool can change the mandate — the agent's write tools: record_thesis, place_limit, place_market, deposit, cancel_order, close_position
+  PASS  a PATCH signed by the agent key alone is refused — Privy answered 401: "No valid authorization signatures were provided. Your payload may be malformed or your signing keys may be incorrect or expired. Docs: https://docs.privy.io/api-reference/authorization-signatures"
+  PASS  and the cap did not move — sign-only probe of 2 USDC: refused
+  PASS  the owner-signed amend raises the cap to 2 USDC — AgentsService.amendMandate → policy PATCH in 1394 ms; stored cap 2 USDC
+  PASS  the new rule reached the enclave — 2 USDC sign-only probe signed 2 in a row 916 ms after the PATCH returned (2 probe(s), polling every 500 ms)
+  record_thesis MON-USDC                           → OK  {"recorded":true,"market":"MON-USDC","direction":"long"}
+  deposit       2 USDC for MON-USDC                → OK  {"deposited":"2","asset":"USDC","hash":"0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7","transactionHash":"0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7"}
+  signed + broadcast 0x14206cd7063ccb364f55dfa0a0b18acd57e8e7304b91de69638e6d99ea889840  receipt: success
+  signed + broadcast 0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7  receipt: success
+  PASS  the same 2 USDC deposit now signs and lands — OK  {"deposited":"2","asset":"USDC","hash":"0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7","transactionHash":"0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7"}
+  PASS  approve + deposit broadcast — nonce 7 → 9; 2 signed transaction(s)
+  PASS  both receipts succeeded on chain — 0x14206cd7063ccb364f55dfa0a0b18acd57e8e7304b91de69638e6d99ea889840 success, 0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7 success
+
+=== ACT 5 — REVOKE: every write is refused ===
+[SCRIPTED — no model; the same gated tools a model would call]
+  PASS  revoked, and the policy emptied — status revoked, policyCleared true (PATCH to [] in 360 ms)
+  record_thesis MON-USDC                           → REFUSED by Sente (layer 1) [agent_inactive] — "Refused by Sente mandate: agent_inactive. this agent has been revoked and can no longer act"
+  deposit       1 USDC for MON-USDC                → REFUSED by Sente (layer 1) [agent_inactive] — "Refused by Sente mandate: agent_inactive. this agent has been revoked and can no longer act"
+  PASS  a 1 USDC deposit, within even the original cap, is refused — REFUSED by Sente (layer 1) [agent_inactive] — "Refused by Sente mandate: agent_inactive. this agent has been revoked and can no longer act"
+  PASS  the tools asked Privy nothing — 0 Privy call(s)
+  Directly at the enclave, with Sente out of the way (sign-only, never broadcast):
+  PASS  the enclave refuses the wallet everything — a 1 USDC approve, allowed at hire, refused 2 in a row 852 ms after the revoke returned (2 probe(s))
+  PASS  nothing was broadcast — nonce 9 → 9
+
+=== RESULT [SCRIPTED — no model; the same gated tools a model would call] ===
+ALL 24 CHECKS PASSED
+
+agent 0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E after: MON 0.027877958, wallet USDC 0, Kuru AccountCore USDC 14, nonce 9
+spent by the agent: 0.033870018 MON gas; 2 USDC moved from its wallet into its own Kuru account
+Privy calls through the provider: 16 (tools 4, sign-only probes 9, owner PATCHes 3); plus 1 PATCH attempted with the agent key
