@@ -18,10 +18,12 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { createWalletClient, formatEther, http, parseEther } from 'viem';
 
-import { describeAuthError, RP_ID, useAccount } from '@/auth';
+import { describeAuthError, RP_ID } from '@/auth';
 import { MONAD_GAS_LIMITS, MONAD_NETWORK, monadChain, publicClient } from '@/chain';
+import { useSession } from '@/session';
 
 /** Deliberately small: this is a liveness proof, not a transfer anyone wants. */
 const SELF_TRANSFER = parseEther('0.001');
@@ -36,8 +38,10 @@ type TxState =
   | { kind: 'failed'; title: string; detail: string };
 
 export default function Home() {
+  const router = useRouter();
+  // The session lives in <SessionProvider> so the agent screens share it.
   const { status, account, address, hasCredential, error, createPasskey, signIn, signOut, forget } =
-    useAccount();
+    useSession().auth;
 
   const [balance, setBalance] = useState<bigint | null>(null);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -154,6 +158,12 @@ export default function Home() {
         />
         <Button label="Sign in" onPress={() => void signIn()} disabled={busy} />
         <Button
+          label="Agents"
+          onPress={() => router.push('/agents')}
+          disabled={status !== 'ready'}
+          style={styles.primary}
+        />
+        <Button
           label={`Send ${formatEther(SELF_TRANSFER)} MON to self`}
           onPress={() => void sendToSelf()}
           disabled={status !== 'ready' || tx.kind === 'sending'}
@@ -253,7 +263,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 48,
   },
-  primary: { backgroundColor: '#3D3DFF' },
+  // Neutral: purple is reserved for the consensus ramp (plan, "Instrument Grey").
+  primary: { backgroundColor: '#2E2E33' },
   buttonDisabled: { opacity: 0.35 },
   buttonPressed: { opacity: 0.7 },
   buttonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
