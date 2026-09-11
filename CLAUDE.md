@@ -331,6 +331,7 @@ keys. On mainnet, sweeper bots drain them within a block.
 - Strict TypeScript everywhere; every package extends `tsconfig.base.json`.
 - ESLint flat config lives at the repo root; each package's `eslint.config.mjs` re-exports it.
 - Prettier: single quotes, semicolons, trailing commas, 100 columns.
-- Branch names: `{type}/{issue-id}-{short-description}`, e.g. `feat/MOV-251-privy-auth`.
+- Branch names: `{type}/{issue-id}-{short-description}`, e.g. `feat/SEN-5-agents-api`. Issues live in the
+  vault tracker (`~/Documents/Moveseventyeight/003-tracker/issues/sente/`, key `SEN`); older `MOV-*` ids are Linear history.
 - Secrets: see `.env.example`. `EXPO_PUBLIC_*` is compiled into the app bundle and is therefore
   public by construction — private keys and app secrets are server-side only.

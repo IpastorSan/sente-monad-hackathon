@@ -151,8 +151,8 @@ A 24h cap sits comfortably inside, and is Privy's own worked example.
   out of the path. Conditions on `to`/`value`/calldata are chain-agnostic
   regardless.
 - ~~None of the enforcement claims here were tested empirically.~~ The refusal
-  path was exercised for real on 2026-09-11 — see the next section. What the
-  API cannot tell us is whether the app runs Privy's TEE execution mode.
+  path was exercised for real on 2026-09-11 — see the next section. The app
+  runs Privy's TEE execution mode (confirmed in the dashboard; it is the default).
 
 ## Verified live on 10143
 
@@ -169,19 +169,16 @@ pnpm --filter @sente/api run probe:privy    # [-- --env-file <path>] [-- --out r
 reused rather than a new Sente app. The probe only _creates_ objects, all named
 `sente-probe-…` (the owner quorums "Sente agent key" / "Sente mandate owner"),
 and only PATCHes policies it created in the same run. Turnstile's quorums,
-policy and wallet were never read or touched.
-
-**Execution mode (TEE or not): unknown, and not determinable from the API.**
-The wallet object has no execution-mode field (`id, address, display_name,
+policy and wallet were never read or t**Execution mode: TEE.** Confirmed by the app owner in the Privy dashboard on
+2026-09-11; TEE execution is Privy's default. The API itself cannot show this:
+the wallet object has no execution-mode field (`id, address, display_name,
 chain_type, policy_ids, additional_signers, exported_at, imported_at,
 archived_at, created_at, owner_id, entity`), and `GET /v1/apps/{id}` returns 59
-keys, none of which names TEE, enclave or execution mode. Nothing observed
-suggests enforcement happens somewhere other than the enclave — every refusal
-is Privy's own `policy_violation`, before any signature exists — but nothing
-observed proves it happens inside one either: the API behaves the same either
-way. **Check the app's dashboard setting before claiming "enclave-enforced"
-for this app.** The two lags below (aggregation, policy PATCH) are consistent
-with either mode.
+keys, none of which names TEE, enclave or execution mode. So the dashboard is the
+evidence, and "enclave-enforced" is accurate for the field sources listed above.
+The two lags below (aggregation, policy PATCH) are real regardless of mode;
+don't claim an exact cumulative cap or instant revocation.
+er mode.
 
 ### Results (run 6 of 6 — earlier runs found the fixes below)
 
