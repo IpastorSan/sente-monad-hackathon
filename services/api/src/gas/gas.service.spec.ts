@@ -1,7 +1,7 @@
 import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
-import type { Address, Hash } from 'viem';
+import type { Address, Hash, Hex } from 'viem';
 
-import type { BalanceReader } from './chain/monad-chain.providers';
+import type { BalanceReader, CodeReader } from './chain/monad-chain.providers';
 import type { GasDripConfig } from './gas.config';
 import { GasDripRefusedError } from './gas.errors';
 import { GasDripService } from './gas.service';
@@ -22,6 +22,7 @@ const config = (over: Partial<GasDripConfig> = {}): GasDripConfig => ({
   amountWei: ONE_TENTH_MON,
   dailyCapWei: ONE_TENTH_MON * 10n,
   gasLimit: 21_000n,
+  gasLimitContract: 46_000n,
   rpcUrl: undefined,
   rateLimit: { max: 100, windowMs: 60_000 },
   dryRun: false,
@@ -36,16 +37,29 @@ const balances = (wei: bigint): BalanceReader => ({
   getBalance: async () => wei,
 });
 
+/** A fake `eth_getCode`: `undefined`/`0x` is no code, anything else is a contract. */
+const codeReader = (code: Hex | undefined | Error): CodeReader => ({
+  getCode: async () => {
+    if (code instanceof Error) {
+      throw code;
+    }
+    return code;
+  },
+});
+
+/** Runtime code of a deployed Kernel account — the content is irrelevant, only its presence. */
+const KERNEL_CODE = '0x363d3d373d3d363d7f360894a13ba1a3210667c828492db98dca3e2076cc3735a9' as Hex;
+
 function senderPool(behaviour: 'ok' | 'throw' | 'empty' = 'ok') {
-  const sends: { to: Address; value: bigint }[] = [];
+  const sends: { to: Address; value: bigint; gasLimit: bigint }[] = [];
   const pool = {
     size: behaviour === 'empty' ? 0 : 3,
     addresses: () => [SENDER],
-    send: async (to: Address, value: bigint): Promise<DripSendResult> => {
+    send: async (to: Address, value: bigint, gasLimit: bigint): Promise<DripSendResult> => {
       if (behaviour === 'throw') {
         throw new Error('rpc exploded');
       }
-      sends.push({ to, value });
+      sends.push({ to, value, gasLimit });
       return { hash: '0xfeed' as Hash, nonce: 4, sender: SENDER };
     },
   } as unknown as SenderPool;
@@ -59,6 +73,7 @@ function build(
     balanceWei?: bigint;
     allowIp?: boolean;
     senders?: 'ok' | 'throw' | 'empty';
+    code?: Hex | undefined | Error;
   } = {},
 ) {
   const ledger = over.ledger ?? new InMemoryDripLedger();
@@ -69,6 +84,7 @@ function build(
     pool,
     balances(over.balanceWei ?? 0n),
     rateLimiter(over.allowIp ?? true),
+    codeReader(over.code),
   );
   return { service, ledger, sends };
 }
@@ -170,6 +186,71 @@ describe('GasDripService.drip', () => {
     const day = new Date().toISOString().slice(0, 10);
     expect(await ledger.dailyTotalWei(day)).toBe(0n);
     expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
+  });
+
+  describe('gas limit per recipient', () => {
+    it.each([
+      ['no code (viem returns undefined)', undefined],
+      ['empty code (0x)', '0x' as Hex],
+    ])('sends an EOA / counterfactual account the 21k limit: %s', async (_label, code) => {
+      const { service, sends } = build({ code });
+
+      await service.drip(USER, { address: ADDRESS, ip: IP });
+
+      expect(sends).toEqual([{ to: ADDRESS, value: ONE_TENTH_MON, gasLimit: 21_000n }]);
+    });
+
+    it('sends an address with code (a deployed Kernel account) the contract limit', async () => {
+      const { service, sends } = build({ code: KERNEL_CODE });
+
+      await service.drip(USER, { address: ADDRESS, ip: IP });
+
+      // 21k reverts there: the account's receive() measured 40,995 gas.
+      expect(sends).toEqual([{ to: ADDRESS, value: ONE_TENTH_MON, gasLimit: 46_000n }]);
+    });
+
+    it('uses the configured limits, not hard-coded ones', async () => {
+      const cfg = { gasLimit: 22_000n, gasLimitContract: 48_000n };
+      const eoa = build({ cfg, code: undefined });
+      const contract = build({ cfg, code: KERNEL_CODE });
+
+      await eoa.service.drip(USER, { address: ADDRESS, ip: IP });
+      await contract.service.drip(USER, { address: ADDRESS, ip: IP });
+
+      expect(eoa.sends[0]?.gasLimit).toBe(22_000n);
+      expect(contract.sends[0]?.gasLimit).toBe(48_000n);
+    });
+
+    it('does not read code for a refused drip', async () => {
+      const getCode = jest.fn(async (): Promise<Hex | undefined> => undefined);
+      const { pool } = senderPool();
+      const service = new GasDripService(
+        config(),
+        new InMemoryDripLedger(),
+        pool,
+        balances(1n),
+        rateLimiter(),
+        { getCode },
+      );
+
+      expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
+        'address_already_funded',
+      );
+      expect(getCode).not.toHaveBeenCalled();
+    });
+
+    it('gives the budget back when the code read fails, and does not send', async () => {
+      const { service, ledger, sends } = build({ code: new Error('getCode timed out') });
+
+      await expect(service.drip(USER, { address: ADDRESS, ip: IP })).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+
+      expect(sends).toHaveLength(0);
+      const day = new Date().toISOString().slice(0, 10);
+      expect(await ledger.dailyTotalWei(day)).toBe(0n);
+      expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
+    });
   });
 
   it('lets only one of several concurrent drips for the same user through', async () => {

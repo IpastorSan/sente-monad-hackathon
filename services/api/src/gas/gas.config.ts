@@ -22,11 +22,18 @@ export interface GasDripConfig {
   /** Global outflow ceiling per UTC day, checked before any send. */
   dailyCapWei: bigint;
   /**
-   * Explicit gas limit for the native transfer. Monad charges on gas_limit,
-   * not gas used, so this is hard-coded rather than estimated — see CLAUDE.md
-   * gotcha 4 and MONAD_TX_DEFAULTS in apps/mobile/src/chain/client.ts.
+   * Explicit gas limit for a native transfer to an address WITHOUT code (an
+   * EOA, or a counterfactual Kernel account not deployed yet). Monad charges on
+   * gas_limit, not gas used, so this is hard-coded rather than estimated — see
+   * CLAUDE.md gotcha 4 and MONAD_GAS_LIMITS in apps/mobile/src/chain/client.ts.
    */
   gasLimit: bigint;
+  /**
+   * Explicit gas limit for a native transfer to an address WITH code, e.g. a
+   * deployed Kernel smart account, whose `receive()` runs on the send. 21k
+   * reverts there. Chosen per recipient from `eth_getCode`, so EOAs never pay it.
+   */
+  gasLimitContract: bigint;
   /** Optional RPC override; falls back to viem's default for monadTestnet. */
   rpcUrl: string | undefined;
   rateLimit: GasDripRateLimitConfig;
@@ -46,7 +53,14 @@ const MAX_SENDER_KEYS = 5;
 export const GAS_DRIP_DEFAULTS = {
   amountMon: '0.1',
   dailyCapMon: '25',
+  /** MON -> EOA: 21,000, and it cannot vary. */
   gasLimit: 21_000n,
+  /**
+   * MON -> deployed Kernel v0.3.1 account: 40,995 measured on Monad testnet
+   * (MONAD_GAS_LIMITS.nativeTransferToSmartAccount in apps/mobile). The floor
+   * and the +20% ceiling are pinned in gas.config.spec.ts.
+   */
+  gasLimitContract: 46_000n,
   rateLimitMax: 3,
   rateLimitWindowMs: 15 * 60 * 1000,
 } as const;
@@ -137,6 +151,13 @@ export function loadGasDripConfig(env: NodeJS.ProcessEnv = process.env): GasDrip
         'GAS_DRIP_GAS_LIMIT',
       ),
     ),
+    gasLimitContract: BigInt(
+      parsePositiveInt(
+        env.GAS_DRIP_GAS_LIMIT_CONTRACT,
+        Number(GAS_DRIP_DEFAULTS.gasLimitContract),
+        'GAS_DRIP_GAS_LIMIT_CONTRACT',
+      ),
+    ),
     rpcUrl: env.MONAD_TESTNET_RPC_URL?.trim() || undefined,
     rateLimit: {
       max: parsePositiveInt(
@@ -160,6 +181,7 @@ export function describeGasDripConfig(config: GasDripConfig, logger: Logger): vo
     `faucet amount=${formatEther(config.amountWei)} MON ` +
       `dailyCap=${formatEther(config.dailyCapWei)} MON ` +
       `senders=${config.senderKeys.length} gasLimit=${config.gasLimit} ` +
+      `gasLimitContract=${config.gasLimitContract} ` +
       `rateLimit=${config.rateLimit.max}/${config.rateLimit.windowMs}ms dryRun=${config.dryRun}`,
   );
 }

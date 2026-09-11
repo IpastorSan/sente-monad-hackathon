@@ -12,7 +12,12 @@ export interface DripSendResult {
 
 export interface DripSender {
   readonly address: Address;
-  send(to: Address, valueWei: bigint): Promise<DripSendResult>;
+  /**
+   * `gasLimit` is per send because it depends on the recipient: 21k for an
+   * EOA, more for an address with code. Always explicit, never estimated —
+   * Monad charges the limit (CLAUDE.md gotcha 4).
+   */
+  send(to: Address, valueWei: bigint, gasLimit: bigint): Promise<DripSendResult>;
 }
 
 /**
