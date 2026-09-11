@@ -197,6 +197,27 @@ test('rollingCap: Privy window bounds, a positive cap, and a token the mandate f
   );
 });
 
+test('returnTo: optional, checksummed, never the zero address', () => {
+  assert.equal(parseMandate(demoMandateInput()).returnTo, undefined);
+  const owner = '0x93e6b8d57dca7b72fae80adaa5c9d7308f7e33b8';
+  assert.equal(
+    parseMandate(withPatch((m) => (m.returnTo = owner))).returnTo,
+    '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8',
+  );
+  rejects(
+    withPatch((m) => (m.returnTo = '0x0000000000000000000000000000000000000000')),
+    /returnTo must not be the zero address/,
+  );
+  rejects(
+    withPatch((m) => (m.returnTo = 'alice')),
+    /returnTo is not a valid address/,
+  );
+  rejects(
+    withPatch((m) => (m.returnTo = '0x93E6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8')), // bad checksum
+    /returnTo is not a valid address/,
+  );
+});
+
 test('compareDecimal is exact where a float is not', () => {
   assert.equal(compareDecimal('250.5', '250.50'), 0);
   assert.equal(compareDecimal('250.50000000000000001', '250.5'), 1);

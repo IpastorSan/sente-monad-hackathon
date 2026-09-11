@@ -446,6 +446,78 @@ Runs 1–5 left their own `sente-probe-…` wallets and policies in the app. The
 are unfunded, owned by the two quorums above (so still controllable with our
 keys), and their ids were not kept — only the last run's are in `.env`.
 
+## Recipient pinning (SEN-15)
+
+Two rules that move money out of the agent's hands, each pinned to one
+recipient. They carry `chain_id` and deliberately **no expiry**. Verified live
+on 10143: each signed what it should and refused anyone else, and both
+survived an expired mandate. Tx hashes are in `docs/agents.md`.
+
+```json
+{
+  "name": "Kuru: withdraw to its own wallet",
+  "method": "eth_signTransaction",
+  "action": "ALLOW",
+  "conditions": [
+    {
+      "field_source": "ethereum_transaction",
+      "field": "chain_id",
+      "operator": "eq",
+      "value": "0x279f"
+    },
+    {
+      "field_source": "ethereum_transaction",
+      "field": "to",
+      "operator": "eq",
+      "value": "0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "function_name",
+      "abi": ["withdraw(address token, uint256 amount) only"],
+      "operator": "eq",
+      "value": "withdraw"
+    }
+  ]
+}
+```
+
+```json
+{
+  "name": "Return USDC to the owner",
+  "method": "eth_signTransaction",
+  "action": "ALLOW",
+  "conditions": [
+    {
+      "field_source": "ethereum_transaction",
+      "field": "chain_id",
+      "operator": "eq",
+      "value": "0x279f"
+    },
+    {
+      "field_source": "ethereum_transaction",
+      "field": "to",
+      "operator": "eq",
+      "value": "0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "transfer.to",
+      "abi": ["transfer(address to, uint256 amount)"],
+      "operator": "eq",
+      "value": "0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8"
+    }
+  ]
+}
+```
+
+- `withdraw` names no recipient: AccountCore pays `msg.sender`. The ABI
+  handed to Privy has that one function, so `withdrawFromAccount` and
+  `transferBetweenAccounts` fail to decode and are refused. That is the same
+  mechanism the `batch` rule uses.
+- A calldata param called `to` (`transfer.to`) is fine. It is distinct from
+  the transaction's `to`.
+
 ## Plan availability
 
 The policy engine is **included on the Developer plan**, not an add-on. The

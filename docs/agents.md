@@ -71,14 +71,16 @@ socket included, and the next call builds a fresh one.
 - **Fixed gas, never estimated** (gotcha 4). The receipts below show Monad
   charges exactly the limit: `gasUsed` equals the limit on every one of them.
 
-| Call                               | Limit   | Source                                                   |
-| ---------------------------------- | ------- | -------------------------------------------------------- |
-| ERC-20 `approve` (USDC, AUSD)      | 80,000  | measured 52,089 (USDC) and 71,099 (AUSD, fresh spender)  |
-| Kuru `AccountCore.deposit`         | 252,059 | `KURU_MEASURED_GAS.firstDeposit` (includes registration) |
-| Kuru `batch`, one order            | 425,430 | `placeTakingOneLevel`; covers a resting GTC (404,204)    |
-| Kuru `batch`, one cancel           | 242,923 | `cancelOne`                                              |
-| Perpl `createAccount`              | 203,000 | measured 202,237                                         |
-| Perpl `allowOrderForwarding(true)` | 72,000  | measured 71,363                                          |
+| Call                                | Limit   | Source                                                                |
+| ----------------------------------- | ------- | --------------------------------------------------------------------- |
+| ERC-20 `approve` (USDC, AUSD)       | 80,000  | measured 52,089 (USDC) and 71,099 (AUSD, fresh spender)               |
+| Kuru `AccountCore.deposit`          | 252,059 | `KURU_MEASURED_GAS.firstDeposit` (includes registration)              |
+| Kuru `batch`, one order             | 425,430 | `placeTakingOneLevel`; covers a resting GTC (404,204)                 |
+| Kuru `batch`, one cancel            | 242,923 | `cancelOne`                                                           |
+| Kuru `AccountCore.withdraw`         | 150,407 | `KURU_MEASURED_GAS.withdraw`; landed using exactly this (SEN-15)      |
+| ERC-20 `transfer` (return to owner) | 46,525  | `KURU_MEASURED_GAS.erc20Transfer`; landed using exactly this (SEN-15) |
+| Perpl `createAccount`               | 203,000 | measured 202,237                                                      |
+| Perpl `allowOrderForwarding(true)`  | 72,000  | measured 71,363                                                       |
 
 An IOC order that sweeps more than one price level can need more than 425,430.
 Pass `gasLimit` to `PrivyKuruSubmitter` for that.
@@ -240,6 +242,104 @@ pnpm --filter @sente/api run agent:venues-live -- --skip-kuru             # Perp
 When the agent is short, the script prints the exact `agent:fund` command and
 stops. Each run enrolls one new Perpl key, because the secret store is in
 memory.
+
+## Getting the money back: withdraw and return to owner (SEN-15)
+
+An agent funds its own Kuru account, so its mandate must also let that money
+come back out, and only ever toward the owner. Until SEN-15 the compiled
+mandate had no withdraw rule, and the probe agent's 14 USDC sat in AccountCore
+where its wallet could not reach it.
+
+### Two recovery rules
+
+`compileMandate` adds them:
+
+| Rule                                                           | Conditions                                                                            | Why no other recipient can be named                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Kuru: withdraw to its own wallet`, whenever Kuru is a venue   | `chain_id`; `to` = AccountCore; `function_name` = `withdraw`, with a one-function ABI | `withdraw(token, amount)` has no recipient parameter: AccountCore debits the caller's account and pays the caller. A `debug_traceCall` from the agent showed `Withdrawal.recipient` = the agent before any code was written. `withdrawFromAccount(account, …)` also pays the caller (`account` is the source), and `transferBetweenAccounts(from, to, …)` names a destination inside Kuru. Neither decodes against the one-function ABI, so both are refused. |
+| `Return <TOKEN> to the owner`, when the mandate has `returnTo` | `chain_id`; `to` = the token; `transfer.to` = `returnTo`                              | One rule per ERC-20 the wallet can hold (USDC, WETH, cbBTC, XAUt, AUSD), whatever the venues, so funds an earlier mandate allowed can still go home.                                                                                                                                                                                                                                                                                                          |
+
+The choices, and why:
+
+- **The contract pins the withdraw recipient; no address condition does.** No
+  AccountCore withdraw function takes an outside recipient, so pinning the
+  function pins the recipient to the signer. It also means the rule needs no
+  agent address, which matters because hire compiles the policy before the
+  wallet exists. An address pin would cost a second PATCH after every hire.
+- **`returnTo` is a new, optional mandate field**: the owner's smart-account
+  address, EIP-55 checked, never the zero address. Without it no transfer rule
+  exists and the wallet can send nothing (fail closed). Nothing sets it yet:
+  the mobile app and hire don't send it, so a client has to put it in the
+  mandate. Revoke-then-owner-key stays the fallback for agents without it.
+- **Native MON is not covered.** A `to = returnTo` value rule would also let
+  the agent call the owner's account with any calldata. Leftover gas stays
+  with the agent.
+- **Both survive mandate expiry.** They carry `chain_id` and no
+  `current_unix_timestamp`, unlike every risk-taking rule. Each can only move
+  money toward the owner. If they expired, an expired agent's collateral
+  would be stranded until the owner re-PATCHed the policy. Revocation still
+  stops them, because it replaces the policy with `[]`. Layer 1 agrees:
+  `checkIntent` passes `withdraw` like cancel and close, after expiry too. A
+  Kuru cancel still expires in the enclave, because a cancel `batch` cannot
+  be told apart from a placing one.
+- **Tool:** `withdraw {asset, amount}` is a write with no thesis and no
+  notional cap, allowed on Kuru even after expiry. It calls
+  `KuruVenue.withdraw` (`withdrawCall`, fixed gas 150,407). Only free balance
+  can leave; resting orders keep their reserve until cancelled.
+- **The user-side path is the rule plus `erc20TransferCall`.** No API route
+  triggers a return yet; the live script sends it through
+  `AgentTransactionSender`. A `POST /agents/:id/return` is a follow-up.
+
+### Live check — 2026-09-11, all 21 checks passed
+
+`pnpm --filter @sente/api run agent:withdraw-live [-- --env-file <path>]`
+(`services/api/scripts/agent-withdraw-live.ts`).
+
+The mandate was compiled with **`returnTo` = the treasury
+`0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8`**, standing in for the owner's
+smart account. This probe agent has no smart-account owner; the treasury
+funded it. The mandate also allowed Kuru MON-USDC, USDC deposits of at most
+1 USDC, and 24 h, which compiled to 9 rules. The owner key PATCHed it over the
+empty policy SEN-9's revoke left. The PATCH returned in 299 ms, and the rule
+answered twice in a row 1,326 ms later.
+
+Sign-only probes, each at a nonce a million ahead and **never broadcast**:
+
+| Probe                                               | Live mandate | Expired mandate |
+| --------------------------------------------------- | ------------ | --------------- |
+| `withdraw(USDC, 14)`, which pays the agent itself   | signed       | **signed**      |
+| `withdrawFromAccount(treasury, USDC, 1)`            | refused      | refused         |
+| `withdrawFromAccount(agent, USDC, 1)`               | refused      | —               |
+| `transferBetweenAccounts(agent → 0x…dEaD, USDC, 1)` | refused      | —               |
+| USDC `transfer(treasury, 14)`                       | signed       | **signed**      |
+| WETH `transfer(treasury, 1)`                        | signed       | —               |
+| USDC `transfer(0x…dEaD, 14)`                        | **refused**  | **refused**     |
+| USDC `transfer(agent itself, 14)`                   | refused      | —               |
+| `approve(AccountCore, 1 USDC)`, within the cap      | signed       | **refused**     |
+| `approve(AccountCore, 2 USDC)`, over the cap        | refused      | —               |
+
+The "expired mandate" column is the same mandate with `expiresAt` 60 s in the
+past. The PATCH returned in 358 ms and applied 1,233 ms later.
+
+Then it moved the money for real, which proves the ABI as well as the rule
+shape (gotcha 13):
+
+| Step                                    | Result                                                                                       | Transaction                                                          |
+| --------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `withdraw` 14 USDC from Kuru account 64 | success; `Withdrawal.recipient` and `Transfer.to` = the agent `0xE05F…0B6E`; gasUsed 150,407 | `0x6b12d44db57c0655e3c415596848c4e04913035ac10e5963e31755032a068c7b` |
+| USDC `transfer` 14 to the treasury      | success; `Transfer` agent → treasury, 14,000,000 atoms; gasUsed 46,525 (estimate 46,525)     | `0xc9e1cb5f383c28088f967fbf40c44c16151eb99dc6d0ab02e564a5739d25d048` |
+
+**Spend.** The agent paid 0.020087064 MON of gas: 0.015341514 for the
+withdraw and 0.00474555 for the transfer, both at 102 gwei, each charged its
+full limit. Its balance went from 0.027877958 to 0.007790894 MON, nonce 9 → 11. The
+treasury got its 14 USDC back and spent nothing. No top-up was needed.
+
+**State left behind.** The agent holds 0 USDC, in its wallet and in Kuru,
+and about 0.0078 MON. Its policy `nmfedw3sc6i1pkndz3a38msh` is left on the
+**expired** mandate, so it signs only a withdraw to itself and a return to the
+treasury. `agent:venues-live`, `agent:run-live` and `demo:refusal` re-PATCH it
+as before. Only this wallet's own `sente-` policy was touched: two owner
+PATCHes and 23 sign-only probes, and nothing else in the shared Privy app.
 
 ## The runner (SEN-8)
 

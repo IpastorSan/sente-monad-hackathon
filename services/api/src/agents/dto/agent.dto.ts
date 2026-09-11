@@ -88,6 +88,8 @@ export interface MandateDto {
   perpl: { maxCollateralAtoms: string; maxLeverage: number; markets: string[] };
   maxOrderNotional: string;
   rollingCap?: { windowSeconds: number; capAtoms: string; token: string };
+  /** The one address the agent's wallet may send ERC-20s to: its owner's. */
+  returnTo?: string;
 }
 
 export interface AgentResponseDto {
@@ -163,6 +165,7 @@ export function toMandateDto(mandate: Mandate): MandateDto {
           },
         }
       : {}),
+    ...(mandate.returnTo ? { returnTo: mandate.returnTo } : {}),
   };
 }
 

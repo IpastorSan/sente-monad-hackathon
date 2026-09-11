@@ -9,11 +9,15 @@ import { test } from 'node:test';
 import {
   cancelOrderCall,
   depositCalls,
+  ERC20_TRANSFER_ABI,
+  erc20TransferCall,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+  KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_TOKENS,
   placeOrderCall,
+  withdrawCall,
 } from '@sente/venues/kuru';
 import {
   ERC20_APPROVE_ABI,
@@ -21,9 +25,17 @@ import {
   PERPL_TESTNET_CONTRACTS,
   perplOnboardingCalls,
 } from '@sente/venues/perpl';
-import { decodeFunctionData, getAddress, type Abi, type Address, type Hex } from 'viem';
+import {
+  decodeFunctionData,
+  encodeFunctionData,
+  getAddress,
+  parseAbi,
+  type Abi,
+  type Address,
+  type Hex,
+} from 'viem';
 
-import { compileMandate, compileRollingCap, readBackCaps } from './policy.ts';
+import { compileMandate, compileRollingCap, KURU_WITHDRAW_RULE, readBackCaps } from './policy.ts';
 import { canonicalize } from './privy/canonicalize.ts';
 import type { PolicyCondition, PolicyRule } from './privy/policy-types.ts';
 import {
@@ -37,6 +49,9 @@ import {
   WETH_USDC,
 } from './mandate.fixture.ts';
 
+/** The owner's return address in these tests (the dev treasury on testnet). */
+const OWNER = getAddress('0x93e6b8d57dca7b72fae80adaa5c9d7308f7e33b8');
+const OTHER = getAddress('0x2222222222222222222222222222222222222222');
 const HEX_UINT = /^0x(0|[1-9a-f][0-9a-f]*)$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
@@ -96,7 +111,8 @@ test('every uint bound is a 0x hex string except the expiry, and the caps are th
   assert.ok(numeric.length > 10);
   for (const c of numeric) assert.match(c.value, HEX_UINT, `${c.field} = ${c.value}`);
   const decimals = conditions.filter(decimalOnly);
-  assert.equal(decimals.length, rules.length + 1); // an expiry per rule + the typed-data chainId
+  // An expiry per rule but the withdraw rule (recovery rules have none) + the typed-data chainId.
+  assert.equal(decimals.length, rules.length - 1 + 1);
   for (const c of decimals) assert.match(c.value, /^(0|[1-9][0-9]*)$/, `${c.field} = ${c.value}`);
 
   const usdcApprove = rules.find((r) => r.name === 'Kuru: approve USDC to AccountCore')!;
@@ -108,8 +124,11 @@ test('every uint bound is a 0x hex string except the expiry, and the caps are th
   ); // 5e8
 });
 
-test('every rule carries the chain id and the expiry', () => {
-  const rules = compileMandate(demoMandate());
+const isRecovery = (r: PolicyRule) => r.name === KURU_WITHDRAW_RULE || r.name.startsWith('Return ');
+
+test('every rule carries the chain id; every risk-taking rule carries the expiry', () => {
+  const rules = compileMandate(demoMandate({ returnTo: OWNER }));
+  assert.equal(rules.filter(isRecovery).length, 6); // withdraw + 5 tokens
   for (const r of rules) {
     const chain =
       r.method === 'eth_signTransaction'
@@ -119,9 +138,86 @@ test('every rule carries the chain id and the expiry', () => {
     // 10143: hex on the transaction, decimal in the typed-data domain (Privy refuses hex there).
     assert.equal(chain?.value, r.method === 'eth_signTransaction' ? '0x279f' : '10143', r.name);
     const expiry = find(r, 'system', 'current_unix_timestamp');
+    if (isRecovery(r)) {
+      // Withdraw-to-self and return-to-owner survive expiry on purpose (SEN-15).
+      assert.equal(expiry, undefined, r.name);
+      continue;
+    }
     assert.equal(expiry?.operator, 'lte', r.name);
     assert.equal(expiry?.value, String(EXPIRES_AT), r.name);
   }
+});
+
+test('Kuru withdraw: AccountCore.withdraw only, which pays the signer and names no recipient', () => {
+  const accountCore = KURU_TESTNET_CONTRACTS.accountCore;
+  const rules = compileMandate(demoMandate({ venues: ['kuru'] }));
+  const withdraw = rules.find((r) => r.name === KURU_WITHDRAW_RULE)!;
+  assert.equal(toOf(withdraw), accountCore);
+  const fn = find(withdraw, 'ethereum_calldata', 'function_name');
+  assert.equal(fn?.value, 'withdraw');
+  assert.ok(fn && 'abi' in fn);
+  // One fragment: the functions that name another account do not decode against it.
+  assert.deepEqual(
+    fn.abi.map((e) => (e.type === 'function' ? e.name : e.type)),
+    ['withdraw'],
+  );
+  assert.equal(withdraw.conditions.length, 3); // chain, to, function — nothing else
+
+  const own = withdrawCall(accountCore, KURU_TESTNET_TOKENS.USDC, 14_000_000n);
+  assert.deepEqual(decode(KURU_ACCOUNT_CORE_WITHDRAW_ABI, own.data).args, [USDC, 14_000_000n]);
+  // AccountCore's other ways to move a balance, as its ABI spells them.
+  const others = parseAbi([
+    'function withdrawFromAccount(address account, address token, uint256 amount)',
+    'function transferBetweenAccounts(address fromAccount, address toAccount, address token, uint256 amount)',
+  ]);
+  const elsewhere = [
+    encodeFunctionData({
+      abi: others,
+      functionName: 'withdrawFromAccount',
+      args: [OWNER, USDC, 1n],
+    }),
+    encodeFunctionData({
+      abi: others,
+      functionName: 'transferBetweenAccounts',
+      args: [OWNER, OTHER, USDC, 1n],
+    }),
+  ];
+  for (const data of elsewhere) {
+    assert.throws(() => decode(KURU_ACCOUNT_CORE_WITHDRAW_ABI, data));
+  }
+
+  // Perpl-only: no Kuru withdraw rule.
+  const perplOnly = compileMandate(demoMandate({ venues: ['perpl'] }));
+  assert.ok(!perplOnly.some((r) => r.name === KURU_WITHDRAW_RULE));
+});
+
+test('return to owner: one transfer rule per token, transfer.to pinned to returnTo', () => {
+  assert.ok(!compileMandate(demoMandate()).some((r) => r.name.startsWith('Return ')));
+
+  const rules = compileMandate(demoMandate({ returnTo: OWNER })).filter((r) =>
+    r.name.startsWith('Return '),
+  );
+  const tokens = [
+    ...Object.values(KURU_TESTNET_TOKENS)
+      .map((t) => t.address)
+      .filter((a) => a !== MON),
+    PERPL_TESTNET_CONTRACTS.collateral,
+  ];
+  assert.deepEqual(rules.map(toOf), tokens);
+  for (const r of rules) {
+    assert.equal(find(r, 'ethereum_calldata', 'transfer.to')?.value, OWNER, r.name);
+    assert.equal(find(r, 'ethereum_calldata', 'transfer.to')?.operator, 'eq', r.name);
+    assert.equal(r.conditions.length, 3, r.name); // chain, to (the token), transfer.to
+  }
+
+  const call = erc20TransferCall(USDC, OWNER, 14_000_000n);
+  assert.equal(call.to, USDC);
+  assert.deepEqual(decode(ERC20_TRANSFER_ABI, call.data).args, [OWNER, 14_000_000n]);
+
+  // Independent of venues: an agent with no venue left can still hand funds back.
+  const none = compileMandate(demoMandate({ venues: [], returnTo: OWNER }));
+  assert.equal(none.length, tokens.length);
+  assert.ok(none.every((r) => r.name.startsWith('Return ')));
 });
 
 test('one batch rule per allowlisted market, addressed to that market', () => {
@@ -149,11 +245,14 @@ test('a venue not in the mandate contributes no rule', () => {
   assert.equal(perplOnly.length, 4);
 });
 
-test('an empty Kuru allowlist allows nothing on Kuru', () => {
+test('an empty Kuru allowlist allows nothing on Kuru but taking its own collateral back', () => {
   const rules = compileMandate(
     demoMandate({ venues: ['kuru'], kuru: { markets: [], maxDepositAtoms: {} } }),
   );
-  assert.deepEqual(rules, []);
+  assert.deepEqual(
+    rules.map((r) => r.name),
+    [KURU_WITHDRAW_RULE],
+  );
 });
 
 test('Kuru funding: approve AccountCore and deposit, both capped; native MON by value', () => {
@@ -278,12 +377,17 @@ test('the caps read back out of the rules — the policy is the authority, not a
   assert.deepEqual(caps.kuruMarkets, mandate.kuru.markets);
   assert.equal(caps.perplCollateralAtoms, mandate.perpl.maxCollateralAtoms);
   assert.equal(caps.expiresAt, EXPIRES_AT);
+  assert.equal(caps.kuruWithdraw, true);
+  assert.equal(caps.returnTo, null);
+  assert.equal(readBackCaps(compileMandate(demoMandate({ returnTo: OWNER }))).returnTo, OWNER);
 
   assert.deepEqual(readBackCaps([]), {
     kuruDepositAtoms: {},
     kuruMarkets: [],
     perplCollateralAtoms: null,
     expiresAt: null,
+    kuruWithdraw: false,
+    returnTo: null,
   });
 });
 

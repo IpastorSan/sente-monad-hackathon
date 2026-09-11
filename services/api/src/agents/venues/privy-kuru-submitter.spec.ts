@@ -8,6 +8,7 @@ import {
   KuruExecutionError,
   KuruVenue,
   placeOrderCall,
+  withdrawCall,
   type KuruCall,
 } from '@sente/venues/kuru';
 import { getAddress, type Address, type Hex, type PublicClient } from 'viem';
@@ -264,6 +265,9 @@ describe('kuruGasLimit', () => {
     expect(kuruGasLimit(deposit!)).toBe(KURU_MEASURED_GAS.firstDeposit);
     expect(kuruGasLimit(placeCall())).toBe(KURU_MEASURED_GAS.placeTakingOneLevel);
     expect(kuruGasLimit(cancelOrderCall(MARKET, 3))).toBe(KURU_MEASURED_GAS.cancelOne);
+    expect(kuruGasLimit(withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n))).toBe(
+      KURU_MEASURED_GAS.withdraw,
+    );
   });
 
   it('throws for anything unmeasured', () => {

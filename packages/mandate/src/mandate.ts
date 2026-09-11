@@ -27,6 +27,9 @@
  *
  * Amounts are bigint atoms, never floats. Every field is required; an optional
  * cap is a cap someone forgets to set. An **empty allowlist allows nothing**.
+ * The two optional fields grant nothing when absent: no `rollingCap` means no
+ * cumulative bound on top of the per-transaction caps, and no `returnTo` means
+ * the agent's wallet can send nothing anywhere (fail closed).
  */
 import type { Decimal } from '@sente/venues';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
@@ -89,6 +92,12 @@ export interface Mandate {
   /** Largest single order, in quote units. Layer 1 only. */
   readonly maxOrderNotional: Decimal;
   readonly rollingCap?: RollingCap;
+  /**
+   * Where the agent may send its funds back: the owner's smart-account address.
+   * The enclave pins ERC-20 `transfer.to` to exactly this, so it is the only
+   * address the agent's wallet can ever pay. Absent: no transfer rule at all.
+   */
+  readonly returnTo?: Address;
 }
 
 /** A mandate that does not parse. `reason` says which field and why. */
@@ -253,7 +262,15 @@ const MANDATE_KEYS = [
   'perpl',
   'maxOrderNotional',
   'rollingCap',
+  'returnTo',
 ] as const;
+
+function parseReturnTo(value: unknown): Address {
+  const returnTo = address(value, 'returnTo');
+  // Tokens sent to the zero address are burnt, not returned.
+  if (isAddressEqual(returnTo, NATIVE_TOKEN)) fail('returnTo must not be the zero address');
+  return returnTo;
+}
 
 /**
  * Validate an untrusted mandate — from JSON, from a client, from anywhere.
@@ -276,6 +293,7 @@ export function parseMandate(input: unknown): Mandate {
     fail('maxOrderNotional must be a non-negative decimal string, e.g. "250.5"');
   }
   const rollingCap = m.rollingCap === undefined ? undefined : parseRollingCap(m.rollingCap, kuru);
+  const returnTo = m.returnTo === undefined ? undefined : parseReturnTo(m.returnTo);
 
   return {
     version: MANDATE_VERSION,
@@ -286,5 +304,6 @@ export function parseMandate(input: unknown): Mandate {
     perpl,
     maxOrderNotional: m.maxOrderNotional,
     ...(rollingCap ? { rollingCap } : {}),
+    ...(returnTo ? { returnTo } : {}),
   };
 }

@@ -139,6 +139,39 @@ describe('gate', () => {
     expect(h.perpl.writes().map((c) => c.method)).toEqual(['closePosition']);
   });
 
+  it('lets withdraw through without a thesis, even after the mandate expires', async () => {
+    const h = await harness();
+    h.setNow(EXPIRES_AT + 86_400);
+    const outcome = await h.call('withdraw', { asset: 'USDC', amount: '14' });
+    expect(outcome).toEqual({
+      ok: true,
+      result: expect.objectContaining({ withdrawn: '14', asset: 'USDC' }),
+    });
+    expect(h.kuru.writes()).toEqual([
+      { method: 'withdraw', args: { asset: 'USDC', amount: '14' } },
+    ]);
+    // Deposits, by contrast, stop at expiry.
+    await h.thesis();
+    const late = refused(await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '1' }));
+    expect(late.refusal?.code).toBe('mandate_expired');
+  });
+
+  it('refuses withdraw off an allowed venue, and of an asset Kuru does not have', async () => {
+    const perplOnly = await harness({
+      agent: { mandate: { ...testAgent().mandate, venues: ['perpl'] } },
+    });
+    const off = refused(await perplOnly.call('withdraw', { asset: 'USDC', amount: '1' }));
+    expect(off.refusal).toEqual({ layer: 'sente', code: 'venue_not_allowed' });
+
+    const h = await harness();
+    const odd = refused(await h.call('withdraw', { asset: 'DOGE', amount: '1' }));
+    expect(odd.refusal?.code).toBe('invalid_input');
+    const fine = refused(await h.call('withdraw', { asset: 'USDC', amount: '0.0000001' }));
+    expect(fine.refusal?.code).toBe('invalid_input');
+    expect(h.kuru.writes()).toEqual([]);
+    expect(perplOnly.kuru.writes()).toEqual([]);
+  });
+
   describe('a layer-1 refusal never calls the venue', () => {
     it.each([
       ['notional_over_cap', 'place_limit', limit({ size: '100' }), MON_USDC],

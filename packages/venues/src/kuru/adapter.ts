@@ -66,6 +66,7 @@ import {
   parseOrderId,
   placeOrderCall,
   toClientOrderId,
+  withdrawCall,
   type KuruCall,
   type KuruLog,
   type KuruMarketParams,
@@ -221,6 +222,16 @@ export class KuruVenue implements Venue {
 
   deposit(asset: string, amount: Decimal): Promise<KuruExecution> {
     return this.#submit(this.depositCalls(asset, amount));
+  }
+
+  /** The call that moves `amount` of free `asset` from this account back to its own address. */
+  withdrawCalls(asset: string, amount: Decimal): KuruCall[] {
+    const token = this.#token(asset);
+    return [withdrawCall(this.#accountCore, token, toUnits(amount, token.decimals, 'amount'))];
+  }
+
+  withdraw(asset: string, amount: Decimal): Promise<KuruExecution> {
+    return this.#submit(this.withdrawCalls(asset, amount));
   }
 
   // -------------------------------------------------------------------------

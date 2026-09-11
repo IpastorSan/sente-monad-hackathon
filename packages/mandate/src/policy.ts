@@ -7,21 +7,38 @@
  * catch-all `{ method: '*', action: 'DENY' }` denies everything — turnstile
  * learned that live on 2026-09-07. There is deliberately none here.
  *
- * Every rule carries two conditions besides its own:
+ * Every rule carries the chain: `ethereum_transaction.chain_id eq 10143` on
+ * transaction rules, `ethereum_typed_data_domain.chainId eq 10143` on the
+ * typed-data rule (a typed-data request has no transaction to read a chain id
+ * from).
  *
- * - the chain: `ethereum_transaction.chain_id eq 10143` on transaction rules,
- *   `ethereum_typed_data_domain.chainId eq 10143` on the typed-data rule (a
- *   typed-data request has no transaction to read a chain id from);
- * - the expiry: `system.current_unix_timestamp lte expiresAt`, so a mandate
- *   stops signing at its deadline by the enclave's own clock, whether or not
- *   anyone remembers to revoke it.
+ * Every rule that lets the agent TAKE risk also carries the expiry,
+ * `system.current_unix_timestamp lte expiresAt`, so a mandate stops funding and
+ * trading at its deadline by the enclave's own clock, whether or not anyone
+ * remembers to revoke it.
+ *
+ * The two RECOVERY rules deliberately carry no expiry (SEN-15), because each
+ * can only move money toward the owner:
+ *
+ * - **Kuru withdraw**: `AccountCore.withdraw(token, amount)` and nothing else.
+ *   It has no recipient parameter; AccountCore pays `msg.sender`, the agent's
+ *   own wallet. `withdrawFromAccount` and `transferBetweenAccounts` do not
+ *   decode against the one-function ABI, so they are refused.
+ * - **Return to owner**: ERC-20 `transfer` with `transfer.to` pinned to
+ *   `mandate.returnTo`, one rule per token the wallet can hold.
+ *
+ * Were they to expire, an expired agent's collateral would be stranded until
+ * the owner re-PATCHed the policy. Revocation still stops them: it replaces the
+ * whole policy with `[]`, recovery rules included.
  *
  * Raw `eth_signTransaction` only, never Privy's Transfer API: Transfer
  * policies are evaluated at the API level, outside the enclave
  * (docs/privy-policy-enforcement.md).
  */
 import {
+  ERC20_TRANSFER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+  KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
@@ -159,18 +176,58 @@ function perplRules(mandate: Mandate, tx: TxRule, expiry: PolicyCondition): Allo
   ];
 }
 
+/** The recovery rule's name, so a reader can tell it from the risk-taking Kuru rules. */
+export const KURU_WITHDRAW_RULE = 'Kuru: withdraw to its own wallet';
+
+/** Every ERC-20 an agent's wallet can come to hold on testnet: Kuru's tokens and Perpl's AUSD. */
+function returnableTokens(): { symbol: string; address: Address }[] {
+  const kuru = Object.values(KURU_TESTNET_TOKENS).filter(
+    (t) => !isAddressEqual(t.address, NATIVE_TOKEN),
+  );
+  return [...kuru, { symbol: 'AUSD', address: PERPL_TESTNET_CONTRACTS.collateral }];
+}
+
+/**
+ * One rule per token, whatever the venues: the point is getting everything
+ * back, including what an earlier mandate let the agent hold. Native MON is not
+ * covered — a value rule to `returnTo` would also let the agent call the
+ * owner's account — so leftover gas stays with the agent.
+ */
+function returnRules(returnTo: Address, recovery: TxRule): AllowRule[] {
+  return returnableTokens().map((token) =>
+    recovery(`Return ${token.symbol} to the owner`, [
+      txToEq(token.address),
+      calldataAddressEq(ERC20_TRANSFER_ABI, 'transfer.to', returnTo),
+    ]),
+  );
+}
+
 /**
  * The mandate as Privy rules. A venue not in `mandate.venues` contributes
- * nothing, so an empty `venues` compiles to `[]` — a policy that signs nothing.
+ * nothing, so an empty `venues` and no `returnTo` compile to `[]` — a policy
+ * that signs nothing.
  */
 export function compileMandate(mandate: Mandate): AllowRule[] {
+  const chain = txChainIdEq(mandate.chainId);
   const expiry = unixTimestampLte(mandate.expiresAt);
   const tx: TxRule = (name, conditions) =>
-    rule(name, 'eth_signTransaction', [txChainIdEq(mandate.chainId), expiry, ...conditions]);
+    rule(name, 'eth_signTransaction', [chain, expiry, ...conditions]);
+  // No expiry: see the module comment.
+  const recovery: TxRule = (name, conditions) =>
+    rule(name, 'eth_signTransaction', [chain, ...conditions]);
 
   const rules: AllowRule[] = [];
-  if (mandate.venues.includes('kuru')) rules.push(...kuruRules(mandate, tx));
+  if (mandate.venues.includes('kuru')) {
+    rules.push(...kuruRules(mandate, tx));
+    rules.push(
+      recovery(KURU_WITHDRAW_RULE, [
+        txToEq(KURU_TESTNET_CONTRACTS.accountCore),
+        calldataFunctionEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw'),
+      ]),
+    );
+  }
   if (mandate.venues.includes('perpl')) rules.push(...perplRules(mandate, tx, expiry));
+  if (mandate.returnTo) rules.push(...returnRules(mandate.returnTo, recovery));
   return rules;
 }
 
@@ -182,8 +239,12 @@ export interface PolicyCaps {
   readonly kuruMarkets: readonly Address[];
   /** Tightest per-transaction ceiling on AUSD reaching the Exchange; `null` if no rule caps it. */
   readonly perplCollateralAtoms: bigint | null;
-  /** Earliest expiry across the rules; `null` if none carries one. */
+  /** Earliest expiry across the rules; `null` if none carries one. Recovery rules carry none. */
   readonly expiresAt: number | null;
+  /** Whether a rule lets the wallet call `AccountCore.withdraw`. */
+  readonly kuruWithdraw: boolean;
+  /** The one address an ERC-20 `transfer` may pay; `null` if no rule allows a transfer. */
+  readonly returnTo: Address | null;
 }
 
 function minBig(a: bigint | null, b: bigint): bigint {
@@ -207,6 +268,8 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
   const kuruMarkets: Address[] = [];
   let perplCollateralAtoms: bigint | null = null;
   let expiresAt: number | null = null;
+  let kuruWithdraw = false;
+  let returnTo: Address | null = null;
 
   const lowerKuru = (token: string, cap: bigint): void => {
     const key = getAddress(token);
@@ -247,13 +310,25 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
       perplCollateralAtoms = minBig(perplCollateralAtoms, BigInt(openCap));
     }
 
-    if (find('ethereum_calldata', 'function_name', 'eq') === 'batch') {
+    const fn = find('ethereum_calldata', 'function_name', 'eq');
+    if (fn === 'batch') {
       const market = getAddress(to);
       if (!kuruMarkets.includes(market)) kuruMarkets.push(market);
     }
+    if (fn === 'withdraw' && isAddressEqual(to as Address, accountCore)) kuruWithdraw = true;
+
+    const recipient = find('ethereum_calldata', 'transfer.to', 'eq');
+    if (recipient) {
+      if (returnTo !== null && !isAddressEqual(returnTo, recipient as Address)) {
+        throw new Error(
+          `readBackCaps: transfers pinned to two addresses, ${returnTo} and ${recipient}`,
+        );
+      }
+      returnTo = getAddress(recipient);
+    }
   }
 
-  return { kuruDepositAtoms, kuruMarkets, perplCollateralAtoms, expiresAt };
+  return { kuruDepositAtoms, kuruMarkets, perplCollateralAtoms, expiresAt, kuruWithdraw, returnTo };
 }
 
 /**

@@ -117,9 +117,9 @@ test('deposit_over_cap: over the cap, missing, or not positive', () => {
   refused({ venue: 'perpl', kind: 'deposit', market: '', amountAtoms: 0n }, 'deposit_over_cap');
 });
 
-test('cancel and close are always allowed on an allowed venue — reducing risk is never blocked', () => {
+test('cancel, close and withdraw are always allowed on an allowed venue — reducing risk is never blocked', () => {
   const late = EXPIRES_AT + 86_400;
-  for (const kind of ['cancel', 'close'] as const) {
+  for (const kind of ['cancel', 'close', 'withdraw'] as const) {
     assert.equal(checkIntent(mandate, { venue: 'kuru', kind, market: CBBTC_USDC }, late), null);
     assert.equal(checkIntent(mandate, { venue: 'perpl', kind, market: 'SOL-PERP' }, late), null);
     refused({ venue: 'hyperliquid', kind, market: 'X' }, 'venue_not_allowed');
@@ -127,7 +127,7 @@ test('cancel and close are always allowed on an allowed venue — reducing risk 
 });
 
 test('an unknown intent kind gets the full order checks, not a pass', () => {
-  const odd = { ...kuruOrder, kind: 'withdraw' } as unknown as Intent;
+  const odd = { ...kuruOrder, kind: 'transfer' } as unknown as Intent;
   assert.equal(checkIntent(mandate, { ...odd, notional: '1' }, NOW), null);
   refused({ ...odd, market: CBBTC_USDC }, 'market_not_allowed');
 });

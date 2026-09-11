@@ -344,6 +344,8 @@ fee to the atom. These receipts are `receipts.fixture.ts`.
 | `batch`, GTC resting                             | 404,204                                     |
 | `batch`, IOC sweeping one level                  | 425,430                                     |
 | `batch`, cancel one slot                         | 242,923                                     |
+| `AccountCore.withdraw`, USDC, from an EOA        | 150,407 (landed exactly this, SEN-15)       |
+| USDC `transfer` between two holders              | 46,525 (landed exactly this, SEN-15)        |
 | Faucet `claim`                                   | 261,237                                     |
 | Kernel `execute` of claim+approve+deposit+place  | 812,498 `callGasLimit`; landed              |
 | ↳ self-bundled `handleOps` transaction around it | 1,038,005                                   |
