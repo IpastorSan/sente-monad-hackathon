@@ -230,9 +230,20 @@ it is a local artifact: regenerate it rather than hand-editing it, and put every
 `app.json` config plugins instead. `expo-build-properties` pins `minSdkVersion` to **28** because
 `react-native-passkey` requires API 28+ and Expo SDK 57's default is 24.
 
-**Building the APK is still a human step** — it needs an Android SDK, which this machine does not
-have. `expo prebuild` itself is pure file generation and safe to run headless; `expo run:android`
-and EAS builds are not.
+**The debug APK builds on this machine.** The Android SDK is in `~/Android/Sdk` and `mise.toml` pins
+JDK 21. That pin is load-bearing: Java 26's JNI restriction breaks the CMake configure step. Last built
+2026-09-11 (after SEN-10 added `expo-font`, a native module, so the dev client has to be rebuilt):
+
+```bash
+cd apps/mobile
+mise exec -- pnpm exec expo prebuild --platform android --clean
+cd android && mise exec -- ./gradlew assembleDebug        # ~4 min
+# → android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Installing on the phone and running the passkey ceremony are still human steps. The debug APK is a
+dev client: start Metro (`pnpm --filter @sente/mobile run start`) and reach it over LAN or `adb reverse`.
 
 The npm package is **`react-native-passkey`**, singular, and mera peer-depends on exactly `3.6.1`.
 `react-native-passkeys` (plural) also exists on npm: its `1.0.0` is a deprecated 223-byte squat
