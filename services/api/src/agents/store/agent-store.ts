@@ -91,6 +91,8 @@ export interface AgentStore {
   get(id: string): Promise<AgentRecord | undefined>;
   /** The user's agents, oldest first. */
   listByUser(userId: string): Promise<AgentRecord[]>;
+  /** Every active agent, oldest first: what the run scheduler ticks (SEN-8). */
+  listActive(): Promise<AgentRecord[]>;
   /**
    * The agent whose MCP token hashes to `hash`, WHATEVER its status — the
    * caller decides what a revoked agent's token means. Callers holding a raw
@@ -138,6 +140,14 @@ export class InMemoryAgentStore implements AgentStore {
   listByUser(userId: string): Promise<AgentRecord[]> {
     const records = [...this.byId.values()]
       .filter((record) => record.userId === userId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((record) => structuredClone(record));
+    return Promise.resolve(records);
+  }
+
+  listActive(): Promise<AgentRecord[]> {
+    const records = [...this.byId.values()]
+      .filter((record) => record.status === 'active')
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
       .map((record) => structuredClone(record));
     return Promise.resolve(records);

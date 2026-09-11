@@ -43,6 +43,8 @@ function setup(wallets = new FakeAgentWalletProvider()) {
   const controller = new AgentsController(
     new AgentsService(new InMemoryAgentStore(), wallets),
     auth,
+    // The run route has its own spec (runner/run-route.spec.ts).
+    {} as never,
   );
   return {
     controller,

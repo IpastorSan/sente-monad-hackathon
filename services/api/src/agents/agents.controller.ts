@@ -11,19 +11,22 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { creditsRefusalToHttpException } from '../credits/credits.errors';
 import { GasDripAuth } from '../gas/auth/gas-drip-auth';
 import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
-import { agentErrorToHttpBody } from './agents.errors';
+import { agentErrorStatus, agentErrorToHttpBody } from './agents.errors';
 import { AgentsService } from './agents.service';
 import {
   AgentIdParamDto,
   AmendMandateDto,
   CreateAgentDto,
+  RunAgentDto,
   toAgentResponse,
   type AgentListResponseDto,
   type AgentResponseDto,
   type HireAgentResponseDto,
 } from './dto/agent.dto';
+import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
 
 /**
  * AUTH: the placeholder seam `wallet/` and `gas/` already use —
@@ -39,6 +42,7 @@ export class AgentsController {
   constructor(
     private readonly agents: AgentsService,
     private readonly auth: GasDripAuth,
+    private readonly runner: AgentRunnerService,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -92,13 +96,52 @@ export class AgentsController {
     );
   }
 
+  /**
+   * Runs the agent once, now, and answers with the whole run (SEN-8).
+   *
+   * - 200 with the `RunResult` for every run that ended on its own terms,
+   *   including `refusal`, `max_tokens`, `max_iterations`, `timeout` and
+   *   `agent_revoked` (revoked mid-run): the stop reason says which.
+   * - 402 `credits_exhausted` and 502 `model_error`, each with the run in `run`.
+   * - Refused before anything is spent: 404 `agent_not_found`, 409
+   *   `agent_revoked`, 409 `run_in_progress`, 503 `credits_unconfigured`,
+   *   502 `provision_failed`.
+   */
+  @Post(':id/run')
+  @HttpCode(HttpStatus.OK)
+  async run(@Param() params: AgentIdParamDto, @Body() body: RunAgentDto): Promise<RunResult> {
+    const result = await this.guard(() =>
+      this.runner.run(this.auth.principal(), params.id, {
+        instruction: body.instruction,
+        trigger: 'manual',
+      }),
+    );
+    if (result.stopReason === 'credits_exhausted' || result.stopReason === 'model_error') {
+      const statusCode = agentErrorStatus(result.stopReason);
+      throw new HttpException(
+        {
+          statusCode,
+          reason: result.stopReason,
+          message:
+            result.stopReason === 'credits_exhausted'
+              ? 'Your inference credits are used up for this month (OpenRouter 402)'
+              : `The model call failed: ${result.error ?? 'unknown error'}`,
+          run: result,
+        },
+        statusCode,
+      );
+    }
+    return result;
+  }
+
   /** Refusals become a clean 4xx/5xx with a stable `reason`; the rest fall through. */
   private async guard<T>(run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (error) {
       const body = agentErrorToHttpBody(error);
-      throw body ? new HttpException(body, body.statusCode) : error;
+      if (body) throw new HttpException(body, body.statusCode);
+      throw creditsRefusalToHttpException(error);
     }
   }
 }
