@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { compileMandate, MandateError, parseMandate, type Mandate } from '@sente/mandate';
 
 import type { GasDripPrincipal } from '../gas/auth/gas-drip-auth';
+import { GasDripService } from '../gas/gas.service';
 import { AGENT_WALLETS, type AgentWalletProvider } from './agent-wallet.provider';
 import { AGENT_MODELS, isAgentModel } from './agents.config';
 import {
@@ -11,7 +12,12 @@ import {
   AgentWalletsUnconfiguredError,
   type AgentRefusalReason,
 } from './agents.errors';
-import { AGENT_STORE, type AgentRecord, type AgentStore } from './store/agent-store';
+import {
+  AGENT_STORE,
+  type AgentGasFunding,
+  type AgentRecord,
+  type AgentStore,
+} from './store/agent-store';
 import { generateMcpToken, hashMcpToken, MCP_TOKEN_PREFIX } from './store/mcp-token';
 
 export interface HireAgentInput {
@@ -28,6 +34,9 @@ export interface HiredAgent {
   /** The MCP bearer token, in plaintext, this once. Only its hash is stored. */
   mcpToken: string;
 }
+
+/** The slice of `GasDripService` hiring needs. */
+export type AgentGasFunder = Pick<GasDripService, 'dripToAgent'>;
 
 /**
  * The agent lifecycle. Every method takes the authenticated principal and
@@ -48,12 +57,23 @@ export class AgentsService {
   constructor(
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_WALLETS) private readonly wallets: AgentWalletProvider,
+    /**
+     * The MON gas drip (SEN-14). Optional so a caller without the gas module
+     * still hires; its agents come back `gasFunded: false`,
+     * `gas_drip_unavailable`. AgentsModule imports GasModule, so the app has it.
+     */
+    @Optional() @Inject(GasDripService) private readonly gas?: AgentGasFunder,
   ) {}
 
   /**
    * parseMandate -> compileMandate -> provision (wallet + policy together) ->
-   * store. Everything that can be refused locally is refused before the
-   * provider is called, so a bad request never creates a Privy object.
+   * store -> gas drip. Everything that can be refused locally is refused
+   * before the provider is called, so a bad request never creates a Privy
+   * object.
+   *
+   * The drip runs after the agent is stored, so a slow or failed drip can
+   * never lose track of a provisioned wallet, and its outcome is recorded on
+   * the agent rather than failing the hire.
    */
   async hire(principal: GasDripPrincipal, input: HireAgentInput): Promise<HiredAgent> {
     if (!isAgentModel(input.model)) {
@@ -92,13 +112,46 @@ export class AgentsService {
       policyCleared: false,
       createdAt: now,
       updatedAt: now,
+      gasFunding: { funded: false, reason: 'drip_pending' },
     };
     await this.store.insert(agent);
     this.logger.log(
       `hired agent ${id} for ${principal.userId}: wallet ${wallet.address} ` +
         `policy ${wallet.policyId} (${rules.length} rules, ${this.wallets.name})`,
     );
-    return { agent, mcpToken };
+    const gasFunding = await this.fundGas(principal, agent);
+    return { agent: await this.store.update(id, { gasFunding }), mcpToken };
+  }
+
+  /** Never throws: an unfunded agent is still hired, and says why. */
+  private async fundGas(principal: GasDripPrincipal, agent: AgentRecord): Promise<AgentGasFunding> {
+    if (!this.gas) return { funded: false, reason: 'gas_drip_unavailable' };
+    try {
+      const outcome = await this.gas.dripToAgent({
+        userId: principal.userId,
+        agentId: agent.id,
+        address: agent.address,
+      });
+      if (outcome.funded) {
+        return {
+          funded: true,
+          txHash: outcome.receipt.txHash,
+          amountWei: outcome.receipt.amountWei,
+        };
+      }
+      this.logger.warn(`agent ${agent.id} not gas-funded: ${outcome.reason} (${outcome.message})`);
+      return {
+        funded: false,
+        reason: outcome.reason,
+        ...(outcome.txHash ? { txHash: outcome.txHash } : {}),
+      };
+    } catch (error) {
+      // dripToAgent does not throw; this only keeps a bug there from failing a hire.
+      this.logger.error(
+        `agent ${agent.id} gas drip threw: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { funded: false, reason: 'drip_failed' };
+    }
   }
 
   list(principal: GasDripPrincipal): Promise<AgentRecord[]> {

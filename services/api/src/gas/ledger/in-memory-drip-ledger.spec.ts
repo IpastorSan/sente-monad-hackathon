@@ -135,3 +135,131 @@ describe('InMemoryDripLedger', () => {
     expect(await ledger.dailyTotalWei(utcDay(NOW))).toBe(AMOUNT);
   });
 });
+
+describe('InMemoryDripLedger.claimAgent', () => {
+  const agentBase = {
+    userId: 'user-1',
+    agentId: 'agent-1',
+    address: ADDRESS_A,
+    amountWei: AMOUNT,
+    dailyCapWei: parseEther('100'),
+    maxPerUserPerDay: 2,
+    now: NOW,
+  };
+  const address = (n: number) => `0x${String(n).repeat(40)}` as Address;
+
+  it('allows one claim per agent, even at a new address', async () => {
+    const ledger = new InMemoryDripLedger();
+    const first = await ledger.claimAgent(agentBase);
+    expect(first.ok).toBe(true);
+    if (first.ok) expect(first.reservation.agentId).toBe('agent-1');
+
+    expect(await ledger.claimAgent({ ...agentBase, address: ADDRESS_B })).toEqual({
+      ok: false,
+      reason: 'agent_already_dripped',
+    });
+    expect((await ledger.findByAgentId('agent-1'))?.address).toBe(ADDRESS_A.toLowerCase());
+  });
+
+  it('allows one claim per address, shared with user drips', async () => {
+    const ledger = new InMemoryDripLedger();
+    await ledger.claim(base);
+
+    expect(await ledger.claimAgent(agentBase)).toEqual({
+      ok: false,
+      reason: 'address_already_dripped',
+    });
+
+    const other = new InMemoryDripLedger();
+    await other.claimAgent(agentBase);
+    expect(await other.claim({ ...base, userId: 'user-2' })).toEqual({
+      ok: false,
+      reason: 'address_already_dripped',
+    });
+  });
+
+  it('is not the user’s own drip, and the user’s own drip does not block it', async () => {
+    const ledger = new InMemoryDripLedger();
+    expect((await ledger.claimAgent(agentBase)).ok).toBe(true);
+    expect(await ledger.findByUserId('user-1')).toBeUndefined();
+    expect((await ledger.claim({ ...base, address: ADDRESS_B })).ok).toBe(true);
+    expect(
+      (await ledger.claimAgent({ ...agentBase, agentId: 'agent-2', address: address(3) })).ok,
+    ).toBe(true);
+  });
+
+  it('caps agents per user per UTC day, per user, and resets the next day', async () => {
+    const ledger = new InMemoryDripLedger();
+    for (const n of [1, 2]) {
+      const result = await ledger.claimAgent({
+        ...agentBase,
+        agentId: `agent-${n}`,
+        address: address(n),
+      });
+      expect(result.ok).toBe(true);
+    }
+
+    const third = { ...agentBase, agentId: 'agent-3', address: address(3) };
+    expect(await ledger.claimAgent(third)).toEqual({
+      ok: false,
+      reason: 'agent_daily_limit_reached',
+    });
+    expect(
+      (
+        await ledger.claimAgent({
+          ...third,
+          userId: 'user-2',
+          agentId: 'agent-4',
+          address: address(4),
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (await ledger.claimAgent({ ...third, now: new Date('2026-09-09T00:00:01.000Z') })).ok,
+    ).toBe(true);
+  });
+
+  it('applies the global daily cap, counting user drips too', async () => {
+    const ledger = new InMemoryDripLedger();
+    await ledger.claim({ ...base, dailyCapWei: CAP }); // 0.1 of 0.25
+
+    expect(
+      (await ledger.claimAgent({ ...agentBase, address: address(1), dailyCapWei: CAP })).ok,
+    ).toBe(true); // 0.2
+    expect(
+      await ledger.claimAgent({
+        ...agentBase,
+        agentId: 'agent-2',
+        address: address(2),
+        dailyCapWei: CAP,
+      }),
+    ).toEqual({ ok: false, reason: 'daily_cap_reached' });
+  });
+
+  it('gives the agent id, the address, the per-user slot and the budget back on release', async () => {
+    const ledger = new InMemoryDripLedger();
+    const limited = { ...agentBase, maxPerUserPerDay: 1 };
+    const claimed = await ledger.claimAgent(limited);
+    if (!claimed.ok) throw new Error('expected claim to succeed');
+
+    await ledger.release(claimed.reservation.id);
+
+    expect(await ledger.dailyTotalWei(utcDay(NOW))).toBe(0n);
+    expect(await ledger.findByAgentId('agent-1')).toBeUndefined();
+    expect(await ledger.findByAddress(ADDRESS_A)).toBeUndefined();
+    expect((await ledger.claimAgent(limited)).ok).toBe(true);
+  });
+
+  it('lets only one of many concurrent claims for the same agent through', async () => {
+    const ledger = new InMemoryDripLedger();
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        ledger.claimAgent({ ...agentBase, maxPerUserPerDay: 100, address: address(i + 1) }),
+      ),
+    );
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(await ledger.dailyTotalWei(utcDay(NOW))).toBe(AMOUNT);
+  });
+});

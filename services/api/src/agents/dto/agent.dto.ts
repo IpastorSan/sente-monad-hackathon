@@ -79,7 +79,10 @@ export interface AgentResponseDto {
   strategy: string;
   model: string;
   mandate: MandateDto;
-  /** The agent's wallet. Fund it with an ERC-20 transfer; the server never does. */
+  /**
+   * The agent's wallet. Fund its collateral with an ERC-20 transfer; the
+   * server only drips MON for gas, at hire (`gasFunded`).
+   */
   address: string;
   chainId: number;
   walletId: string;
@@ -90,6 +93,16 @@ export interface AgentResponseDto {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /** Whether the server's gas drip sent this wallet MON at hire. If not, fund gas by hand. */
+  gasFunded: boolean;
+  /**
+   * Only when `gasFunded` is false. A stable string: one of
+   * `AGENT_DRIP_REFUSAL_REASONS` (gas/gas.errors.ts), `gas_drip_unavailable`
+   * or `drip_pending`.
+   */
+  gasFundingReason?: string;
+  /** The drip transaction, when one was broadcast. */
+  gasFundingTxHash?: string;
 }
 
 export interface HireAgentResponseDto {
@@ -153,5 +166,18 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     ...(agent.revokedAt ? { revokedAt: agent.revokedAt.toISOString() } : {}),
+    ...toGasFundingFields(agent),
+  };
+}
+
+function toGasFundingFields(
+  agent: AgentRecord,
+): Pick<AgentResponseDto, 'gasFunded' | 'gasFundingReason' | 'gasFundingTxHash'> {
+  const funding = agent.gasFunding;
+  if (!funding) return { gasFunded: false, gasFundingReason: 'gas_drip_unavailable' };
+  return {
+    gasFunded: funding.funded,
+    ...(funding.funded ? {} : { gasFundingReason: funding.reason ?? 'drip_failed' }),
+    ...(funding.txHash ? { gasFundingTxHash: funding.txHash } : {}),
   };
 }

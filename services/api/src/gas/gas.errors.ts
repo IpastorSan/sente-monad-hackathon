@@ -16,6 +16,28 @@ export const DRIP_REFUSAL_REASONS = [
 export type DripRefusalReason = (typeof DRIP_REFUSAL_REASONS)[number];
 
 /**
+ * Every way the agent drip (SEN-14, `GasDripService.dripToAgent`) can end
+ * without funding the agent. These never become an HTTP error — hiring still
+ * succeeds — they are recorded on the agent and returned as
+ * `gasFundingReason`. Stable strings, same rule as above.
+ */
+export const AGENT_DRIP_REFUSAL_REASONS = [
+  'faucet_unconfigured',
+  'agent_already_dripped',
+  'address_already_dripped',
+  'address_already_funded',
+  'agent_daily_limit_reached',
+  'daily_cap_reached',
+  /** Every attempt hit, or would have hit, Monad's reserve balance (CLAUDE.md gotcha 12). */
+  'reserve_balance_busy',
+  'drip_failed',
+  /** Broadcast, but no receipt in time. It may still land, so it is never re-sent. */
+  'drip_unconfirmed',
+] as const;
+
+export type AgentDripRefusalReason = (typeof AGENT_DRIP_REFUSAL_REASONS)[number];
+
+/**
  * A refusal is a domain outcome, not an HTTP concern: the service throws this
  * so it stays testable without a request context, and the controller maps it to
  * a status code exactly once (`refusalToHttpException`).

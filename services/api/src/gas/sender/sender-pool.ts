@@ -12,11 +12,20 @@ import type { DripSendResult, DripSender } from './drip-sender';
  * no state to get wrong. A send is NOT retried on a different key — a failure
  * here is almost always "faucet is out of MON" or "RPC is down", and both keys
  * would fail identically while the retry burned a second nonce.
+ *
+ * The pool also remembers when each key last sent, whoever sent it. The agent
+ * drip's `ReserveAwareDispatcher` reads that to keep its sends clear of a
+ * key's previous one (Monad's reserve balance, CLAUDE.md gotcha 12); `send`
+ * itself only records it and behaves exactly as before.
  */
 export class SenderPool {
   private cursor = 0;
+  private readonly lastUsed = new Map<Address, number>();
 
-  constructor(private readonly senders: readonly DripSender[]) {}
+  constructor(
+    private readonly senders: readonly DripSender[],
+    private readonly clock: () => number = Date.now,
+  ) {}
 
   get size(): number {
     return this.senders.length;
@@ -24,6 +33,20 @@ export class SenderPool {
 
   addresses(): Address[] {
     return this.senders.map((sender) => sender.address);
+  }
+
+  /** Every key, in configuration order. */
+  members(): readonly DripSender[] {
+    return this.senders;
+  }
+
+  /** When `address` last sent (epoch ms), from any caller; `undefined` if never. */
+  lastUsedAt(address: Address): number | undefined {
+    return this.lastUsed.get(address);
+  }
+
+  markUsed(address: Address, at: number = this.clock()): void {
+    this.lastUsed.set(address, at);
   }
 
   send(to: Address, valueWei: bigint, gasLimit: bigint): Promise<DripSendResult> {
@@ -37,6 +60,7 @@ export class SenderPool {
     }
     const sender = this.senders[this.cursor] as DripSender;
     this.cursor = (this.cursor + 1) % this.senders.length;
+    this.markUsed(sender.address);
     return sender.send(to, valueWei, gasLimit);
   }
 }
