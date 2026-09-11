@@ -29,7 +29,7 @@ export const AGENT_RUNNER_DEFAULTS = {
   maxIterations: 12,
   maxTokens: 4096,
   // SEN-3: a second sign 5 s after the first was refused by the rolling cap;
-  // one straight after was not. Same figure as GAS_DRIP_SENDER_SPACING_MS.
+  // one straight after was not. Not tied to GAS_DRIP_SENDER_SPACING_MS (2 s, Monad's reserve window, SEN-16); this one covers Privy's lag.
   writeSpacingMs: 5_000,
 } as const;
 
