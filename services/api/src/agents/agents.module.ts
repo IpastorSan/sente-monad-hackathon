@@ -1,5 +1,7 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
+import { GasDripAuth, RequestContextGasDripAuth } from '../gas/auth/gas-drip-auth';
+import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
 import {
   AGENT_WALLETS,
   UnconfiguredAgentWalletProvider,
@@ -15,6 +17,7 @@ import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
+import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './store/agent-store';
 
 const configProvider: Provider = {
   provide: AGENTS_CONFIG,
@@ -55,13 +58,37 @@ const agentWalletsProvider: Provider = {
 };
 
 /**
- * TODO(MOV-250): the lifecycle routes (hire, mandate issuance, revoke) are
- * still a stub. What is real: AGENT_WALLETS, the enclave-held key an agent
- * trades with, bounded by its compiled mandate (SEN-3).
+ * PERSISTENCE: in memory until the repo has a database (see `store/agent-store.ts`).
+ */
+const agentStoreProvider: Provider = {
+  provide: AGENT_STORE,
+  useFactory: (): AgentStore => new InMemoryAgentStore(),
+};
+
+/**
+ * AUTH: the same placeholder seam `wallet/` and `gas/` use. MOV-251's real
+ * session guard rebinds `GasDripAuth` here too.
+ */
+const authProvider: Provider = {
+  provide: GasDripAuth,
+  useClass: RequestContextGasDripAuth,
+};
+
+/**
+ * The agent lifecycle (SEN-5): hire, read, amend mandate, revoke. Each agent
+ * trades with an enclave-held key from AGENT_WALLETS, bounded by its compiled
+ * mandate (SEN-3).
  */
 @Module({
   controllers: [AgentsController],
-  providers: [configProvider, agentWalletsProvider, AgentsService],
-  exports: [AgentsService, AGENT_WALLETS],
+  providers: [
+    configProvider,
+    agentWalletsProvider,
+    agentStoreProvider,
+    authProvider,
+    PlaceholderGasDripAuthGuard,
+    AgentsService,
+  ],
+  exports: [AgentsService, AGENT_WALLETS, AGENT_STORE],
 })
 export class AgentsModule {}

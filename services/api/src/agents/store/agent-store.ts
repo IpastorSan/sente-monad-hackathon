@@ -1,0 +1,128 @@
+import type { Mandate } from '@sente/mandate';
+import type { Address } from 'viem';
+
+import type { AgentModel } from '../agents.config';
+
+/** DI token for agent persistence. */
+export const AGENT_STORE = Symbol('AGENT_STORE');
+
+export const AGENT_STATUSES = ['active', 'revoked'] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+/**
+ * One hired agent. The mandate is stored PARSED (bigint atoms, checksummed
+ * addresses); the wire form is `dto/agent.dto.ts#toMandateDto`.
+ */
+export interface AgentRecord {
+  /** UUID v4. */
+  readonly id: string;
+  /** The owner. Every read and write is scoped to it. */
+  readonly userId: string;
+  readonly name: string;
+  readonly systemPrompt: string;
+  readonly strategy: string;
+  /** An OpenRouter model id from `AGENT_MODELS`. */
+  readonly model: AgentModel;
+  /** The mandate the wallet's policy was last compiled from. */
+  readonly mandate: Mandate;
+  /** The provider's (Privy's) wallet id. */
+  readonly walletId: string;
+  /** The agent's own EOA, EIP-55. The user funds it; nothing server-side does. */
+  readonly address: Address;
+  /** The policy that bounds the wallet. Emptied (`[]`) on revoke. */
+  readonly policyId: string;
+  /**
+   * sha256 (hex) of the agent's MCP bearer token. The token itself is handed
+   * out once, by `hire`, and never stored — see `mcp-token.ts`.
+   */
+  readonly mcpTokenHash: string;
+  /** `revoked` is terminal: nothing moves an agent back to `active`. */
+  readonly status: AgentStatus;
+  /**
+   * Whether the wallet's policy has been replaced with `[]`. Only meaningful
+   * once revoked: the agent is marked revoked FIRST, so it stops at once even
+   * when the enclave update fails, and a repeated revoke retries until this is
+   * true.
+   */
+  readonly policyCleared: boolean;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  readonly revokedAt?: Date;
+}
+
+/** The only fields that change after hire. */
+export type AgentPatch = Partial<
+  Pick<AgentRecord, 'mandate' | 'status' | 'policyCleared' | 'updatedAt' | 'revokedAt'>
+>;
+
+export interface AgentStore {
+  /** Rejects a duplicate id or token hash. */
+  insert(record: AgentRecord): Promise<void>;
+  get(id: string): Promise<AgentRecord | undefined>;
+  /** The user's agents, oldest first. */
+  listByUser(userId: string): Promise<AgentRecord[]>;
+  /**
+   * The agent whose MCP token hashes to `hash`, WHATEVER its status — the
+   * caller decides what a revoked agent's token means. Callers holding a raw
+   * token should use `AgentsService.findByMcpToken`, which hashes it and
+   * answers only for active agents.
+   */
+  findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined>;
+  /** Rejects an unknown id. Returns the updated record. */
+  update(id: string, patch: AgentPatch): Promise<AgentRecord>;
+}
+
+/**
+ * PERSISTENCE: in memory, because this repo has no database yet — the same
+ * call `wallet/store` and `gas/ledger` made. Bind `AGENT_STORE` to a real
+ * store and nothing else in `agents/` changes.
+ *
+ * Losing it on restart is NOT harmless here, unlike the wallet registry: the
+ * Privy wallets and policies live on, but the server forgets which user owns
+ * which. That is acceptable for testnet only.
+ *
+ * Records are copied in and out, so a caller mutating what it got back cannot
+ * reach the stored state.
+ */
+export class InMemoryAgentStore implements AgentStore {
+  private readonly byId = new Map<string, AgentRecord>();
+  private readonly idByTokenHash = new Map<string, string>();
+
+  insert(record: AgentRecord): Promise<void> {
+    if (this.byId.has(record.id)) {
+      return Promise.reject(new Error(`agent ${record.id} already exists`));
+    }
+    if (this.idByTokenHash.has(record.mcpTokenHash)) {
+      return Promise.reject(new Error('MCP token hash collision'));
+    }
+    this.byId.set(record.id, structuredClone(record));
+    this.idByTokenHash.set(record.mcpTokenHash, record.id);
+    return Promise.resolve();
+  }
+
+  get(id: string): Promise<AgentRecord | undefined> {
+    const record = this.byId.get(id);
+    return Promise.resolve(record ? structuredClone(record) : undefined);
+  }
+
+  listByUser(userId: string): Promise<AgentRecord[]> {
+    const records = [...this.byId.values()]
+      .filter((record) => record.userId === userId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((record) => structuredClone(record));
+    return Promise.resolve(records);
+  }
+
+  findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined> {
+    const id = this.idByTokenHash.get(hash);
+    return id === undefined ? Promise.resolve(undefined) : this.get(id);
+  }
+
+  update(id: string, patch: AgentPatch): Promise<AgentRecord> {
+    const existing = this.byId.get(id);
+    if (!existing) return Promise.reject(new Error(`no agent ${id}`));
+    const next: AgentRecord = { ...existing, ...structuredClone(patch) };
+    this.byId.set(id, next);
+    return Promise.resolve(structuredClone(next));
+  }
+}

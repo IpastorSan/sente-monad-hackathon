@@ -6,6 +6,19 @@ import { loadAuthorizationKey, type AuthorizationKey } from './privy/authorizati
 export const AGENTS_CONFIG = Symbol('AGENTS_CONFIG');
 
 /**
+ * The OpenRouter model ids an agent may be hired with. The runner (SEN-8)
+ * calls OpenRouter's Anthropic-compatible endpoint with `agent.model`, so a
+ * model belongs here only once `scripts/openrouter-probe.ts` has shown it
+ * drives tool use through that endpoint — these two are the probe's targets.
+ */
+export const AGENT_MODELS = ['anthropic/claude-sonnet-5', 'moonshotai/kimi-k2.6'] as const;
+export type AgentModel = (typeof AGENT_MODELS)[number];
+
+export function isAgentModel(model: string): model is AgentModel {
+  return (AGENT_MODELS as readonly string[]).includes(model);
+}
+
+/**
  * Privy credentials plus the TWO authorization keys, and why they are two.
  *
  * - `agentAuthKey` owns every agent WALLET. The server uses it on every
