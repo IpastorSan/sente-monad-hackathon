@@ -14,7 +14,9 @@
     "lint:fix": "eslint . --fix",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "probe:openrouter": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/openrouter-probe.ts"
+    "probe:openrouter": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/openrouter-probe.ts",
+    "privy:keys": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-keys.ts",
+    "probe:privy": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",
@@ -22,6 +24,7 @@
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",
+    "@sente/mandate": "workspace:*",
     "@sente/venues": "workspace:*",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -52,8 +55,20 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": "<rootDir>/../tsconfig.spec.json"
+        }
+      ]
     },
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "testEnvironmentOptions": {
+      "customExportConditions": [
+        "source",
+        "node",
+        "node-addons"
+      ]
+    }
   }
 }

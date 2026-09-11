@@ -279,13 +279,42 @@ drip). **Kuru Spot V2 accepts a contract caller**, so there **the Kernel account
 root** and deposit → order is one atomic ERC-7579 batch. Do not "unify" these: each is the only
 arrangement that works for its venue. Evidence in `docs/monad-testnet-assets.md` and `docs/kuru.md`.
 
-### 10. `@sente/venues/kuru` and `@sente/venues/perpl` do not resolve out of the box
+### 10. The workspace packages are TS sources, and each consumer loads them differently
 
-Both are `package.json` subpath exports. **Metro has package exports turned off** (gotcha 2), so
-the mobile app needs a `resolver.resolveRequest` alias per subpath — the same pattern already used
-for `@category-labs/mera` in `metro.config.js`. The subpaths' `types` point at `src/` files that
-import each other with `.ts` extensions, so **`services/api` needs `allowImportingTsExtensions`** in
-its tsconfig before it can import them. Neither is wired yet; the first consumer has to do it.
+`@sente/mandate` and `@sente/venues` (with its `./kuru` and `./perpl` subpaths) are ESM whose
+`exports` map offers three conditions: `types` → `src/`, `source` → `src/`, `default` → `dist/`.
+Their sources import each other as `./x.ts`. There is no single setting that makes every consumer
+happy, so each one is wired on purpose — do not "simplify" one without re-checking the others.
+
+**`services/api` (wired in SEN-3):**
+
+| Consumer                   | Resolves to           | Because                                                                                                                                                                           |
+| -------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tsc` / typecheck          | `src/` via `types`    | TS 6 defaults `moduleResolution` to `bundler` even with `module: CommonJS`, so `exports` subpaths resolve. `rewriteRelativeImportExtensions` accepts the `.ts` specifiers.        |
+| `nest build` → `node dist` | `dist/` via `default` | CJS `require()` of an ESM `dist/index.js` works through Node's `require(esm)` (gotcha 6). **Build the packages first**: they are API dependencies, so `pnpm run build` orders it. |
+| jest                       | `src/` via `source`   | `testEnvironmentOptions.customExportConditions: ["source", …]`; ts-jest compiles them. No build needed.                                                                           |
+| `scripts/*.ts` (probes)    | `src/` via `source`   | `node --conditions=source`, native type stripping.                                                                                                                                |
+
+Two choices that look optional and are not:
+
+- **`rewriteRelativeImportExtensions`, not `allowImportingTsExtensions`.** The latter requires
+  `noEmit`, and `nest build` emits. The former accepts `.ts` specifiers _and_ rewrites them to
+  `.js` in the CJS output.
+- **jest uses `services/api/tsconfig.spec.json`, which turns that rewriting OFF.** Jest's resolver
+  loads `./x.ts` literally; rewritten to `./x.js` it finds nothing in `packages/mandate`, and in
+  `packages/venues/src` it finds stale committed `.js` twins of the sources (`kuru/adapter.js` and
+  friends) and silently loads those instead.
+
+API files that a script imports (`src/agents/privy/*`, `agents.config.ts`, `agents.errors.ts`,
+`agent-wallet.provider.ts`) use `.ts` specifiers and **erasable syntax only** — no Nest decorators,
+no constructor parameter properties — because node's type stripping loads them as-is. Nest wiring
+stays in the module files. `customExportConditions` applies to every package jest resolves; no
+installed dependency exports a `source` condition today, so re-check that if jest ever starts
+loading raw TypeScript out of `node_modules`.
+
+**`apps/mobile` is still unwired.** Metro has package exports turned off (gotcha 2), so the app
+needs a `resolver.resolveRequest` alias per subpath — the same pattern already used for
+`@category-labs/mera` in `metro.config.js`. The first mobile consumer has to add it.
 
 ### 11. Test vectors use publicly known keys — never fund what they derive
 

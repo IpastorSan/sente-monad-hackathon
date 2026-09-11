@@ -34,7 +34,7 @@ import {
   PERPL_EXCHANGE_ABI,
   PERPL_TESTNET_CONTRACTS,
 } from '@sente/venues/perpl';
-import { getAddress, isAddressEqual, type Abi, type Address } from 'viem';
+import { getAddress, getTypesForEIP712Domain, isAddressEqual, type Abi, type Address } from 'viem';
 
 import type { Mandate } from './mandate.ts';
 import {
@@ -57,9 +57,20 @@ import {
   type TypedDataDescriptor,
 } from './privy/policy-types.ts';
 
-/** Perpl's API-key struct, as a typed-data message condition names it. */
+/**
+ * Perpl's API-key struct, as a typed-data message condition names it.
+ *
+ * `EIP712Domain` is spelled out beside the struct, exactly as the Privy
+ * client sends it (viem's `getTypesForEIP712Domain`, which for Perpl's domain
+ * includes `salt`). SEN-3's live probe: with the struct alone the condition
+ * never matched and every enrollment was refused; with the domain type added,
+ * the same condition signed.
+ */
 export const PERPL_ENROLL_TYPED_DATA: TypedDataDescriptor = {
-  types: { PerplRegisterApiKey: PERPL_API_KEY_TYPED_DATA.types.PerplRegisterApiKey },
+  types: {
+    EIP712Domain: getTypesForEIP712Domain({ domain: PERPL_API_KEY_TYPED_DATA.domain }),
+    PerplRegisterApiKey: PERPL_API_KEY_TYPED_DATA.types.PerplRegisterApiKey,
+  },
   primary_type: PERPL_API_KEY_TYPED_DATA.primaryType,
 };
 
@@ -255,6 +266,10 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
  * reference an aggregation by the id Privy assigns on creation, so wiring the
  * reference condition is left to the Privy client (MOV-278), which can prove
  * the shape live. `null` when the mandate has no rolling cap.
+ *
+ * SEN-3's live probe corrected the window key (`seconds`) and found the
+ * reference shape: `aggregationLte(id, cap)` in privy/policy-types.ts. What it
+ * proved end to end is in docs/privy-policy-enforcement.md.
  */
 export interface RollingCapAggregationDraft {
   readonly name: string;
@@ -265,7 +280,12 @@ export interface RollingCapAggregationDraft {
     readonly abi: Abi;
     readonly function: 'sum';
   };
-  readonly window: { readonly type: 'rolling'; readonly duration_seconds: number };
+  /**
+   * `seconds`, not `duration_seconds`: Privy answers the latter with
+   * `400 invalid_aggregation_format`, "Required at window.seconds; Unrecognized
+   * key(s) in object: 'duration_seconds'" (SEN-3 live probe, 2026-09-11).
+   */
+  readonly window: { readonly type: 'rolling'; readonly seconds: number };
   readonly conditions: readonly PolicyCondition[];
   /** The `lte` bound on the aggregated sum. */
   readonly cap: HexUint;
@@ -283,7 +303,7 @@ export function compileRollingCap(mandate: Mandate): RollingCapAggregationDraft 
       abi: ERC20_APPROVE_ABI,
       function: 'sum',
     },
-    window: { type: 'rolling', duration_seconds: rolling.windowSeconds },
+    window: { type: 'rolling', seconds: rolling.windowSeconds },
     conditions: [txChainIdEq(mandate.chainId), txToEq(rolling.token)],
     cap: hexUint(rolling.capAtoms),
   };

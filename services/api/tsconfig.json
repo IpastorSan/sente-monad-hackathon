@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // TS 6 deprecates explicitly naming node10; leaving moduleResolution unset
-    // lets it default from module=CommonJS, which is what Nest expects.
+    // makes it default to `bundler` even with module=CommonJS (check with
+    // `tsc --showConfig`). That is what lets the API resolve the workspace
+    // packages' `exports` maps, subpaths included, to their `types` (src/).
     "module": "CommonJS",
     "target": "ES2023",
     "lib": ["ES2023"],
@@ -16,6 +18,15 @@
     "sourceMap": true,
     "incremental": true,
     "isolatedModules": false,
+
+    // CLAUDE.md gotcha 10. @sente/mandate and @sente/venues ship TS sources
+    // whose relative imports end in `.ts`, and the API type-checks them
+    // through their `types` condition. `allowImportingTsExtensions` would
+    // accept that too, but it demands noEmit and `nest build` emits; this
+    // accepts `.ts` specifiers AND rewrites them to `.js` in the CJS output.
+    // It also lets src/agents/privy/* use `.ts` specifiers, so scripts/ can
+    // load them under node's type stripping (see jest's tsconfig.spec.json).
+    "rewriteRelativeImportExtensions": true,
 
     "types": ["node", "jest"]
   },
