@@ -365,8 +365,11 @@ only as its first transaction within the last few blocks; a second MON transfer 
 succession reverts with `reserve balance violation` — and on Monad the gas limit is still charged.
 Seen in SEN-6: the treasury (≈4 MON) sent a MON transfer right after its Kuru faucet claim and it
 reverted; sent on its own, it landed. `scripts/fund-agent.ts` therefore sends MON first. The gas
-drip's senders do back-to-back MON sends and are exposed to the same rule (SEN-14). The exact
-window was not measured. EIP-7702-delegated EOAs get no exception at all: their balance cannot drop
+drip's agent drips go through `services/api/src/gas/sender/reserve-aware-dispatcher.ts` (SEN-14):
+one send per key at a time, `GAS_DRIP_SENDER_SPACING_MS` (default 5 s) between sends from the same
+key, an advisory `eth_call` first, and a reverted plain transfer retried on another key (at most 3
+sends). The user `drip()` still sends unspaced, so it can still hit this. The exact window was not
+measured, and Monad's `eth_call` accepts a single below-reserve transfer. EIP-7702-delegated EOAs get no exception at all: their balance cannot drop
 below 10 MON.
 
 ### 13. Perpl's enrollment struct drifts, and the Privy policy pins it exactly
