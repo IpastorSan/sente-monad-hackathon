@@ -9,10 +9,14 @@
 // threshold. The signature is over the request itself, so it cannot be replayed
 // against a different body or a different URL.
 //
-// That is why Sente holds two of these and never one: the agent key owns the
-// wallets (it signs trades), the mandate-owner key owns the policies (it can
-// change the limits). **The key that spends can never raise its own limit**,
-// and the check runs on Privy's side, not ours.
+// That is why Sente holds two of these and never one: the agent (trading) key
+// is only a SIGNER on each wallet, while the mandate-owner key OWNS both the
+// wallet and its policy. A Privy signer "cannot update a wallet's owner,
+// signers, or policies" (verified live on 10143, SEN-31), so **the key that
+// spends can never raise its own limit** — and the check runs on Privy's side,
+// not ours. Before SEN-31 the agent key OWNED the wallets, and a Privy wallet
+// owner can PATCH the wallet to detach its own policy; that hole is exactly why
+// the trading key must be a signer, never an owner.
 //
 // ## Three encodings, and mixing them up is the first hour you lose
 //

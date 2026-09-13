@@ -5,15 +5,18 @@
 // Sente creates two single-key quorums, and they are deliberately different
 // objects:
 //
-// | Quorum        | Key                       | Owns          |
-// |---------------|---------------------------|---------------|
-// | agent         | `PRIVY_AGENT_AUTH_KEY`    | every wallet  |
-// | mandate owner | `PRIVY_MANDATE_OWNER_KEY` | every policy  |
+// | Quorum        | Key                       | Role (SEN-31)                    |
+// |---------------|---------------------------|----------------------------------|
+// | agent         | `PRIVY_AGENT_AUTH_KEY`    | SIGNER on every wallet (trades)  |
+// | mandate owner | `PRIVY_MANDATE_OWNER_KEY` | OWNER of every wallet AND policy |
 //
-// One quorum owning both would let the key that signs trades also rewrite the
-// policy that bounds them. Phase 3 moves the mandate-owner key onto the user's
-// device; the shape of this call does not change, because a quorum has only
-// ever needed the public half.
+// The agent quorum only ever signs; it never OWNS a wallet, because a Privy
+// wallet owner can PATCH the wallet to detach its own policy (verified live,
+// SEN-31). The mandate-owner quorum owns both the wallet and the policy, so
+// only it can change either, and the key that signs trades can never rewrite
+// the policy that bounds them. Phase 3 moves the mandate-owner key onto the
+// user's device; the shape of this call does not change, because a quorum has
+// only ever needed the public half.
 
 import type { PrivyClient } from './privy.client.ts';
 

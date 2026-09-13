@@ -43,13 +43,17 @@ export const AGENT_MODEL_REQUEST_EXTRAS: Readonly<Record<AgentModel, OpenRouterR
 /**
  * Privy credentials plus the TWO authorization keys, and why they are two.
  *
- * - `agentAuthKey` owns every agent WALLET. The server uses it on every
- *   `eth_signTransaction`, so it is the hot key.
- * - `mandateOwnerKey` owns every POLICY. Only it can change what a wallet may
- *   sign.
+ * - `agentAuthKey` is the trading SIGNER on every agent WALLET (SEN-31). The
+ *   server uses it on every `eth_signTransaction`, so it is the hot key — but
+ *   it only ever SIGNS; it never owns a wallet.
+ * - `mandateOwnerKey` OWNS every wallet AND every policy. Only it can change
+ *   what a wallet may sign, or the wallet's owner and signers.
  *
- * One key doing both would let the trading path raise its own limit, which is
- * the single thing the mandate exists to prevent. Phase 3 moves the
+ * The trading key being a signer, not an owner, is what stops the trading path
+ * raising its own limit: a Privy wallet owner can PATCH the wallet to detach
+ * its own policy, a signer cannot (verified live on 10143, SEN-31). Either key
+ * doing both jobs — or the agent key owning the wallet, as it did before
+ * SEN-31 — is the single thing the mandate exists to prevent. Phase 3 moves the
  * mandate-owner key onto the user's device; until then both sit in `.env`,
  * which is honest for testnet and wrong for production.
  */

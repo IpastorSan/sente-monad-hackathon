@@ -172,7 +172,11 @@ broadcast**. The only transactions that reached the chain are act 4's two.
    with zero calls to Privy."
 4. "The agent's own key tries to raise its limit. Privy says 401. **The key
    that trades can never raise its own limit.** The owner's key can, and a
-   second later the same deposit lands on chain."
+   second later the same deposit lands on chain." (Why 401, precisely: the
+   trading key is only a **signer** on the wallet, never its owner — SEN-31. A
+   Privy signer cannot edit the policy _or_ PATCH the wallet to detach it; only
+   the owner, the mandate quorum, can. Before SEN-31 the agent key owned the
+   wallet and could detach its own policy, so the tagline was not yet true.)
 5. "Revoke it, and the enclave won't sign even what it signed at hire."
 
 Say "scripted" when you show the scripted run: no model is choosing anything
@@ -184,9 +188,11 @@ in it.
   wallet, because a hire mints an unfunded wallet. The CI spec does a real
   `AgentsService.hire` against the fake Privy.
 - Both authorization keys sit in `.env` on testnet, so this machine could
-  produce either signature. The split holds at Privy (the agent key gets
-  401), but custody of the owner key is not yet on the user's device
-  (Phase 3).
+  produce either signature. The split holds at Privy: the wallet is **owned by
+  the mandate quorum** and the trading (agent) key is only an
+  `additional_signers` entry (SEN-31), so the agent key gets 401 on both the
+  policy and any `PATCH /v1/wallets/{id}` — it can neither edit nor detach the
+  mandate. Custody of the owner key is not yet on the user's device (Phase 3).
 - The fake Privy in CI applies the compiled rules and checks the
   authorization signatures. It does not model Privy's PATCH lag or its late
   rolling-cap aggregation.

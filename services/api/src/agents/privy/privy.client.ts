@@ -15,8 +15,9 @@
 //      authorized this specific request*. Only requests that mutate an owned
 //      resource carry it.
 //
-// The app secret alone cannot raise a mandate: the policy is owned by a key
-// the trading path never uses, and Privy checks that signature, not us.
+// The app secret alone cannot raise a mandate: the wallet AND its policy are
+// both owned by a key the trading path never uses — the trading key is only a
+// wallet signer (SEN-31) — and Privy checks that owner signature, not us.
 //
 // Relative imports carry `.ts` so scripts/privy-probe.ts can load this exact
 // file under node's type stripping; tsc rewrites them to `.js` for the CJS

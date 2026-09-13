@@ -20,9 +20,9 @@ import { PrivyError, type PrivyClient } from './privy.client.ts';
 
 export interface PrivyAgentWalletProviderOptions {
   client: PrivyClient;
-  /** Owns the wallets; approves every signature. */
+  /** The trading SIGNER on every wallet (SEN-31); approves every signature. Never owns a wallet. */
   agentKey: AuthorizationKey;
-  /** Owns the policies; approves every policy change. Never used to sign a trade. */
+  /** Owns every wallet AND every policy; approves policy changes and wallet PATCHes. Never signs a trade. */
   mandateOwnerKey: AuthorizationKey;
   agentQuorumId?: string;
   mandateQuorumId?: string;
@@ -74,8 +74,12 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
       rules: input.rules,
       ownerQuorumId: mandateQuorumId,
     });
+    // Owner = mandate quorum; the agent quorum is only an additional SIGNER
+    // (SEN-31). The trading key can sign within the mandate but cannot PATCH
+    // the wallet to detach or widen it.
     const wallet = await createAgentWallet(this.#client, {
-      ownerQuorumId: agentQuorumId,
+      ownerQuorumId: mandateQuorumId,
+      signerQuorumId: agentQuorumId,
       policyId: policy.id,
       displayName: input.displayName,
     });
@@ -102,7 +106,7 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
     });
   }
 
-  /** The two owner quorums: pinned from config, or created once per process. */
+  /** The agent (signer) and mandate (owner) quorums: pinned from config, or created once per process. */
   quorums(): Promise<Quorums> {
     const { agentQuorumId, mandateQuorumId } = this.#options;
     if (agentQuorumId && mandateQuorumId)
