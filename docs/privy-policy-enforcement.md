@@ -165,7 +165,7 @@ pnpm --filter @sente/api run privy:keys     # the two authorization keys, into .
 pnpm --filter @sente/api run probe:privy    # [-- --env-file <path>] [-- --out report.json]
 ```
 
-**The Privy app is shared.** It is turnstile's app (`cmtr2xx7101zp0cl1qxy3m9zc`),
+**The Privy app is shared.** It is turnstile's app (`<privy-app-id>`),
 reused rather than a new Sente app. The probe only _creates_ objects, all named
 `sente-probe-…` (the owner quorums "Sente agent key" / "Sente mandate owner"),
 and only PATCHes policies it created in the same run. Turnstile's quorums,
@@ -436,11 +436,11 @@ answer 405, so this is the record). None of these is secret.
 
 | Object                               | Id                                                                        |
 | ------------------------------------ | ------------------------------------------------------------------------- |
-| agent-key quorum (owns wallets)      | `v4akc7n2q006kndzefpksv0j` (also `PRIVY_AGENT_QUORUM_ID`)                 |
-| mandate-owner quorum (owns policies) | `bnpobexc7e0c4rcli6k6uqfw` (also `PRIVY_MANDATE_QUORUM_ID`)               |
-| mandate wallet                       | `j1vvfuszwb4vzw2z3gb613oh` → `0x9c3cf0f7D73C4386E63754d9e42593141DDCDb3c` |
-| its policy (cap now 1 USDC after 7c) | `giux7b2ttmictttqdixije9n`                                                |
-| aggregation, hex cap / decimal cap   | `bhcefi3oxa8kon1gbkte13hp` / `najd1wrbb43bky18am1wz7mf`                   |
+| agent-key quorum (owns wallets)      | `<privy-probe-agent-quorum-id>` (also `PRIVY_AGENT_QUORUM_ID`)                 |
+| mandate-owner quorum (owns policies) | `<privy-probe-mandate-quorum-id>` (also `PRIVY_MANDATE_QUORUM_ID`)               |
+| mandate wallet                       | `<privy-probe-wallet-id>` → `0x9c3cf0f7D73C4386E63754d9e42593141DDCDb3c` |
+| its policy (cap now 1 USDC after 7c) | `<privy-probe-policy-id>`                                                |
+| aggregation, hex cap / decimal cap   | `<privy-probe-aggregation-id>` / `<privy-probe-aggregation-id-decimal>`                   |
 
 Runs 1–5 left their own `sente-probe-…` wallets and policies in the app. They
 are unfunded, owned by the two quorums above (so still controllable with our

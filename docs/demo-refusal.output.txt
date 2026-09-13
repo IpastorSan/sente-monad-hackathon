@@ -7,7 +7,7 @@ agent 0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E before: MON 0.061747976, wallet
 === ACT 1 — HIRE: a tight mandate ===
 [SCRIPTED — no model; the same gated tools a model would call]
   agent c670e82b-c428-466b-8b87-ca48673e9520
-  wallet qqhg4rxobx0qnjg398tjzgi9 0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E, policy nmfedw3sc6i1pkndz3a38msh
+  wallet <privy-agent-venues-wallet-id> 0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E, policy <privy-agent-venues-policy-id>
   mandate: Kuru only; market MON-USDC only; deposits ≤ 1 USDC per transaction; expires 2026-09-12T16:44:03.000Z
   reused the funded SEN-6 probe wallet rather than minting one (a hire mints an unfunded wallet); no funds were moved by this script
   owner-key PATCH of its policy to the demo mandate returned in 383 ms

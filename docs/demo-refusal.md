@@ -121,7 +121,7 @@ All 24 checks passed. The full transcript is in `demo-refusal.output.txt`.
 
 | What                             | Result                                                                                                                                                                                  |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent                            | `c670e82b-c428-466b-8b87-ca48673e9520`, wallet `qqhg4rxobx0qnjg398tjzgi9` = `0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E`, policy `nmfedw3sc6i1pkndz3a38msh`                             |
+| Agent                            | `c670e82b-c428-466b-8b87-ca48673e9520`, wallet `<privy-agent-venues-wallet-id>` = `0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E`, policy `<privy-agent-venues-policy-id>`                             |
 | Act 1 re-arm                     | owner PATCH returned in 383 ms; rule confirmed live 1,334 ms later                                                                                                                      |
 | Act 2                            | deposit 2 USDC and a WETH-USDC buy of 0.0161622692 @ 1237.45: both `policy_violation`, nonce 7 → 7, enclave events seq 2 and 4                                                          |
 | Act 3                            | `deposit_over_cap` and `market_not_allowed`, **0 Privy calls**                                                                                                                          |

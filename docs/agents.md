@@ -146,9 +146,9 @@ would revert the second, and Monad charges the full 21,000 gas limit for it.
 
 **Agent:**
 
-- Privy wallet `qqhg4rxobx0qnjg398tjzgi9`, display name
+- Privy wallet `<privy-agent-venues-wallet-id>`, display name
   `sente-agent-venues-live`, EOA `0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E`.
-- Policy `nmfedw3sc6i1pkndz3a38msh`, compiled from this mandate:
+- Policy `<privy-agent-venues-policy-id>`, compiled from this mandate:
   - Kuru: MON-USDC, deposits ≤ 20 USDC per transaction.
   - Perpl: BTC-PERP, collateral ≤ 100 AUSD, leverage ≤ 5.
 - Ids are recorded in the main checkout's `.env` as `PRIVY_AGENT_VENUES_*`.
@@ -196,7 +196,7 @@ salt, so that change is harmless.
 
 | Step                                     | Result                                                          | Transaction / id                                                     |
 | ---------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
-| policy recompiled + PATCHed (5 s settle) | ok                                                              | policy `nmfedw3sc6i1pkndz3a38msh`                                    |
+| policy recompiled + PATCHed (5 s settle) | ok                                                              | policy `<privy-agent-venues-policy-id>`                                    |
 | over-cap deposit again                   | `EnclaveRefusedError`, nonce 7 → 7, nothing sent                | —                                                                    |
 | Perpl onboard                            | no-op: account 505 exists                                       | —                                                                    |
 | Perpl enrollment via the agent's wallet  | enrolled; the second `credentials()` call reused it             | key held server-side, never printed                                  |
@@ -335,7 +335,7 @@ full limit. Its balance went from 0.027877958 to 0.007790894 MON, nonce 9 → 11
 treasury got its 14 USDC back and spent nothing. No top-up was needed.
 
 **State left behind.** The agent holds 0 USDC, in its wallet and in Kuru,
-and about 0.0078 MON. Its policy `nmfedw3sc6i1pkndz3a38msh` is left on the
+and about 0.0078 MON. Its policy `<privy-agent-venues-policy-id>` is left on the
 **expired** mandate, so it signs only a withdraw to itself and a return to the
 treasury. `agent:venues-live`, `agent:run-live` and `demo:refusal` re-PATCH it
 as before. Only this wallet's own `sente-` policy was touched: two owner
