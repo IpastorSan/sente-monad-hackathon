@@ -2,9 +2,11 @@
  * A fake Privy that ENFORCES, for the refusal demo's spec: served through a
  * fake `fetch` to the real `PrivyClient`, it
  *
- * - checks every `privy-authorization-signature` against the quorum that owns
- *   the resource (a policy PATCH needs the mandate-owner key, a sign needs the
- *   agent key), answering 401 as Privy does when none verifies;
+ * - checks every `privy-authorization-signature` against the quorum that may
+ *   authorize the resource: a policy PATCH or a wallet PATCH needs the
+ *   mandate-owner key (the OWNER), a sign needs the agent key (a SIGNER,
+ *   SEN-31), answering 401 as Privy does when none verifies. A signer key
+ *   cannot PATCH the wallet;
  * - evaluates the wallet's compiled ALLOW rules on `eth_signTransaction` —
  *   `to`, `chain_id`, `value`, decoded calldata (`eq`, `lte`, function name)
  *   and `system.current_unix_timestamp` — and answers 400 `policy_violation`
@@ -143,9 +145,13 @@ export function fakeEnclave(options: FakeEnclaveOptions) {
     ['kq-owner', [options.ownerKey.publicKey]],
   ]);
   const policies = new Map<string, { ownerId: string; rules: readonly PolicyRule[] }>();
+  interface WalletSigner {
+    signerId: string;
+    overridePolicyIds: string[];
+  }
   const wallets = new Map<
     string,
-    { ownerId: string; policyIds: string[]; account: PrivateKeyAccount }
+    { ownerId: string; policyIds: string[]; signers: WalletSigner[]; account: PrivateKeyAccount }
   >();
   const requests: EnclaveRequest[] = [];
   let seq = 0;
@@ -191,10 +197,23 @@ export function fakeEnclave(options: FakeEnclaveOptions) {
       const id = `wal-${seq}`;
       const account = privateKeyToAccount(generatePrivateKey());
       const policyIds = body['policy_ids'] as string[];
-      wallets.set(id, { ownerId: String(body['owner_id']), policyIds, account });
+      const signers = ((body['additional_signers'] as
+        | { signer_id: string; override_policy_ids: string[] }[]
+        | undefined) ?? []).map((s) => ({
+        signerId: s.signer_id,
+        overridePolicyIds: s.override_policy_ids ?? [],
+      }));
+      wallets.set(id, { ownerId: String(body['owner_id']), policyIds, signers, account });
       return {
         status: 200,
-        body: { id, address: account.address, chain_type: 'ethereum', policy_ids: policyIds },
+        body: {
+          id,
+          address: account.address,
+          chain_type: 'ethereum',
+          policy_ids: policyIds,
+          owner_id: body['owner_id'],
+          additional_signers: body['additional_signers'] ?? [],
+        },
       };
     }
     const policyMatch = /^\/v1\/policies\/([^/]+)$/.exec(path);
@@ -207,16 +226,38 @@ export function fakeEnclave(options: FakeEnclaveOptions) {
       policies.set(policyMatch[1]!, { ...policy, rules: body['rules'] as PolicyRule[] });
       return { status: 200, body: { id: policyMatch[1], ...body } };
     }
-    const rpcMatch = /^\/v1\/wallets\/([^/]+)\/rpc$/.exec(path);
-    if (method === 'POST' && rpcMatch) {
-      const wallet = wallets.get(rpcMatch[1]!);
+    const walletMatch = /^\/v1\/wallets\/([^/]+)$/.exec(path);
+    if (method === 'PATCH' && walletMatch) {
+      // SEN-31: only the wallet OWNER may change it; a signer key alone → 401.
+      const wallet = wallets.get(walletMatch[1]!);
       if (!wallet) return { status: 404, body: { error: 'not found' } };
       if (!authorized(wallet.ownerId, method, url, body, headers)) {
         return { status: 401, body: { error: 'No valid authorization signatures' } };
       }
+      if ('policy_ids' in body) wallet.policyIds = body['policy_ids'] as string[];
+      if ('owner_id' in body) wallet.ownerId = String(body['owner_id']);
+      if ('additional_signers' in body) {
+        wallet.signers = (
+          body['additional_signers'] as { signer_id: string; override_policy_ids: string[] }[]
+        ).map((s) => ({ signerId: s.signer_id, overridePolicyIds: s.override_policy_ids ?? [] }));
+      }
+      return { status: 200, body: { id: walletMatch[1], ...body } };
+    }
+    const rpcMatch = /^\/v1\/wallets\/([^/]+)\/rpc$/.exec(path);
+    if (method === 'POST' && rpcMatch) {
+      const wallet = wallets.get(rpcMatch[1]!);
+      if (!wallet) return { status: 404, body: { error: 'not found' } };
+      // A sign is authorized by a SIGNER (evaluated against its override
+      // policy) or by the owner (evaluated against the wallet's own policies).
+      const signer = wallet.signers.find((s) => authorized(s.signerId, method, url, body, headers));
+      const byOwner = !signer && authorized(wallet.ownerId, method, url, body, headers);
+      if (!signer && !byOwner) {
+        return { status: 401, body: { error: 'No valid authorization signatures' } };
+      }
       if (body['method'] !== 'eth_signTransaction') return { status: 400, body: POLICY_VIOLATION };
       const tx = (body['params'] as { transaction: FakeTx }).transaction;
-      const rules = wallet.policyIds.flatMap((id) => policies.get(id)?.rules ?? []);
+      const effectivePolicyIds = signer ? signer.overridePolicyIds : wallet.policyIds;
+      const rules = effectivePolicyIds.flatMap((id) => policies.get(id)?.rules ?? []);
       if (!allows(rules, tx, now())) return { status: 400, body: POLICY_VIOLATION };
       const signed = await wallet.account.signTransaction({
         type: 'eip1559',

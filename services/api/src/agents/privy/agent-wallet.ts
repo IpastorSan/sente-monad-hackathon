@@ -24,6 +24,11 @@ import {
 import type { AuthorizationKey } from './authorization-key.ts';
 import type { PrivyClient } from './privy.client.ts';
 
+export interface WalletSigner {
+  signer_id: string;
+  override_policy_ids: string[];
+}
+
 export interface AgentWallet {
   /** Privy's wallet id. What `/rpc` is addressed to. */
   id: string;
@@ -31,25 +36,50 @@ export interface AgentWallet {
   address: string;
   chain_type: string;
   policy_ids: string[];
+  /** The OWNER quorum — the mandate quorum, NOT the trading key (SEN-31). */
   owner_id: string | null;
+  /** The trading key sits here, as a SIGNER, never the owner (SEN-31). */
+  additional_signers?: WalletSigner[];
 }
 
 /**
- * Create an agent wallet: owned by the agent quorum, governed by the mandate
- * policy.
+ * Create an agent wallet in the owner=mandate / signer=agent shape (SEN-31).
  *
- * Both are set at creation on purpose. A wallet created bare and patched
+ * The wallet is OWNED by the mandate quorum, has the mandate policy attached,
+ * and names the agent (trading) quorum as an `additional_signers` entry whose
+ * `override_policy_ids` is that same mandate policy. So the trading key can
+ * sign only what the mandate allows and — verified live on 10143, 2026-09-13 —
+ * gets 401 on any `PATCH /v1/wallets/{id}` (policy_ids, owner_id or
+ * additional_signers). A Privy signer "cannot update a wallet's owner, signers,
+ * or policies"; only the owner can. That is what makes "the key that trades can
+ * never raise its own limit" true: before SEN-31 the trading key OWNED the
+ * wallet and could detach its own policy.
+ *
+ * The override is always the mandate policy, never empty: a signer is evaluated
+ * ONLY against its override, and an empty override is an unrestricted signer.
+ *
+ * Everything is set at creation on purpose. A wallet created bare and patched
  * afterwards is briefly a wallet with no owner and no policy — and a policy of
  * none is not "deny": it is no policy at all.
  */
 export async function createAgentWallet(
   privy: PrivyClient,
-  options: { ownerQuorumId: string; policyId: string; displayName: string },
+  options: {
+    /** The mandate/owner quorum. Owns the wallet; the only party that may PATCH it. */
+    ownerQuorumId: string;
+    /** The agent (trading) quorum. Added as an additional signer, never the owner. */
+    signerQuorumId: string;
+    policyId: string;
+    displayName: string;
+  },
 ): Promise<AgentWallet> {
   return privy.post<AgentWallet>('/v1/wallets', {
     chain_type: 'ethereum',
     owner_id: options.ownerQuorumId,
     policy_ids: [options.policyId],
+    additional_signers: [
+      { signer_id: options.signerQuorumId, override_policy_ids: [options.policyId] },
+    ],
     display_name: options.displayName.slice(0, 50),
   });
 }
@@ -111,11 +141,12 @@ interface SignTransactionResponse {
 /**
  * Have the wallet sign a transaction, if the mandate policy allows it.
  *
- * `approvals` must satisfy the wallet's owner quorum (the agent key). Throws
- * `PrivyError` with `status: 400` and `code: policy_violation` when the policy
- * refuses, and `401` when the approvals are short. Those are different
- * failures — the mandate saying no, versus nobody having asked — and are
- * deliberately not collapsed.
+ * `approvals` must satisfy the wallet's agent SIGNER quorum (the agent key),
+ * and the transaction is evaluated against that signer's override policy — the
+ * mandate (SEN-31). Throws `PrivyError` with `status: 400` and
+ * `code: policy_violation` when the policy refuses, and `401` when the
+ * approvals are short. Those are different failures — the mandate saying no,
+ * versus nobody having asked — and are deliberately not collapsed.
  */
 export async function signTransaction(
   privy: PrivyClient,

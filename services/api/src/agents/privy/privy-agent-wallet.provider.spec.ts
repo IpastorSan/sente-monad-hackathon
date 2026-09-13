@@ -3,8 +3,10 @@ import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
 import { UnconfiguredAgentWalletProvider } from '../agent-wallet.provider';
 import { AgentWalletsUnconfiguredError, EnclaveRefusedError } from '../agents.errors';
-import { privyTransaction } from './agent-wallet';
+import { createAgentWallet, privyTransaction } from './agent-wallet';
 import { generateAuthorizationKey } from './authorization-key';
+import { createKeyQuorum } from './key-quorum';
+import { createPolicy } from './policies';
 import { PrivyAgentWalletProvider } from './privy-agent-wallet.provider';
 import { PrivyClient, PrivyError } from './privy.client';
 import {
@@ -87,7 +89,7 @@ describe('PrivyAgentWalletProvider', () => {
     expect(RULES.every((rule) => rule.action === 'ALLOW')).toBe(true);
   });
 
-  it('provisions: agent quorum owns the wallet, mandate-owner quorum owns the policy', async () => {
+  it('provisions: mandate-owner quorum owns the wallet AND the policy; agent quorum is only a signer', async () => {
     const { provider, calls, created } = setup();
     const wallet = await provider.provision({ rules: RULES, displayName: 'agent-1' });
 
@@ -95,7 +97,14 @@ describe('PrivyAgentWalletProvider', () => {
     expect(agentQuorum!.body).toMatchObject({ public_keys: [agentKey.publicKey] });
     expect(ownerQuorum!.body).toMatchObject({ public_keys: [mandateOwnerKey.publicKey] });
     expect(policy!.body).toMatchObject({ owner_id: 'kq2', rules: RULES, chain_type: 'ethereum' });
-    expect(walletCall!.body).toMatchObject({ owner_id: 'kq1', policy_ids: ['pol3'] });
+    // SEN-31: the wallet OWNER is the mandate quorum (kq2), not the agent
+    // quorum (kq1); the agent quorum is an additional signer whose override is
+    // the mandate policy. So the trading key can sign but cannot PATCH.
+    expect(walletCall!.body).toMatchObject({
+      owner_id: 'kq2',
+      policy_ids: ['pol3'],
+      additional_signers: [{ signer_id: 'kq1', override_policy_ids: ['pol3'] }],
+    });
     // Creation needs no owner signature; only mutations of owned resources do.
     expect(calls.map(signedBy)).toEqual(['none', 'none', 'none', 'none']);
 
@@ -105,6 +114,45 @@ describe('PrivyAgentWalletProvider', () => {
       policyId: 'pol3',
     });
     expect(created).toEqual([{ agentQuorumId: 'kq1', mandateQuorumId: 'kq2' }]);
+  });
+
+  it('the fake enforces the SEN-31 owner/signer split: a signer-key wallet PATCH is refused, the owner-key one is not', async () => {
+    const fake = fakePrivy();
+    const client = new PrivyClient({
+      appId: FAKE_APP_ID,
+      appSecret: FAKE_APP_SECRET,
+      fetch: fake.fetch,
+    });
+    const owner = await createKeyQuorum(client, {
+      displayName: 'owner',
+      threshold: 1,
+      publicKeys: [mandateOwnerKey.publicKey],
+    });
+    const signer = await createKeyQuorum(client, {
+      displayName: 'signer',
+      threshold: 1,
+      publicKeys: [agentKey.publicKey],
+    });
+    const policy = await createPolicy(client, { name: 'm', rules: RULES, ownerQuorumId: owner.id });
+    const wallet = await createAgentWallet(client, {
+      ownerQuorumId: owner.id,
+      signerQuorumId: signer.id,
+      policyId: policy.id,
+      displayName: 'w',
+    });
+    expect(wallet.additional_signers).toEqual([
+      { signer_id: signer.id, override_policy_ids: [policy.id] },
+    ]);
+
+    // The agent (signer) key alone cannot detach the policy — Privy answers 401.
+    await expect(
+      client.patch(`/v1/wallets/${wallet.id}`, { policy_ids: [] }, { approvals: [agentKey] }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    // The mandate-owner key can.
+    await expect(
+      client.patch(`/v1/wallets/${wallet.id}`, { policy_ids: [] }, { approvals: [mandateOwnerKey] }),
+    ).resolves.toMatchObject({ policy_ids: [] });
   });
 
   it('creates the quorums once, and reuses pinned ones without creating any', async () => {

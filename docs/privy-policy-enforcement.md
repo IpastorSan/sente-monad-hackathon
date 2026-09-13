@@ -272,12 +272,83 @@ Refusals all read `"RPC request denied due to policy violation"`, code
    and 7c's amendment bit on the first try at 336 ms. So propagation is usually
    sub-second but not guaranteed immediate: **do not promise a revocation is
    instant; treat it as effective after a few seconds.**
-8. **The owner split holds, enforced by Privy.** The agent key, which owns the
-   wallet, gets a 401 on the policy; only the mandate-owner key can change it.
+8. **The policy owner split holds — but owning the wallet was itself the hole
+   (SEN-31).** The agent key gets a 401 editing the _policy_; only the
+   mandate-owner key can. That much is real. What this run missed is that the
+   agent key also **owned the wallet**, and a Privy wallet owner can `PATCH
+   /v1/wallets/{id}` to set `policy_ids: []`, swap in a permissive policy, add an
+   unrestricted `additional_signers` entry, or change `owner_id` — none of which
+   touches the policy, so all of them slipped past the 401 above. Verified live
+   2026-09-13: an agent-owned wallet detached its own mandate and the previously
+   refused transaction then signed. **The fix is the owner/signer model below:**
+   the trading key is a wallet _signer_, never the owner, and a signer cannot
+   PATCH the wallet at all. Do not cite this finding as proof the mandate holds;
+   cite the next section.
 9. Signatures are real: every signed transaction parsed to chain 10143 with the
    requested `to` and recovered to the wallet's address; typed-data signatures
    recovered to the wallet. Nonce, gas and fees were filled from Monad RPC as
    `0x` hex.
+
+## Owner/signer model — verified (SEN-31, 2026-09-13)
+
+Finding 8 above was the hole under the whole pitch. Until SEN-31 the agent
+(trading) key **owned** each wallet, and a Privy wallet owner can rewrite the
+wallet — so "the key that trades can never raise its own limit" was **false**.
+The fix makes the trading key a **signer**, never the owner:
+
+- the wallet is **owned by the mandate quorum** (`PRIVY_MANDATE_QUORUM_ID`,
+  key `PRIVY_MANDATE_OWNER_KEY`), with the mandate policy attached;
+- the **agent quorum** (`PRIVY_AGENT_QUORUM_ID`, key `PRIVY_AGENT_AUTH_KEY`) is
+  an `additional_signers` entry whose `override_policy_ids` is that same mandate
+  policy. A signer is evaluated **only** against its override, so the override is
+  always the mandate policy, never empty (an empty override is an unrestricted
+  signer).
+
+Per Privy's docs a signer "cannot update a wallet's owner, signers, or
+policies"; only the owner can. Confirmed live on Monad testnet 10143 by
+`services/api/scripts/sen31-signer-probe.ts` (sign-only, nonce 1,000,000, never
+broadcast, `sente-sen31-probe-*` resources only):
+
+| #   | Check                                                                             | Expected                | Got                           |
+| --- | --------------------------------------------------------------------------------- | ----------------------- | ----------------------------- |
+| a   | the agent SIGNER signs an ALLOWED `eth_signTransaction` (to allowlisted, 10143)    | signed                  | **SIGNED**, parsed to 10143   |
+| b   | the agent SIGNER signs a NOT-allowed one                                           | refused                 | **refused `policy_violation`** (400) |
+| c1  | agent SIGNER `PATCH /v1/wallets/{id}` `{policy_ids: []}` (detach)                  | 401                     | **401 `invalid_data`**        |
+| c2  | agent SIGNER `PATCH` `{owner_id: <attacker quorum>}`                               | 401                     | **401 `invalid_data`**        |
+| c3  | agent SIGNER `PATCH` `{additional_signers: [{attacker, override: permissive}]}`    | 401                     | **401 `invalid_data`**        |
+| d   | the OWNER (mandate) key `PATCH /v1/wallets/{id}` `{policy_ids: []}`                | ok                      | **200** (then restored)       |
+
+After each refused (c) attempt the wallet still refused the not-allowed
+transaction, and the read-back showed `policy_ids`, `owner_id` and
+`additional_signers` unchanged. So the agent signer trades within the mandate
+and can change **nothing** about the wallet; only the owner can. `DESIGN OK`.
+
+### Migration of the existing wallets
+
+`services/api/scripts/migrate-agent-wallets.ts` PATCHes each wallet named in
+`.env` (while the agent key is still owner, so it can) into the owner=mandate /
+signer=agent shape, idempotently (a wallet already owned by the mandate quorum is
+skipped). Run 2026-09-13, both moved and then verified sign-only that the agent
+key can no longer detach the policy (`PATCH {policy_ids: []}` by the agent key →
+401, policy still attached):
+
+| `.env` var                     | wallet id                  | owner before → after                | result   | detach by agent key |
+| ------------------------------ | -------------------------- | ----------------------------------- | -------- | ------------------- |
+| `PRIVY_AGENT_VENUES_WALLET_ID` | `qqhg4rxobx0qnjg398tjzgi9` | agent quorum → **mandate quorum**   | migrated | **401, refused**    |
+| `PRIVY_PROBE_WALLET_ID`        | `j1vvfuszwb4vzw2z3gb613oh` | agent quorum → **mandate quorum**   | migrated | **401, refused**    |
+
+The agent quorum is now an `additional_signers` entry on each, its
+`override_policy_ids` the wallet's own mandate policy
+(`PRIVY_AGENT_VENUES_POLICY_ID` / `PRIVY_PROBE_POLICY_ID`).
+
+### Demo re-verified against the migrated wallet
+
+`demo:refusal --mode scripted` was rerun live on the migrated
+`PRIVY_AGENT_VENUES_WALLET_ID` (2026-09-13): **all 24 checks passed**. Act 4
+still shows a _policy_ PATCH signed by the agent key alone refused with 401, the
+owner-signed amend raising the cap, and the agent _signer_ then signing and
+landing the 2 USDC deposit on chain (nonces 20→22, both receipts `success`). The
+signer model changes nothing the demo depends on except closing the detach hole.
 
 ### The JSON that worked
 

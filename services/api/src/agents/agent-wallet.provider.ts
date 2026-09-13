@@ -34,8 +34,10 @@ export interface ProvisionedAgentWallet {
  *   transaction; nothing is ever broadcast from here.
  * - A policy refusal throws `EnclaveRefusedError` (`agents.errors.ts`) and
  *   nothing else does — callers branch on it.
- * - `updatePolicy` is authorised by a DIFFERENT key from the one that signs
- *   trades, so the key that spends can never raise its own limit.
+ * - `updatePolicy` is authorised by the mandate-owner key, a DIFFERENT key from
+ *   the one that signs trades. The trading key is only a wallet SIGNER (SEN-31),
+ *   never the owner, so it can neither change the policy nor PATCH the wallet to
+ *   detach it: the key that spends can never raise its own limit.
  */
 export interface AgentWalletProvider {
   /** Human-readable, for logs. */

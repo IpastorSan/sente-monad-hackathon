@@ -37,15 +37,67 @@ export function signatureVerifies(
 }
 
 /**
+ * Which of `publicKeys` (base64 SPKI) signed this request, if any? Reconstructs
+ * the payload Privy signs — same URL, same body, only the `privy-` headers —
+ * from the captured request, then checks every comma-joined signature against
+ * every candidate key. Used to enforce owner-only wallet mutation (SEN-31).
+ */
+export function requestSignedByAny(
+  request: CapturedRequest,
+  publicKeys: readonly string[],
+): boolean {
+  const header = request.headers['privy-authorization-signature'];
+  if (!header || publicKeys.length === 0) return false;
+  const privyHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(request.headers)) {
+    if (k.toLowerCase().startsWith('privy-') && k.toLowerCase() !== 'privy-authorization-signature') {
+      privyHeaders[k] = v;
+    }
+  }
+  const payload: AuthorizationPayload = {
+    version: 1,
+    method: request.method as AuthorizationPayload['method'],
+    url: request.url,
+    body: request.body ?? {},
+    headers: privyHeaders,
+  };
+  const signatures = header.split(',');
+  return publicKeys.some((key) =>
+    signatures.some((signature) => {
+      try {
+        return signatureVerifies(key, payload, signature);
+      } catch {
+        return false;
+      }
+    }),
+  );
+}
+
+interface FakeWallet {
+  id: string;
+  address: string;
+  chain_type: string;
+  policy_ids: unknown;
+  owner_id: unknown;
+  additional_signers: unknown;
+}
+
+/**
  * A stand-in for Privy's REST API, served through a fake `fetch`. Records every
  * request verbatim so a spec can check that what was signed is what was sent.
  *
  * Default routes cover what the provider calls: quorums, policies, wallets and
- * the wallet `/rpc`. `handle` runs first and may answer anything itself —
- * that is how a spec makes the enclave refuse.
+ * the wallet `/rpc`. It also models the SEN-31 owner/signer split: it remembers
+ * each quorum's public keys and each wallet's owner, and a `PATCH
+ * /v1/wallets/{id}` is honoured only when signed by the wallet's OWNER quorum —
+ * a signer key alone gets 401, exactly as Privy answers live. `handle` runs
+ * first and may answer anything itself — that is how a spec makes the enclave
+ * refuse.
  */
 export function fakePrivy(handle: Handler = () => undefined) {
   const calls: CapturedRequest[] = [];
+  const quorums = new Map<string, string[]>(); // quorum id -> public keys
+  const wallets = new Map<string, FakeWallet>();
   let seq = 0;
 
   const fetch = ((url: string | URL | Request, init?: RequestInit) => {
@@ -68,7 +120,12 @@ export function fakePrivy(handle: Handler = () => undefined) {
     const body = (request.body ?? {}) as Record<string, unknown>;
     seq += 1;
     if (request.method === 'POST' && path === '/v1/key_quorums') {
-      return { status: 200, body: { id: `kq${seq}`, ...body } };
+      const id = `kq${seq}`;
+      const publicKeys = Array.isArray(body['public_keys'])
+        ? (body['public_keys'] as string[])
+        : [];
+      quorums.set(id, publicKeys);
+      return { status: 200, body: { id, ...body } };
     }
     if (request.method === 'POST' && path === '/v1/policies') {
       return { status: 200, body: { id: `pol${seq}`, ...body } };
@@ -77,20 +134,45 @@ export function fakePrivy(handle: Handler = () => undefined) {
       return { status: 200, body: { id: path.split('/').pop(), ...body } };
     }
     if (request.method === 'POST' && path === '/v1/wallets') {
-      return {
-        status: 200,
-        body: {
-          id: `w${seq}`,
-          // Lowercase on purpose: the provider must checksum what it returns.
-          address: '0x3de96375140717193f52c220df5ec460971cbe84',
-          chain_type: 'ethereum',
-          policy_ids: body['policy_ids'],
-          owner_id: body['owner_id'],
-        },
+      const wallet: FakeWallet = {
+        id: `w${seq}`,
+        // Lowercase on purpose: the provider must checksum what it returns.
+        address: '0x3de96375140717193f52c220df5ec460971cbe84',
+        chain_type: 'ethereum',
+        policy_ids: body['policy_ids'],
+        owner_id: body['owner_id'],
+        additional_signers: body['additional_signers'] ?? [],
       };
+      wallets.set(wallet.id, wallet);
+      return { status: 200, body: wallet };
+    }
+    if (request.method === 'PATCH' && /^\/v1\/wallets\/[^/]+$/.test(path)) {
+      // The SEN-31 rule: only the wallet's OWNER quorum may change its
+      // policy_ids, owner_id or additional_signers. A signer key alone → 401,
+      // exactly as Privy answers live.
+      const id = path.split('/').pop()!;
+      const wallet = wallets.get(id);
+      if (!wallet) return { status: 404, body: { error: 'not found' } };
+      const ownerKeys = quorums.get(String(wallet.owner_id)) ?? [];
+      if (!requestSignedByAny(request, ownerKeys)) {
+        return {
+          status: 401,
+          body: {
+            error: 'No valid authorization signatures were provided.',
+            code: 'invalid_data',
+          },
+        };
+      }
+      if ('policy_ids' in body) wallet.policy_ids = body['policy_ids'];
+      if ('owner_id' in body) wallet.owner_id = body['owner_id'];
+      if ('additional_signers' in body) wallet.additional_signers = body['additional_signers'];
+      return { status: 200, body: wallet };
     }
     if (request.method === 'GET' && /^\/v1\/wallets\/[^/]+$/.test(path)) {
-      return { status: 200, body: { id: path.split('/').pop(), chain_type: 'ethereum' } };
+      const id = path.split('/').pop()!;
+      const wallet = wallets.get(id);
+      if (wallet) return { status: 200, body: wallet };
+      return { status: 200, body: { id, chain_type: 'ethereum' } };
     }
     if (request.method === 'POST' && /^\/v1\/wallets\/[^/]+\/rpc$/.test(path)) {
       if (body['method'] === 'eth_signTypedData_v4') {
