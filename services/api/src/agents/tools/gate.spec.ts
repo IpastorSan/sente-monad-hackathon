@@ -522,3 +522,95 @@ describe('gate', () => {
     expect(Object.values(mandate.raw.kuru.maxDepositAtoms)).toEqual(['1000000000']);
   });
 });
+
+describe('venue pre-flight (SEN-19)', () => {
+  const minMarket = {
+    symbol: MON_USDC,
+    kind: 'spot' as const,
+    base: 'MON',
+    quote: 'USDC',
+    tickSize: '0.00001',
+    stepSize: '0.00000001',
+    minSize: '0.00000001',
+    minNotional: '10',
+  };
+
+  it('refuses a deposit larger than the wallet holds, and signs nothing', async () => {
+    const h = await harness();
+    await h.thesis();
+    h.kuru.wallet = [{ asset: 'USDC', available: '6', locked: '0', total: '6' }];
+
+    const outcome = refused(await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '10' }));
+
+    expect(outcome.refusal).toEqual({ layer: 'sente', code: 'insufficient_balance' });
+    expect(outcome.message).toContain('Your wallet holds 6 USDC');
+    expect(h.kuru.writes()).toHaveLength(0);
+  });
+
+  it('refuses a Kuru buy that AccountCore cannot back, pointing at deposit', async () => {
+    const h = await harness();
+    await h.thesis();
+    h.kuru.balances = [{ asset: 'USDC', available: '0', locked: '0', total: '0' }];
+
+    const outcome = refused(await h.call('place_limit', limit()));
+
+    expect(outcome.refusal).toEqual({ layer: 'sente', code: 'insufficient_balance' });
+    expect(outcome.message).toContain('Deposit first');
+    expect(h.kuru.writes()).toHaveLength(0);
+  });
+
+  it('refuses a Kuru sell that AccountCore holds too little base for', async () => {
+    const h = await harness();
+    await h.thesis();
+    h.kuru.balances = [{ asset: 'MON', available: '2', locked: '0', total: '2' }];
+
+    const outcome = refused(await h.call('place_limit', limit({ side: 'sell', size: '5' })));
+
+    expect(outcome.refusal?.code).toBe('insufficient_balance');
+    expect(h.kuru.writes()).toHaveLength(0);
+  });
+
+  it("refuses an order below Kuru's minimum notional", async () => {
+    const h = await harness();
+    await h.thesis();
+    h.kuru.markets = [minMarket];
+
+    const outcome = refused(await h.call('place_limit', limit({ size: '1', price: '3.5' })));
+
+    expect(outcome.refusal).toEqual({ layer: 'sente', code: 'below_min_notional' });
+    expect(outcome.message).toContain('minimum order on');
+    expect(h.kuru.writes()).toHaveLength(0);
+  });
+
+  it('lets a backed order at or above the minimum through', async () => {
+    const h = await harness();
+    await h.thesis();
+    h.kuru.markets = [minMarket];
+
+    expect((await h.call('place_limit', limit({ size: '3', price: '3.5' }))).ok).toBe(true);
+    expect(h.kuru.writes().map((w) => w.method)).toEqual(['placeLimit']);
+  });
+
+  it('does not run with the pre-check off, so the enclave demo still reaches the enclave', async () => {
+    const h = await harness({ precheck: false });
+    await h.thesis();
+    h.kuru.wallet = [{ asset: 'USDC', available: '0', locked: '0', total: '0' }];
+    h.kuru.balances = [];
+
+    expect((await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '1' })).ok).toBe(true);
+    expect((await h.call('place_limit', limit())).ok).toBe(true);
+    expect(h.kuru.writes().map((w) => w.method)).toEqual(['deposit', 'placeLimit']);
+  });
+
+  it('shows the wallet next to AccountCore in get_balances', async () => {
+    const h = await harness();
+    h.kuru.wallet = [{ asset: 'USDC', available: '6', locked: '0', total: '6' }];
+
+    const outcome = await h.call('get_balances', { venue: 'kuru' });
+
+    expect(outcome.ok).toBe(true);
+    const [kuru] = (outcome as { result: unknown[] }).result as Array<Record<string, unknown>>;
+    expect(kuru).toMatchObject({ venue: 'kuru', available: true });
+    expect(kuru.wallet).toEqual([{ asset: 'USDC', available: '6', locked: '0', total: '6' }]);
+  });
+});

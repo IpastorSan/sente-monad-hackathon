@@ -365,7 +365,10 @@ export class AgentRunnerService {
     };
 
     const kuru = mandate.venues.includes('kuru');
-    const perpl = mandate.venues.includes('perpl');
+    // Only read Perpl when this process has the agent's Perpl key (SEN-19): the
+    // mandate may allow Perpl before the wallet has enrolled one.
+    const perplAllowed = mandate.venues.includes('perpl');
+    const perpl = perplAllowed && Boolean(await ctx.venues().then((v) => v.perpl, () => undefined));
     const kuruMarkets = kuru
       ? mandate.kuru.markets.flatMap((address) => {
           const market = KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, address));
@@ -388,6 +391,7 @@ export class AgentRunnerService {
 
     return {
       balances,
+      ...(perplAllowed && !perpl ? { perpl: 'not set up for this agent yet (no enrolled API key)' } : {}),
       ...(perpl ? { positions } : {}),
       openOrders: {
         ...(kuru ? { kuru: kuruOrders } : {}),

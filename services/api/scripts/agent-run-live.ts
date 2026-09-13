@@ -12,6 +12,9 @@
 //   1. Boots the compiled API (dist/app.module.js) as an application context:
 //      the same providers `node dist/main.js` wires, no HTTP. The scheduler is
 //      forced off (AGENT_TICK_SECONDS is cleared).
+//   0. Fund the probe wallet first (SEN-19): at least 12 USDC in its WALLET and
+//      0.15 MON for gas — Kuru's MON-USDC minimum order is 10 USDC, e.g.
+//      pnpm --filter @sente/api run agent:fund -- --to <address> --usdc 12 --mon 0.15
 //   2. Reuses the FUNDED SEN-6 probe wallet (PRIVY_AGENT_VENUES_*: 12 USDC in
 //      Kuru AccountCore, AUSD in Perpl account 505). Re-PATCHes its policy
 //      with this script's small mandate — Kuru MON-USDC and Perpl BTC-PERP,
@@ -42,9 +45,10 @@ import { envFileFromArgs } from './env-file.ts';
 const USER_ID = 'sente-live-runner';
 const DEFAULT_MODEL = 'anthropic/claude-sonnet-5';
 const DEFAULT_INSTRUCTION =
-  'Live check. Record a thesis for MON-USDC on Kuru. Then place exactly ONE GTC buy limit ' +
-  'order on Kuru MON-USDC at about half the best bid, sized to a notional of about 5 USDC, so ' +
-  'it rests without filling. Then cancel that order and end your turn. Do nothing else.';
+  'Live check. Record a thesis for MON-USDC on Kuru. Deposit 11 USDC from your wallet into your ' +
+  'Kuru account. Then place exactly ONE GTC buy limit order on Kuru MON-USDC at about half the ' +
+  "best bid, sized to a notional of about 10.5 USDC (Kuru's minimum on this market is 10 USDC), " +
+  'so it rests without filling. Then cancel that order and end your turn. Do nothing else.';
 /** Privy applies a policy PATCH asynchronously (SEN-3 run 5). */
 const PATCH_SETTLE_MS = 5_000;
 const DAY = 86_400;

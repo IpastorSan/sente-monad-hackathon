@@ -10,7 +10,7 @@
  *   gated.
  * - `intent`: what `checkIntent` (layer 1) judges.
  */
-import { type Intent, type Mandate } from '@sente/mandate';
+import { compareDecimal, type Intent, type Mandate } from '@sente/mandate';
 import type { Decimal, Side } from '@sente/venues';
 import {
   fromUnits,
@@ -27,7 +27,7 @@ import { toMandateDto } from '../dto/agent.dto';
 import type { AgentRecord } from '../store/agent-store';
 import type { KuruToolVenue, ToolContext, ToolVenues } from './context';
 import { isPositiveDecimal, maxDecimal, mulDecimal } from './decimal';
-import { invalidInput } from './refusals';
+import { invalidInput, SenteRefusal } from './refusals';
 
 export type ToolKind = 'read' | 'write';
 
@@ -149,6 +149,41 @@ function orderIntent(
     notional,
     ...(args.leverage !== undefined ? { leverage: args.leverage } : {}),
   };
+}
+
+/**
+ * Venue pre-flight for a Kuru order (SEN-19), run only with the pre-check on so
+ * the enclave demo still reaches the enclave. Refuses what must revert anyway:
+ * below the market's minimum notional, or more than AccountCore can back (a
+ * buy locks quote at size x price; a sell locks base). On Monad a revert pays
+ * the whole gas limit, so these checks save real MON.
+ */
+async function kuruOrderPreflight(
+  kuru: KuruToolVenue,
+  args: { market: string; side: Side; size: Decimal },
+  price: Decimal,
+): Promise<void> {
+  const market = kuru.market(args.market);
+  const notional = mulDecimal(args.size, price);
+  const listed = (await kuru.getMarkets()).find((m) => m.symbol === args.market);
+  if (listed?.minNotional && compareDecimal(notional, listed.minNotional) < 0) {
+    throw new SenteRefusal(
+      'below_min_notional',
+      `Kuru's minimum order on ${args.market} is ${listed.minNotional} ${market.quote.symbol}; ` +
+        `this one is ${notional}. Size it up, and make sure AccountCore can back it.`,
+    );
+  }
+  const asset = args.side === 'buy' ? market.quote.symbol : market.base.symbol;
+  const needed = args.side === 'buy' ? notional : args.size;
+  const available = (await kuru.getBalances()).find((b) => b.asset === asset)?.available ?? '0';
+  if (compareDecimal(available, needed) < 0) {
+    throw new SenteRefusal(
+      'insufficient_balance',
+      `Your Kuru AccountCore has ${available} ${asset} available; this order needs ${needed}. ` +
+        'Deposit first with the deposit tool (get_balances shows what your wallet holds). ' +
+        'Nothing was signed.',
+    );
+  }
 }
 
 function spotOnlyChecks(args: {
@@ -308,8 +343,9 @@ const getBalances = defineTool({
   name: 'get_balances',
   kind: 'read',
   description:
-    'Your balances at each venue: Kuru AccountCore balances (available and locked by resting ' +
-    'orders) and Perpl collateral.',
+    'Your balances at each venue. Kuru: `balances` is your AccountCore account (available, and ' +
+    'locked by resting orders), which is what orders use; `wallet` is what your wallet holds, ' +
+    'which you can move into AccountCore with the deposit tool. Perpl: collateral.',
   input: z.strictObject({ venue: venue.optional() }),
   async handler(ctx, args) {
     const venues = await ctx.venues();
@@ -318,6 +354,13 @@ const getBalances = defineTool({
       ids.map(async (id) => {
         const v = id === 'kuru' ? venues.kuru : venues.perpl;
         if (!v) return { venue: id, available: false, reason: 'Perpl is not set up yet' };
+        if (id === 'kuru') {
+          const [balances, wallet] = await Promise.all([
+            venues.kuru.getBalances(),
+            venues.kuru.walletBalances(),
+          ]);
+          return { venue: id, available: true, balances, wallet };
+        }
         return { venue: id, available: true, balances: await v.getBalances() };
       }),
     );
@@ -413,7 +456,10 @@ const placeLimit = defineTool({
       reduceOnly: args.reduceOnly,
       clientOrderId: args.clientOrderId,
     };
-    if (args.venue === 'kuru') return venues.kuru.placeLimit(request);
+    if (args.venue === 'kuru') {
+      if (ctx.precheck) await kuruOrderPreflight(venues.kuru, args, args.price);
+      return venues.kuru.placeLimit(request);
+    }
     const perpl = requirePerpl(venues);
     if (args.leverage !== undefined) {
       await perpl.setLeverage({ symbol: args.market, leverage: args.leverage });
@@ -457,7 +503,10 @@ const placeMarket = defineTool({
       reduceOnly: args.reduceOnly,
       clientOrderId: args.clientOrderId,
     };
-    if (args.venue === 'kuru') return venues.kuru.placeMarket(request);
+    if (args.venue === 'kuru') {
+      if (ctx.precheck) await kuruOrderPreflight(venues.kuru, args, args.slippageLimitPrice);
+      return venues.kuru.placeMarket(request);
+    }
     const perpl = requirePerpl(venues);
     if (args.leverage !== undefined) {
       await perpl.setLeverage({ symbol: args.market, leverage: args.leverage });
@@ -496,6 +545,16 @@ const deposit = defineTool({
     const { kuru } = await ctx.venues();
     const token = depositToken(kuru, args);
     atoms(args.amount, token); // precision, before anything is signed
+    if (ctx.precheck) {
+      const held = (await kuru.walletBalances()).find((b) => b.asset === token.symbol)?.available;
+      if (compareDecimal(held ?? '0', args.amount) < 0) {
+        throw new SenteRefusal(
+          'insufficient_balance',
+          `Your wallet holds ${held ?? '0'} ${token.symbol}; you can deposit at most that. ` +
+            'Nothing was signed.',
+        );
+      }
+    }
     const execution = await kuru.deposit(token.symbol, args.amount);
     return {
       deposited: args.amount,
