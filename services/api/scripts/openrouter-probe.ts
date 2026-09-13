@@ -102,8 +102,9 @@ interface TargetResult {
 
 async function main(): Promise<number> {
   const managementKey = process.env['OPENROUTER_MANAGEMENT_KEY']?.trim();
-  if (!managementKey) {
-    console.log('pending credentials: OPENROUTER_MANAGEMENT_KEY not set');
+  const sharedKey = process.env['OPENROUTER_API_KEY']?.trim();
+  if (!managementKey && !sharedKey) {
+    console.log('pending credentials: neither OPENROUTER_MANAGEMENT_KEY nor OPENROUTER_API_KEY is set');
     console.log(
       'Set it in the repo-root .env, then: pnpm --filter @sente/api run probe:openrouter',
     );
@@ -111,6 +112,9 @@ async function main(): Promise<number> {
   }
 
   const listing = await listModels();
+  if (!managementKey) {
+    return probeSharedKey(listing, sharedKey as string);
+  }
   const management = new OpenRouterManagementClient({ managementKey });
   const created = await management.createKey({
     name: `sente:probe:${new Date().toISOString()}`,
@@ -159,6 +163,41 @@ async function main(): Promise<number> {
   }
 
   console.log(JSON.stringify({ probedAt: new Date().toISOString(), results }, null, 2));
+  return 0;
+}
+
+/**
+ * Shared-key dev mode (SEN-18): the same round trips on the one inference key.
+ * Nothing is minted or deleted, and the key's usage delta is not measured.
+ */
+async function probeSharedKey(
+  listing: Awaited<ReturnType<typeof listModels>>,
+  sharedKey: string,
+): Promise<number> {
+  console.log('shared-key mode (OPENROUTER_API_KEY): no key minted; usage deltas not measured');
+  const client = new Anthropic({
+    baseURL: OPENROUTER_ANTHROPIC_BASE,
+    authToken: sharedKey,
+    apiKey: null,
+  });
+  const results: TargetResult[] = [];
+  for (const target of TARGETS) {
+    const cost = { usd: 0 };
+    const roundTrip = await probeToolRoundTrip(client, target, cost);
+    const thinking = await probeThinking(client, target, cost);
+    const entry = listing.get(target.model);
+    results.push({
+      label: target.label,
+      model: target.model,
+      listed: entry !== undefined,
+      listedWithTools: entry?.includes('tools') ?? false,
+      roundTrip,
+      thinking,
+      reportedCostUsd: round(cost.usd),
+      keyUsageDeltaUsd: null,
+    });
+  }
+  console.log(JSON.stringify({ probedAt: new Date().toISOString(), mode: 'shared', results }, null, 2));
   return 0;
 }
 

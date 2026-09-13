@@ -19,7 +19,7 @@ class FixedAuth extends GasDripAuth {
   }
 }
 
-const CONFIGURED: CreditsConfig = { managementKey: FAKE_MANAGEMENT_KEY, defaultLimitUsd: 5 };
+const CONFIGURED: CreditsConfig = { managementKey: FAKE_MANAGEMENT_KEY, sharedKey: undefined, mode: 'per-user', defaultLimitUsd: 5 };
 
 function setup(config: CreditsConfig = CONFIGURED) {
   const fake = fakeOpenRouter();

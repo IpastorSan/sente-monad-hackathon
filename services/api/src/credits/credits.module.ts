@@ -9,8 +9,14 @@ import {
   type CreditsConfig,
 } from './credits.config';
 import { CreditsController } from './credits.controller';
-import { createOpenRouterKeys, CreditsService, OPENROUTER_KEYS } from './credits.service';
-import type { OpenRouterKeyApi } from './openrouter.client';
+import {
+  createOpenRouterKeys,
+  createSharedKey,
+  CreditsService,
+  OPENROUTER_KEYS,
+  OPENROUTER_SHARED,
+} from './credits.service';
+import type { OpenRouterKeyApi, SharedKeyApi } from './openrouter.client';
 import { CREDIT_KEYS, InMemoryCreditKeyStore } from './store/credit-key-store';
 
 const configProvider: Provider = {
@@ -27,6 +33,13 @@ const openRouterProvider: Provider = {
   provide: OPENROUTER_KEYS,
   inject: [CREDITS_CONFIG],
   useFactory: (config: CreditsConfig): OpenRouterKeyApi => createOpenRouterKeys(config),
+};
+
+/** Shared-key dev mode (SEN-18): the one inference key's `GET /key`; null in other modes. */
+const sharedKeyProvider: Provider = {
+  provide: OPENROUTER_SHARED,
+  inject: [CREDITS_CONFIG],
+  useFactory: (config: CreditsConfig): SharedKeyApi | null => createSharedKey(config),
 };
 
 /** PERSISTENCE: in memory until the repo has a database — see `store/credit-key-store.ts`. */
@@ -51,6 +64,7 @@ const authProvider: Provider = {
   providers: [
     configProvider,
     openRouterProvider,
+    sharedKeyProvider,
     storeProvider,
     authProvider,
     PlaceholderGasDripAuthGuard,

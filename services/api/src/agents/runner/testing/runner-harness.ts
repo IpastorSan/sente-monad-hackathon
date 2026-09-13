@@ -46,9 +46,14 @@ export async function runnerHarness(
   });
 
   const openrouter = fakeOpenRouter();
-  const creditsConfig: CreditsConfig = {
+  const baseCreditsConfig = {
     managementKey: options.creditsConfigured === false ? undefined : FAKE_MANAGEMENT_KEY,
     defaultLimitUsd: 5,
+  };
+  const creditsConfig: CreditsConfig = {
+    ...baseCreditsConfig,
+    sharedKey: undefined,
+    mode: baseCreditsConfig.managementKey ? 'per-user' : 'unconfigured',
   };
   const credits = new CreditsService(
     creditsConfig,

@@ -145,3 +145,13 @@ Run with an OpenRouter **inference** key (not a management key — see below), t
 and `probe:openrouter` fails at its first step. Create a key under **Settings → Management keys** at
 https://openrouter.ai/settings/management-keys and put that in `OPENROUTER_MANAGEMENT_KEY`; re-run
 `pnpm --filter @sente/api run probe:openrouter`.
+
+## Shared-key dev mode — SEN-18
+
+Set `OPENROUTER_API_KEY` (an ordinary inference key) and leave `OPENROUTER_MANAGEMENT_KEY` unset:
+
+- `CreditsService.keyFor` hands every user that one key; nothing is minted or stored.
+- `provision` and `status` read `GET /api/v1/key` — the shared key's own limit and usage, i.e. everyone's budget.
+- The API **refuses to boot** in this mode when `NODE_ENV=production`; if both variables are set, per-user mode wins.
+- `agent:run-live`, `demo:refusal -- --mode model` and `probe:openrouter` all accept it (no minting, no key deletion).
+- `costUsd` from the key's usage delta blurs when runs overlap; the per-response `usage.cost` sum stays exact.

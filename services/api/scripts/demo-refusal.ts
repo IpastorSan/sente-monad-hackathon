@@ -76,8 +76,8 @@ async function main(): Promise<number> {
   const envFile = envFileFromArgs();
   if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-  if (mode === 'model' && !has('OPENROUTER_MANAGEMENT_KEY')) {
-    console.log('pending credentials: OPENROUTER_MANAGEMENT_KEY not set');
+  if (mode === 'model' && !has('OPENROUTER_MANAGEMENT_KEY') && !has('OPENROUTER_API_KEY')) {
+    console.log('pending credentials: neither OPENROUTER_MANAGEMENT_KEY nor OPENROUTER_API_KEY is set');
     console.log(
       'Set it in the repo-root .env, then: pnpm --filter @sente/api run build && ' +
         'pnpm --filter @sente/api run demo:refusal -- --mode model',

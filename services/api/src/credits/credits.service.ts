@@ -1,11 +1,13 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 
 import type { GasDripPrincipal } from '../gas/auth/gas-drip-auth';
 import { CREDITS_CONFIG, type CreditsConfig } from './credits.config';
 import { CreditsRefusedError } from './credits.errors';
 import {
   OpenRouterManagementClient,
+  OpenRouterSharedKeyClient,
   type FetchLike,
+  type SharedKeyApi,
   type LimitReset,
   type OpenRouterKey,
   type OpenRouterKeyApi,
@@ -14,6 +16,9 @@ import { CREDIT_KEYS, type CreditKeyRecord, type CreditKeyStore } from './store/
 
 /** DI token for the OpenRouter key-management API (or its unconfigured stand-in). */
 export const OPENROUTER_KEYS = Symbol('OPENROUTER_KEYS');
+
+/** DI token for the shared inference key's `GET /key` reader. Null outside shared mode. */
+export const OPENROUTER_SHARED = Symbol('OPENROUTER_SHARED');
 
 /**
  * Bound when OPENROUTER_MANAGEMENT_KEY is unset. Every call refuses with
@@ -38,7 +43,7 @@ export class UnconfiguredOpenRouterKeys implements OpenRouterKeyApi {
 function unconfigured(): CreditsRefusedError {
   return new CreditsRefusedError(
     'credits_unconfigured',
-    'Inference credits are not configured on this server (OPENROUTER_MANAGEMENT_KEY is unset)',
+    'Inference credits are not configured on this server (set OPENROUTER_MANAGEMENT_KEY, or OPENROUTER_API_KEY in dev)',
   );
 }
 
@@ -47,6 +52,13 @@ export function createOpenRouterKeys(config: CreditsConfig, fetch?: FetchLike): 
   return config.managementKey
     ? new OpenRouterManagementClient({ managementKey: config.managementKey, fetch })
     : new UnconfiguredOpenRouterKeys();
+}
+
+/** Shared-key dev mode (SEN-18) reads its own limit and usage; null in every other mode. */
+export function createSharedKey(config: CreditsConfig, fetch?: FetchLike): SharedKeyApi | null {
+  return config.mode === 'shared' && config.sharedKey
+    ? new OpenRouterSharedKeyClient({ apiKey: config.sharedKey, fetch })
+    : null;
 }
 
 /** What a user may see about their own credits. No key, no hash. */
@@ -79,10 +91,15 @@ export class CreditsService {
     @Inject(CREDITS_CONFIG) private readonly config: CreditsConfig,
     @Inject(OPENROUTER_KEYS) private readonly keys: OpenRouterKeyApi,
     @Inject(CREDIT_KEYS) private readonly store: CreditKeyStore,
+    @Optional() @Inject(OPENROUTER_SHARED) private readonly shared?: SharedKeyApi | null,
   ) {}
 
   /** Mints the caller's key on first call; returns the existing one's status after. */
   provision(principal: GasDripPrincipal): Promise<ProvisionResult> {
+    if (this.config.mode === 'shared') {
+      // Dev mode: nothing to mint. Every user draws on the one shared key.
+      return this.sharedView(new Date()).then((view) => ({ ...view, created: false }));
+    }
     const pending = this.inFlight.get(principal.userId);
     if (pending) {
       return pending;
@@ -95,6 +112,9 @@ export class CreditsService {
   }
 
   async status(principal: GasDripPrincipal, now: Date = new Date()): Promise<CreditsView> {
+    if (this.config.mode === 'shared') {
+      return this.sharedView(now);
+    }
     const record = await this.requireRecord(principal.userId);
     return toView(await this.readKey(record.hash), now);
   }
@@ -104,7 +124,28 @@ export class CreditsService {
    * budget with. Never route this into an HTTP response or a log line.
    */
   async keyFor(userId: string): Promise<string> {
+    if (this.config.mode === 'shared' && this.config.sharedKey) {
+      return this.config.sharedKey;
+    }
     return (await this.requireRecord(userId)).key;
+  }
+
+  /** The shared key's limit and usage. It is everyone's budget, so the view says nothing per user. */
+  private async sharedView(now: Date): Promise<CreditsView> {
+    if (!this.shared) {
+      throw unconfigured();
+    }
+    try {
+      const info = await this.shared.currentKey();
+      return {
+        limitUsd: info.limit,
+        remainingUsd: info.limit_remaining,
+        usageMonthUsd: info.usage_monthly ?? info.usage,
+        resetsAt: nextResetUtc(info.limit_reset ?? null, now)?.toISOString() ?? null,
+      };
+    } catch (error) {
+      throw asRefusal(error, 'status_unavailable', 'Could not read the shared OpenRouter key');
+    }
   }
 
   private async provisionOnce(userId: string): Promise<ProvisionResult> {
