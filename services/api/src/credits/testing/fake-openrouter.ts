@@ -1,6 +1,8 @@
 import type { FetchLike, OpenRouterKey } from '../openrouter.client';
 
 export const FAKE_MANAGEMENT_KEY = 'sk-or-v1-management-FAKE-do-not-leak';
+/** An inference key, as used by shared-key dev mode (SEN-18). Only `GET /key` accepts it. */
+export const FAKE_SHARED_KEY = 'sk-or-v1-shared-inference-FAKE-do-not-leak';
 
 export interface RecordedCall {
   method: string;
@@ -14,10 +16,11 @@ export interface RecordedCall {
  * `fetch`. It mints recognisable plaintext keys (`sk-or-v1-PLAINTEXT-n`) so a
  * spec can assert they never reach an HTTP response.
  */
-export function fakeOpenRouter(options: { failCreate?: number } = {}) {
+export function fakeOpenRouter(options: { failCreate?: number; failCurrentKey?: number } = {}) {
   const keys = new Map<string, OpenRouterKey>();
   const calls: RecordedCall[] = [];
   let minted = 0;
+  let sharedUsage = 0;
 
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -30,6 +33,28 @@ export function fakeOpenRouter(options: { failCreate?: number } = {}) {
     const headers = (init.headers ?? {}) as Record<string, string>;
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
     calls.push({ method, url, authorization: headers.Authorization, body });
+
+    if (method === 'GET' && new URL(url).pathname === '/api/v1/key') {
+      if (headers.Authorization !== `Bearer ${FAKE_SHARED_KEY}`) {
+        return Promise.resolve(json(401, { error: { code: 401, message: 'Invalid API key' } }));
+      }
+      if (options.failCurrentKey) {
+        return Promise.resolve(
+          json(options.failCurrentKey, { error: { code: options.failCurrentKey, message: 'sad' } }),
+        );
+      }
+      return Promise.resolve(
+        json(200, {
+          data: {
+            label: 'sk-or-v1-sha...FAKE',
+            limit: 10,
+            limit_remaining: 10 - sharedUsage,
+            usage: sharedUsage,
+            is_free_tier: false,
+          },
+        }),
+      );
+    }
 
     if (headers.Authorization !== `Bearer ${FAKE_MANAGEMENT_KEY}`) {
       return Promise.resolve(json(401, { error: { code: 401, message: 'Invalid credentials' } }));
@@ -103,5 +128,10 @@ export function fakeOpenRouter(options: { failCreate?: number } = {}) {
     key.limit_remaining = key.limit === null ? null : Math.max(0, key.limit - key.usage_monthly);
   };
 
-  return { fetch, keys, calls, spend };
+  /** Simulates inference spend against the shared key. */
+  const spendShared = (usd: number) => {
+    sharedUsage += usd;
+  };
+
+  return { fetch, keys, calls, spend, spendShared };
 }

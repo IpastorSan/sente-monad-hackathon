@@ -302,7 +302,12 @@ describe('the refusal demo, acts 1–5 (fake Privy that applies the compiled rul
     ]);
 
     const openrouter = fakeOpenRouter();
-    const creditsConfig = { managementKey: FAKE_MANAGEMENT_KEY, defaultLimitUsd: 5 };
+    const creditsConfig = {
+      managementKey: FAKE_MANAGEMENT_KEY,
+      sharedKey: undefined,
+      mode: 'per-user' as const,
+      defaultLimitUsd: 5,
+    };
     const credits = new CreditsService(
       creditsConfig,
       createOpenRouterKeys(creditsConfig, openrouter.fetch),

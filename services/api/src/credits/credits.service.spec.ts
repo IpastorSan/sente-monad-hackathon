@@ -1,17 +1,22 @@
 import { CREDITS_DEFAULTS, loadCreditsConfig, type CreditsConfig } from './credits.config';
 import { CreditsRefusedError } from './credits.errors';
-import { createOpenRouterKeys, CreditsService, nextResetUtc } from './credits.service';
+import { createOpenRouterKeys, createSharedKey, CreditsService, nextResetUtc } from './credits.service';
 import {
   InMemoryCreditKeyStore,
   type CreditKeyClaim,
   type CreditKeyRecord,
   type CreditKeyStore,
 } from './store/credit-key-store';
-import { FAKE_MANAGEMENT_KEY, fakeOpenRouter } from './testing/fake-openrouter';
+import { FAKE_MANAGEMENT_KEY, FAKE_SHARED_KEY, fakeOpenRouter } from './testing/fake-openrouter';
 
 const USER = { userId: 'user-1' };
 
-const configured: CreditsConfig = { managementKey: FAKE_MANAGEMENT_KEY, defaultLimitUsd: 5 };
+const configured: CreditsConfig = {
+  managementKey: FAKE_MANAGEMENT_KEY,
+  sharedKey: undefined,
+  mode: 'per-user',
+  defaultLimitUsd: 5,
+};
 
 function setup(
   options: { config?: CreditsConfig; store?: CreditKeyStore; failCreate?: number } = {},
@@ -189,6 +194,8 @@ describe('loadCreditsConfig', () => {
   it('defaults to a $5 limit and no management key', () => {
     expect(loadCreditsConfig({})).toEqual({
       managementKey: undefined,
+      sharedKey: undefined,
+      mode: 'unconfigured',
       defaultLimitUsd: CREDITS_DEFAULTS.defaultLimitUsd,
     });
   });
@@ -199,7 +206,12 @@ describe('loadCreditsConfig', () => {
         OPENROUTER_MANAGEMENT_KEY: ' sk-or-v1-m ',
         OPENROUTER_DEFAULT_LIMIT_USD: '2.5',
       }),
-    ).toEqual({ managementKey: 'sk-or-v1-m', defaultLimitUsd: 2.5 });
+    ).toEqual({
+      managementKey: 'sk-or-v1-m',
+      sharedKey: undefined,
+      mode: 'per-user',
+      defaultLimitUsd: 2.5,
+    });
   });
 
   it.each(['0', '-1', 'five', 'Infinity'])('rejects a limit of %s', (raw) => {
@@ -244,3 +256,80 @@ function minted() {
     updated_at: null,
   };
 }
+
+describe('shared-key dev mode (SEN-18)', () => {
+  const shared = loadCreditsConfig({ OPENROUTER_API_KEY: ` ${FAKE_SHARED_KEY} ` });
+
+  function sharedSetup(options: { failCurrentKey?: number } = {}) {
+    const fake = fakeOpenRouter({ failCurrentKey: options.failCurrentKey });
+    const store = new InMemoryCreditKeyStore();
+    const service = new CreditsService(
+      shared,
+      createOpenRouterKeys(shared, fake.fetch),
+      store,
+      createSharedKey(shared, fake.fetch),
+    );
+    return { fake, store, service };
+  }
+
+  const paths = (fake: ReturnType<typeof fakeOpenRouter>) =>
+    fake.calls.map((call) => `${call.method} ${new URL(call.url).pathname}`);
+
+  it('resolves from OPENROUTER_API_KEY alone, trimmed', () => {
+    expect(shared).toEqual({
+      managementKey: undefined,
+      sharedKey: FAKE_SHARED_KEY,
+      mode: 'shared',
+      defaultLimitUsd: CREDITS_DEFAULTS.defaultLimitUsd,
+    });
+  });
+
+  it('prefers per-user mode when both keys are set', () => {
+    const both = loadCreditsConfig({
+      OPENROUTER_MANAGEMENT_KEY: FAKE_MANAGEMENT_KEY,
+      OPENROUTER_API_KEY: FAKE_SHARED_KEY,
+    });
+    expect(both.mode).toBe('per-user');
+  });
+
+  it('refuses to boot in production', () => {
+    expect(() =>
+      loadCreditsConfig({ OPENROUTER_API_KEY: FAKE_SHARED_KEY, NODE_ENV: 'production' }),
+    ).toThrow(/dev-only/);
+  });
+
+  it('hands every user the shared key, and never mints or stores one', async () => {
+    const { fake, store, service } = sharedSetup();
+
+    expect(await service.keyFor('user-1')).toBe(FAKE_SHARED_KEY);
+    expect(await service.keyFor('user-2')).toBe(FAKE_SHARED_KEY);
+    expect(creates(fake)).toHaveLength(0);
+    expect(await store.find('user-1')).toBeUndefined();
+  });
+
+  it('provision and status read GET /key, never /keys, and never expose the key', async () => {
+    const { fake, service } = sharedSetup();
+    fake.spendShared(1.25);
+
+    const provisioned = await service.provision(USER);
+    const status = await service.status(USER);
+
+    expect(provisioned).toEqual({
+      limitUsd: 10,
+      remainingUsd: 8.75,
+      usageMonthUsd: 1.25,
+      resetsAt: null,
+      created: false,
+    });
+    expect(status).toEqual({ limitUsd: 10, remainingUsd: 8.75, usageMonthUsd: 1.25, resetsAt: null });
+    expect(paths(fake)).toEqual(['GET /api/v1/key', 'GET /api/v1/key']);
+    expect(JSON.stringify([provisioned, status])).not.toContain(FAKE_SHARED_KEY);
+  });
+
+  it('maps a failing GET /key to status_unavailable', async () => {
+    const { service } = sharedSetup({ failCurrentKey: 500 });
+
+    expect((await refusal(service.status(USER))).reason).toBe('status_unavailable');
+    expect((await refusal(service.provision(USER))).reason).toBe('status_unavailable');
+  });
+});

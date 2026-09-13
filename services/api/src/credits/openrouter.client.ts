@@ -208,3 +208,77 @@ function upstreamMessage(text: string): string {
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** What `GET /api/v1/key` reports about the inference key making the request. Money in USD. */
+export interface CurrentKeyInfo {
+  label: string;
+  limit: number | null;
+  limit_remaining: number | null;
+  limit_reset?: LimitReset;
+  usage: number;
+  usage_monthly?: number;
+}
+
+/** The one operation shared-key mode needs (SEN-18). */
+export interface SharedKeyApi {
+  currentKey(): Promise<CurrentKeyInfo>;
+}
+
+export interface OpenRouterSharedKeyClientOptions {
+  apiKey: string;
+  fetch?: FetchLike;
+  baseUrl?: string;
+}
+
+/** Reads the shared inference key's own limit and usage. Never returns or logs the key. */
+export class OpenRouterSharedKeyClient implements SharedKeyApi {
+  private readonly apiKey: string;
+  private readonly fetchImpl: FetchLike;
+  private readonly baseUrl: string;
+
+  constructor(options: OpenRouterSharedKeyClientOptions) {
+    if (!options.apiKey.trim()) {
+      throw new Error('OpenRouterSharedKeyClient needs an API key');
+    }
+    this.apiKey = options.apiKey.trim();
+    this.fetchImpl = options.fetch ?? ((url, init) => fetch(url, init));
+    this.baseUrl = (options.baseUrl ?? OPENROUTER_API_BASE).replace(/\/+$/, '');
+  }
+
+  async currentKey(): Promise<CurrentKeyInfo> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/key`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+      });
+    } catch (error) {
+      throw new OpenRouterApiError(0, `GET /key: ${describeError(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new OpenRouterApiError(
+        response.status,
+        `GET /key: HTTP ${response.status} ${upstreamMessage(text)}`.trim(),
+      );
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      throw new OpenRouterApiError(response.status, 'GET /key: response is not JSON');
+    }
+    const data = (body as { data?: Partial<CurrentKeyInfo> } | null)?.data;
+    if (!data || typeof data.usage !== 'number') {
+      throw new OpenRouterApiError(response.status, 'GET /key: response has no key data');
+    }
+    return {
+      label: typeof data.label === 'string' ? data.label : '',
+      limit: typeof data.limit === 'number' ? data.limit : null,
+      limit_remaining: typeof data.limit_remaining === 'number' ? data.limit_remaining : null,
+      limit_reset: data.limit_reset ?? null,
+      usage: data.usage,
+      ...(typeof data.usage_monthly === 'number' ? { usage_monthly: data.usage_monthly } : {}),
+    };
+  }
+}
