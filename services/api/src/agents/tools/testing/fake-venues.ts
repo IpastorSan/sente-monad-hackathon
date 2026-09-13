@@ -50,6 +50,13 @@ abstract class FakeVenue {
   onWrite: ((method: string, args: unknown) => Promise<void>) | undefined;
   /** What `quote` reports as the book's average price. */
   quotePrice = '1';
+  /** What `getBalances` reports (Kuru: AccountCore). Plenty by default, so pre-flight passes. */
+  balances: Balance[] = [
+    { asset: 'USDC', available: '100000', locked: '0', total: '100000' },
+    { asset: 'MON', available: '100000', locked: '0', total: '100000' },
+  ];
+  /** What `getMarkets` reports; empty means no minimum notional is known. */
+  markets: Market[] = [];
   private sequence = 0;
 
   /** Only the calls that would sign or trade. */
@@ -90,7 +97,7 @@ abstract class FakeVenue {
 
   getMarkets(): Promise<Market[]> {
     this.record('getMarkets', undefined);
-    return Promise.resolve([]);
+    return Promise.resolve(this.markets);
   }
 
   getDepth(query: DepthQuery): Promise<Depth> {
@@ -147,13 +154,23 @@ abstract class FakeVenue {
 
   getBalances(): Promise<Balance[]> {
     this.record('getBalances', undefined);
-    return Promise.resolve([{ asset: 'USDC', available: '100', locked: '0', total: '100' }]);
+    return Promise.resolve(this.balances);
   }
 }
 
 export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
   readonly id = 'kuru';
   readonly name = 'Kuru (fake)';
+  /** What `walletBalances` reports: the wallet, outside AccountCore. */
+  wallet: Balance[] = [
+    { asset: 'USDC', available: '100000', locked: '0', total: '100000' },
+    { asset: 'MON', available: '100000', locked: '0', total: '100000' },
+  ];
+
+  walletBalances(): Promise<Balance[]> {
+    this.record('walletBalances', undefined);
+    return Promise.resolve(this.wallet);
+  }
 
   market(symbol: string): KuruMarketConfig {
     const market = KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol);

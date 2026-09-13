@@ -14,7 +14,7 @@
  * Why direct OrderBook calls and not Kuru's Relay: see `orders.ts`.
  */
 import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
-import { isAddressEqual, type Address, type Hex, type PublicClient } from 'viem';
+import { erc20Abi, isAddressEqual, zeroAddress, type Address, type Hex, type PublicClient } from 'viem';
 
 import type {
   Balance,
@@ -343,6 +343,29 @@ export class KuruVenue implements Venue {
           locked: fromUnits(reserved, token.decimals),
           total: fromUnits(free + reserved, token.decimals),
         };
+      }),
+    );
+  }
+
+  /**
+   * What the account's own WALLET holds of every Kuru market token (native MON
+   * for the zero address), as opposed to `getBalances`, which is AccountCore.
+   * Deposits move funds from here into AccountCore; orders only use AccountCore.
+   */
+  async walletBalances(): Promise<Balance[]> {
+    const user = this.#requireAccount();
+    return Promise.all(
+      this.#tokens().map(async (token) => {
+        const raw = isAddressEqual(token.address, zeroAddress)
+          ? await this.#client.getBalance({ address: user })
+          : await this.#client.readContract({
+              address: token.address,
+              abi: erc20Abi,
+              functionName: 'balanceOf',
+              args: [user],
+            });
+        const amount = fromUnits(raw, token.decimals);
+        return { asset: token.symbol, available: amount, locked: '0', total: amount };
       }),
     );
   }

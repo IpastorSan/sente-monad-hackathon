@@ -8,7 +8,7 @@ import type { AgentRecord, AgentStore } from '../store/agent-store';
 import { KeyedMutex } from './keyed-mutex';
 
 /** The Kuru surface the tools use: the shared `Venue` plus market lookup, deposits and withdrawals. */
-export type KuruToolVenue = Venue & Pick<KuruVenue, 'market' | 'deposit' | 'withdraw'>;
+export type KuruToolVenue = Venue & Pick<KuruVenue, 'market' | 'deposit' | 'withdraw' | 'walletBalances'>;
 
 /** What `AgentVenues.forAgent` returns, narrowed to what the tools touch. */
 export interface ToolVenues {

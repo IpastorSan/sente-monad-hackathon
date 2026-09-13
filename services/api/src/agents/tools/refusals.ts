@@ -19,7 +19,15 @@ export type SenteRefusalCode =
   /** The arguments failed the schema, or name something that does not fit together. */
   | 'invalid_input'
   /** The agent was revoked while the run was open. */
-  | 'agent_inactive';
+  | 'agent_inactive'
+  /**
+   * Venue pre-flight (SEN-19): the wallet or Kuru AccountCore holds less than the
+   * write needs. Refused before signing, because on Monad a revert still pays
+   * the whole gas limit.
+   */
+  | 'insufficient_balance'
+  /** Venue pre-flight (SEN-19): below Kuru's minimum order notional for the market. */
+  | 'below_min_notional';
 
 /** A refusal by Sente's own gate. The message is model-facing. */
 export class SenteRefusal extends Error {
