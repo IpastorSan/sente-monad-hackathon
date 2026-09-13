@@ -557,3 +557,35 @@ runs the agent with only the enclave in the way. The events come back in
 Over HTTP it is the same:
 `POST /agents/:id/run {"instruction": "…"}` against an API started with
 `AGENT_PRECHECK=off`; the response body is the `RunResult`, events included.
+
+## Live agent run on the shared OpenRouter key — SEN-18 / SEN-19, 2026-09-13
+
+`agent:run-live` with `OPENROUTER_API_KEY` (shared-key dev mode, SEN-18), `anthropic/claude-sonnet-5`,
+pre-check on, agent wallet `0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E` (the SEN-6 probe wallet).
+
+**Run 1 — failed, and why (fixed in SEN-19).** Funded with 0.1 MON (`0x8c14a327…82a8`) + 6 USDC (`0xf9806c97…77ae0`).
+The model recorded a thesis, then placed a Kuru buy of 693 MON @ 0.01445 **before depositing anything** — reverted
+with `InsufficientBalance()` (`0x2469e551…65db`, full 425,430 gas limit paid). It then tried to deposit 10 USDC from a
+wallet holding 6 — reverted with `ERC20InsufficientBalance` (`0xeed00261…09ae`, 252,059 gas paid). About 0.077 MON was
+burned on writes that could never succeed, and the model concluded "the wallet holds 0 USDC" because `get_balances`
+showed only AccountCore. Kuru's minimum order on MON-USDC is **10 USDC**; the script had asked for 5.
+
+**SEN-19 fix.** With the pre-check on, `deposit` checks the wallet and Kuru `place_limit`/`place_market` check the
+market's minimum notional and the AccountCore balance **before signing**, refusing as Sente-layer
+`insufficient_balance` / `below_min_notional`. (On Monad a revert still pays the whole gas limit.) With
+`AGENT_PRECHECK=off` the pre-flight is skipped, so the refusal demo still reaches the enclave. `get_balances` now shows
+the Kuru wallet next to AccountCore.
+
+**Run 2 — passed** (run `run-2747e22a`, 6 iterations, 5 tool calls, 33 s, $0.114). Topped up with 0.12 MON
+(`0x7d90216d…64a2`) + 6 USDC (`0xa4d25874…1599`), so the wallet held 12 USDC.
+
+| Step | Result | Tx |
+| --- | --- | --- |
+| `record_thesis` MON-USDC | recorded | — |
+| `deposit` 11 USDC into AccountCore | ok | `0x484ab888f4ef1514e8058293ccce4cffc527903c0bb68dde13461ff86fd0f281` |
+| `place_limit` buy 727 MON @ 0.01445 (≈10.51 USDC, half the best bid) | ok — order `0:4209` resting | `0xcbb45e0255bdddba10dbc37d8169c43e770cb070ec8f3718f474b153b373813b` |
+| `cancel_order` `0:4209` | ok — cancelled | `0xf3a29c8f2d1bdc907ba0ff64de75a969c28a8fbe04dd5a7cf6956c4bc266a1e2` |
+
+After the run the agent holds 0.048 MON and 1 USDC in its wallet, with 11 USDC free in AccountCore. The four
+transactions (approve, deposit, place, cancel) cost about **0.10 MON** of gas — so the 0.15 MON agent gas drip
+(SEN-14) covers roughly one run of this shape.
