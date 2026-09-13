@@ -122,3 +122,26 @@ const client = new Anthropic({
 - The SDK is exact-pinned, and `pnpm-workspace.yaml` lists it in `minimumReleaseAgeExclude`. It was
   published less than a day before it was added, and pnpm 12's release-age gate otherwise fails
   every pnpm command on the lockfile, `pnpm exec` included.
+
+## Verified live — 2026-09-13 (tool-use round trips)
+
+Run with an OpenRouter **inference** key (not a management key — see below), through the Anthropic SDK pointed at
+`https://openrouter.ai/api` with `authToken` set and `apiKey: null`. One tool (`get_price`), two turns
+(tool_use → tool_result → final answer), `max_tokens: 1024`.
+
+| Model | Tool round trip | Final stop | Thinking blocks returned |
+| --- | --- | --- | --- |
+| `anthropic/claude-sonnet-5` | ✅ `get_price {"symbol":"MON-USDC"}` | `end_turn` | no |
+| `anthropic/claude-sonnet-5` + `thinking: {type:'adaptive'}` | ✅ | `end_turn` | **no** — the parameter is accepted but no thinking block came back, so pass-through is unproven; keep `AGENT_RUNNER_THINKING=off` |
+| `moonshotai/kimi-k2.6`, `provider: {order:['Moonshot AI'], allow_fallbacks:false}` | ✅ | `end_turn` | yes |
+| `moonshotai/kimi-k2.6`, any provider | ✅ | `end_turn` | yes |
+
+**Kimi tool calls do round-trip through `/api/v1/messages`**, despite OpenRouter's blog saying non-Anthropic models
+"aren't supported through the native endpoint" for Claude Code. So the runner works with Kimi as-is, and no
+`chat/completions` path is needed for the KIMI bounty. Latency was 2.4–4.2 s per two-turn trial.
+
+**Still pending: per-user key provisioning.** The key in `OPENROUTER_MANAGEMENT_KEY` is an inference key
+(`GET /api/v1/key` → `is_management_key: false`, $10 limit), so `POST /api/v1/keys` returns `401 Invalid API key`
+and `probe:openrouter` fails at its first step. Create a key under **Settings → Management keys** at
+https://openrouter.ai/settings/management-keys and put that in `OPENROUTER_MANAGEMENT_KEY`; re-run
+`pnpm --filter @sente/api run probe:openrouter`.
