@@ -107,6 +107,13 @@ export default function AgentScreen() {
 
       {notice ? <Notice tone={notice.tone} title={notice.title} detail={notice.detail} /> : null}
 
+      {/* The Ledger is where an agent stops being a name and becomes a record. */}
+      <Button
+        label="Agent Ledger — theses, trades, refusals"
+        onPress={() => router.push({ pathname: '/agents/[id]/ledger', params: { id: agent.id } })}
+        style={styles.ledgerLink}
+      />
+
       {active ? (
         <View style={styles.actions}>
           <ButtonRow>
@@ -505,6 +512,7 @@ function RevokeSheet({
 const styles = StyleSheet.create({
   grow: { flex: 1 },
   meta: { marginTop: 4 },
+  ledgerLink: { marginTop: 18 },
   actions: { marginTop: 20, gap: 10 },
   actionsTop: { marginTop: 16 },
   after: { marginTop: 10 },

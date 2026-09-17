@@ -116,6 +116,37 @@ export type RunOutcome =
   /** The API has no run route yet (SEN-8). Not an error in the agent. */
   | { kind: 'unavailable' };
 
+/**
+ * One event on the agent's trail, as `GET /agents/:id/events` returns it
+ * (SEN-20). Bigints already crossed as decimal strings server-side, so
+ * `detail` is JSON-safe as it stands.
+ *
+ * `kind` is a plain string rather than a union: `verdict` is SEN-22's and is
+ * not in the API's `AGENT_EVENT_KINDS` yet, and the Ledger must not stop
+ * compiling the day it lands. `src/agents/ledger.ts` is what narrows it.
+ */
+export type WireAgentEvent = {
+  /** Increasing across the whole log, so it orders and pages stably. */
+  seq: number;
+  agentId: string;
+  /** The run or MCP session that produced it. */
+  runId?: string;
+  /** Unix epoch milliseconds. */
+  at: number;
+  kind: string;
+  /** Set on every refusal, and only on refusals. */
+  layer?: string;
+  tool?: string;
+  detail: Record<string, unknown>;
+};
+
+export type AgentEventsPage = {
+  /** Oldest first. */
+  events: WireAgentEvent[];
+  /** The highest `seq` in this page: hand it back as `afterSeq` for the next. */
+  nextSeq: number;
+};
+
 /** A non-2xx response, carrying the API's stable `reason` when it sent one. */
 export class AgentsApiError extends Error {
   readonly status: number;
@@ -184,6 +215,32 @@ export class AgentsApi {
     return fromWireAgent(
       await this.request<WireAgent>('POST', `/agents/${encodeURIComponent(id)}/revoke`),
     );
+  }
+
+  /**
+   * `GET /agents/:id/events` (SEN-20) — the agent's trail.
+   *
+   * `afterSeq` is the cursor: only events with a higher `seq` come back, which
+   * is what lets the Ledger tail the log without re-reading what it holds.
+   * Omit it and the API returns the MOST RECENT page, not the oldest — the log
+   * keeps the last `limit` matches and orders them oldest-first within it — so
+   * a first call with no cursor lands on recent history rather than on the
+   * agent's first day.
+   */
+  async events(id: string, afterSeq?: number, limit?: number): Promise<AgentEventsPage> {
+    // Built by hand rather than with URLSearchParams: `size` is not in every
+    // engine this runs on, and `String(undefined)` on the wire would be a 400.
+    const query: string[] = [];
+    if (afterSeq !== undefined) query.push(`afterSeq=${afterSeq}`);
+    if (limit !== undefined) query.push(`limit=${limit}`);
+    const page = await this.request<AgentEventsPage>(
+      'GET',
+      `/agents/${encodeURIComponent(id)}/events${query.length > 0 ? `?${query.join('&')}` : ''}`,
+    );
+    return {
+      events: page.events ?? [],
+      nextSeq: page.nextSeq ?? afterSeq ?? 0,
+    };
   }
 
   /**
