@@ -36,17 +36,23 @@ type Account {
   venue: Venue!
   # Numeric account id exactly as emitted on-chain.
   accountId: BigInt!
-  # Owner wallet address (lowercase), from AccountRegistered/AccountCreated.
+  # The venue account address (lowercase): Kuru `AccountRegistered.account`,
+  # Perpl `AccountCreated.account`. This is the address that trades and the one
+  # a Sente user is matched on. Null until its event is seen.
+  address: String
+  # Owner the venue names separately (Kuru `AccountRegistered.owner`). Perpl has
+  # no equivalent, so it stays null there. Not inferred from `address`.
   owner: String
   firstSeenBlock: BigInt!
   firstSeenAt: Timestamp!
-  # Custody rails (Kuru Deposit/Withdrawal, Perpl CollateralDeposit/Withdrawal).
+  # Custody rails (Kuru Deposit/Withdrawal + SpotReserveUpdated, Perpl
+  # CollateralDeposit/Withdrawal).
   balances: [AccountBalance!]! @derivedFrom(field: "account")
   # Leaderboard rows, one per market traded.
   marketStats: [AccountMarketStats!]! @derivedFrom(field: "account")
   tradesAsTaker: [Trade!]! @derivedFrom(field: "taker")
-  # Kuru-only: filled resting orders. (Perpl maker fills update stats but do
-  # not create Trade rows — see docs/indexer.md.)
+  # Perpl maker fills update stats but do not create Trade rows — see
+  # docs/indexer.md §perpl.
   tradesAsMaker: [Trade!]! @derivedFrom(field: "maker")
   # Cross-market rollup kept in sync with the stats rows.
   totalTradeCount: Int!
@@ -57,9 +63,17 @@ type Account {
 }
 
 """
-An account's net custody of one token from the deposit/withdrawal rails.
-Fills are NOT applied here — this mirrors what moved between wallet and
-venue, the counterpart of a `transferBalance`.
+An account's custody of one token. Two independent readings of the same rail,
+kept apart on purpose because they answer different questions:
+
+- `deposited`/`withdrawn`/`net` are the cumulative **flow** between wallet and
+  venue. They know nothing about what the venue did internally (fills, fees,
+  funding), so `net` is NOT a balance.
+- `freeRaw`/`reservedRaw` are the absolute **balances** the venue reports. They
+  are written from absolute values rather than accumulated, so a dropped event
+  is corrected by the next one instead of drifting forever.
+
+Fills are not applied here; this mirrors what moved between wallet and venue.
 """
 type AccountBalance {
   # "<accountId>-<tokenAddress>" (lowercase)
@@ -70,6 +84,11 @@ type AccountBalance {
   deposited: BigInt!
   withdrawn: BigInt!
   net: BigInt!
+  # Kuru `SpotReserveUpdated` free/reserved. Perpl: free is `balanceCNS` from
+  # CollateralDeposit/Withdrawal and reserved stays 0 (its locked balance is not
+  # on those events). Consumers sum the pair.
+  freeRaw: BigInt!
+  reservedRaw: BigInt!
   decimals: Int!
   lastUpdatedBlock: BigInt!
 }
@@ -77,10 +96,12 @@ type AccountBalance {
 """
 One matched trade. Kuru: one row per record unpacked from a `TradesPacked`
 log (taker + maker both resolved). Perpl: one row per `TakerOrderFilledV2`
-log; the maker is resolved from the matching `MakerOrderFilledV2` in the same
-transaction when present (first swept maker — a multi-maker sweep records
-the taker's aggregate fill once and attributes the first maker, so market
-volume is counted once per match rather than once per leg).
+log, attributed from the `OrderRequestV2` in the same transaction; the maker
+is the first `MakerOrderFilledV2` in that transaction (a multi-maker sweep
+records the taker's aggregate fill once and attributes the first maker, so
+market volume is counted once per match rather than once per leg). Perpl
+`Trade` rows are a tape, not the authority on PnL — see docs/indexer.md
+§perpl.
 """
 type Trade {
   # "<chainId>-<blockNumber>-<logIndex>-<recordIndex>"
@@ -214,19 +235,42 @@ type MakerOrderUpdate {
 }
 
 """
-Perpl `OrderRequestV2` context. Taker fills carry no perpId/accountId —
-they are joined to the most recent request in the same transaction with a
-lower logIndex. Internal plumbing, not public API.
+Perpl `OrderRequestV2` context. Taker fills carry no perpId/accountId — they
+are joined to the most recent request in the same transaction with a
+lower logIndex. The handler that writes these runs before the fills in the
+same transaction (registration order follows log order), and Envio serves
+`getWhere` from uncommitted in-batch writes. Internal plumbing, not public API.
 """
 type PerplOrderContext @internal {
   # "<chainId>-<blockNumber>-<logIndex>"
   id: ID!
-  # @index: required — handlers query getWhere({ txHash }) per taker fill.
+  # @index: required — handlers query getWhere({ txHash }) per fill.
   txHash: String! @index
   perpId: BigInt!
   accountId: BigInt!
   orderId: BigInt!
+  # Perpl `OrderDescEnum`, **zero-based** — 0 OpenLong (bid), 1 OpenShort (ask),
+  # 2 CloseLong (ask), 3 CloseShort (bid). Verified on chain and against
+  # PerplFoundation/dex-sdk crates/sdk/src/types/order.rs; see src/lib/perpl.ts.
   orderType: Int!
   blockNumber: BigInt!
+  logIndex: Int!
+}
+
+"""
+Perpl `MakerOrderFilledV2`, stashed so the `TakerOrderFilledV2` that follows in
+the same transaction can name the maker on its `Trade` row. One row per maker
+fill; `selectFirstMakerFill` picks the lowest logIndex. Internal plumbing, not
+public API.
+"""
+type PerplMakerFill @internal {
+  # "<chainId>-<blockNumber>-<logIndex>"
+  id: ID!
+  # @index: required — the taker handler queries getWhere({ txHash }).
+  txHash: String! @index
+  perpId: BigInt!
+  accountId: BigInt!
+  # The maker's own fee, carried so the taker's Trade row can report it.
+  feeCns: BigInt!
   logIndex: Int!
 }

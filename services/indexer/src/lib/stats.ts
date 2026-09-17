@@ -119,3 +119,15 @@ export function yyyymmdd(timestampSeconds: number): number {
   const d = new Date(timestampSeconds * 1000);
   return d.getUTCFullYear() * 10_000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
 }
+
+/**
+ * Decimal count of a power-of-ten precision (10^8 → 8, 1 → 0).
+ *
+ * This — not the base token's ERC-20 decimals — is the scale that turns a raw
+ * book/LNS size into a human base amount. On MON-USDC the book sizes in 10^8
+ * units while MON is 18-decimal, so using the token's decimals overstates
+ * `boughtBase`/`soldBase`/`baseVolume` by 10^(18-8).
+ */
+export function decimalsFromPrecision(precision: bigint): number {
+  return precision.toString().length - 1;
+}

@@ -1,12 +1,34 @@
 /**
- * Market constants, mirrored from packages/venues/src/kuru/constants.ts and
- * docs/monad-testnet-assets.md. The indexer is standalone (not a workspace
- * member) and Envio runs handlers through its own tsx loader, so this table
- * is duplicated rather than imported. kuru-packed.test.ts pins the layout
- * against the SDK; a venues-side address change must be copied here.
+ * Market constants, mirrored from packages/venues/src/kuru/constants.ts,
+ * packages/venues/src/perpl/constants.ts and docs/monad-testnet-assets.md.
+ * The indexer is standalone (not a workspace member) and Envio runs handlers
+ * through its own tsx loader, so this table is duplicated rather than
+ * imported. `seeds.test.ts` pins the parts that have a counterpart in the
+ * venue packages; an address or precision change there must be copied here.
  */
 
 export const MONAD_TESTNET_CHAIN_ID = 10143;
+
+/**
+ * One market row, venue-neutral — the shape `entities/Market` wants, so
+ * handlers never branch on venue when seeding.
+ */
+export type MarketSeed = {
+  readonly marketId: string;
+  readonly venue: 'KURU' | 'PERPL';
+  readonly symbol: string;
+  readonly base: string;
+  readonly quote: string;
+  /** Kuru: book price units per 1 quote-per-base. Perpl: 10^price_decimals. */
+  readonly pricePrecision: bigint;
+  /** Kuru: book size units per 1 base. Perpl: 10^size_decimals. */
+  readonly sizePrecision: bigint;
+  /** ERC-20 decimals of the base token (Kuru only; display metadata). */
+  readonly baseDecimals: number;
+  readonly quoteDecimals: number;
+  /** Kuru only: the OrderBook proxy (lowercase) that emits this market. */
+  readonly address?: string;
+};
 
 /** Kuru OrderBook proxies, one per market (lowercase for keying). */
 export type KuruMarketSeed = {
@@ -70,6 +92,19 @@ export const KURU_MARKETS: readonly KuruMarketSeed[] = [
   },
 ] as const;
 
+export const KURU_MARKET_SEEDS: readonly MarketSeed[] = KURU_MARKETS.map((m) => ({
+  marketId: m.marketId,
+  venue: 'KURU',
+  symbol: m.symbol,
+  base: m.base,
+  quote: m.quote,
+  pricePrecision: m.pricePrecision,
+  sizePrecision: m.sizePrecision,
+  baseDecimals: m.baseDecimals,
+  quoteDecimals: m.quoteDecimals,
+  address: m.address,
+}));
+
 export function kuruMarketByAddress(address: string): KuruMarketSeed | undefined {
   const lower = address.toLowerCase();
   return KURU_MARKETS.find((m) => m.address === lower);
@@ -99,40 +134,83 @@ export function kuruTokenDecimals(token: string): number {
  * (instance 12 = Exchange 0x1964…80cc). price_decimals / size_decimals scale
  * the on-chain PNS / LNS integers: humanPrice = pricePNS / 10^priceDecimals,
  * humanSize = lotLNS / 10^sizeDecimals. CNS (collateral) is AUSD, 6 decimals.
+ *
+ * The `perpId`s are powers of two by construction, which is why the id is
+ * used as the join key rather than the symbol.
  */
 export type PerplMarketSeed = {
   readonly marketId: string; // "perpl-<perpId>"
   readonly perpId: bigint;
-  readonly symbol: string;
+  readonly base: string;
   readonly priceDecimals: number;
   readonly sizeDecimals: number;
 };
 
 export const PERP_COLLATERAL_DECIMALS = 6; // AUSD
 
+/** Agora AUSD on Monad testnet — the collateral token Perpl's events are priced in. */
+export const PERPL_COLLATERAL =
+  '0xa9012a055bd4e0edff8ce09f960291c09d5322dc';
+
 export const PERPL_MARKETS: readonly PerplMarketSeed[] = [
-  { marketId: 'perpl-16', perpId: 16n, symbol: 'BTC', priceDecimals: 1, sizeDecimals: 5 },
-  { marketId: 'perpl-32', perpId: 32n, symbol: 'ETH', priceDecimals: 2, sizeDecimals: 3 },
-  { marketId: 'perpl-48', perpId: 48n, symbol: 'SOL', priceDecimals: 2, sizeDecimals: 3 },
-  { marketId: 'perpl-64', perpId: 64n, symbol: 'MON', priceDecimals: 5, sizeDecimals: 0 },
-  { marketId: 'perpl-256', perpId: 256n, symbol: 'ZEC', priceDecimals: 3, sizeDecimals: 3 },
-  { marketId: 'perpl-272', perpId: 272n, symbol: 'LIT', priceDecimals: 5, sizeDecimals: 1 },
-  { marketId: 'perpl-320', perpId: 320n, symbol: 'PUMP', priceDecimals: 6, sizeDecimals: 0 },
+  { marketId: 'perpl-16', perpId: 16n, base: 'BTC', priceDecimals: 1, sizeDecimals: 5 },
+  { marketId: 'perpl-32', perpId: 32n, base: 'ETH', priceDecimals: 2, sizeDecimals: 3 },
+  { marketId: 'perpl-48', perpId: 48n, base: 'SOL', priceDecimals: 2, sizeDecimals: 3 },
+  { marketId: 'perpl-64', perpId: 64n, base: 'MON', priceDecimals: 5, sizeDecimals: 0 },
+  { marketId: 'perpl-256', perpId: 256n, base: 'ZEC', priceDecimals: 3, sizeDecimals: 3 },
+  { marketId: 'perpl-272', perpId: 272n, base: 'LIT', priceDecimals: 5, sizeDecimals: 1 },
+  { marketId: 'perpl-320', perpId: 320n, base: 'PUMP', priceDecimals: 6, sizeDecimals: 0 },
 ] as const;
+
+export const perplMarketId = (perpId: bigint): string => `perpl-${perpId}`;
+
+/** Perpl `price_decimals`/`size_decimals` are decimal counts, not precisions. */
+export function perplMarketSeed(seed: PerplMarketSeed): MarketSeed {
+  return {
+    marketId: seed.marketId,
+    venue: 'PERPL',
+    symbol: `${seed.base}-PERP`,
+    base: seed.base,
+    quote: 'AUSD',
+    pricePrecision: 10n ** BigInt(seed.priceDecimals),
+    sizePrecision: 10n ** BigInt(seed.sizeDecimals),
+    baseDecimals: seed.sizeDecimals,
+    quoteDecimals: PERP_COLLATERAL_DECIMALS,
+  };
+}
+
+export const PERPL_MARKET_SEEDS: readonly MarketSeed[] = PERPL_MARKETS.map(perplMarketSeed);
 
 export function perplMarketByPerpId(perpId: bigint): PerplMarketSeed | undefined {
   return PERPL_MARKETS.find((m) => m.perpId === perpId);
 }
 
 /**
- * Perpl OrderType wire enum (docs.perpl.xyz types-and-errors):
- * 0 Unspecified, 1 OpenLong, 2 OpenShort, 3 CloseLong, 4 CloseShort,
- * 5 Cancel, 6 IncreasePositionCollateral, 7 Change.
- * BUY = the taker acquired exposure (OpenLong / CloseShort — a short close
- * buys back); SELL = OpenShort / CloseLong. Mirrors OrderType::side() in
- * PerplFoundation/dex-sdk (OpenLong|CloseShort → Bid is the *order* side;
- * the taker intent is long/short, which is what a trade tape wants).
+ * The handler-facing lookup: the same market, in the venue-neutral `MarketSeed`
+ * shape, so handlers read `sizePrecision`/`pricePrecision` and derive the
+ * decimal counts with `decimalsFromPrecision` — one source of truth instead of
+ * a `priceDecimals` copy that can drift from it.
  */
-export function perplSide(orderType: number): 'BUY' | 'SELL' {
-  return orderType === 1 || orderType === 4 ? 'BUY' : 'SELL';
+export function perplMarketSeedByPerpId(perpId: bigint): MarketSeed | undefined {
+  const seed = perplMarketByPerpId(perpId);
+  return seed === undefined ? undefined : perplMarketSeed(seed);
+}
+
+/**
+ * A market from Perpl's `ContractAdded`, for a perpetual listed *inside* the
+ * indexed range. Carries the decimals on the event, so nothing is assumed.
+ */
+export function perplMarketSeedFromContract(
+  perpId: bigint,
+  symbol: string,
+  priceDecimals: bigint,
+  lotDecimals: bigint,
+): MarketSeed {
+  return perplMarketSeed({
+    marketId: perplMarketId(perpId),
+    perpId,
+    base: symbol,
+    priceDecimals: Number(priceDecimals),
+    sizeDecimals: Number(lotDecimals),
+  });
 }
