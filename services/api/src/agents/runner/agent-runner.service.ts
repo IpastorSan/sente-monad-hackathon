@@ -368,7 +368,14 @@ export class AgentRunnerService {
     // Only read Perpl when this process has the agent's Perpl key (SEN-19): the
     // mandate may allow Perpl before the wallet has enrolled one.
     const perplAllowed = mandate.venues.includes('perpl');
-    const perpl = perplAllowed && Boolean(await ctx.venues().then((v) => v.perpl, () => undefined));
+    const perpl =
+      perplAllowed &&
+      Boolean(
+        await ctx.venues().then(
+          (v) => v.perpl,
+          () => undefined,
+        ),
+      );
     const kuruMarkets = kuru
       ? mandate.kuru.markets.flatMap((address) => {
           const market = KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, address));
@@ -389,15 +396,28 @@ export class AgentRunnerService {
       ...markets.map((m) => read('get_depth', { ...m, limit: SNAPSHOT_DEPTH_LEVELS })),
     ]);
 
+    // Nansen smart-money context (SEN-29), only with a key set: without one the
+    // tool just answers `not_configured`, and the free plan's credits are too
+    // scarce to spend per snapshot on every market. One market, the first
+    // allowed — the tool's own 10-minute cache keeps repeat runs cheap.
+    const nansenMarket = markets[0]?.market;
+    const smartMoney =
+      nansenMarket && (process.env['NANSEN_API_KEY'] ?? '').trim()
+        ? await read('smart_money_signals', { market: nansenMarket })
+        : undefined;
+
     return {
       balances,
-      ...(perplAllowed && !perpl ? { perpl: 'not set up for this agent yet (no enrolled API key)' } : {}),
+      ...(perplAllowed && !perpl
+        ? { perpl: 'not set up for this agent yet (no enrolled API key)' }
+        : {}),
       ...(perpl ? { positions } : {}),
       openOrders: {
         ...(kuru ? { kuru: kuruOrders } : {}),
         ...(perpl ? { perpl: perplOrders } : {}),
       },
       depth: Object.fromEntries(markets.map((m, i) => [`${m.venue}:${m.market}`, depths[i]])),
+      ...(smartMoney !== undefined ? { smartMoney } : {}),
     };
   }
 }
