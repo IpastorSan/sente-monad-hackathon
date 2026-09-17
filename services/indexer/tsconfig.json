@@ -16,5 +16,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", ".envio/types.d.ts", "envio-env.d.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", ".envio/types.d.ts", "envio-env.d.ts"],
+  "exclude": ["scripts/local/**", "node_modules"]
 }
