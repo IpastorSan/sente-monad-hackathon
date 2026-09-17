@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 
 import { AgentsModule } from './agents/agents.module';
 import { AuthModule } from './auth/auth.module';
+import { ChainModule } from './chain/chain.module';
 import { CreditsModule } from './credits/credits.module';
 import { GasModule } from './gas/gas.module';
 import { HealthModule } from './health/health.module';
@@ -21,6 +22,8 @@ import { WalletModule } from './wallet/wallet.module';
     WalletModule,
     VenuesModule,
     AgentsModule,
+    // Monad's commit state, followed over `MONAD_WS_URL` (SEN-21).
+    ChainModule,
     CreditsModule,
     GasModule,
   ],
