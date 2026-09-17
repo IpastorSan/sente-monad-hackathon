@@ -71,6 +71,22 @@ export interface AgentRecord {
   readonly updatedAt: Date;
   readonly revokedAt?: Date;
   /**
+   * Whether the owner published this agent's system prompt (SEN-28). Default
+   * `false`: nothing is shared until its owner says so, and a fork copies the
+   * system prompt ONLY when this is true. The strategy and the model are
+   * copyable either way — they are what a fork is for.
+   *
+   * The forked agent always starts `false`, whoever it was forked from.
+   */
+  readonly public: boolean;
+  /**
+   * The agent this one's strategy was forked from (SEN-28), if any. Lineage
+   * only: the source's mandate, wallet, policy, MCP token, event log and
+   * ERC-8004 identity are NOT inherited, so this is a fact about where the
+   * strategy came from and nothing more.
+   */
+  readonly forkedFrom?: string;
+  /**
    * The gas drip's outcome. Optional so records built elsewhere (specs, older
    * code) stay valid; absent reads as not funded.
    */

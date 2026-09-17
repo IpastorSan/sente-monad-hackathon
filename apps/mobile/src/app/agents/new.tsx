@@ -4,6 +4,13 @@
  * With `?amend=<id>` the same screen amends an existing agent's mandate and
  * shows only the last two steps, so a mandate is always edited and read back
  * in exactly one place.
+ *
+ * With `?fork=<id>&from=<name>` it forks that agent's strategy (SEN-28) and
+ * shows only the last two steps too. There is no strategy field on this path
+ * and nothing to retype: the API copies the source's strategy and model into
+ * the new agent, and copies its system prompt only if the source's owner
+ * published it. The mandate written here is the forker's OWN — it is compiled
+ * into the new wallet's policy, and the source's wallet is never touched.
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -13,6 +20,7 @@ import {
   AGENT_LIMITS,
   AGENT_MODELS,
   describeAgentsError,
+  forkName,
   modelLabel,
   type Agent,
   type HireAgentResult,
@@ -65,19 +73,27 @@ type ErrorCopy = { title: string; detail: string };
 
 export default function HireAgentScreen() {
   const router = useRouter();
-  const { amend } = useLocalSearchParams<{ amend?: string }>();
+  const { amend, fork, from } = useLocalSearchParams<{
+    amend?: string;
+    fork?: string;
+    from?: string;
+  }>();
   const { agents: api } = useSession();
 
-  const steps: StepId[] = amend
-    ? ['mandate', 'review']
-    : ['identity', 'instructions', 'mandate', 'review'];
+  /** The agent being forked, named for the copy. Falls back to the raw id. */
+  const source = fork ? from?.trim() || fork : undefined;
+
+  const steps: StepId[] =
+    amend || fork ? ['mandate', 'review'] : ['identity', 'instructions', 'mandate', 'review'];
   const [index, setIndex] = useState(0);
   const step = steps[index] ?? 'review';
 
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => (fork && source ? forkName(source) : ''));
   const [model, setModel] = useState<string>(AGENT_MODELS[0].id);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [strategy, setStrategy] = useState('');
+  /** SEN-28: publish the prompt so others can fork it. Opt-in, off by default. */
+  const [isPublic, setIsPublic] = useState(false);
   const [form, setForm] = useState<MandateForm>(() => defaultMandateForm(nowSeconds()));
   /** A preset counts from the moment of submitting; `null` keeps `form.expiresAt` as is. */
   const [expiryDays, setExpiryDays] = useState<number | null>(7);
@@ -117,6 +133,12 @@ export default function HireAgentScreen() {
   };
   const mandateResult = currentMandate();
   const mandateErrors: MandateErrors = showErrors && !mandateResult.ok ? mandateResult.errors : {};
+  /**
+   * The name the copy will be stored under: what the user typed, or the same
+   * default the API applies to an unnamed fork (`forkName`). Blank is sent as
+   * "no name", so the API's own rule is what a cleared field means.
+   */
+  const forkAgentName = fork && source ? name.trim() || forkName(source) : '';
 
   const stepValid = (id: StepId): boolean => {
     switch (id) {
@@ -158,6 +180,15 @@ export default function HireAgentScreen() {
       if (amend) {
         await api.amendMandate(amend, result.mandate);
         router.back();
+      } else if (fork) {
+        // No strategy, prompt or model in this body: the API takes them from the
+        // source agent, under the name sent here.
+        setHired(
+          await api.fork(fork, {
+            mandate: result.mandate,
+            ...(name.trim() !== '' ? { name: name.trim() } : {}),
+          }),
+        );
       } else {
         setHired(
           await api.hire({
@@ -166,6 +197,7 @@ export default function HireAgentScreen() {
             strategy,
             model,
             mandate: result.mandate,
+            public: isPublic,
           }),
         );
       }
@@ -178,7 +210,11 @@ export default function HireAgentScreen() {
 
   if (hired) return <Hired result={hired} />;
 
-  const title = amend ? `Amend ${target?.name ?? 'mandate'}` : 'Hire an agent';
+  const title = amend
+    ? `Amend ${target?.name ?? 'mandate'}`
+    : fork
+      ? `Fork ${source ?? 'an agent'}`
+      : 'Hire an agent';
 
   if (!api || (amend && !target)) {
     return (
@@ -202,7 +238,7 @@ export default function HireAgentScreen() {
       <Button label={index === 0 ? 'Cancel' : 'Back'} onPress={back} style={styles.grow} />
       {last ? (
         <Button
-          label={amend ? 'Save mandate' : 'Hire agent'}
+          label={amend ? 'Save mandate' : fork ? 'Fork agent' : 'Hire agent'}
           kind="primary"
           busy={submitting}
           disabled={!mandateResult.ok}
@@ -254,6 +290,14 @@ export default function HireAgentScreen() {
               Runs are billed to your OpenRouter credits.
             </Text>
           </Section>
+          <Section label="Sharing">
+            <ToggleRow
+              title="Publish this agent’s prompt"
+              detail="Lets anyone fork this agent with your instructions. The strategy can be forked either way — this is the part it gates. Off by default."
+              value={isPublic}
+              onValueChange={setIsPublic}
+            />
+          </Section>
         </>
       ) : null}
 
@@ -288,12 +332,23 @@ export default function HireAgentScreen() {
           errors={mandateErrors}
           expiryDays={expiryDays}
           setExpiryDays={setExpiryDays}
+          fork={fork && source ? { source, name, setName } : undefined}
         />
       ) : null}
 
       {step === 'review' ? (
         <>
-          {!amend ? (
+          {fork ? (
+            <Section label="Forked from">
+              <Row label="Source" value={source ?? fork} />
+              <Row label="Name" value={forkAgentName} />
+              <Row label="Copied" value="Strategy and model" />
+              <Row
+                label="Not copied"
+                value="The source’s wallet, mandate and track record — and its prompt, unless it is public"
+              />
+            </Section>
+          ) : !amend ? (
             <Section label="Agent">
               <Row label="Name" value={name.trim()} />
               <Row label="Model" value={modelLabel(model)} />
@@ -313,7 +368,9 @@ export default function HireAgentScreen() {
           <Text style={[text.dim, styles.after]}>
             {amend
               ? 'Saving replaces the wallet’s signing policy. Until that succeeds, the current mandate stands.'
-              : 'Hiring creates the agent’s wallet with this policy attached. The wallet starts empty: fund it from the agent’s page.'}
+              : fork
+                ? 'Forking creates your own agent with this policy attached. The strategy carries over; the source’s wallet, prompt and mandate do not. The new wallet starts empty: fund it from the agent’s page.'
+                : 'Hiring creates the agent’s wallet with this policy attached. The wallet starts empty: fund it from the agent’s page.'}
           </Text>
           {submitError ? (
             <Notice tone="error" title={submitError.title} detail={submitError.detail} />
@@ -330,12 +387,15 @@ function MandateStep({
   errors,
   expiryDays,
   setExpiryDays,
+  fork,
 }: {
   form: MandateForm;
   patch: (change: Partial<MandateForm>) => void;
   errors: MandateErrors;
   expiryDays: number | null;
   setExpiryDays: (days: number | null) => void;
+  /** Set only when forking (SEN-28): the source's name, and the copy's name. */
+  fork?: { source: string; name: string; setName: (value: string) => void };
 }) {
   const toggleMarket = (address: MandateForm['kuruMarkets'][number]) =>
     patch({
@@ -349,6 +409,25 @@ function MandateStep({
 
   return (
     <>
+      {fork ? (
+        <Section label="Fork">
+          <Text style={text.dim}>
+            {fork.source}’s strategy and model are copied into an agent of your own. Its system
+            prompt comes with it only if that agent is public, and your copy is private either way.
+            Nothing of the source’s wallet, mandate or record comes across.
+          </Text>
+          <Field
+            label="Name"
+            value={fork.name}
+            onChangeText={fork.setName}
+            max={AGENT_LIMITS.name}
+            placeholder="Name for your copy"
+            autoCapitalize="words"
+            hint="Leave it blank and the copy is named after the agent you are forking."
+          />
+        </Section>
+      ) : null}
+
       <Section label="Venues">
         <ToggleRow
           title="Kuru"

@@ -25,6 +25,7 @@ import {
   AGENT_EVENTS_DEFAULT_LIMIT,
   AmendMandateDto,
   CreateAgentDto,
+  ForkAgentDto,
   RunAgentDto,
   toAgentEventResponse,
   toAgentResponse,
@@ -72,6 +73,7 @@ export class AgentsController {
         strategy: body.strategy,
         model: body.model,
         mandate: body.mandate,
+        ...(body.public !== undefined ? { public: body.public } : {}),
       });
       return { agent: toAgentResponse(agent), mcpToken };
     });
@@ -160,6 +162,38 @@ export class AgentsController {
         await this.agents.amendMandate(this.auth.principal(), params.id, body.mandate),
       ),
     );
+  }
+
+  /**
+   * Forks an agent's strategy into a NEW agent for the caller (SEN-28): the
+   * honest way to copy a leaderboard agent is to hire its strategy, never to
+   * mirror a stranger's wallet.
+   *
+   * - The copy takes the source's `model` and `strategy`, and its
+   *   `systemPrompt` only when the source's owner published it (`public`).
+   * - Its wallet and policy are new, and the policy is compiled from the
+   *   mandate in THIS body — the forker's, never the source's.
+   * - The response is a `HireAgentResponseDto`: the new agent, and its own MCP
+   *   token, this once.
+   *
+   * The source is not ownership-checked — forking anyone's active agent is the
+   * feature — so the only refusals are 404 `agent_not_found`, 409
+   * `agent_revoked` (a revoked strategy is not running), 400 `mandate_invalid`
+   * (the forker's own) and the wallet failures.
+   */
+  @Post(':id/fork')
+  @HttpCode(HttpStatus.CREATED)
+  async fork(
+    @Param() params: AgentIdParamDto,
+    @Body() body: ForkAgentDto,
+  ): Promise<HireAgentResponseDto> {
+    return this.guard(async () => {
+      const { agent, mcpToken } = await this.agents.fork(this.auth.principal(), params.id, {
+        mandate: body.mandate,
+        ...(body.name !== undefined ? { name: body.name } : {}),
+      });
+      return { agent: toAgentResponse(agent), mcpToken };
+    });
   }
 
   /** Permanent. Retrying is safe, and is how a failed policy clear is retried. */

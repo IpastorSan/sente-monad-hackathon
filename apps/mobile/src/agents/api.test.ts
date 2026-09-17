@@ -13,6 +13,7 @@ import {
   AgentsApi,
   AgentsApiError,
   describeAgentsError,
+  forkName,
   fromWireMandate,
   toWireMandate,
   type WireAgent,
@@ -52,6 +53,7 @@ const WIRE_AGENT: WireAgent = {
   walletId: 'wallet-1',
   policyId: 'policy-1',
   status: 'active',
+  public: false,
   createdAt: '2026-09-11T10:00:00.000Z',
   updatedAt: '2026-09-11T10:00:00.000Z',
 };
@@ -119,6 +121,77 @@ test('hire posts exactly the CreateAgentDto fields, atoms as decimal strings, no
 
   assert.equal(result.mcpToken, 'sente_mcp_secret');
   assert.equal(result.agent.mandate.perpl.maxCollateralAtoms, 500_000_000n);
+});
+
+test('fork posts only the mandate (and the name) to /agents/:id/fork (SEN-28)', async () => {
+  const forked: WireAgent = {
+    ...WIRE_AGENT,
+    id: '99999999-9999-4999-8999-999999999999',
+    name: 'Night desk (fork)',
+    forkedFrom: AGENT_ID,
+  };
+  const { api, calls } = recordingApi({
+    status: 201,
+    body: { agent: forked, mcpToken: 'sente_mcp_fork' },
+  });
+
+  const result = await api.fork(AGENT_ID, {
+    mandate: fromWireMandate(WIRE_MANDATE),
+    name: 'Night desk (fork)',
+  });
+
+  const call = calls[0];
+  assert.equal(call?.url, `${BASE}/agents/${AGENT_ID}/fork`);
+  assert.equal(call?.method, 'POST');
+  assert.deepEqual(call?.headers, {
+    'x-sente-user-id': OWNER,
+    'content-type': 'application/json',
+  });
+  // The strategy and the prompt come from the source agent: a fork body that
+  // carried them would be a different agent wearing its name.
+  assert.deepEqual(Object.keys(call?.body as object).sort(), ['mandate', 'name']);
+  assert.deepEqual((call?.body as { mandate: unknown }).mandate, WIRE_MANDATE);
+
+  assert.equal(result.mcpToken, 'sente_mcp_fork');
+  assert.equal(result.agent.forkedFrom, AGENT_ID);
+  assert.equal(result.agent.mandate.perpl.maxCollateralAtoms, 500_000_000n);
+});
+
+test('an unnamed fork omits the name rather than sending a guess', async () => {
+  const { api, calls } = recordingApi({
+    status: 201,
+    body: { agent: WIRE_AGENT, mcpToken: 'sente_mcp_fork' },
+  });
+  await api.fork(AGENT_ID, { mandate: fromWireMandate(WIRE_MANDATE) });
+
+  assert.deepEqual(Object.keys(calls[0]?.body as object), ['mandate']);
+});
+
+test('forkName mirrors the API’s default, inside the name limit', () => {
+  assert.equal(forkName('Night desk'), 'Night desk (fork)');
+  assert.equal(forkName('  Night desk  '), 'Night desk (fork)');
+  assert.equal(forkName('x'.repeat(64)), `${'x'.repeat(57)} (fork)`);
+  assert.equal(forkName('x'.repeat(64)).length, 64);
+});
+
+test('hire carries the sharing flag only when it is set', async () => {
+  const { api, calls } = recordingApi(
+    { status: 201, body: { agent: WIRE_AGENT, mcpToken: 'a' } },
+    { status: 201, body: { agent: WIRE_AGENT, mcpToken: 'b' } },
+  );
+  const drafted = {
+    name: 'Night desk',
+    systemPrompt: 'Trade calmly.',
+    strategy: 'Mean reversion on MON-USDC.',
+    model: 'anthropic/claude-sonnet-5',
+    mandate: fromWireMandate(WIRE_MANDATE),
+  };
+
+  await api.hire(drafted);
+  await api.hire({ ...drafted, public: true });
+
+  assert.equal((calls[0]?.body as { public?: boolean }).public, undefined);
+  assert.equal((calls[1]?.body as { public?: boolean }).public, true);
 });
 
 test('atoms beyond Number.MAX_SAFE_INTEGER survive the wire exactly', () => {
