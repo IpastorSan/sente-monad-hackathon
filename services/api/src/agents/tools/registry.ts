@@ -27,6 +27,7 @@ import { toMandateDto } from '../dto/agent.dto';
 import type { AgentRecord } from '../store/agent-store';
 import type { KuruToolVenue, ToolContext, ToolVenues } from './context';
 import { isPositiveDecimal, maxDecimal, mulDecimal } from './decimal';
+import { fetchSmartMoneySignals, NansenClient } from './nansen';
 import { invalidInput, SenteRefusal } from './refusals';
 
 export type ToolKind = 'read' | 'write';
@@ -387,6 +388,35 @@ const getOpenOrders = defineTool({
   },
 });
 
+/**
+ * Nansen smart-money read (SEN-29). One client for the process, built on first
+ * use so it sees the boot-time environment (Nest's ConfigModule loads `.env`
+ * after module imports), and so its 10-minute cache outlives a single run:
+ * the free plan gives 100 credits and then ~10 a day, and a fresh client per
+ * run would spend the budget inside a few agents. With `NANSEN_API_KEY`
+ * absent the tool answers `not_configured` — a real result, not a failure.
+ */
+let nansenClientSingleton: NansenClient | undefined;
+function nansenClient(): NansenClient {
+  nansenClientSingleton ??= new NansenClient();
+  return nansenClientSingleton;
+}
+
+const smartMoneySignals = defineTool({
+  name: 'smart_money_signals',
+  kind: 'read',
+  description:
+    'Nansen Smart Money on the token behind one market over the last 24 hours: net flow ' +
+    'in USD (accumulating or distributing), how many smart-money wallets traded it, and ' +
+    'their DEX buys vs sells. This is MONAD MAINNET data used as context for your TESTNET ' +
+    'trades — it describes the real market, not the book you trade on. A not_configured or ' +
+    'unavailable result means there is no signal: trade on the venue data you have.',
+  input: z.strictObject({ market }),
+  async handler(_ctx, args) {
+    return fetchSmartMoneySignals(nansenClient(), args.market);
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Write tools
 
@@ -670,6 +700,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   getBalances,
   getPositions,
   getOpenOrders,
+  smartMoneySignals,
   recordThesis,
   placeLimit,
   placeMarket,
