@@ -147,6 +147,62 @@ export type AgentEventsPage = {
   nextSeq: number;
 };
 
+/**
+ * One row of `GET /leaderboard` (SEN-26).
+ *
+ * `n` is the denominator of `winRate` and `capitalDeployedUsd` of `roi`; the
+ * API returns them together on purpose, and `src/agents/leaderboard.ts` is the
+ * only thing that formats either one. Money is the API's own exact decimal
+ * string, never a float.
+ */
+export type LeaderboardRow = {
+  /** 1-based among the ranked rows; `null` for a row that is not ranked. */
+  rank: number | null;
+  agentId: string;
+  name: string;
+  model: string;
+  /** One line: venues, markets, largest order. */
+  mandate: string;
+  /** The agent's own wallet, EIP-55. */
+  address: Address;
+  /** `kuru` | `perpl`: where the indexer holds an account for it. */
+  venues: string[];
+  /** `false` when the indexer holds no account for this address yet. */
+  indexed: boolean;
+  /** Settled trades: wins + losses. */
+  n: number;
+  wins: number;
+  losses: number;
+  /** Every indexed fill, entries included. */
+  fills: number;
+  /** `wins / n`, 0..1. `null` when nothing has settled. */
+  winRate: number | null;
+  realisedPnlUsd: string;
+  capitalDeployedUsd: string;
+  roi: number | null;
+  /** The SEN-22 reading: per thesis, with its own denominator. */
+  theses: { settled: number; held: number; open: number };
+};
+
+/** Whether the numbers exist at all. `unconfigured` and `unreachable` carry no rows. */
+export type LeaderboardSource = {
+  kind: 'ok' | 'unconfigured' | 'unreachable';
+  message?: string;
+};
+
+export type Leaderboard = {
+  /** Rows with at least `minTrades` settled trades, best first. */
+  ranked: LeaderboardRow[];
+  /** Rows below it: shown, never ordered. */
+  tooFewTrades: LeaderboardRow[];
+  /** The published definitions, verbatim. Printed under the table. */
+  formula: string;
+  notes: string[];
+  minTrades: number;
+  source: LeaderboardSource;
+  generatedAt: string;
+};
+
 /** A non-2xx response, carrying the API's stable `reason` when it sent one. */
 export class AgentsApiError extends Error {
   readonly status: number;
@@ -263,6 +319,31 @@ export class AgentsApi {
       }
       throw error;
     }
+  }
+
+  /**
+   * `GET /leaderboard` (SEN-26) — every active agent, ranked on settled
+   * performance, with `n` beside every win rate and the formulas published in
+   * the response.
+   *
+   * The route is global, not per-user: it answers the same board whoever asks.
+   * It is behind the placeholder header for now, like every other route.
+   *
+   * `source.kind` is not decoration. When it is `unconfigured` or
+   * `unreachable` the lists are empty because there are no numbers to show —
+   * not because nobody has traded — and the screen must say which.
+   */
+  async leaderboard(): Promise<Leaderboard> {
+    const page = await this.request<Partial<Leaderboard>>('GET', '/leaderboard');
+    return {
+      ranked: page.ranked ?? [],
+      tooFewTrades: page.tooFewTrades ?? [],
+      formula: page.formula ?? '',
+      notes: page.notes ?? [],
+      minTrades: page.minTrades ?? 3,
+      source: page.source ?? { kind: 'ok' },
+      generatedAt: page.generatedAt ?? '',
+    };
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

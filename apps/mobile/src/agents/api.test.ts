@@ -234,3 +234,86 @@ test('describeAgentsError speaks to the reason, and to an unreachable API', () =
     'Couldn’t reach the API',
   );
 });
+
+test('leaderboard is GET /leaderboard, and keeps n beside the rate it belongs to', async () => {
+  const { api, calls } = recordingApi({
+    status: 200,
+    body: {
+      ranked: [
+        {
+          rank: 1,
+          agentId: AGENT_ID,
+          name: 'Night desk',
+          model: 'anthropic/claude-sonnet-5',
+          mandate: 'Kuru MON-USDC · max 250.5 per order',
+          address: '0x1111111111111111111111111111111111111111',
+          venues: ['kuru'],
+          indexed: true,
+          n: 8,
+          wins: 5,
+          losses: 3,
+          fills: 26,
+          winRate: 0.625,
+          realisedPnlUsd: '25',
+          capitalDeployedUsd: '100',
+          roi: 0.25,
+          theses: { settled: 3, held: 2, open: 1 },
+        },
+      ],
+      tooFewTrades: [],
+      formula:
+        'n = settled trades (wins + losses) · win rate = wins ÷ n · ROI = realised PnL ÷ capital deployed',
+      notes: ['n counts settled trades'],
+      minTrades: 3,
+      source: { kind: 'ok' },
+      generatedAt: '2026-09-17T10:00:00.000Z',
+    },
+  });
+
+  const board = await api.leaderboard();
+
+  assert.deepEqual(calls, [
+    { url: `${BASE}/leaderboard`, method: 'GET', headers: { 'x-sente-user-id': OWNER } },
+  ]);
+  const row = board.ranked[0];
+  // The denominator travels with the rate: no row can render one without it.
+  assert.equal(row?.n, 8);
+  assert.equal(row?.winRate, 0.625);
+  assert.equal(row?.roi, 0.25);
+  assert.equal(row?.capitalDeployedUsd, '100');
+  assert.deepEqual(row?.theses, { settled: 3, held: 2, open: 1 });
+  assert.match(board.formula, /win rate = wins ÷ n/);
+  assert.deepEqual(board.source, { kind: 'ok' });
+});
+
+test('leaderboard answers an empty board rather than undefined lists', async () => {
+  const { api } = recordingApi({ status: 200, text: '{}' });
+
+  const board = await api.leaderboard();
+
+  assert.deepEqual(board.ranked, []);
+  assert.deepEqual(board.tooFewTrades, []);
+  assert.equal(board.minTrades, 3);
+  assert.deepEqual(board.source, { kind: 'ok' });
+});
+
+test('an unconfigured board says so, and carries no rows to misread', async () => {
+  const { api } = recordingApi({
+    status: 200,
+    body: {
+      ranked: [],
+      tooFewTrades: [],
+      formula:
+        'n = settled trades (wins + losses) · win rate = wins ÷ n · ROI = realised PnL ÷ capital deployed',
+      notes: ['…', 'No indexer is configured (ENVIO_GRAPHQL_URL is unset)'],
+      minTrades: 3,
+      source: { kind: 'unconfigured', message: 'No indexer is configured' },
+      generatedAt: '2026-09-17T10:00:00.000Z',
+    },
+  });
+
+  const board = await api.leaderboard();
+
+  assert.equal(board.source.kind, 'unconfigured');
+  assert.equal(board.ranked.length, 0);
+});

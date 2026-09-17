@@ -163,6 +163,13 @@ export default function Home() {
           disabled={status !== 'ready'}
           style={styles.primary}
         />
+        {/* SEN-26: the board, which is also the zero-balance landing content. */}
+        <Button
+          label="Leaderboard"
+          onPress={() => router.push('/leaderboard')}
+          disabled={status !== 'ready'}
+          style={styles.primary}
+        />
         <Button
           label={`Send ${formatEther(SELF_TRANSFER)} MON to self`}
           onPress={() => void sendToSelf()}
