@@ -3,6 +3,7 @@ import { parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
 import type { GasDripAuth, GasDripPrincipal } from '../gas/auth/gas-drip-auth';
+import { ConsensusService, type PollTag, type TaggedBlock } from '../chain/consensus.service';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
 import { AGENT_REFUSAL_REASONS, agentErrorStatus } from './agents.errors';
@@ -47,16 +48,31 @@ function setup(wallets = new FakeAgentWalletProvider()) {
   let principal: GasDripPrincipal = { userId: 'alice' };
   const auth: GasDripAuth = { principal: () => principal };
   const events = new InMemoryAgentEventLog();
+  // SEN-21. A real ConsensusService, fed through its tag reader — the socket
+  // path is consensus.service.spec.ts's. `settle(n)` is what a block that has
+  // been finalized looks like to the decoration.
+  const byTag = new Map<PollTag, TaggedBlock>();
+  const consensus = new ConsensusService({
+    wsUrl: 'wss://example.invalid',
+    readBlock: { getBlockByTag: (tag) => Promise.resolve(byTag.get(tag)) },
+    logger: { log: () => undefined, warn: () => undefined },
+    autoStart: false,
+  });
   const controller = new AgentsController(
     new AgentsService(new InMemoryAgentStore(), wallets),
     auth,
     // The run route has its own spec (runner/run-route.spec.ts).
     {} as never,
     events,
+    consensus,
   );
   return {
     controller,
     events,
+    consent: async (blockNumber: number) => {
+      byTag.set('finalized', { number: blockNumber, id: `0x${'f'.repeat(64)}` });
+      await consensus.pollOnce();
+    },
     as(userId: string) {
       principal = { userId };
     },
@@ -210,6 +226,58 @@ describe('AgentsController', () => {
         status: 404,
         body: { reason: 'agent_not_found' },
       });
+    });
+
+    it('decorates order and fill events with how far Monad has taken their block (SEN-21)', async () => {
+      const h = setup();
+      const { agent } = await h.controller.hire(body() as unknown as CreateAgentDto);
+      const at = { agentId: agent.id, runId: 'run-2' };
+      const TRACKED = 74_000_020;
+      await h.events.append({
+        ...at,
+        kind: 'order',
+        tool: 'place_limit',
+        detail: { orderId: '9:1', blockNumber: TRACKED },
+      });
+      await h.events.append({
+        ...at,
+        kind: 'fill',
+        tool: 'place_limit',
+        detail: { orderId: '9:1', blockNumber: TRACKED },
+      });
+      // An order the venue never reported a block for, a thesis, and a fill on
+      // a block old enough to have fallen out of the tracking window.
+      await h.events.append({
+        ...at,
+        kind: 'order',
+        tool: 'cancel_order',
+        detail: { orderId: '9:2' },
+      });
+      await h.events.append({ ...at, kind: 'thesis', detail: { market: 'MON-USDC' } });
+      await h.events.append({
+        ...at,
+        kind: 'fill',
+        tool: 'place_limit',
+        detail: { orderId: '9:3', blockNumber: 74_000_099 },
+      });
+      await h.consent(TRACKED);
+
+      const page = await h.controller.listEvents({ id: agent.id }, {});
+      const events = page.events;
+
+      expect(events[0]!.consensus).toEqual({
+        state: 'Finalized',
+        at: { finalized: expect.any(Number) },
+      });
+      // The fill of the same order landed in the same block, so it reads the same.
+      expect(events[1]!.consensus).toEqual(events[0]!.consensus);
+      expect(events[2]).not.toHaveProperty('consensus'); // no block to ask about
+      expect(events[3]).not.toHaveProperty('consensus'); // a thesis has no block
+      expect(events[4]!.consensus).toEqual({ state: 'unknown', at: {} });
+
+      // `detail` is the log's, byte for byte: the decoration adds a sibling.
+      expect(events[0]!.detail).toEqual({ orderId: '9:1', blockNumber: TRACKED });
+      expect(JSON.stringify(page)).not.toContain('undefined');
     });
 
     it('validates the query (the global ValidationPipe, as main.ts configures it)', async () => {

@@ -12,7 +12,9 @@ async function routeHarness(options: Parameters<typeof runnerHarness>[0] = {}) {
   const h = await runnerHarness(options);
   let userId = h.agent.userId;
   const auth: GasDripAuth = { principal: () => ({ userId }) };
-  const controller = new AgentsController(h.agents, auth, h.runner, h.events);
+  // The run route never reads consensus (SEN-21); the events route does, and
+  // has its own spec.
+  const controller = new AgentsController(h.agents, auth, h.runner, h.events, {} as never);
   return {
     ...h,
     controller,
