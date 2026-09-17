@@ -75,13 +75,26 @@ export interface AgentRecord {
    * code) stay valid; absent reads as not funded.
    */
   readonly gasFunding?: AgentGasFunding;
+  /**
+   * The agent's ERC-8004 `agentId` on Monad testnet, as a decimal string — a
+   * uint256 does not survive JSON. Absent when the agent has no on-chain
+   * identity: no registrar key is configured, or the registration failed, which
+   * never fails a hire (SEN-27, the same shape as `gasFunding`).
+   */
+  readonly erc8004AgentId?: string;
 }
 
 /** The only fields that change after hire. */
 export type AgentPatch = Partial<
   Pick<
     AgentRecord,
-    'mandate' | 'status' | 'policyCleared' | 'updatedAt' | 'revokedAt' | 'gasFunding'
+    | 'mandate'
+    | 'status'
+    | 'policyCleared'
+    | 'updatedAt'
+    | 'revokedAt'
+    | 'gasFunding'
+    | 'erc8004AgentId'
   >
 >;
 
