@@ -50,7 +50,7 @@ import {
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { useSession } from '@/session';
 import { ConsensusRamp } from '@/ui/ConsensusRamp';
-import { Loading, Notice, Screen, Tag, TopBar } from '@/ui/kit';
+import { Button, Loading, Notice, Screen, Tag, TopBar } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
 
 /** The plan's number: long enough to read as construction, short enough not to wait. */
@@ -79,6 +79,8 @@ export default function LedgerScreen() {
   const { agents: api } = useSession();
   const { entries, loaded, error } = useAgentEvents(id);
   const [agent, setAgent] = useState<Agent | null>(null);
+  /** The agent this one was forked from, named — when it is readable (SEN-28). */
+  const [forkedFromName, setForkedFromName] = useState<string | null>(null);
 
   useEffect(() => {
     if (!api || !id) return;
@@ -93,6 +95,26 @@ export default function LedgerScreen() {
       cancelled = true;
     };
   }, [api, id]);
+
+  /**
+   * Lineage, not a link: the source may belong to someone else, and a ledger is
+   * readable for your own agents. A source we cannot read is named as just
+   * that — the id is on the agent's own screen.
+   */
+  const forkedFrom = agent?.forkedFrom;
+  useEffect(() => {
+    if (!api || !forkedFrom) return;
+    let cancelled = false;
+    api.get(forkedFrom).then(
+      (source) => {
+        if (!cancelled) setForkedFromName(source.name);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, forkedFrom]);
 
   // The hook pages oldest-first; a ledger reads newest-first, the way a fill
   // report does. Reversing here keeps the mapping order-stable for tests.
@@ -112,6 +134,11 @@ export default function LedgerScreen() {
         {agent ? `${agent.name} · ` : ''}
         <Text style={text.mono}>{id ?? '—'}</Text>
       </Text>
+      {forkedFrom !== undefined ? (
+        <Text style={[text.caption, styles.forkLine]}>
+          Forked from {forkedFromName ?? 'another agent'}
+        </Text>
+      ) : null}
 
       <View style={styles.status}>
         <View style={[styles.dot, error !== null && styles.dotStale]} />
@@ -123,6 +150,21 @@ export default function LedgerScreen() {
               : 'Reading the agent’s trail…'}
         </Text>
       </View>
+
+      {/* The honest copy-trade (SEN-28): this agent's strategy under the
+          forker's own mandate, and never its wallet. */}
+      {id !== undefined ? (
+        <Button
+          label="Fork this strategy"
+          onPress={() =>
+            router.push({
+              pathname: '/agents/new',
+              params: { fork: id, ...(agent?.name ? { from: agent.name } : {}) },
+            })
+          }
+          style={styles.forkAction}
+        />
+      ) : null}
 
       {empty ? (
         <Notice
@@ -181,15 +223,7 @@ function Building({ children, delay = 0 }: { children: ReactNode; delay?: number
   );
 }
 
-function Entry({
-  entry,
-  delay,
-  animate,
-}: {
-  entry: LedgerEntry;
-  delay: number;
-  animate: boolean;
-}) {
+function Entry({ entry, delay, animate }: { entry: LedgerEntry; delay: number; animate: boolean }) {
   const row = (
     <View style={styles.entry}>
       <View style={styles.entryHead}>
@@ -295,8 +329,8 @@ function RefusalBody({ entry }: { entry: RefusalEntry }) {
       <Text style={[text.body, styles.tight]}>{entry.message || '—'}</Text>
       {enclave ? (
         <Text style={[text.caption, styles.after]}>
-          The enclave refused a call this agent’s mandate does not allow, and nothing was signed.
-          An agent cannot widen its own authority — this is that guarantee, doing its job.
+          The enclave refused a call this agent’s mandate does not allow, and nothing was signed. An
+          agent cannot widen its own authority — this is that guarantee, doing its job.
         </Text>
       ) : null}
     </>
@@ -322,6 +356,8 @@ function VerdictBody({ entry }: { entry: VerdictEntry }) {
 
 const styles = StyleSheet.create({
   meta: { marginTop: 4 },
+  forkLine: { marginTop: 6 },
+  forkAction: { marginTop: 16, minHeight: 0, paddingVertical: 12 },
   status: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 },
   dot: { width: 5, height: 5, borderRadius: 3, backgroundColor: color.textDim },
   dotStale: { backgroundColor: color.danger },

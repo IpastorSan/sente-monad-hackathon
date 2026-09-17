@@ -50,6 +50,8 @@ export function testAgent(patch: Partial<AgentRecord> = {}): AgentRecord {
     mcpTokenHash: 'a'.repeat(64),
     status: 'active',
     policyCleared: false,
+    // Private by default: a fixture only publishes its prompt when a spec says so.
+    public: false,
     createdAt: now,
     updatedAt: now,
     ...patch,

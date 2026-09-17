@@ -52,6 +52,7 @@ function agent(over: Partial<AgentRecord> & { id: string; address: Address }): A
     mcpTokenHash: `hash-${over.id}`,
     status: 'active',
     policyCleared: false,
+    public: false,
     createdAt: now,
     updatedAt: now,
     ...over,

@@ -12,6 +12,7 @@ import {
   AgentWalletsUnconfiguredError,
   type AgentRefusalReason,
 } from './agents.errors';
+import { AGENT_NAME_MAX_LENGTH } from './dto/agent.dto';
 import {
   AGENT_STORE,
   type AgentGasFunding,
@@ -28,6 +29,49 @@ export interface HireAgentInput {
   model: string;
   /** Untrusted; `parseMandate` validates it. */
   mandate: unknown;
+  /**
+   * Publish the system prompt so other people can fork it (SEN-28). Absent
+   * means `false`: sharing is opt-in, per agent.
+   */
+  public?: boolean;
+}
+
+/**
+ * `POST /agents/:id/fork` (SEN-28). There is no `strategy`, `systemPrompt` or
+ * `model` here on purpose: the fork takes those from the source agent, and the
+ * only thing the caller writes is the mandate that will bound their copy.
+ */
+export interface ForkAgentInput {
+  /** The FORKER's mandate. `parseMandate` validates it. */
+  mandate: unknown;
+  /** The new agent's name. Absent means `<source name> (fork)`. */
+  name?: string;
+}
+
+/** What a fork is called when the caller does not name it. */
+export const FORK_NAME_SUFFIX = ' (fork)';
+
+/**
+ * `Momentum` -> `Momentum (fork)`, clamped to `AGENT_NAME_MAX_LENGTH` so a
+ * maximum-length source name still yields a name the API accepts. Exported
+ * because the mobile app pre-fills the same string, and a spec pins them
+ * together.
+ */
+export function forkName(sourceName: string): string {
+  const room = AGENT_NAME_MAX_LENGTH - FORK_NAME_SUFFIX.length;
+  return `${sourceName.trim().slice(0, room)}${FORK_NAME_SUFFIX}`;
+}
+
+/**
+ * The name a fork is stored under. A caller-supplied name is trimmed and
+ * clamped (the DTO already refuses a blank or oversized one over HTTP, and the
+ * store's invariants must hold for callers that skip the DTO); a blank or
+ * missing one falls back to `forkName(source)`.
+ */
+function clampAgentName(name: string, sourceName: string): string {
+  const trimmed = name.trim();
+  if (trimmed === '') return forkName(sourceName);
+  return trimmed.slice(0, AGENT_NAME_MAX_LENGTH);
 }
 
 export interface HiredAgent {
@@ -120,6 +164,8 @@ export class AgentsService {
       mcpTokenHash: hashMcpToken(mcpToken),
       status: 'active',
       policyCleared: false,
+      // Opt-in, per agent: unset means private, so nothing is shared by accident.
+      public: input.public ?? false,
       createdAt: now,
       updatedAt: now,
       gasFunding: { funded: false, reason: 'drip_pending' },
@@ -129,12 +175,105 @@ export class AgentsService {
       `hired agent ${id} for ${principal.userId}: wallet ${wallet.address} ` +
         `policy ${wallet.policyId} (${rules.length} rules, ${this.wallets.name})`,
     );
-    // The on-chain identity first, then the gas: an identity that never gets gas
-    // is still worth having, and neither may fail the hire.
+    return this.completeHire(principal, agent, mcpToken);
+  }
+
+  /**
+   * Forks another agent's strategy under the CALLER's own mandate (SEN-28):
+   * the honest way to copy a leaderboard agent is to hire its strategy, never
+   * to mirror a stranger's wallet.
+   *
+   * Copied: `model` and `strategy` — always — and `systemPrompt`, only when the
+   * source's owner published it (`source.public`). When it is private the fork
+   * gets an EMPTY prompt: we do not summarise, paraphrase or reconstruct
+   * someone else's instructions.
+   *
+   * Not copied, ever: the source's mandate, wallet, address, policy, MCP token,
+   * event log and ERC-8004 identity. The forker's mandate is compiled into a
+   * NEW policy on a NEW wallet, so a fork can never sign with authority its
+   * forker did not grant — and the source's own wallet is untouched by any of
+   * this.
+   *
+   * The source is deliberately NOT ownership-checked: forking a stranger's
+   * leaderboard agent is the feature, and the two agents share a strategy and
+   * nothing else. A revocation is the one thing that stops it — a revoked
+   * agent's strategy is no longer running, so it is refused rather than copied.
+   */
+  async fork(
+    principal: GasDripPrincipal,
+    sourceId: string,
+    input: ForkAgentInput,
+  ): Promise<HiredAgent> {
+    const source = await this.store.get(sourceId);
+    if (!source) {
+      throw new AgentRefusedError('agent_not_found', `no agent ${sourceId}`);
+    }
+    if (source.status === 'revoked') {
+      throw new AgentRefusedError(
+        'agent_revoked',
+        `agent ${sourceId} is revoked, so its strategy is no longer running and cannot be forked`,
+      );
+    }
+    const mandate = this.parse(input.mandate);
+    const rules = compileMandate(mandate);
+
+    const id = randomUUID();
+    let wallet;
+    try {
+      // Same naming rule as hire: the id, not a name a third party supplied.
+      wallet = await this.wallets.provision({ rules, displayName: `sente-agent-${id}` });
+    } catch (error) {
+      throw this.walletFailure('wallet_provision_failed', error, 'could not provision the wallet');
+    }
+
+    const mcpToken = generateMcpToken();
+    const now = new Date();
+    const agent: AgentRecord = {
+      id,
+      userId: principal.userId,
+      name:
+        input.name !== undefined ? clampAgentName(input.name, source.name) : forkName(source.name),
+      systemPrompt: source.public ? source.systemPrompt : '',
+      strategy: source.strategy,
+      model: source.model,
+      mandate,
+      walletId: wallet.walletId,
+      address: wallet.address,
+      policyId: wallet.policyId,
+      mcpTokenHash: hashMcpToken(mcpToken),
+      status: 'active',
+      policyCleared: false,
+      // The fork inherits the strategy, never the source's sharing choice.
+      public: false,
+      forkedFrom: source.id,
+      createdAt: now,
+      updatedAt: now,
+      gasFunding: { funded: false, reason: 'drip_pending' },
+    };
+    await this.store.insert(agent);
+    this.logger.log(
+      `forked agent ${source.id} into ${id} for ${principal.userId}: wallet ${wallet.address} ` +
+        `policy ${wallet.policyId} (${rules.length} rules, prompt ` +
+        `${source.public ? 'copied' : 'not copied: the source is private'})`,
+    );
+    return this.completeHire(principal, agent, mcpToken);
+  }
+
+  /**
+   * The tail every hire shares — a fork is a hire that inherited a strategy, so
+   * it gets the same treatment: the on-chain identity first, then the gas. An
+   * identity that never gets gas is still worth having, and neither may fail
+   * the hire.
+   */
+  private async completeHire(
+    principal: GasDripPrincipal,
+    agent: AgentRecord,
+    mcpToken: string,
+  ): Promise<HiredAgent> {
     const registration = await this.registerIdentity(agent);
     const gasFunding = await this.fundGas(principal, agent);
     return {
-      agent: await this.store.update(id, {
+      agent: await this.store.update(agent.id, {
         gasFunding,
         ...(registration.agentId !== undefined ? { erc8004AgentId: registration.agentId } : {}),
       }),

@@ -33,6 +33,21 @@ export const AGENT_LIMITS = {
   strategy: 2_000,
 } as const;
 
+/** Mirrors `FORK_NAME_SUFFIX` in `services/api/src/agents/agents.service.ts`. */
+export const FORK_NAME_SUFFIX = ' (fork)';
+
+/**
+ * `Night desk` -> `Night desk (fork)`, clamped to `AGENT_LIMITS.name`.
+ *
+ * Mirrors `forkName` in `services/api/src/agents/agents.service.ts`, which names
+ * an unnamed fork this same way: this screen shows the name and SENDS it, so
+ * what the user reads before hiring is the name the agent is stored under.
+ */
+export function forkName(sourceName: string): string {
+  const room = AGENT_LIMITS.name - FORK_NAME_SUFFIX.length;
+  return `${sourceName.trim().slice(0, room)}${FORK_NAME_SUFFIX}`;
+}
+
 export const MANDATE_VERSION = 1;
 /** Monad testnet. Both venues are testnet-only today, so the mandate is too. */
 export const MANDATE_CHAIN_ID = 10143;
@@ -73,6 +88,13 @@ type AgentFields = {
   systemPrompt: string;
   strategy: string;
   model: string;
+  /**
+   * Whether the owner published the system prompt (SEN-28). Forking copies it
+   * only when this is true; the strategy is copyable either way.
+   */
+  public: boolean;
+  /** The agent this one's strategy was forked from (SEN-28), if any. */
+  forkedFrom?: string;
   /** The agent's own wallet. Funding it is a plain transfer from the user. */
   address: Address;
   chainId: number;
@@ -95,6 +117,22 @@ export type HireAgentRequest = {
   strategy: string;
   model: string;
   mandate: AgentMandate;
+  /**
+   * Publish the system prompt so other people can fork it (SEN-28). Omitted
+   * means `false`: sharing is opt-in, per agent.
+   */
+  public?: boolean;
+};
+
+/**
+ * `POST /agents/:id/fork` (SEN-28). No `strategy`, `systemPrompt` or `model`:
+ * the API takes those from the source agent. The only thing the caller writes
+ * is the mandate that will bound their copy.
+ */
+export type ForkAgentRequest = {
+  mandate: AgentMandate;
+  /** Omitted, the API names the copy `<source name> (fork)`. */
+  name?: string;
 };
 
 export type HireAgentResult = {
@@ -253,6 +291,28 @@ export class AgentsApi {
         strategy: request.strategy,
         model: request.model,
         mandate: toWireMandate(request.mandate),
+        ...(request.public !== undefined ? { public: request.public } : {}),
+      },
+    );
+    return { agent: fromWireAgent(agent), mcpToken };
+  }
+
+  /**
+   * `POST /agents/:id/fork` (SEN-28) — a NEW agent for the caller, carrying the
+   * source's strategy and model and bounded by `mandate`: the caller's OWN, so
+   * the copy can never sign with authority the source's owner granted.
+   *
+   * The source needs no ownership — forking a leaderboard agent is the feature —
+   * and the answer is a `HireAgentResult` because a fork is a real agent: its
+   * own wallet, its own policy, and its own MCP token, returned this once.
+   */
+  async fork(id: string, request: ForkAgentRequest): Promise<HireAgentResult> {
+    const { agent, mcpToken } = await this.request<{ agent: WireAgent; mcpToken: string }>(
+      'POST',
+      `/agents/${encodeURIComponent(id)}/fork`,
+      {
+        mandate: toWireMandate(request.mandate),
+        ...(request.name !== undefined ? { name: request.name } : {}),
       },
     );
     return { agent: fromWireAgent(agent), mcpToken };

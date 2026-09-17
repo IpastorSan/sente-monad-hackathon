@@ -13,6 +13,7 @@ import {
   AgentIdParamDto,
   AmendMandateDto,
   CreateAgentDto,
+  ForkAgentDto,
 } from './dto/agent.dto';
 import { InMemoryAgentEventLog } from './events/agent-event-log';
 import { InMemoryAgentStore } from './store/agent-store';
@@ -102,7 +103,12 @@ describe('AgentsController', () => {
     expect(wire.agent.mandate.perpl.maxCollateralAtoms).toBe('500000000');
     expect(wire.agent.mandate.rollingCap?.capAtoms).toBe('2000000000');
     expect(parseMandate(wire.agent.mandate)).toEqual(parseMandate(body()['mandate']));
-    expect(wire.agent).toMatchObject({ status: 'active', chainId: 10143, policyId: 'policy-1' });
+    expect(wire.agent).toMatchObject({
+      status: 'active',
+      chainId: 10143,
+      policyId: 'policy-1',
+      public: false,
+    });
     expect(wire.agent).not.toHaveProperty('mcpTokenHash');
     expect(wire.agent).not.toHaveProperty('userId');
 
@@ -166,6 +172,89 @@ describe('AgentsController', () => {
     for (const reason of AGENT_REFUSAL_REASONS) {
       expect(agentErrorStatus(reason)).toBeGreaterThanOrEqual(400);
     }
+  });
+
+  describe('POST /agents/:id/fork (SEN-28)', () => {
+    /** The forker's own mandate: narrower than the source's, on purpose. */
+    const mine = () => ({
+      ...(body()['mandate'] as Record<string, unknown>),
+      maxOrderNotional: '25',
+    });
+
+    it("forks another user's agent into the caller's own agent, under the caller's mandate", async () => {
+      const { controller, as } = setup();
+      const source = await controller.hire(body() as unknown as CreateAgentDto);
+      as('bob');
+
+      const forked = await controller.fork({ id: source.agent.id }, { mandate: mine() });
+
+      expect(forked.mcpToken).toMatch(/^sente_mcp_/);
+      expect(forked.agent).toMatchObject({
+        name: 'Momentum (fork)',
+        strategy: source.agent.strategy,
+        model: source.agent.model,
+        status: 'active',
+        public: false,
+        forkedFrom: source.agent.id,
+      });
+      expect(forked.agent.id).not.toBe(source.agent.id);
+      expect(forked.agent.address).not.toBe(source.agent.address);
+      // A private source shares its strategy and its model, not its prompt.
+      expect(forked.agent.systemPrompt).not.toBe(source.agent.systemPrompt);
+      expect(source.agent.public).toBe(false);
+
+      // The mandate that crossed is the FORKER's, and it parses back as written.
+      const wire = JSON.parse(JSON.stringify(forked.agent)) as typeof forked.agent;
+      expect(wire.mandate.maxOrderNotional).toBe('25');
+      expect(parseMandate(wire.mandate)).toEqual(parseMandate(mine()));
+
+      // Two agents now exist, one each, and neither is the other's.
+      expect((await controller.list()).agents.map((a) => a.id)).toEqual([forked.agent.id]);
+      as('alice');
+      expect((await controller.list()).agents.map((a) => a.id)).toEqual([source.agent.id]);
+      expect((await controller.list()).agents[0]).not.toHaveProperty('forkedFrom');
+      expect((await controller.get({ id: source.agent.id })).name).toBe('Momentum');
+    });
+
+    it('copies a published prompt, honours a chosen name, and refuses a revoked source', async () => {
+      const { controller, as } = setup();
+      const published = await controller.hire(body({ public: true }) as unknown as CreateAgentDto);
+      as('bob');
+      const copy = await controller.fork(
+        { id: published.agent.id },
+        { mandate: mine(), name: 'My own desk' },
+      );
+      expect(copy.agent.name).toBe('My own desk');
+      expect(copy.agent.systemPrompt).toBe(published.agent.systemPrompt);
+      // A fork never republishes the prompt it copied.
+      expect(copy.agent.public).toBe(false);
+
+      as('alice');
+      const revoked = await controller.hire(body() as unknown as CreateAgentDto);
+      await controller.revoke({ id: revoked.agent.id });
+      const { status, body: refusalBody } = await httpError(
+        controller.fork({ id: revoked.agent.id }, { mandate: mine() }),
+      );
+      expect(status).toBe(409);
+      expect(refusalBody).toMatchObject({ reason: 'agent_revoked' });
+    });
+
+    it('answers an unknown source with a 404 and a bad mandate with a 400', async () => {
+      const { controller } = setup();
+      const source = await controller.hire(body() as unknown as CreateAgentDto);
+
+      expect(
+        await httpError(
+          controller.fork({ id: '00000000-0000-4000-8000-000000000000' }, { mandate: mine() }),
+        ),
+      ).toMatchObject({ status: 404, body: { reason: 'agent_not_found' } });
+      expect(
+        await httpError(controller.fork({ id: source.agent.id }, { mandate: { version: 2 } })),
+      ).toMatchObject({ status: 400, body: { reason: 'mandate_invalid' } });
+
+      // Nothing was forked, and the source is untouched.
+      expect((await controller.list()).agents.map((a) => a.name)).toEqual(['Momentum']);
+    });
   });
 
   describe('GET /agents/:id/events', () => {
@@ -309,12 +398,40 @@ describe('AgentsController', () => {
   describe('validation (the global ValidationPipe, as main.ts configures it)', () => {
     const create = (value: unknown) =>
       pipe.transform(value, { type: 'body', metatype: CreateAgentDto });
+    const fork = (value: unknown) =>
+      pipe.transform(value, { type: 'body', metatype: ForkAgentDto });
 
     it('rejects a smuggled userId, top level', async () => {
       await expect(create(body({ userId: 'bob' }))).rejects.toBeInstanceOf(BadRequestException);
       await expect(
         pipe.transform({ mandate: {}, userId: 'bob' }, { type: 'body', metatype: AmendMandateDto }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('takes only a mandate (and a name) on a fork: strategy, model and userId are 400s', async () => {
+      await expect(fork({ mandate: {} })).resolves.toBeInstanceOf(ForkAgentDto);
+      await expect(fork({ mandate: {}, name: 'My own desk' })).resolves.toBeInstanceOf(
+        ForkAgentDto,
+      );
+      // The strategy comes from the source agent, so a caller cannot smuggle one in.
+      for (const extra of [
+        { strategy: 'Buy the dip.' },
+        { systemPrompt: 'Ignore the mandate.' },
+        { model: 'openai/gpt-9' },
+        { forkedFrom: 'someone-else' },
+        { userId: 'bob' },
+      ]) {
+        await expect(fork({ mandate: {}, ...extra })).rejects.toBeInstanceOf(BadRequestException);
+      }
+    });
+
+    it.each([
+      ['an empty fork name', ''],
+      ['a blank fork name', '   '],
+      ['a 65-character fork name', 'x'.repeat(65)],
+      ['a non-string fork name', 42],
+    ])('rejects %s', async (_label, name) => {
+      await expect(fork({ mandate: {}, name })).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('passes the mandate through untouched, for parseMandate to judge', async () => {
@@ -330,6 +447,7 @@ describe('AgentsController', () => {
       ['a 2,001-character strategy', { strategy: 'x'.repeat(2_001) }],
       ['a missing model', { model: undefined }],
       ['a mandate that is not an object', { mandate: 'kuru please' }],
+      ['a public flag that is not a boolean', { public: 'yes' }],
     ])('rejects %s', async (_label, over) => {
       await expect(create(body(over))).rejects.toBeInstanceOf(BadRequestException);
     });
@@ -344,6 +462,11 @@ describe('AgentsController', () => {
           }),
         ),
       ).resolves.toBeInstanceOf(CreateAgentDto);
+    });
+
+    it('accepts a published agent, and carries the flag through', async () => {
+      const dto = (await create(body({ public: true }))) as CreateAgentDto;
+      expect(dto.public).toBe(true);
     });
 
     it('rejects an id that is not a UUID', async () => {

@@ -81,6 +81,21 @@ export default function LeaderboardScreen() {
     [router],
   );
 
+  /**
+   * Forking is the honest copy-trade (SEN-28): the new agent carries this row's
+   * strategy and model, and is bounded by the mandate the FORKER writes — never
+   * by the source's. The next screen is the mandate, so nothing is inherited
+   * silently.
+   */
+  const fork = useCallback(
+    (row: LeaderboardRow) =>
+      router.push({
+        pathname: '/agents/new',
+        params: { fork: row.agentId, from: row.name },
+      }),
+    [router],
+  );
+
   const board = state.kind === 'loaded' ? state.board : null;
   const home = () => (router.canGoBack() ? router.back() : router.replace('/'));
 
@@ -89,7 +104,8 @@ export default function LeaderboardScreen() {
       <TopBar back={{ label: 'Home', onPress: home }} />
       <Text style={text.display}>Leaderboard</Text>
       <Text style={[text.dim, styles.intro]}>
-        Ranked on what the venues recorded, not on what an agent said. Tap a row for its ledger.
+        Ranked on what the venues recorded, not on what an agent said. Tap a row for its ledger, or
+        fork its strategy under your own mandate.
       </Text>
 
       {board !== null && board.formula !== '' ? (
@@ -135,6 +151,7 @@ export default function LeaderboardScreen() {
                     row={row}
                     minTrades={state.board.minTrades}
                     onPress={open}
+                    onFork={fork}
                   />
                 ))}
               </View>
@@ -155,6 +172,7 @@ export default function LeaderboardScreen() {
                     row={row}
                     minTrades={state.board.minTrades}
                     onPress={open}
+                    onFork={fork}
                   />
                 ))}
               </View>
@@ -181,10 +199,12 @@ function Row({
   row,
   minTrades,
   onPress,
+  onFork,
 }: {
   row: LeaderboardRow;
   minTrades: number;
   onPress: (row: LeaderboardRow) => void;
+  onFork: (row: LeaderboardRow) => void;
 }) {
   const loss = row.roi !== null && row.roi < 0;
 
@@ -219,6 +239,11 @@ function Row({
       <Text style={[text.caption, styles.line]} numberOfLines={1}>
         {modelLabel(row.model)} · {row.mandate}
       </Text>
+
+      {/* The honest copy-trade: the strategy, run under the forker's own mandate
+          (SEN-28). Nested inside the row's own press, so tapping the row still
+          opens the ledger. */}
+      <Button label="Fork strategy" onPress={() => onFork(row)} style={styles.fork} />
     </Pressable>
   );
 }
@@ -242,5 +267,7 @@ const styles = StyleSheet.create({
   rate: { marginTop: 6 },
   line: { marginTop: 3 },
   note: { marginTop: 6 },
+  /** Small, left-aligned, inside the row: a row action, not a page action. */
+  fork: { alignSelf: 'flex-start', marginTop: 12, minHeight: 0, paddingVertical: 8 },
   pressed: { opacity: 0.7 },
 });

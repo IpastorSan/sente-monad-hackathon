@@ -6,6 +6,7 @@ import 'reflect-metadata';
 import { MANDATE_CHAIN_ID, type Mandate } from '@sente/mandate';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsIn,
   IsInt,
   IsObject,
@@ -62,14 +63,47 @@ export class CreateAgentDto {
   @MaxLength(128)
   model!: string;
 
-  /** Atoms as decimal strings, never JS numbers — the form `parseMandate` accepts. */
+  /**
+   * Atoms as decimal strings, never JS numbers — the form `parseMandate` accepts.
+   */
   @IsObject()
   mandate!: Record<string, unknown>;
+
+  /**
+   * Publish this agent's system prompt so other people can fork it with your
+   * instructions (SEN-28). Omitted means `false`. The STRATEGY is copyable by
+   * forking either way — this gates the prompt, not the idea.
+   */
+  @IsOptional()
+  @IsBoolean()
+  'public'?: boolean;
 }
 
 export class AmendMandateDto {
   @IsObject()
   mandate!: Record<string, unknown>;
+}
+
+/**
+ * `POST /agents/:id/fork` (SEN-28): the caller's OWN mandate for a copy of
+ * another agent's strategy.
+ *
+ * There is no `strategy`, `systemPrompt` or `model` field, and `forbidNonWhitelisted`
+ * makes that a 400: the API takes those from the source agent, so a caller
+ * cannot fork an agent and smuggle in a different strategy under its name.
+ */
+export class ForkAgentDto {
+  /** The forker's mandate. The copy's policy is compiled from THIS, never the source's. */
+  @IsObject()
+  mandate!: Record<string, unknown>;
+
+  /** The new agent's name. Omitted means `<source name> (fork)`. */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(AGENT_NAME_MAX_LENGTH)
+  @Matches(/\S/, { message: 'name must not be blank' })
+  name?: string;
 }
 
 export class AgentIdParamDto {
@@ -145,6 +179,13 @@ export interface AgentResponseDto {
   model: string;
   mandate: MandateDto;
   /**
+   * Whether the owner published the system prompt (SEN-28): forking copies it
+   * only when this is true, and a fork always starts `false` itself.
+   */
+  public: boolean;
+  /** The agent this one's strategy was forked from (SEN-28), when there is one. */
+  forkedFrom?: string;
+  /**
    * The agent's wallet. Fund its collateral with an ERC-20 transfer; the
    * server only drips MON for gas, at hire (`gasFunded`).
    */
@@ -174,7 +215,8 @@ export interface HireAgentResponseDto {
   agent: AgentResponseDto;
   /**
    * The agent's MCP bearer token. Returned by this response ONLY — the server
-   * keeps just its hash, so it cannot be shown again.
+   * keeps just its hash, so it cannot be shown again. A fork answers with this
+   * same shape: the copy is a real, separately-credentialled agent.
    */
   mcpToken: string;
 }
@@ -277,6 +319,8 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     strategy: agent.strategy,
     model: agent.model,
     mandate: toMandateDto(agent.mandate),
+    public: agent.public,
+    ...(agent.forkedFrom !== undefined ? { forkedFrom: agent.forkedFrom } : {}),
     address: agent.address,
     chainId: MANDATE_CHAIN_ID,
     walletId: agent.walletId,
