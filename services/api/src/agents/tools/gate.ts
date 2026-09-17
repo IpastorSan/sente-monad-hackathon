@@ -13,13 +13,16 @@
  *
  * Nothing is thrown out of `invoke`: every outcome comes back as a
  * `ToolOutcome` whose message the model reads. Every refusal, and every
- * venue write whether it landed or failed, is appended to the event log.
+ * venue write whether it landed or failed, is appended to the event log. A
+ * close also settles the thesis behind it, so a `verdict` event follows the
+ * `close` (SEN-22).
  */
 import { Logger } from '@nestjs/common';
 import { checkIntent, type Intent } from '@sente/mandate';
 import * as z from 'zod/v4';
 
 import { type NewAgentEvent, type RefusalLayer } from '../events/agent-event-log';
+import { settle } from '../events/verdict';
 import type { ToolContext } from './context';
 import { isPositiveDecimal } from './decimal';
 import {
@@ -117,6 +120,9 @@ async function write(tool: AgentTool, ctx: ToolContext, args: unknown): Promise<
           tool: tool.name,
           detail: { ...(fill ?? {}), ...realisedOf(result) },
         });
+        // The close is what settles the thesis (SEN-22): what it made and
+        // whether it held, on the log like everything else.
+        await recordVerdict(ctx, fill);
       }
     }
     return { ok: true, result };
@@ -191,6 +197,37 @@ async function record(
     logger.error(
       `could not record a ${event.kind} event for agent ${ctx.agent.id}: ${String(error)}`,
     );
+  }
+}
+
+/**
+ * A verdict event for the thesis a close just settled (SEN-22).
+ *
+ * `settle` is a pure read of the run's events, so it only sees the close once
+ * the close above is on the log. Only a thesis whose position came back to zero
+ * is settled — one that is still open, and a close with no thesis behind it,
+ * record nothing.
+ *
+ * Like `record`, this never decides the outcome of the call: the close landed,
+ * and a log that will not take the verdict must not tell the model otherwise.
+ */
+async function recordVerdict(
+  ctx: ToolContext,
+  fill: Record<string, unknown> | undefined,
+): Promise<void> {
+  const market = fill?.['symbol'];
+  if (typeof market !== 'string') return;
+  try {
+    const events = await ctx.events.list(ctx.agent.id, { runId: ctx.runId });
+    const verdict = settle(events).findLast((v) => v.market === market);
+    if (verdict === undefined || verdict.held === 'open') return;
+    await record(ctx, {
+      kind: 'verdict',
+      tool: 'close_position',
+      detail: { ...verdict },
+    });
+  } catch (error) {
+    logger.error(`could not settle ${market} for agent ${ctx.agent.id}: ${String(error)}`);
   }
 }
 
