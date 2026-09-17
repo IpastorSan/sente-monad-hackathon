@@ -22,6 +22,9 @@ apps/mobile/keystores/credentials.json
 # Claude Code agent worktrees
 .claude/worktrees/
 
+# Hermes subagent worktrees
+.worktrees/
+
 # Stray build output next to TS sources (SEN-6 removed a committed set that
 # jest had been loading instead of the sources — CLAUDE.md gotcha 10). Real
 # JS lives in dist/ or in config files such as metro.config.js.
