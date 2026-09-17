@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+#
+# Sente leaderboard indexer — Monad testnet (10143).
+#
+# Kuru Spot V2 fills come off the four market OrderBook proxies as packed
+# events (`TradesPacked` / `BookUpdatesPacked`), decoded by hand in
+# src/lib/kuru-packed.ts because the payload is bit-packed, not ABI-encoded.
+# Account custody flows come off AccountCore. Perpl fills come off its
+# Exchange proxy using the event ABI vendored from Perpl's official
+# `dex-sdk` repo (abis/PerplExchange.events.json), matched live on-chain.
+#
+# Addresses are the Set-C Spot V2 deployment — the table in
+# packages/venues/src/kuru/constants.ts is the source of truth; this file is
+# a copy for a standalone runtime that cannot import workspace TS.
+name: sente-kuru-indexer
+description: Kuru + Perpl fills on Monad testnet, per-account stats for the Sente leaderboard
+
+# Handlers are auto-loaded from ./src; registration lives in
+# src/EventHandlers.ts, pure decoders in src/lib/.
+handlers: ./src
+
+# Trade rows and the Perpl context join key on tx hash, so select it globally
+# (block number/timestamp/hash are on by default).
+field_selection:
+  transaction_fields:
+    - hash
+
+chains:
+  - id: 10143 # Monad Testnet
+    # ~7 days back from 2026-09-17 (block 63278318 @ 09:29 UTC, binary
+    # searched on-chain): 61294867 @ 2026-09-10T09:29:46Z. The verified live
+    # fill in docs/kuru.md (tx 0x9d7fbce1…) is at 61406913, inside the range.
+    start_block: 61294867
+    hypersync_config:
+      url: https://monad-testnet.hypersync.xyz
+    # Public RPC as fallback only. Monad's public RPC caps eth_getLogs at 100
+    # blocks (docs/monad-testnet-assets.md), hence the interval and why
+    # HyperSync is the primary source.
+    rpc:
+      - url: https://testnet-rpc.monad.xyz
+        for: fallback
+        initial_block_interval: 100
+        interval_ceiling: 100
+    contracts:
+      - name: KuruOrderBook
+        address:
+          - "0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61" # MON-USDC
+          - "0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7" # WETH-USDC
+          - "0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f" # cbBTC-USDC
+          - "0x0B4dD2A7b09d5c5401149fFe51301Cc589017343" # XAUt-USDC
+      - name: KuruAccountCore
+        address: "0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22"
+      - name: PerplExchange
+        address: "0x1964C32f0bE608E7D29302AFF5E61268E72080cc"
+
+contracts:
+  - name: KuruOrderBook
+    events:
+      # Signatures copied from @toxicflow-labs/ts-sdk's spotOrderBookAbi so
+      # the topic0 hashes cannot drift from what the contract emits.
+      - event: "TradesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, uint24 effectiveTakerFeePps, address builder, uint24 builderFeePps, bytes packedTrades)"
+      - event: "BookUpdatesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, bytes packedUpdates)"
+
+  - name: KuruAccountCore
+    events:
+      - event: "Deposit(uint40 indexed accountId, address indexed token, address indexed payer, uint256 amount)"
+      - event: "Withdrawal(uint40 indexed accountId, address indexed token, address indexed recipient, uint256 amount)"
+      # account <-> accountId mapping; without it every leaderboard row is a
+      # number nobody can pay.
+      - event: "AccountRegistered(address indexed account, uint40 indexed accountId, uint40 indexed rootAccountId, address owner, uint16 subaccountSeq)"
+
+  - name: PerplExchange
+    abi_file_path: ./abis/PerplExchange.events.json
+    events:
+      - event: OrderRequestV2
+      - event: MakerOrderFilledV2
+      - event: TakerOrderFilledV2
+      - event: AccountCreated
+      - event: ContractAdded
+      - event: CollateralDeposit
+      - event: CollateralWithdrawal

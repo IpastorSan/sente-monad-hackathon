@@ -1,0 +1,24 @@
+{
+  "name": "sente-kuru-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Envio HyperIndex for Kuru Spot V2 + Perpl fills on Monad testnet (SEN-25)",
+  "scripts": {
+    "codegen": "envio codegen",
+    "dev": "envio dev",
+    "start": "envio start",
+    "test": "node --no-warnings --test src/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "envio": "3.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "~6.0.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

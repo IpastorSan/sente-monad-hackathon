@@ -1,0 +1,232 @@
+"""
+Sente leaderboard schema — Monad testnet (10143), Kuru Spot V2 + Perpl.
+
+Design notes:
+- Kuru identities are `uint40` account ids inside AccountCore, not addresses;
+  Perpl ids are `uint256` Exchange account ids. `Account.id` is therefore
+  `"kuru-<id>"` / `"perpl-<id>"` and carries the on-chain owner address once
+  AccountCore's `AccountRegistered` (or Perpl's `AccountCreated`) is seen.
+- Money is stored as the venue's raw integer units wherever arithmetic happens
+  (FIFO-style realised PnL is exact BigInt); `*Usd`/`price` conveniences are
+  BigDecimal derived at write time. No float ever touches a raw value.
+- Every aggregate is written incrementally by handlers; the leaderboard sorts
+  on stored fields, never computes at query time.
+- Token and address keys are lowercase for cross-source joins.
+"""
+
+enum Side {
+  BUY
+  SELL
+}
+
+enum Venue {
+  KURU
+  PERPL
+}
+
+"""
+A venue trading account: Kuru AccountCore account (uint40 id) or Perpl
+Exchange account (uint256 id). The owner wallet is attached from
+AccountRegistered / AccountCreated; until then it is null and the leaderboard
+shows the raw account id.
+"""
+type Account {
+  # "kuru-62" | "perpl-1"
+  id: ID!
+  venue: Venue!
+  # Numeric account id exactly as emitted on-chain.
+  accountId: BigInt!
+  # Owner wallet address (lowercase), from AccountRegistered/AccountCreated.
+  owner: String
+  firstSeenBlock: BigInt!
+  firstSeenAt: Timestamp!
+  # Custody rails (Kuru Deposit/Withdrawal, Perpl CollateralDeposit/Withdrawal).
+  balances: [AccountBalance!]! @derivedFrom(field: "account")
+  # Leaderboard rows, one per market traded.
+  marketStats: [AccountMarketStats!]! @derivedFrom(field: "account")
+  tradesAsTaker: [Trade!]! @derivedFrom(field: "taker")
+  # Kuru-only: filled resting orders. (Perpl maker fills update stats but do
+  # not create Trade rows — see docs/indexer.md.)
+  tradesAsMaker: [Trade!]! @derivedFrom(field: "maker")
+  # Cross-market rollup kept in sync with the stats rows.
+  totalTradeCount: Int!
+  totalVolumeUsd: BigDecimal!
+  realizedPnlUsd: BigDecimal!
+  winningTradeCount: Int!
+  losingTradeCount: Int!
+}
+
+"""
+An account's net custody of one token from the deposit/withdrawal rails.
+Fills are NOT applied here — this mirrors what moved between wallet and
+venue, the counterpart of a `transferBalance`.
+"""
+type AccountBalance {
+  # "<accountId>-<tokenAddress>" (lowercase)
+  id: ID!
+  account: Account!
+  token: String!
+  # Raw token units (ERC-20 native decimals; native MON = zero address, 18).
+  deposited: BigInt!
+  withdrawn: BigInt!
+  net: BigInt!
+  decimals: Int!
+  lastUpdatedBlock: BigInt!
+}
+
+"""
+One matched trade. Kuru: one row per record unpacked from a `TradesPacked`
+log (taker + maker both resolved). Perpl: one row per `TakerOrderFilledV2`
+log; the maker is resolved from the matching `MakerOrderFilledV2` in the same
+transaction when present (first swept maker — a multi-maker sweep records
+the taker's aggregate fill once and attributes the first maker, so market
+volume is counted once per match rather than once per leg).
+"""
+type Trade {
+  # "<chainId>-<blockNumber>-<logIndex>-<recordIndex>"
+  id: ID!
+  venue: Venue!
+  market: Market!
+  # BUY = taker bought base; SELL = taker sold base.
+  side: Side!
+  # Raw book units as emitted: Kuru price/size in book units (see Market
+  # precisions), Perpl pricePNS/lotLNS in the market's PNS/LNS scaling.
+  rawPrice: BigInt!
+  rawSize: BigInt!
+  # Human-readable price and quote notional, derived at write time.
+  price: BigDecimal!
+  notionalUsd: BigDecimal!
+  maker: Account
+  # The aggressing account. Always set.
+  taker: Account!
+  # Fee raw units: Kuru pps (per ten million), Perpl CNS (per million).
+  takerFeeRaw: BigInt!
+  makerFeeRaw: BigInt!
+  blockNumber: BigInt!
+  timestamp: Timestamp!
+  txHash: String!
+  logIndex: Int!
+}
+
+"""
+A market. Kuru markets are seeded in src/lib/seeds.ts from
+packages/venues/src/kuru/constants.ts; Perpl markets are seeded from the
+live `/api/v1/pub/context` and upserted by `ContractAdded` if one lands
+inside the indexed range.
+"""
+type Market {
+  # Kuru: "kuru-<orderBookAddress>" | Perpl: "perpl-<perpId>" (lowercase addr)
+  id: ID!
+  venue: Venue!
+  # "MON-USDC" | "BTC-PERP"
+  symbol: String!
+  base: String!
+  quote: String!
+  # Kuru: book price units per 1 quote-per-base. Perpl: 10^price_decimals.
+  pricePrecision: BigInt!
+  # Kuru: book size units per 1 base. Perpl: 10^lot_decimals.
+  sizePrecision: BigInt!
+  baseDecimals: Int!
+  quoteDecimals: Int!
+  # Kuru only: the OrderBook proxy address (lowercase) emitting this market.
+  address: String
+  tradeCount: Int!
+  volumeUsd: BigDecimal!
+  latestTradeBlock: BigInt
+  daily: [MarketDay!]! @derivedFrom(field: "market")
+}
+
+"""
+One UTC calendar day per market (`day = floor(blockTimestamp / 86400)`).
+"""
+type MarketDay {
+  # "<marketId>-<yyyymmdd>"
+  id: ID!
+  market: Market!
+  day: Int!
+  date: Timestamp!
+  tradeCount: Int!
+  buyCount: Int!
+  sellCount: Int!
+  volumeUsd: BigDecimal!
+  baseVolume: BigDecimal!
+  highPrice: BigDecimal
+  lowPrice: BigDecimal
+  # volumeUsd / baseVolume — quote per base over the day.
+  vwapPrice: BigDecimal
+  activeAccountIds: [String!]!
+}
+
+"""
+The leaderboard row: one per (account, market). Realised PnL uses a signed
+moving-average cost basis (exact BigInt quote atoms, floored): trades that
+add to the position extend it at the traded price; trades that reduce it
+realise (price − avgCost) × closed for a long and (avgCost − price) × closed
+for a short. `wins`/`losses` count each reducing trade by the sign of the
+realised delta it produced, so a flip (reduce + reopen) counts once.
+"""
+type AccountMarketStats {
+  # "<accountId>-<marketId>"
+  id: ID!
+  account: Account!
+  market: Market!
+  # Fills attributed to this account (as taker or maker).
+  n: Int!
+  takerN: Int!
+  makerN: Int!
+  volumeUsd: BigDecimal!
+  boughtBase: BigDecimal!
+  soldBase: BigDecimal!
+  # Quote units (Kuru USDC 6dp, Perpl AUSD CNS 6dp).
+  realizedPnlUsd: BigDecimal!
+  wins: Int!
+  losses: Int!
+  # Position carried into the next trade. openBaseRaw is signed base units;
+  # openCostRaw is its signed cost in quote atoms. avgCost = cost/base.
+  openBaseRaw: BigInt!
+  openCostRaw: BigInt!
+  firstTradeBlock: BigInt!
+  lastTradeBlock: BigInt!
+}
+
+"""
+Kuru `BookUpdatesPacked` history — every resting-order add/remove observed.
+Not needed by the leaderboard; it is the order-lifecycle feed (and the
+reason BookUpdatesPacked is indexed at all).
+"""
+type MakerOrderUpdate {
+  # "<chainId>-<blockNumber>-<logIndex>-<recordIndex>"
+  id: ID!
+  market: Market!
+  # AccountCore id (stringified uint40) of the maker this update belongs to.
+  makerAccountId: String!
+  slotIdx: Int!
+  orderId: BigInt!
+  priceRaw: BigInt!
+  sizeRaw: BigInt!
+  isBuy: Boolean!
+  # true = placed/rested on book, false = removed (filled/cancelled/dust).
+  isLive: Boolean!
+  blockNumber: BigInt!
+  timestamp: Timestamp!
+  txHash: String!
+  logIndex: Int!
+}
+
+"""
+Perpl `OrderRequestV2` context. Taker fills carry no perpId/accountId —
+they are joined to the most recent request in the same transaction with a
+lower logIndex. Internal plumbing, not public API.
+"""
+type PerplOrderContext @internal {
+  # "<chainId>-<blockNumber>-<logIndex>"
+  id: ID!
+  # @index: required — handlers query getWhere({ txHash }) per taker fill.
+  txHash: String! @index
+  perpId: BigInt!
+  accountId: BigInt!
+  orderId: BigInt!
+  orderType: Int!
+  blockNumber: BigInt!
+  logIndex: Int!
+}
