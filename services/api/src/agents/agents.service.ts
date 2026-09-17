@@ -19,6 +19,7 @@ import {
   type AgentStore,
 } from './store/agent-store';
 import { generateMcpToken, hashMcpToken, MCP_TOKEN_PREFIX } from './store/mcp-token';
+import { ERC8004_WRITER, type Erc8004Reputation } from './reputation/erc8004';
 
 export interface HireAgentInput {
   name: string;
@@ -63,17 +64,26 @@ export class AgentsService {
      * `gas_drip_unavailable`. AgentsModule imports GasModule, so the app has it.
      */
     @Optional() @Inject(GasDripService) private readonly gas?: AgentGasFunder,
+    /**
+     * The ERC-8004 registration (SEN-27). Optional for the same reason: an
+     * unconfigured registry leaves `erc8004AgentId` unset rather than failing a
+     * hire. AgentsModule provides it, wrapping the event log so verdicts write
+     * reputation too.
+     */
+    @Optional()
+    @Inject(ERC8004_WRITER)
+    private readonly reputation?: Erc8004Reputation,
   ) {}
 
   /**
    * parseMandate -> compileMandate -> provision (wallet + policy together) ->
-   * store -> gas drip. Everything that can be refused locally is refused
-   * before the provider is called, so a bad request never creates a Privy
-   * object.
+   * store -> ERC-8004 identity -> gas drip. Everything that can be refused
+   * locally is refused before the provider is called, so a bad request never
+   * creates a Privy object.
    *
-   * The drip runs after the agent is stored, so a slow or failed drip can
-   * never lose track of a provisioned wallet, and its outcome is recorded on
-   * the agent rather than failing the hire.
+   * The registry write and the drip run after the agent is stored, so a slow or
+   * failed one can never lose track of a provisioned wallet, and their outcomes
+   * are recorded on the agent rather than failing the hire.
    */
   async hire(principal: GasDripPrincipal, input: HireAgentInput): Promise<HiredAgent> {
     if (!isAgentModel(input.model)) {
@@ -119,8 +129,42 @@ export class AgentsService {
       `hired agent ${id} for ${principal.userId}: wallet ${wallet.address} ` +
         `policy ${wallet.policyId} (${rules.length} rules, ${this.wallets.name})`,
     );
+    // The on-chain identity first, then the gas: an identity that never gets gas
+    // is still worth having, and neither may fail the hire.
+    const registration = await this.registerIdentity(agent);
     const gasFunding = await this.fundGas(principal, agent);
-    return { agent: await this.store.update(id, { gasFunding }), mcpToken };
+    return {
+      agent: await this.store.update(id, {
+        gasFunding,
+        ...(registration.agentId !== undefined ? { erc8004AgentId: registration.agentId } : {}),
+      }),
+      mcpToken,
+    };
+  }
+
+  /**
+   * Registers the agent in the ERC-8004 Identity Registry (SEN-27). Never
+   * throws, exactly like `fundGas`: an agent whose registration failed is
+   * hired, runs, and simply has no public track record yet. The registrar key
+   * signs, not the agent's wallet, so the mandate's policy is untouched.
+   */
+  private async registerIdentity(agent: AgentRecord): Promise<{ agentId?: string }> {
+    if (!this.reputation) return {};
+    try {
+      const outcome = await this.reputation.registerOnHire(agent);
+      if (outcome.ok) return { agentId: outcome.agentId };
+      this.logger.warn(
+        `agent ${agent.id} not registered with ERC-8004: ${outcome.reason} (${outcome.message})`,
+      );
+      return {};
+    } catch (error) {
+      // registerOnHire does not throw; this only keeps a bug there from failing a hire.
+      this.logger.error(
+        `agent ${agent.id} ERC-8004 registration threw: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+      return {};
+    }
   }
 
   /** Never throws: an unfunded agent is still hired, and says why. */
