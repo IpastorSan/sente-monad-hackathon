@@ -122,6 +122,9 @@ export class PrivyKuruSubmitter implements KuruSubmitter {
       transactionHash: last.transactionHash,
       success: receipts.length === calls.length && last.success,
       logs: receipts.flatMap((receipt) => receipt.logs),
+      // The block of the LAST leg's receipt: what the fill events live in
+      // (SEN-20). A Monad block number fits a JS number comfortably.
+      blockNumber: Number(last.blockNumber),
     };
   }
 }

@@ -89,6 +89,11 @@ export type KuruExecution = {
   readonly transactionHash: Hex;
   readonly success: boolean;
   readonly logs: readonly KuruLog[];
+  /**
+   * Block the execution was confirmed in (SEN-20), when the submitter read it
+   * off the receipt. Absent from a submitter that does not surface one.
+   */
+  blockNumber?: number;
 };
 
 /**
@@ -547,6 +552,9 @@ export class KuruVenue implements Venue {
       executionHash: execution.hash,
       transactionHash: execution.transactionHash,
       observedAt: Date.now(),
+      blockNumber: execution.blockNumber,
+      quoteDecimals: prepared.market.quote.decimals,
+      feeAsset: prepared.market.quote.symbol,
     });
   }
 

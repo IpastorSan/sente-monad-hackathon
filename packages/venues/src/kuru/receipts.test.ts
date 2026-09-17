@@ -75,10 +75,17 @@ test('a taking IOC: TradesPacked carries the fills and nothing rests', () => {
     executionHash: RECEIPTS.placeMarket.transactionHash,
     transactionHash: RECEIPTS.placeMarket.transactionHash,
     observedAt: 0,
+    blockNumber: 74_000_001,
+    quoteDecimals: 6,
+    feeAsset: 'USDC',
   });
   assert.equal(order.status, 'cancelled');
   assert.equal(order.filledSize, '317.73742494');
   assert.equal(order.averageFillPrice, '0.030974');
+  // 7000 pps of a 9.841599 USDC fill, floored at the atom (SEN-20).
+  assert.equal(order.fee, '0.006889');
+  assert.equal(order.feeAsset, 'USDC');
+  assert.equal(order.blockNumber, 74_000_001);
 });
 
 test('another account reads nothing from the same receipts', () => {

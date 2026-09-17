@@ -116,7 +116,12 @@ function harness(
     waitForReceipt: (hash) => {
       const success = broadcasts !== options.reverted;
       if (success && broadcasts === 3) accountId = 493n;
-      return Promise.resolve({ transactionHash: hash, success, logs: [] });
+      return Promise.resolve({
+        transactionHash: hash,
+        success,
+        logs: [],
+        blockNumber: 74_000_000n + BigInt(broadcasts),
+      });
     },
   };
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {

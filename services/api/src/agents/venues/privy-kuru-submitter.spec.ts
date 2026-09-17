@@ -105,6 +105,8 @@ function harness(options: { reverted?: number[]; refuseAt?: number; laggingNonce
         transactionHash: hash,
         success: !(options.reverted ?? []).includes(n),
         logs: [{ address: MARKET, topics: [], data: `0x${n.toString(16).padStart(2, '0')}` }],
+        // Blocks 74,000,000 + n: distinct per broadcast, like real receipts.
+        blockNumber: 74_000_000n + BigInt(n),
       };
     },
   };
@@ -161,6 +163,8 @@ describe('PrivyKuruSubmitter', () => {
         { address: MARKET, topics: [], data: '0x01' },
         { address: MARKET, topics: [], data: '0x02' },
       ],
+      // The last leg's receipt block, surfaced for fill records (SEN-20).
+      blockNumber: 74_000_002,
     });
   });
 

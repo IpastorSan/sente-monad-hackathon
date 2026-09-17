@@ -322,7 +322,12 @@ export function fakeChain() {
       return hash;
     },
     waitForReceipt: (hash): Promise<AgentReceipt> =>
-      Promise.resolve({ transactionHash: hash, success: true, logs: [] }),
+      Promise.resolve({
+        transactionHash: hash,
+        success: true,
+        logs: [],
+        blockNumber: 74_000_001n,
+      }),
   };
   return { client, sent, nonceOf: (address: Address) => nonces.get(address.toLowerCase()) ?? 0 };
 }

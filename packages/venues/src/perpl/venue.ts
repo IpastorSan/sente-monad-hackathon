@@ -187,9 +187,42 @@ export function toOrder(
     ...(filled > 0 && o.fp ? { averageFillPrice: fromScaled(o.fp, m.pd) } : {}),
     ...(extra.timeInForce !== undefined ? { timeInForce: extra.timeInForce } : {}),
     reduceOnly: o.t === ORDER_TYPE.CloseLong || o.t === ORDER_TYPE.CloseShort,
+    // The order's own settle block and the leverage it carried (SEN-20).
+    // Perpl's frame also has `f`, whose units the repo's docs do not pin down
+    // — unlike Kuru, where the fee is computed from an on-chain event, it is
+    // left unmapped rather than guessed at.
+    ...(o.at.b !== undefined ? { blockNumber: o.at.b } : {}),
+    leverage: o.lv / 100,
     createdAt: o.c?.t ?? o.at.t ?? Date.now(),
     updatedAt: o.at.t ?? Date.now(),
     ...(hash ? { txHash: hash } : {}),
+  };
+}
+
+/**
+ * Attach the position's realised PnL to a `closePosition` result (SEN-20).
+ *
+ * Best-effort by design: the order's terminal event and the position frames
+ * are separate messages. When the exchange closed the position, the socket
+ * kept its final frame and the settled `dpnl`/`fnd` ride onto the order; when
+ * that frame has not arrived — or never comes, on a venue that does not push
+ * it — the fields are simply absent.
+ */
+function withClosePnl(
+  order: Order,
+  closed: PerplPosition | undefined,
+  m: ResolvedMarket,
+): Order {
+  if (!closed) return order;
+  return {
+    ...order,
+    ...(closed.dpnl !== undefined
+      ? { realizedPnl: fromScaled(BigInt(closed.dpnl), m.cd) }
+      : {}),
+    // Same sign convention as `toPosition`: `fnd` is received > 0.
+    ...(closed.fnd !== undefined
+      ? { fundingPaid: fromScaled(-BigInt(closed.fnd), m.cd) }
+      : {}),
   };
 }
 
@@ -578,7 +611,13 @@ export class PerplVenue implements PerpsVenue {
       },
       isTerminal,
     );
-    return toOrder(order, m, { type: 'market', timeInForce: 'IOC' });
+    // A full close moves the position to the retained final frame; a partial
+    // one stays live with an updated dpnl (SEN-20). Either frame carries the
+    // realised PnL the close produced, once it has arrived.
+    const settled =
+      this.trading.openPositions().find((p) => p.pid === position.pid) ??
+      this.trading.closedPosition(position.pid);
+    return withClosePnl(toOrder(order, m, { type: 'market', timeInForce: 'IOC' }), settled, m);
   }
 
   // --- internals ---------------------------------------------------------

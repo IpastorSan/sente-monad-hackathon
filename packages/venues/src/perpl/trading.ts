@@ -135,6 +135,14 @@ export class PerplTradingSocket {
   private account: PerplAccount | null = null;
   private readonly orders = new Map<string, PerplOrder>();
   private readonly positions = new Map<number, PerplPosition>();
+  /**
+   * The last frame of each position that has closed, by pid. A `closePosition`
+   * caller reads the settled `dpnl`/`fnd` off it (SEN-20); the live map drops
+   * the entry the moment `st` goes non-open.
+   */
+  private readonly closedPositions = new Map<number, PerplPosition>();
+  /** Bound the retained-close map: a long-lived socket must not grow forever. */
+  private static readonly MAX_RETAINED_CLOSED = 500;
   private lastRq = 0;
   private frameSn = 0;
   private heartbeatSn: number | undefined;
@@ -179,6 +187,14 @@ export class PerplTradingSocket {
 
   openPositions(): PerplPosition[] {
     return [...this.positions.values()];
+  }
+
+  /**
+   * The final recorded frame of a position that has closed, by `pid` —
+   * `dpnl`/`fnd` included, once their frames have arrived (SEN-20).
+   */
+  closedPosition(pid: number): PerplPosition | undefined {
+    return this.closedPositions.get(pid);
   }
 
   /**
@@ -392,7 +408,22 @@ export class PerplTradingSocket {
         if (message.mt === MT.PositionsSnapshot) this.positions.clear();
         for (const position of (message['d'] as PerplPosition[] | undefined) ?? []) {
           if (position.st === 1) this.positions.set(position.pid, position);
-          else this.positions.delete(position.pid);
+          else {
+            // Record the frame that closed it, merged with the last known
+            // one: a closePosition caller wants the settled dpnl/fnd the
+            // live map no longer holds, and updates can be partial (SEN-20).
+            const known = this.positions.get(position.pid);
+            this.positions.delete(position.pid);
+            if (this.closedPositions.size >= PerplTradingSocket.MAX_RETAINED_CLOSED) {
+              // Oldest first: Map iteration order is insertion order.
+              const oldest = this.closedPositions.keys().next();
+              if (!oldest.done) this.closedPositions.delete(oldest.value);
+            }
+            this.closedPositions.set(
+              position.pid,
+              known ? { ...known, ...position } : position,
+            );
+          }
         }
         break;
       }

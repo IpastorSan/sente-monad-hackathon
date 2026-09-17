@@ -58,6 +58,8 @@ export interface AgentReceipt {
   /** From the receipt's `status`: for an EOA the transaction IS the operation. */
   readonly success: boolean;
   readonly logs: readonly AgentLog[];
+  /** The block the transaction was confirmed in (SEN-20). */
+  readonly blockNumber: bigint;
 }
 
 /** The slice of a Monad RPC client the sender needs, so specs fake five lines, not viem. */
@@ -87,6 +89,7 @@ export function agentChainClient(client: PublicClient): AgentChainClient {
         transactionHash: receipt.transactionHash,
         success: receipt.status === 'success',
         logs: receipt.logs,
+        blockNumber: receipt.blockNumber,
       };
     },
   };
