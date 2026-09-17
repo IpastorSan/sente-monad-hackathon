@@ -1,0 +1,10 @@
+# Envio HyperIndex generates into .envio/ and build/ — regenerate with
+# `pnpm codegen` (or `npm run codegen` standalone). See docs/indexer.md.
+.envio/
+build/
+node_modules/
+.env
+*.log
+# Local scratch probes. `scripts/verify-config-topics.ts` is the one script
+# that is committed and checked; anything dropped here is throwaway.
+scripts/local/
