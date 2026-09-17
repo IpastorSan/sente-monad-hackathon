@@ -11,9 +11,11 @@
  * - Numbers are Inter with tabular figures. Mono is reserved for chain facts —
  *   the transaction hash, the block height, the agent id — so mono means "this
  *   came from the chain" and nothing else.
- * - There is no purple. Purple is the consensus ramp's colour, and the ramp is
- *   an empty slot here (SEN-24). An achromatic ground makes it read as an
- *   event when it arrives.
+ * - The ground is achromatic, so the consensus ramp's purple (SEN-24) is the
+ *   only colour on the screen and reads as an event: it is there while a block
+ *   is acquiring consensus and gone once it has it. The ramp also owns the
+ *   block height, which is why a trade row prints it once, under the ramp,
+ *   rather than beside the hash.
  *
  * An enclave refusal is rendered as a filled tag, not as an error: an agent
  * refused by a policy it cannot widen is the product working.
@@ -29,11 +31,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { groupThousands } from '@/agents/amounts';
 import type { Agent } from '@/agents/api';
 import {
   clockTime,
-  CONSENSUS_STOPS,
   demoLedger,
   directionLabel,
   heldLabel,
@@ -49,8 +49,9 @@ import {
 } from '@/agents/ledger';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { useSession } from '@/session';
+import { ConsensusRamp } from '@/ui/ConsensusRamp';
 import { Loading, Notice, Screen, Tag, TopBar } from '@/ui/kit';
-import { color, font, text } from '@/ui/theme';
+import { color, text } from '@/ui/theme';
 
 /** The plan's number: long enough to read as construction, short enough not to wait. */
 const BUILD_MS = 600;
@@ -266,11 +267,6 @@ function TradeBody({ entry }: { entry: TradeEntry }) {
               {shortHash(entry.txHash)}
             </Text>
           ) : null}
-          {entry.blockNumber !== null ? (
-            <Text style={[text.mono, text.num]}>
-              block {groupThousands(String(entry.blockNumber))}
-            </Text>
-          ) : null}
         </View>
       ) : null}
       {!entry.filled ? (
@@ -278,7 +274,9 @@ function TradeBody({ entry }: { entry: TradeEntry }) {
           Did not fill{entry.status !== null ? ` · ${entry.status}` : ''}
         </Text>
       ) : null}
-      <RampSlot />
+      {/* The ramp owns the height: it is what the ramp is about, and it prints
+          it in the same mono a chain fact gets anywhere else. */}
+      {entry.blockNumber !== null ? <ConsensusRamp blockNumber={entry.blockNumber} /> : null}
     </>
   );
 }
@@ -322,26 +320,6 @@ function VerdictBody({ entry }: { entry: VerdictEntry }) {
   );
 }
 
-/**
- * The consensus ramp's slot (SEN-24). Empty on purpose: the track and its three
- * stops are here so the ramp has a home, and the fill arrives with SEN-24.
- * Nothing is purple until the network has actually agreed about something.
- */
-function RampSlot() {
-  return (
-    <View style={styles.ramp}>
-      <View style={styles.rampTrack} />
-      <View style={styles.rampStops}>
-        {CONSENSUS_STOPS.map((stop) => (
-          <Text key={stop} style={styles.rampStop}>
-            {stop}
-          </Text>
-        ))}
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   meta: { marginTop: 4 },
   status: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 },
@@ -371,10 +349,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 16,
   },
-  ramp: { marginTop: 14 },
-  rampTrack: { height: 1, backgroundColor: color.rule },
-  rampStops: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
-  rampStop: { fontFamily: font.mono, fontSize: 10, letterSpacing: 0.6, color: color.textFaint },
   after: { marginTop: 10 },
   tight: { marginTop: 4 },
 });

@@ -6,9 +6,11 @@
  * Inter everywhere, with tabular figures for numbers; true mono is reserved
  * for chain facts (addresses, ids), so mono means "this came from the chain".
  *
- * NO PURPLE. Purple belongs to the consensus ramp and nothing else in the app.
- * The one chromatic token here is `danger`, for destructive actions and
- * errors, because those carry information too.
+ * Two chromatic tokens, and no more. `ramp` is Monad's purple, and it belongs
+ * to the consensus ramp (SEN-24) and to nothing else — it marks a chain event
+ * in progress, and it leaves the screen when the event is over. `danger` is
+ * for destructive actions and errors, because those carry information too.
+ * Everything else is grey, on purpose.
  */
 import { StyleSheet } from 'react-native';
 
@@ -22,6 +24,12 @@ export const color = {
   textDim: '#A0A0A5',
   textFaint: '#67676C',
   danger: '#E5534B',
+  /**
+   * Monad's purple. The consensus ramp's own colour: a block acquiring
+   * consensus fills in it, and the fill drains back to neutral once the block
+   * is final, so the purple is an event rather than a state.
+   */
+  ramp: '#836EF9',
 } as const;
 
 export const font = {
