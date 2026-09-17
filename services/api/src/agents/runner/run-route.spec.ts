@@ -12,7 +12,7 @@ async function routeHarness(options: Parameters<typeof runnerHarness>[0] = {}) {
   const h = await runnerHarness(options);
   let userId = h.agent.userId;
   const auth: GasDripAuth = { principal: () => ({ userId }) };
-  const controller = new AgentsController(h.agents, auth, h.runner);
+  const controller = new AgentsController(h.agents, auth, h.runner, h.events);
   return {
     ...h,
     controller,

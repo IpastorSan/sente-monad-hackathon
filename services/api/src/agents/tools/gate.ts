@@ -106,8 +106,18 @@ async function write(tool: AgentTool, ctx: ToolContext, args: unknown): Promise<
         tool: tool.name,
         detail: { status: 'ok', precheck: ctx.precheck, args, intent, result },
       });
-      const fill = fillOf(result);
+      const fill = fillOf(result, intent?.venue);
       if (fill) await record(ctx, { kind: 'fill', tool: tool.name, detail: fill });
+      // A position close is its own event (SEN-20): the Ledger reads the
+      // close and the venue's realised-PnL fields from `close`, not from an
+      // order that happens to have been reduce-only.
+      if (tool.name === 'close_position') {
+        await record(ctx, {
+          kind: 'close',
+          tool: tool.name,
+          detail: { ...(fill ?? {}), ...realisedOf(result) },
+        });
+      }
     }
     return { ok: true, result };
   } catch (error) {
@@ -185,12 +195,16 @@ async function record(
 }
 
 /** A fill event for an order that filled at least partly. */
-function fillOf(result: unknown): Record<string, unknown> | undefined {
+function fillOf(
+  result: unknown,
+  venue: string | undefined,
+): Record<string, unknown> | undefined {
   if (typeof result !== 'object' || result === null) return undefined;
   const order = result as Record<string, unknown>;
   if (typeof order['id'] !== 'string' || !isPositiveDecimal(order['filledSize'])) return undefined;
   return {
     orderId: order['id'],
+    ...(venue !== undefined ? { venue } : {}),
     symbol: order['symbol'],
     side: order['side'],
     type: order['type'],
@@ -198,6 +212,27 @@ function fillOf(result: unknown): Record<string, unknown> | undefined {
     filledSize: order['filledSize'],
     averageFillPrice: order['averageFillPrice'],
     txHash: order['txHash'],
+    // Richer per-fill record (SEN-20): the block the fills confirmed in, the
+    // fee actually charged, and, for Perpl, the leverage the order carried.
+    // Every one is present only when the venue reported it on the order.
+    ...(order['blockNumber'] !== undefined ? { blockNumber: order['blockNumber'] } : {}),
+    ...(order['fee'] !== undefined ? { fee: order['fee'] } : {}),
+    ...(order['feeAsset'] !== undefined ? { feeAsset: order['feeAsset'] } : {}),
+    ...(order['leverage'] !== undefined ? { leverage: order['leverage'] } : {}),
+  };
+}
+
+/**
+ * The venue's realised-PnL fields a closed position reports back, carried
+ * onto the `close` event when present (Perpl's position `dpnl` and `fnd`,
+ * mapped by the adapter to `realizedPnl` and `fundingPaid`).
+ */
+function realisedOf(result: unknown): Record<string, unknown> {
+  if (typeof result !== 'object' || result === null) return {};
+  const order = result as Record<string, unknown>;
+  return {
+    ...(order['realizedPnl'] !== undefined ? { realizedPnl: order['realizedPnl'] } : {}),
+    ...(order['fundingPaid'] !== undefined ? { fundingPaid: order['fundingPaid'] } : {}),
   };
 }
 

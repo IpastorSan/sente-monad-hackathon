@@ -10,7 +10,7 @@
 export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
 
 /** `run`: one summary per Tool Runner run (SEN-8) — trigger, stop reason, iterations, cost. */
-export const AGENT_EVENT_KINDS = ['thesis', 'order', 'fill', 'refusal', 'run'] as const;
+export const AGENT_EVENT_KINDS = ['thesis', 'order', 'fill', 'close', 'refusal', 'run'] as const;
 export type AgentEventKind = (typeof AGENT_EVENT_KINDS)[number];
 
 /**

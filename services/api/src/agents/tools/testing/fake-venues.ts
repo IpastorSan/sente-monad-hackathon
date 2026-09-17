@@ -166,6 +166,8 @@ export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
     { asset: 'USDC', available: '100000', locked: '0', total: '100000' },
     { asset: 'MON', available: '100000', locked: '0', total: '100000' },
   ];
+  /** Set to have filled orders report a receipt block and fee (SEN-20). */
+  fillRecord: { blockNumber?: number; fee?: string; feeAsset?: string } | undefined;
 
   walletBalances(): Promise<Balance[]> {
     this.record('walletBalances', undefined);
@@ -176,6 +178,16 @@ export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
     const market = KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol);
     if (!market) throw new KuruOrderError(`Kuru does not list ${symbol}`);
     return market;
+  }
+
+  override async placeLimit(request: LimitOrderRequest): Promise<Order> {
+    const order = await super.placeLimit(request);
+    return this.fillRecord && order.filledSize !== '0' ? { ...order, ...this.fillRecord } : order;
+  }
+
+  override async placeMarket(request: MarketOrderRequest): Promise<Order> {
+    const order = await super.placeMarket(request);
+    return this.fillRecord && order.filledSize !== '0' ? { ...order, ...this.fillRecord } : order;
   }
 
   async deposit(asset: string, amount: string): Promise<KuruExecution> {
@@ -203,6 +215,10 @@ export class FakePerplVenue extends FakeVenue implements PerpsVenue {
   readonly id = 'perpl';
   readonly name = 'Perpl (fake)';
   readonly kind = 'perps' as const;
+  /** Leverage `toOrder`-style fills report; the venue default is 1x. */
+  leverage = 3;
+  /** Set to have `closePosition` report the settled position PnL (SEN-20). */
+  closePnl: { realizedPnl?: string; fundingPaid?: string } | undefined;
 
   getPositions(): Promise<Position[]> {
     this.record('getPositions', undefined);
@@ -211,15 +227,31 @@ export class FakePerplVenue extends FakeVenue implements PerpsVenue {
 
   async setLeverage(request: SetLeverageRequest): Promise<void> {
     await this.write('setLeverage', request);
+    this.leverage = request.leverage;
+  }
+
+  override async placeLimit(request: LimitOrderRequest): Promise<Order> {
+    const order = await super.placeLimit(request);
+    return { ...order, ...(this.leverage ? { leverage: this.leverage } : {}) };
+  }
+
+  override async placeMarket(request: MarketOrderRequest): Promise<Order> {
+    const order = await super.placeMarket(request);
+    return { ...order, ...(this.leverage ? { leverage: this.leverage } : {}) };
   }
 
   async closePosition(request: ClosePositionRequest): Promise<Order> {
     await this.write('closePosition', request);
-    return this.order(
+    const order = this.order(
       { symbol: request.symbol, side: 'sell', size: request.size ?? '1' },
       'market',
       request.slippageLimitPrice,
     );
+    return {
+      ...order,
+      leverage: this.leverage,
+      ...(this.closePnl ? { reduceOnly: true, ...this.closePnl } : {}),
+    };
   }
 }
 

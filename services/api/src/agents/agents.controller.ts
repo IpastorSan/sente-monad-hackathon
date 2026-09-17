@@ -5,9 +5,11 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 
@@ -17,15 +19,20 @@ import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
 import { agentErrorStatus, agentErrorToHttpBody } from './agents.errors';
 import { AgentsService } from './agents.service';
 import {
+  AgentEventsQueryDto,
   AgentIdParamDto,
+  AGENT_EVENTS_DEFAULT_LIMIT,
   AmendMandateDto,
   CreateAgentDto,
   RunAgentDto,
+  toAgentEventResponse,
   toAgentResponse,
+  type AgentEventsResponseDto,
   type AgentListResponseDto,
   type AgentResponseDto,
   type HireAgentResponseDto,
 } from './dto/agent.dto';
+import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
 
 /**
@@ -43,6 +50,7 @@ export class AgentsController {
     private readonly agents: AgentsService,
     private readonly auth: GasDripAuth,
     private readonly runner: AgentRunnerService,
+    @Inject(AGENT_EVENTS) private readonly events: AgentEventLog,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -73,6 +81,38 @@ export class AgentsController {
     return this.guard(async () =>
       toAgentResponse(await this.agents.get(this.auth.principal(), params.id)),
     );
+  }
+
+  /**
+   * The agent's event log — every thesis, order, fill, close and refusal its
+   * tools produced (SEN-20). This is what the Agent Ledger reads, so the
+   * field names in `detail` are wire-stable; bigints cross as decimal strings.
+   *
+   * PERSISTENCE: in memory, 10k events per agent, oldest dropped first (see
+   * `events/agent-event-log.ts`). Paging forward with `afterSeq` is stable
+   * until that cap drops events behind the cursor.
+   *
+   * `nextSeq` is the highest `seq` in the page: pass it back as `afterSeq` to
+   * read what comes next. Oldest-first within the page.
+   */
+  @Get(':id/events')
+  async listEvents(
+    @Param() params: AgentIdParamDto,
+    @Query() query: AgentEventsQueryDto,
+  ): Promise<AgentEventsResponseDto> {
+    return this.guard(async () => {
+      // Ownership first: another user's agent is a 404, not an empty log.
+      await this.agents.get(this.auth.principal(), params.id);
+      const events = await this.events.list(params.id, {
+        afterSeq: query.afterSeq,
+        kind: query.kind,
+        limit: query.limit ?? AGENT_EVENTS_DEFAULT_LIMIT,
+      });
+      return {
+        events: events.map(toAgentEventResponse),
+        nextSeq: events.at(-1)?.seq ?? query.afterSeq ?? 0,
+      };
+    });
   }
 
   @Patch(':id/mandate')
