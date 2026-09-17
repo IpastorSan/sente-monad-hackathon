@@ -15,6 +15,10 @@ packages:
 #   unrs-resolver    — native resolver used by the eslint toolchain
 allowBuilds:
   '@parcel/watcher': true
+  # Skia's postinstall links the prebuilt react-native-skia-android artifacts
+  # into the package (SEN-24). Without it Metro resolves the JS but the native
+  # module is never wired, and pnpm 12 refuses to run it silently.
+  '@shopify/react-native-skia': true
   unrs-resolver: true
 minimumReleaseAgeExclude:
   - '@typescript-eslint/eslint-plugin@8.70.0'
