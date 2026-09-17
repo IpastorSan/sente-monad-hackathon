@@ -288,7 +288,36 @@ export type PlacedOrderInput = {
   readonly executionHash: string;
   readonly transactionHash: string;
   readonly observedAt: number;
+  /**
+   * Block the execution was confirmed in (SEN-20), from the receipt. Absent
+   * when the submitter did not surface one.
+   */
+  readonly blockNumber?: number;
+  /** Quote-token decimals and symbol: what `fee`/`feeAsset` are reported in. */
+  readonly quoteDecimals?: number;
+  readonly feeAsset?: string;
 };
+
+/**
+ * Taker fee actually paid on the fills of one execution, in quote-token atoms:
+ * `notional × pps / 10_000_000`, where `priceTimesSize` is in book units
+ * (scaled `10^(pd+sd)`) and the notional lives in quote atoms. One floor, at
+ * the atom — a fee fraction of an atom is never charged, so flooring here
+ * cannot overstate it.
+ */
+function takerFeeAtoms(
+  priceTimesSize: bigint,
+  takerFeePps: bigint,
+  pricePrecision: bigint,
+  sizePrecision: bigint,
+  quoteDecimals: number,
+): bigint {
+  const bookScale = precisionDecimals(pricePrecision) + precisionDecimals(sizePrecision);
+  return (
+    (priceTimesSize * takerFeePps * 10n ** BigInt(quoteDecimals)) /
+    (PPS_DENOMINATOR * 10n ** BigInt(bookScale))
+  );
+}
 
 /** A placement's decoded outcome as a Sente `Order`. */
 export function toPlacedOrder(input: PlacedOrderInput): Order {
@@ -303,6 +332,20 @@ export function toPlacedOrder(input: PlacedOrderInput): Order {
   }
   // One order was placed, so at most one of this account's orders rested.
   const rested = outcome.rested.at(-1);
+  // The taker fee actually applied, when anything was taken (SEN-20).
+  const takerFee =
+    outcome.takerFeePps !== undefined && filled > 0n && input.quoteDecimals !== undefined
+      ? fromUnits(
+          takerFeeAtoms(
+            priceTimesSize,
+            outcome.takerFeePps,
+            params.pricePrecision,
+            params.sizePrecision,
+            input.quoteDecimals,
+          ),
+          input.quoteDecimals,
+        )
+      : undefined;
 
   let status: OrderStatus;
   if (rested) {
@@ -333,5 +376,10 @@ export function toPlacedOrder(input: PlacedOrderInput): Order {
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
     txHash: input.transactionHash,
+    ...(input.blockNumber !== undefined ? { blockNumber: input.blockNumber } : {}),
+    ...(takerFee !== undefined ? { fee: takerFee } : {}),
+    ...(takerFee !== undefined && input.feeAsset !== undefined
+      ? { feeAsset: input.feeAsset }
+      : {}),
   };
 }

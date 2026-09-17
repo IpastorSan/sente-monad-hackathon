@@ -152,6 +152,29 @@ export interface Order {
   updatedAt: Timestamp;
   /** On-chain transaction hash, for venues that settle per order. */
   txHash?: string;
+  /**
+   * Block the fills were confirmed in (SEN-20). Kuru: from the execution
+   * receipt; Perpl: from the order's own `at.b`. Absent when the venue path
+   * does not report one.
+   */
+  blockNumber?: number;
+  /**
+   * Perpl: leverage this order carries (`lv / 100`), e.g. 3 for 3x.
+   * Meaningless on a spot venue.
+   */
+  leverage?: number;
+  /** Fee charged on the fills so far, in quote/collateral units, when known. */
+  fee?: Decimal;
+  /** The asset `fee` is denominated in. */
+  feeAsset?: string;
+  /**
+   * Perps only, set by `closePosition`: the position's realised price PnL at
+   * the close (Perpl's `dpnl`), in collateral units. Cumulative over the
+   * position's life, not only this close.
+   */
+  realizedPnl?: Decimal;
+  /** Collateral paid (positive = paid out) as funding on that position (Perpl's `fnd`, sign-flipped). */
+  fundingPaid?: Decimal;
 }
 
 export interface Balance {

@@ -75,7 +75,7 @@ test('collateral rescales when price+size decimals are below the token decimals'
 
 test('orders map status, side and the tx hash with its 0x', () => {
   const raw: PerplOrder = {
-    at: { t: 20, txid: 'ab'.repeat(32) },
+    at: { b: 9_999, t: 20, txid: 'ab'.repeat(32) },
     c: { t: 10 },
     rq: 3,
     mkt: 16,
@@ -103,6 +103,8 @@ test('orders map status, side and the tx hash with its 0x', () => {
     averageFillPrice: '77105',
     timeInForce: 'IOC',
     reduceOnly: true,
+    blockNumber: 9_999,
+    leverage: 5,
     createdAt: 10,
     updatedAt: 20,
     txHash: `0x${'ab'.repeat(32)}`,

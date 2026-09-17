@@ -1,14 +1,26 @@
+// The `@Type` decorators below read Reflect metadata at module-load time, and
+// this DTO is imported by the tool registry too — so the polyfill must load
+// with it, not just with main.ts (same first-line import as main.ts).
+import 'reflect-metadata';
+
 import { MANDATE_CHAIN_ID, type Mandate } from '@sente/mandate';
+import { Type } from 'class-transformer';
 import {
+  IsIn,
+  IsInt,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
+import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
+import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
 import type { AgentRecord, AgentStatus } from '../store/agent-store';
 
 export const AGENT_NAME_MAX_LENGTH = 64;
@@ -74,6 +86,38 @@ export class RunAgentDto {
   instruction?: string;
 }
 
+/**
+ * Page size when the client omits `limit`, and its hard ceiling.
+ *
+ * `GET /agents/:id/events`. Query values arrive as strings, so the numeric
+ * ones carry `@Type(() => Number)` for the global pipe's `transform` step.
+ * `kind` is checked against `AGENT_EVENT_KINDS` — a typo is a 400 here, not a
+ * silently-empty page later.
+ */
+export const AGENT_EVENTS_DEFAULT_LIMIT = 100;
+export const AGENT_EVENTS_MAX_LIMIT = 500;
+
+export class AgentEventsQueryDto {
+  /** Event-log cursor: return only events with `seq > afterSeq`. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  afterSeq?: number;
+
+  /** Optional filter, e.g. only `fill` records for the Ledger. */
+  @IsOptional()
+  @IsIn(AGENT_EVENT_KINDS)
+  kind?: AgentEventKind;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(AGENT_EVENTS_MAX_LIMIT)
+  limit?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Responses. Every bigint crosses the wire as a decimal string.
 // ---------------------------------------------------------------------------
@@ -136,6 +180,46 @@ export interface HireAgentResponseDto {
 
 export interface AgentListResponseDto {
   agents: AgentResponseDto[];
+}
+
+/**
+ * One event on the wire — the log's shape with the bigint-free guarantee made
+ * explicit. The Agent Ledger, verdicts and consensus ramp all read through
+ * this route, so field names here are API surface: `seq`, `kind`, `at`,
+ * `detail` and every key inside `detail` are kept stable on purpose.
+ */
+export interface AgentEventResponseDto {
+  seq: number;
+  agentId: string;
+  runId?: string;
+  at: number;
+  kind: AgentEventKind;
+  layer?: string;
+  tool?: string;
+  /** JSON-safe: the log already stored bigints as decimal strings. */
+  detail: Record<string, unknown>;
+}
+
+export interface AgentEventsResponseDto {
+  events: AgentEventResponseDto[];
+  /**
+   * The highest `seq` in this page — pass it back as `afterSeq` for the next
+   * one. Equals the request cursor when the page is empty.
+   */
+  nextSeq: number;
+}
+
+export function toAgentEventResponse(event: AgentEvent): AgentEventResponseDto {
+  return {
+    seq: event.seq,
+    agentId: event.agentId,
+    ...(event.runId !== undefined ? { runId: event.runId } : {}),
+    at: event.at,
+    kind: event.kind,
+    ...(event.layer !== undefined ? { layer: event.layer } : {}),
+    ...(event.tool !== undefined ? { tool: event.tool } : {}),
+    detail: { ...event.detail },
+  };
 }
 
 export function toMandateDto(mandate: Mandate): MandateDto {

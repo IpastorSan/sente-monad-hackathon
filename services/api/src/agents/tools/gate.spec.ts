@@ -422,11 +422,70 @@ describe('gate', () => {
       intent: { venue: 'kuru', kind: 'order', notional: '36' },
     });
     expect(events[2]!.detail).toMatchObject({
+      venue: 'kuru',
       symbol: MON_USDC,
       filledSize: '10',
       averageFillPrice: '3.6',
     });
     expect(events.every((e) => e.agentId === h.agent.id && e.runId === 'run-1')).toBe(true);
+  });
+
+  it('a Kuru fill carries the receipt block and the taker fee it was charged', async () => {
+    const h = await harness();
+    h.kuru.fillRecord = { blockNumber: 74_000_042, fee: '0.0108', feeAsset: 'USDC' };
+    await h.thesis();
+    await h.call('place_market', {
+      venue: 'kuru',
+      market: MON_USDC,
+      side: 'buy',
+      size: '10',
+      slippageLimitPrice: '3.6',
+    });
+
+    const [fill] = await h.events.list(h.agent.id, { kind: 'fill' });
+    expect(fill!.detail).toMatchObject({
+      venue: 'kuru',
+      blockNumber: 74_000_042,
+      fee: '0.0108',
+      feeAsset: 'USDC',
+    });
+    // A JSON round-trip proves the detail crosses the wire unchanged.
+    expect(JSON.parse(JSON.stringify(fill!.detail)).blockNumber).toBe(74_000_042);
+  });
+
+  it('a Perpl fill carries its leverage', async () => {
+    const h = await harness();
+    await h.thesis(BTC_PERP);
+    await h.call('place_market', {
+      venue: 'perpl',
+      market: BTC_PERP,
+      side: 'buy',
+      size: '0.001',
+      slippageLimitPrice: '61000',
+      leverage: 3,
+    });
+
+    const [fill] = await h.events.list(h.agent.id, { kind: 'fill' });
+    expect(fill!.detail).toMatchObject({ venue: 'perpl', leverage: 3 });
+  });
+
+  it('close_position emits a close event with the venue realised PnL', async () => {
+    const h = await harness();
+    h.perpl.closePnl = { realizedPnl: '12.5', fundingPaid: '-0.3' };
+    const outcome = await h.call('close_position', { market: BTC_PERP });
+    expect(outcome.ok).toBe(true);
+
+    const events = await h.events.list(h.agent.id);
+    expect(events.map((e) => e.kind)).toEqual(['order', 'fill', 'close']);
+    const close = events.at(-1)!;
+    expect(close.tool).toBe('close_position');
+    expect(close.detail).toMatchObject({
+      venue: 'perpl',
+      symbol: BTC_PERP,
+      leverage: 3,
+      realizedPnl: '12.5',
+      fundingPaid: '-0.3',
+    });
   });
 
   it('returns a venue error as its reason, with no stack and no token', async () => {

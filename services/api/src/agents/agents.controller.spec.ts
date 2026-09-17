@@ -7,7 +7,13 @@ import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
 import { AGENT_REFUSAL_REASONS, agentErrorStatus } from './agents.errors';
 import { AgentsService } from './agents.service';
-import { AgentIdParamDto, AmendMandateDto, CreateAgentDto } from './dto/agent.dto';
+import {
+  AgentEventsQueryDto,
+  AgentIdParamDto,
+  AmendMandateDto,
+  CreateAgentDto,
+} from './dto/agent.dto';
+import { InMemoryAgentEventLog } from './events/agent-event-log';
 import { InMemoryAgentStore } from './store/agent-store';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
 
@@ -40,14 +46,17 @@ function body(over: Record<string, unknown> = {}): Record<string, unknown> {
 function setup(wallets = new FakeAgentWalletProvider()) {
   let principal: GasDripPrincipal = { userId: 'alice' };
   const auth: GasDripAuth = { principal: () => principal };
+  const events = new InMemoryAgentEventLog();
   const controller = new AgentsController(
     new AgentsService(new InMemoryAgentStore(), wallets),
     auth,
     // The run route has its own spec (runner/run-route.spec.ts).
     {} as never,
+    events,
   );
   return {
     controller,
+    events,
     as(userId: string) {
       principal = { userId };
     },
@@ -141,6 +150,92 @@ describe('AgentsController', () => {
     for (const reason of AGENT_REFUSAL_REASONS) {
       expect(agentErrorStatus(reason)).toBeGreaterThanOrEqual(400);
     }
+  });
+
+  describe('GET /agents/:id/events', () => {
+    /** Hires as alice and records one thesis, one fill (bigint detail) and one refusal. */
+    async function seeded() {
+      const h = setup();
+      const { agent } = await h.controller.hire(body() as unknown as CreateAgentDto);
+      const at = { agentId: agent.id, runId: 'run-1' };
+      await h.events.append({ ...at, kind: 'thesis', detail: { market: 'MON-USDC' } });
+      await h.events.append({
+        ...at,
+        kind: 'fill',
+        tool: 'place_market',
+        detail: { orderId: '4:812', blockNumber: 74_000_012, amountAtoms: 25_000_000n },
+      });
+      await h.events.append({ ...at, kind: 'refusal', layer: 'sente', detail: { code: 'oops' } });
+      return { ...h, agentId: agent.id };
+    }
+
+    it('returns the log oldest-first, bigints as strings, with nextSeq', async () => {
+      const { controller, agentId } = await seeded();
+      const page = await controller.listEvents({ id: agentId }, {});
+
+      expect(page.events.map((e) => e.kind)).toEqual(['thesis', 'fill', 'refusal']);
+      expect(page.events[1]).toMatchObject({ kind: 'fill', runId: 'run-1', tool: 'place_market' });
+      expect(page.events[1]!.detail).toEqual({
+        orderId: '4:812',
+        blockNumber: 74_000_012,
+        amountAtoms: '25000000', // a bigint on the wire is a decimal string
+      });
+      expect(page.events[2]!.layer).toBe('sente');
+      expect(page.nextSeq).toBe(3);
+
+      // The cursor pages forward: what comes after seq 2 is only the refusal.
+      const next = await controller.listEvents({ id: agentId }, { afterSeq: 2 });
+      expect(next.events.map((e) => e.seq)).toEqual([3]);
+      expect(next.nextSeq).toBe(3);
+      // A cursor past the end is empty, and echoes the cursor back.
+      const done = await controller.listEvents({ id: agentId }, { afterSeq: 3 });
+      expect(done.events).toEqual([]);
+      expect(done.nextSeq).toBe(3);
+    });
+
+    it('filters by kind and clamps to the most recent N', async () => {
+      const { controller, agentId } = await seeded();
+      const orders = await controller.listEvents({ id: agentId }, { kind: 'fill' });
+      expect(orders.events.map((e) => e.kind)).toEqual(['fill']);
+
+      const lastTwo = await controller.listEvents({ id: agentId }, { limit: 2 });
+      expect(lastTwo.events.map((e) => e.seq)).toEqual([2, 3]);
+      expect(lastTwo.nextSeq).toBe(3);
+    });
+
+    it("answers another user's agent with a 404, not an empty log", async () => {
+      const { controller, as, agentId } = await seeded();
+      as('bob');
+      expect(await httpError(controller.listEvents({ id: agentId }, {}))).toMatchObject({
+        status: 404,
+        body: { reason: 'agent_not_found' },
+      });
+    });
+
+    it('validates the query (the global ValidationPipe, as main.ts configures it)', async () => {
+      // Nest's ValidationPipe coerces the raw query strings to numbers at
+      // runtime (`@Type(() => Number)` on the DTO). Specs call the controller
+      // with already-typed values, as the rest of this file does.
+      await expect(
+        pipe.transform(
+          { afterSeq: 10, kind: 'close', limit: 250 },
+          { type: 'query', metatype: AgentEventsQueryDto },
+        ),
+      ).resolves.toEqual({ afterSeq: 10, kind: 'close', limit: 250 });
+
+      for (const query of [
+        { afterSeq: '-1' },
+        { afterSeq: 'x' },
+        { kind: 'nonsense' },
+        { limit: '0' },
+        { limit: '501' },
+        { runId: 'sneaked-in' }, // not a query param the route knows
+      ]) {
+        await expect(
+          pipe.transform(query, { type: 'query', metatype: AgentEventsQueryDto }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      }
+    });
   });
 
   describe('validation (the global ValidationPipe, as main.ts configures it)', () => {
