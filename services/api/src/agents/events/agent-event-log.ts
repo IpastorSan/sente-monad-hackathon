@@ -1,7 +1,8 @@
 /**
  * What an agent tried and what happened: every thesis, order, fill and
- * refusal its tools produce (SEN-7). This is the data the Agent Ledger will
- * show, so it is written for completeness rather than for debugging — a
+ * refusal its tools produce (SEN-7), plus the verdict on a thesis once a close
+ * settles it (SEN-22). This is the data the Agent Ledger will show, so it is
+ * written for completeness rather than for debugging — a
  * refusal names the layer that refused, and an order that failed at the venue
  * is recorded as well as one that landed.
  */
@@ -9,8 +10,20 @@
 /** DI token for the agent event log. */
 export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
 
-/** `run`: one summary per Tool Runner run (SEN-8) — trigger, stop reason, iterations, cost. */
-export const AGENT_EVENT_KINDS = ['thesis', 'order', 'fill', 'close', 'refusal', 'run'] as const;
+/**
+ * `run`: one summary per Tool Runner run (SEN-8) — trigger, stop reason, iterations, cost.
+ * `verdict`: a settled thesis (SEN-22) — its realised PnL and whether it held — appended
+ * when a close completes one, so the Ledger reads it through the events route like the rest.
+ */
+export const AGENT_EVENT_KINDS = [
+  'thesis',
+  'order',
+  'fill',
+  'close',
+  'verdict',
+  'refusal',
+  'run',
+] as const;
 export type AgentEventKind = (typeof AGENT_EVENT_KINDS)[number];
 
 /**

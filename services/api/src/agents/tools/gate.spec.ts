@@ -488,6 +488,65 @@ describe('gate', () => {
     });
   });
 
+  it('emits a verdict once a close settles the thesis behind it (SEN-22)', async () => {
+    const h = await harness();
+    h.perpl.closePnl = { realizedPnl: '12.5', fundingPaid: '-0.3' };
+    await h.thesis(BTC_PERP);
+    await h.call('place_market', {
+      venue: 'perpl',
+      market: BTC_PERP,
+      side: 'buy',
+      size: '0.001',
+      slippageLimitPrice: '61000',
+      leverage: 3,
+    });
+    const closed = await h.call('close_position', {
+      market: BTC_PERP,
+      size: '0.001',
+      slippageLimitPrice: '61000',
+    });
+    expect(closed.ok).toBe(true);
+
+    const events = await h.events.list(h.agent.id);
+    expect(events.map((e) => e.kind)).toEqual([
+      'thesis',
+      'order',
+      'fill',
+      'order',
+      'fill',
+      'close',
+      'verdict',
+    ]);
+    const verdict = events.at(-1)!;
+    expect(verdict.tool).toBe('close_position');
+    expect(verdict.detail).toMatchObject({
+      agentId: h.agent.id,
+      runId: 'run-1',
+      market: BTC_PERP,
+      venue: 'perpl',
+      direction: 'long',
+      thesisSeq: events[0]!.seq,
+      fills: 2,
+      // The venue's settled dpnl, less the funding received.
+      realisedPnl: '12.8',
+      pnlAsset: 'AUSD',
+      costBasis: '61',
+      held: true,
+    });
+    // The Ledger reads it off the events route, by kind, like every other event.
+    expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toHaveLength(1);
+  });
+
+  it('records no verdict for a close with no thesis behind it', async () => {
+    const h = await harness();
+    h.perpl.closePnl = { realizedPnl: '3' };
+    expect((await h.call('close_position', { market: BTC_PERP, size: '1' })).ok).toBe(true);
+
+    const events = await h.events.list(h.agent.id);
+    expect(events.map((e) => e.kind)).toEqual(['order', 'fill', 'close']);
+    expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toEqual([]);
+  });
+
   it('returns a venue error as its reason, with no stack and no token', async () => {
     const h = await harness();
     await h.thesis();
