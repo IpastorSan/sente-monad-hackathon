@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 
 import { creditsRefusalToHttpException } from '../credits/credits.errors';
+import { ConsensusService } from '../chain/consensus.service';
 import { GasDripAuth } from '../gas/auth/gas-drip-auth';
 import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
 import { agentErrorStatus, agentErrorToHttpBody } from './agents.errors';
@@ -27,6 +28,7 @@ import {
   RunAgentDto,
   toAgentEventResponse,
   toAgentResponse,
+  type AgentEventResponseDto,
   type AgentEventsResponseDto,
   type AgentListResponseDto,
   type AgentResponseDto,
@@ -51,6 +53,12 @@ export class AgentsController {
     private readonly auth: GasDripAuth,
     private readonly runner: AgentRunnerService,
     @Inject(AGENT_EVENTS) private readonly events: AgentEventLog,
+    /**
+     * SEN-21: only `GET /agents/:id/events` uses this, to say how far Monad has
+     * taken the block an order or fill confirmed in. `ChainModule` provides it;
+     * see `agents.module.ts`.
+     */
+    private readonly consensus: ConsensusService,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -94,6 +102,10 @@ export class AgentsController {
    *
    * `nextSeq` is the highest `seq` in the page: pass it back as `afterSeq` to
    * read what comes next. Oldest-first within the page.
+   *
+   * SEN-21: every `order` and `fill` that carries a `blockNumber` also carries
+   * `consensus`, so the Ledger's ramp can show how far Monad has taken that
+   * block. See `withConsensus`.
    */
   @Get(':id/events')
   async listEvents(
@@ -109,10 +121,33 @@ export class AgentsController {
         limit: query.limit ?? AGENT_EVENTS_DEFAULT_LIMIT,
       });
       return {
-        events: events.map(toAgentEventResponse),
+        events: events.map(toAgentEventResponse).map((event) => this.withConsensus(event)),
         nextSeq: events.at(-1)?.seq ?? query.afterSeq ?? 0,
       };
     });
+  }
+
+  /**
+   * Adds `consensus` to an order or a fill — the two kinds a venue reports a
+   * block for — and leaves every other event, and `detail` itself, exactly as
+   * the log stored it.
+   *
+   * `state` is `unknown` with an empty `at` when the block is outside the
+   * window `ConsensusService` keeps. That is the ordinary outcome for a trade
+   * older than a few minutes, and it is a state the Ledger can draw: an
+   * incomplete ramp, not a missing field.
+   */
+  private withConsensus(event: AgentEventResponseDto): AgentEventResponseDto {
+    if (event.kind !== 'order' && event.kind !== 'fill') return event;
+    const blockNumber = eventBlockNumber(event.detail);
+    if (blockNumber === undefined) return event;
+    const record = this.consensus.stateOf(blockNumber);
+    return {
+      ...event,
+      consensus: record
+        ? { state: record.state, at: { ...record.at } }
+        : { state: 'unknown', at: {} },
+    };
   }
 
   @Patch(':id/mandate')
@@ -184,4 +219,17 @@ export class AgentsController {
       throw creditsRefusalToHttpException(error);
     }
   }
+}
+
+/**
+ * The block an event's `detail` names, if it names one. Venue adapters record
+ * `blockNumber` as a number; a decimal string is accepted too, because a
+ * bigint that crossed the log's `toJsonSafe` arrives as one.
+ */
+function eventBlockNumber(detail: Record<string, unknown>): number | undefined {
+  const value = detail['blockNumber'];
+  if (typeof value === 'number')
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+  return undefined;
 }

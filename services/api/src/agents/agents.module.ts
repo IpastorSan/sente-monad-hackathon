@@ -1,5 +1,6 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
+import { ChainModule } from '../chain/chain.module';
 import { GasDripAuth, RequestContextGasDripAuth } from '../gas/auth/gas-drip-auth';
 import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
 import { GasModule } from '../gas/gas.module';
@@ -95,7 +96,9 @@ const authProvider: Provider = {
 @Module({
   // GasDripService: the MON gas drip to each hired agent's wallet (SEN-14).
   // CreditsService: the owner's OpenRouter key the runner bills (SEN-8).
-  imports: [GasModule, ...agentRunnerImports],
+  // ChainModule: ConsensusService, which `GET /agents/:id/events` decorates
+  // its order and fill events with (SEN-21).
+  imports: [GasModule, ChainModule, ...agentRunnerImports],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   controllers: [AgentsController, ...agentToolsControllers],
   providers: [

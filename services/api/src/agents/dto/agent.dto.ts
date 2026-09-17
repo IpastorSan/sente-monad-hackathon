@@ -19,6 +19,7 @@ import {
   MinLength,
 } from 'class-validator';
 
+import type { CommitTimes, ConsensusState } from '../../chain/consensus.service';
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
 import type { AgentRecord, AgentStatus } from '../store/agent-store';
@@ -198,6 +199,20 @@ export interface AgentEventResponseDto {
   tool?: string;
   /** JSON-safe: the log already stored bigints as decimal strings. */
   detail: Record<string, unknown>;
+  /**
+   * Where Monad has taken `detail.blockNumber` (SEN-21). Present on every
+   * `order` and `fill` that names a block, and on nothing else — a thesis or a
+   * refusal has no block to ask about.
+   */
+  consensus?: AgentEventConsensusDto;
+}
+
+/** The consensus ramp's per-event input: current state, and when each state landed. */
+export interface AgentEventConsensusDto {
+  /** `Proposed` | `Voted` | `Finalized` | `Verified`, or `unknown` for a block outside the window. */
+  state: ConsensusState;
+  /** Epoch ms each commit state was first observed; empty when `state` is `unknown`. */
+  at: CommitTimes;
 }
 
 export interface AgentEventsResponseDto {
