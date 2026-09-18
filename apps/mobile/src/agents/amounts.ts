@@ -45,11 +45,44 @@ export function formatAtoms(
   decimals: number,
   { group = true }: { group?: boolean } = {},
 ): string {
+  const { sign, whole, fraction } = split(atoms, decimals);
+  const trimmed = fraction.replace(/0+$/, '');
+  return `${sign}${group ? groupThousands(whole) : whole}${trimmed ? `.${trimmed}` : ''}`;
+}
+
+/**
+ * Atoms -> a balance figure with a FIXED number of decimals: `0.00`, `1,204.50`.
+ *
+ * `formatAtoms` formats a number someone typed, where trailing zeros are noise.
+ * A balance is a column of money, and a column of money lines up or it looks
+ * broken: `0` above `1,204.5` above `0.000001` reads as three unrelated things.
+ * `places` is how many decimals to show, defaulting to all of the token's.
+ *
+ * It TRUNCATES, always toward zero, and never rounds. Rounding 0.009 AUSD up to
+ * `0.01` tells a user they hold a hundredth they cannot spend, and a balance is
+ * read precisely when deciding what it can cover. Showing fewer places than the
+ * token has therefore means the figure can be short of the truth — say so on
+ * screen rather than in the number.
+ */
+export function formatFixedAtoms(
+  atoms: bigint,
+  decimals: number,
+  { group = true, places = decimals }: { group?: boolean; places?: number } = {},
+): string {
+  const shown = Math.max(0, Math.min(places, decimals));
+  const { sign, whole, fraction } = split(atoms, decimals);
+  const truncated = fraction.slice(0, shown);
+  return `${sign}${group ? groupThousands(whole) : whole}${truncated ? `.${truncated}` : ''}`;
+}
+
+/** Sign, whole part, and the full zero-padded fraction. No rounding anywhere. */
+function split(atoms: bigint, decimals: number): { sign: string; whole: string; fraction: string } {
   const negative = atoms < 0n;
   const magnitude = negative ? -atoms : atoms;
   const base = 10n ** BigInt(decimals);
-  const whole = (magnitude / base).toString();
-  const fraction =
-    decimals > 0 ? (magnitude % base).toString().padStart(decimals, '0').replace(/0+$/, '') : '';
-  return `${negative ? '-' : ''}${group ? groupThousands(whole) : whole}${fraction ? `.${fraction}` : ''}`;
+  return {
+    sign: negative ? '-' : '',
+    whole: (magnitude / base).toString(),
+    fraction: decimals > 0 ? (magnitude % base).toString().padStart(decimals, '0') : '',
+  };
 }

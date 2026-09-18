@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { formatAtoms, normalizeDecimal, parseAmount } from './amounts.ts';
+import { formatAtoms, formatFixedAtoms, normalizeDecimal, parseAmount } from './amounts.ts';
 
 test('normalizeDecimal canonicalises what a person types', () => {
   assert.equal(normalizeDecimal(' 250.50 '), '250.5');
@@ -38,6 +38,31 @@ test('formatAtoms groups thousands and drops trailing zeros', () => {
   assert.equal(formatAtoms(5_000_000_000_000_000_000n, 18), '5');
   assert.equal(formatAtoms(0n, 6), '0');
   assert.equal(formatAtoms(-1_500_000n, 6), '-1.5');
+});
+
+test('formatFixedAtoms keeps the decimals a balance column needs', () => {
+  // A zero balance still reads as money, which is what the home screen shows
+  // at sign-in before anything has been funded.
+  assert.equal(formatFixedAtoms(0n, 6, { places: 2 }), '0.00');
+  assert.equal(formatFixedAtoms(1_204_500_000n, 6, { places: 2 }), '1,204.50');
+  assert.equal(formatFixedAtoms(2_500_000_000_000_000_000n, 18, { places: 4 }), '2.5000');
+  assert.equal(formatFixedAtoms(1_204_500_000n, 6, { places: 2, group: false }), '1204.50');
+  assert.equal(formatFixedAtoms(-1_500_000n, 6, { places: 2 }), '-1.50');
+});
+
+test('formatFixedAtoms truncates toward zero rather than rounding a balance up', () => {
+  // 0.009 AUSD shown as "0.01" claims a hundredth the user cannot spend.
+  assert.equal(formatFixedAtoms(9_000n, 6, { places: 2 }), '0.00');
+  assert.equal(formatFixedAtoms(1_999_999n, 6, { places: 2 }), '1.99');
+  assert.equal(formatFixedAtoms(-1_999_999n, 6, { places: 2 }), '-1.99');
+  assert.equal(formatFixedAtoms(999_999_999_999_999_999n, 18, { places: 4 }), '0.9999');
+});
+
+test('formatFixedAtoms defaults to the token precision and clamps silly places', () => {
+  assert.equal(formatFixedAtoms(1_204_500_000n, 6), '1,204.500000');
+  assert.equal(formatFixedAtoms(1_204_500_000n, 6, { places: 99 }), '1,204.500000');
+  assert.equal(formatFixedAtoms(1_204_500_000n, 6, { places: 0 }), '1,204');
+  assert.equal(formatFixedAtoms(42n, 0, { places: 2 }), '42');
 });
 
 test('formatAtoms without grouping reads back through parseAmount exactly', () => {

@@ -34,6 +34,8 @@ import { createBundlerClient, getUserOperationHash } from 'viem/account-abstract
 
 import { monadChain } from '../chain';
 import {
+  asError,
+  SIGNED_OUT,
   WalletApi,
   WalletApiError,
   toUserOperation,
@@ -55,13 +57,6 @@ import { ENTRY_POINT, toSenteKernelAccount, type SenteKernelAccount } from './ke
  * Leave this unset and the race simply runs on one source.
  */
 const BUNDLER_URL = process.env.EXPO_PUBLIC_BUNDLER_URL || undefined;
-
-/**
- * The session for a caller that has none: every request goes out unauthenticated
- * and the API answers 401. Used only when the hook runs with no `auth` and no
- * injected client, which is the state before sign-in.
- */
-const SIGNED_OUT: SessionAuth = { token: () => null, refresh: () => Promise.resolve(null) };
 
 export type SmartAccountStatus =
   /** No owner yet — the passkey session is not open. */
@@ -168,8 +163,10 @@ export function useSmartAccount(
         kernelRef.current = kernel;
 
         // Idempotent for the same owner; the server refuses a DIFFERENT owner
-        // for the same user rather than rebinding.
-        const registered = await api.register(owner.address);
+        // for the same user rather than rebinding. `/wallet/kernel/register`,
+        // not `/wallet/register`: the plain route is the user's Privy wallet
+        // now (SEN-40) and would refuse an owner address.
+        const registered = await api.registerKernel(owner.address);
         if (cancelled) return;
 
         if (registered.address.toLowerCase() !== kernel.address.toLowerCase()) {
@@ -198,7 +195,7 @@ export function useSmartAccount(
   const refresh = useCallback(async () => {
     if (status === 'idle') return;
     try {
-      const fresh = await api.account();
+      const fresh = await api.kernelAccount();
       if (mountedRef.current) setAccount(fresh);
     } catch (caught) {
       if (mountedRef.current) setError(asError(caught));
@@ -345,8 +342,4 @@ async function readBundlerReceipt(
     // viem throws while the operation is still in the mempool. Normal.
     return null;
   }
-}
-
-function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
