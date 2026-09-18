@@ -10,11 +10,12 @@
     "start": "envio start",
     "test": "node --no-warnings --test src/lib/*.test.ts",
     "test:watch": "node --no-warnings --test --watch src/lib/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run codegen && tsc -p tsconfig.json --noEmit",
     "verify:topics": "node --experimental-strip-types --no-warnings scripts/verify-config-topics.ts"
   },
   "dependencies": {
-    "envio": "3.12.0"
+    "envio": "3.12.0",
+    "viem": "^2.54.0"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",

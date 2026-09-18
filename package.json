@@ -13,6 +13,7 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "build": "pnpm -r --if-present run build",
     "test": "pnpm -r --if-present run test",
+    "check:indexer": "cd services/indexer && npm ci --no-audit --no-fund && npm run typecheck && npm test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "claim:ausd": "pnpm --filter @sente/mobile run claim:ausd"

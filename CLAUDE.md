@@ -64,6 +64,8 @@ mise exec -- pnpm run lint         # eslint across every package
 mise exec -- pnpm run build        # topological build (venues -> api)
 mise exec -- pnpm run test         # per-package test scripts
 mise exec -- pnpm run format       # prettier --write .
+mise exec -- pnpm run check:indexer # services/indexer, which the four above skip:
+                                    # npm ci + envio codegen + its typecheck + its tests
 ```
 
 Per package: `mise exec -- pnpm --filter @sente/api run start:dev`,

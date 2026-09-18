@@ -4,8 +4,9 @@ Sente leaderboard schema — Monad testnet (10143), Kuru Spot V2 + Perpl.
 Design notes:
 - Kuru identities are `uint40` account ids inside AccountCore, not addresses;
   Perpl ids are `uint256` Exchange account ids. `Account.id` is therefore
-  `"kuru-<id>"` / `"perpl-<id>"` and carries the on-chain owner address once
-  AccountCore's `AccountRegistered` (or Perpl's `AccountCreated`) is seen.
+  `"kuru-<id>"` / `"perpl-<id>"`, and its address is read off the venue the
+  first time the account is seen (most registration events are older than the
+  indexed range — see docs/indexer.md §addresses).
 - Money is stored as the venue's raw integer units wherever arithmetic happens
   (FIFO-style realised PnL is exact BigInt); `*Usd`/`price` conveniences are
   BigDecimal derived at write time. No float ever touches a raw value.
@@ -26,9 +27,10 @@ enum Venue {
 
 """
 A venue trading account: Kuru AccountCore account (uint40 id) or Perpl
-Exchange account (uint256 id). The owner wallet is attached from
-AccountRegistered / AccountCreated; until then it is null and the leaderboard
-shows the raw account id.
+Exchange account (uint256 id). The address is resolved from the venue on first
+sight and confirmed by AccountRegistered / AccountCreated when one lands inside
+the indexed range; it is null only for an id the venue itself does not know,
+and then the leaderboard shows the raw account id.
 """
 type Account {
   # "kuru-62" | "perpl-1"
@@ -37,8 +39,11 @@ type Account {
   # Numeric account id exactly as emitted on-chain.
   accountId: BigInt!
   # The venue account address (lowercase): Kuru `AccountRegistered.account`,
-  # Perpl `AccountCreated.account`. This is the address that trades and the one
-  # a Sente user is matched on. Null until its event is seen.
+  # Perpl `AccountCreated.account`, or — when that one-shot event is older than
+  # the indexed range, which is the common case — `AccountCore.userAddressById`
+  # / `Exchange.getAccountById`, read once per account. This is the address that
+  # trades and the one a Sente user is matched on, so a null here is an account
+  # the leaderboard cannot show at all. See docs/indexer.md §addresses.
   address: String
   # Owner the venue names separately (Kuru `AccountRegistered.owner`). Perpl has
   # no equivalent, so it stays null there. Not inferred from `address`.
