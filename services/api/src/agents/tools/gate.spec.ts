@@ -591,6 +591,85 @@ describe('gate', () => {
     expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toHaveLength(1);
   });
 
+  it('settles a Kuru thesis through its own fills, with no close_position (SEN-47)', async () => {
+    const h = await harness();
+    // Kuru has no `close_position`: a spot thesis ends when its fills net out,
+    // and until SEN-47 that produced a verdict inside `settle()` — counted by
+    // the leaderboard — but never a `verdict` EVENT, so neither the Ledger nor
+    // ERC-8004 ever heard of a spot outcome.
+    h.kuru.fillRecord = { blockNumber: 74_000_500, fee: '0.05', feeAsset: 'USDC' };
+    await h.thesis();
+    const buy = {
+      venue: 'kuru',
+      market: MON_USDC,
+      side: 'buy',
+      size: '10',
+      slippageLimitPrice: '3.5',
+    };
+    expect((await h.call('place_market', buy)).ok).toBe(true);
+    expect(
+      (await h.call('place_market', { ...buy, side: 'sell', slippageLimitPrice: '4' })).ok,
+    ).toBe(true);
+
+    const events = await h.events.list(h.agent.id);
+    expect(events.map((e) => e.kind)).toEqual([
+      'thesis',
+      'order',
+      'fill',
+      'order',
+      'fill',
+      'verdict',
+    ]);
+    const verdict = events.at(-1)!;
+    // The tool that settled it, which on spot is the sell that closed it.
+    expect(verdict.tool).toBe('place_market');
+    expect(verdict.detail).toMatchObject({
+      market: MON_USDC,
+      venue: 'kuru',
+      direction: 'long',
+      thesisSeq: events[0]!.seq,
+      fills: 2,
+      // 10 MON bought at 3.5 and sold at 4, less the 0.05 USDC taker fee each
+      // fill paid: net of fees, like every other verdict.
+      realisedPnl: '4.9',
+      pnlAsset: 'USDC',
+      costBasis: '35',
+      held: true,
+    });
+    // The block the settling fill confirmed in, so the Ledger draws the same
+    // consensus ramp under the verdict as under that fill (SEN-35).
+    expect(verdict.detail['blockNumber']).toBe(74_000_500);
+  });
+
+  it('leaves a partly exited thesis open, and settles it once when it finishes', async () => {
+    const h = await harness();
+    await h.thesis();
+    const order = {
+      venue: 'kuru',
+      market: MON_USDC,
+      side: 'buy',
+      size: '10',
+      slippageLimitPrice: '3.5',
+    };
+    await h.call('place_market', order);
+
+    // Four of the ten back out: the position is still live, so there is
+    // nothing to judge yet.
+    await h.call('place_market', { ...order, side: 'sell', size: '4', slippageLimitPrice: '4' });
+    expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toEqual([]);
+
+    // The fill that takes it to zero is the one that settles it.
+    await h.call('place_market', { ...order, side: 'sell', size: '6', slippageLimitPrice: '4' });
+    const verdicts = await h.events.list(h.agent.id, { kind: 'verdict' });
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]!.detail).toMatchObject({ fills: 3, realisedPnl: '5', held: true });
+
+    // A further sell on the same market settles nothing new: the thesis behind
+    // it already has its verdict, and two would be counted twice.
+    await h.call('place_market', { ...order, side: 'sell', size: '1', slippageLimitPrice: '4' });
+    expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toHaveLength(1);
+  });
+
   it('records no verdict for a close with no thesis behind it', async () => {
     const h = await harness();
     h.perpl.closePnl = { realizedPnl: '3' };
@@ -712,7 +791,9 @@ describe('venue pre-flight (SEN-19)', () => {
     await h.thesis();
     h.kuru.wallet = [{ asset: 'USDC', available: '6', locked: '0', total: '6' }];
 
-    const outcome = refused(await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '10' }));
+    const outcome = refused(
+      await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '10' }),
+    );
 
     expect(outcome.refusal).toEqual({ layer: 'sente', code: 'insufficient_balance' });
     expect(outcome.message).toContain('Your wallet holds 6 USDC');
@@ -769,7 +850,9 @@ describe('venue pre-flight (SEN-19)', () => {
     h.kuru.wallet = [{ asset: 'USDC', available: '0', locked: '0', total: '0' }];
     h.kuru.balances = [];
 
-    expect((await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '1' })).ok).toBe(true);
+    expect((await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '1' })).ok).toBe(
+      true,
+    );
     expect((await h.call('place_limit', limit())).ok).toBe(true);
     expect(h.kuru.writes().map((w) => w.method)).toEqual(['deposit', 'placeLimit']);
   });

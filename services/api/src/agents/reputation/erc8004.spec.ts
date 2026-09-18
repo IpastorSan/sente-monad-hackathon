@@ -13,7 +13,10 @@ import { AgentsService } from '../agents.service';
 import { InMemoryAgentEventLog, type NewAgentEvent } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
 import { FakeAgentWalletProvider } from '../testing/fake-agent-wallet.provider';
-import { testAgent, testMandateInput } from '../tools/testing/agent-fixture';
+import { AgentTools } from '../tools/context';
+import { GATED_TOOLS } from '../tools/gate';
+import { MON_USDC, NOW, testAgent, testMandateInput } from '../tools/testing/agent-fixture';
+import { fakeVenues } from '../tools/testing/fake-venues';
 import {
   agentRegistryId,
   agentUriFor,
@@ -412,6 +415,65 @@ describe('ReputationEventLog', () => {
     await log.append({ agentId: 'agent-1', kind: 'thesis', detail: { market: 'MON-USDC' } });
     expect(await log.list('agent-1')).toHaveLength(1);
     expect(await log.list('agent-1', { kind: 'run' })).toHaveLength(0);
+  });
+});
+
+describe('a thesis settled by its fills reaches the registry (SEN-47)', () => {
+  it('publishes feedback for a Kuru round trip, which never calls close_position', async () => {
+    const client = new FakeErc8004Client();
+    const agent = testAgent({ erc8004AgentId: '1874' });
+    const rep = reputation(client, {
+      get: (id) => Promise.resolve(id === agent.id ? agent : undefined),
+    });
+    const inner = new InMemoryAgentEventLog();
+    const store = new InMemoryAgentStore();
+    await store.insert(agent);
+    const fakes = fakeVenues();
+    const tools = new AgentTools({
+      store,
+      events: new ReputationEventLog(inner, rep),
+      precheck: true,
+      venuesFor: () => Promise.resolve(fakes.venues),
+      now: () => NOW,
+    });
+    const ctx = tools.context(agent, { runId: 'run-1' });
+    const call = (name: string, args: unknown) => {
+      const tool = GATED_TOOLS.find((t) => t.name === name);
+      if (!tool) throw new Error(`no tool ${name}`);
+      return tool.invoke(ctx, args);
+    };
+
+    await call('record_thesis', {
+      market: MON_USDC,
+      direction: 'long',
+      thesis: 'Breaking out.',
+      invalidation: 'Back under 3.',
+    });
+    const order = {
+      venue: 'kuru',
+      market: MON_USDC,
+      side: 'buy',
+      size: '10',
+      slippageLimitPrice: '3.5',
+    };
+    expect((await call('place_market', order)).ok).toBe(true);
+    expect(
+      (await call('place_market', { ...order, side: 'sell', slippageLimitPrice: '4' })).ok,
+    ).toBe(true);
+    await rep.whenIdle();
+
+    // Spot closes through an ordinary sell, so before SEN-47 this round trip
+    // produced no `verdict` event and the registry heard nothing.
+    expect(await inner.list(agent.id, { kind: 'verdict' })).toHaveLength(1);
+    expect(client.feedback).toHaveLength(1);
+    expect(client.feedback[0]).toMatchObject({
+      agentId: 1874n,
+      tag1: ERC8004_PNL_TAG,
+      tag2: 'kuru',
+      valueDecimals: ERC8004_VALUE_DECIMALS,
+      // 5 USDC made on a 35 USDC cost basis: 1,428.57 basis points.
+      value: 142_857n,
+    });
   });
 });
 

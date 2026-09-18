@@ -13,9 +13,9 @@
  *
  * Nothing is thrown out of `invoke`: every outcome comes back as a
  * `ToolOutcome` whose message the model reads. Every refusal, and every
- * venue write whether it landed or failed, is appended to the event log. A
- * close also settles the thesis behind it, so a `verdict` event follows the
- * `close` (SEN-22).
+ * venue write whether it landed or failed, is appended to the event log. Any
+ * write that FILLED then settles the thesis behind it, so a `verdict` event
+ * follows the fill that finished the position (SEN-22, SEN-47).
  */
 import { Logger } from '@nestjs/common';
 import { checkIntent, type Intent } from '@sente/mandate';
@@ -120,10 +120,15 @@ async function write(tool: AgentTool, ctx: ToolContext, args: unknown): Promise<
           tool: tool.name,
           detail: { ...(fill ?? {}), ...realisedOf(result) },
         });
-        // The close is what settles the thesis (SEN-22): what it made and
-        // whether it held, on the log like everything else.
-        await recordVerdict(ctx, fill);
       }
+      // A fill is what settles a thesis (SEN-22), whichever tool produced it.
+      // It used to be `close_position` alone, and that tool is Perpl-only
+      // (SEN-47): a Kuru thesis comes back to zero through an ordinary sell,
+      // so every spot round trip settled inside `settle()` — counted by the
+      // leaderboard — while the Ledger and ERC-8004, which read the `verdict`
+      // EVENT, never heard of it. The close above is recorded first because
+      // the verdict is read off the log and Perpl's realised PnL rides on it.
+      if (fill) await recordVerdict(ctx, tool.name, fill);
     }
     return { ok: true, result };
   } catch (error) {
@@ -201,28 +206,36 @@ async function record(
 }
 
 /**
- * A verdict event for the thesis a close just settled (SEN-22).
+ * A verdict event for the thesis a fill just settled (SEN-22, SEN-47).
  *
- * `settle` is a pure read of the agent's events, so it only sees the close once
- * the close above is on the log. Only a thesis whose position came back to zero
- * is settled — one that is still open, and a close with no thesis behind it,
- * record nothing.
+ * `settle` is a pure read of the agent's events, so it only sees this write
+ * once the fill (and, for a Perpl close, the `close`) is on the log. Only a
+ * thesis whose position came back to zero is settled — one that is still open,
+ * a partial fill, and a fill with no thesis behind it, record nothing.
+ *
+ * Every filling tool reaches here, not just `close_position` (SEN-47). Kuru has
+ * no close: a spot thesis ends when its own fills net out, and settling only on
+ * `close_position` meant two of the three verdict consumers — the Ledger and the
+ * ERC-8004 reputation hook, which both read the `verdict` EVENT — missed every
+ * Kuru outcome, while the leaderboard, which calls `settle` itself, counted it.
  *
  * The log is read for the WHOLE AGENT, not for this run (SEN-33). A scheduled
  * agent records its thesis in one tick and closes the position in a later one,
  * and a run-scoped read never found that thesis: every such position settled to
  * nothing and `theses.settled` stayed at zero in normal operation. Reading
- * across runs means the same thesis can be reached by a second close, so a
- * thesis that already has a verdict on the log is not settled twice.
+ * across runs means the same thesis can be reached by a second fill, so a
+ * thesis that already has a verdict on the log is not settled twice — which is
+ * the whole guard against duplicates now that every fill asks.
  *
- * Like `record`, this never decides the outcome of the call: the close landed,
+ * Like `record`, this never decides the outcome of the call: the order landed,
  * and a log that will not take the verdict must not tell the model otherwise.
  */
 async function recordVerdict(
   ctx: ToolContext,
-  fill: Record<string, unknown> | undefined,
+  tool: string,
+  fill: Record<string, unknown>,
 ): Promise<void> {
-  const market = fill?.['symbol'];
+  const market = fill['symbol'];
   if (typeof market !== 'string') return;
   try {
     const events = await ctx.events.list(ctx.agent.id);
@@ -234,8 +247,15 @@ async function recordVerdict(
     if (settled) return;
     await record(ctx, {
       kind: 'verdict',
-      tool: 'close_position',
-      detail: { ...verdict },
+      tool,
+      detail: {
+        ...verdict,
+        // The block the settling fill confirmed in, so the Ledger draws the
+        // same consensus ramp under the verdict as under the fill that caused
+        // it: since SEN-35 any event that NAMES a block gets one, with nothing
+        // to add in the controller.
+        ...(fill['blockNumber'] !== undefined ? { blockNumber: fill['blockNumber'] } : {}),
+      },
     });
   } catch (error) {
     logger.error(`could not settle ${market} for agent ${ctx.agent.id}: ${String(error)}`);
@@ -243,10 +263,7 @@ async function recordVerdict(
 }
 
 /** A fill event for an order that filled at least partly. */
-function fillOf(
-  result: unknown,
-  venue: string | undefined,
-): Record<string, unknown> | undefined {
+function fillOf(result: unknown, venue: string | undefined): Record<string, unknown> | undefined {
   if (typeof result !== 'object' || result === null) return undefined;
   const order = result as Record<string, unknown>;
   if (typeof order['id'] !== 'string' || !isPositiveDecimal(order['filledSize'])) return undefined;
