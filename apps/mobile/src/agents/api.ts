@@ -166,7 +166,6 @@ export type MandateChangeSummary = {
   policyId: string;
   /** Rules the policy holds afterwards. Zero on a revoke: the wallet signs nothing. */
   ruleCount: number;
-  mandate?: WireMandate;
 };
 
 /**

@@ -9,7 +9,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { formatAtoms, parseAmount } from '@/agents/amounts';
-import { AgentsApiError, describeAgentsError, modelLabel, type Agent } from '@/agents/api';
+import {
+  AgentsApiError,
+  describeAgentsError,
+  modelLabel,
+  type Agent,
+  type PreparedMandateChange,
+} from '@/agents/api';
 import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
 import { buildFundCall, FUNDING_TOKENS } from '@/agents/fund';
@@ -458,6 +464,28 @@ function RevokeSheet({
    * checks that the PATCH really leaves no rules before signing anything.
    */
   const signs = needsApproval(agent);
+  const [prepared, setPrepared] = useState<PreparedMandateChange | null>(null);
+
+  // Asked for as the sheet opens, not when the button is pressed: the change is
+  // then on screen to read (it leaves `rules: 0`), and the passkey prompt is
+  // not sitting behind a round trip. Preparing again supersedes this one
+  // server-side, so an abandoned sheet leaves nothing committable behind.
+  useEffect(() => {
+    if (!visible || !signs || !api) return;
+    let cancelled = false;
+    setPrepared(null);
+    api.prepareRevoke(agent.id).then(
+      (change) => {
+        if (!cancelled) setPrepared(change);
+      },
+      (caught: unknown) => {
+        if (!cancelled) setError({ tone: 'error', ...describeApprovalError(caught) });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, signs, api, agent.id]);
 
   const revoke = async () => {
     if (!api) return;
@@ -465,7 +493,7 @@ function RevokeSheet({
     setError(null);
     try {
       const revoked = signs
-        ? await revokeWithApproval(api, agent, auth.signPrivyAuthorization)
+        ? await revokeWithApproval(api, agent, auth.signPrivyAuthorization, prepared ?? undefined)
         : await api.revoke(agent.id);
       onDone(
         revoked.policyCleared === false
@@ -502,10 +530,16 @@ function RevokeSheet({
         Funds already in its wallet stay there; revoking doesn’t send them back.
       </Text>
       {signs ? (
-        <Text style={[text.dim, styles.after]}>
-          Your passkey signs this. Sente holds no key that can empty this agent’s policy, so the
-          phone checks that the change really leaves no rules and then approves it.
-        </Text>
+        <>
+          <Text style={[text.dim, styles.after]}>
+            Your passkey signs this. Sente holds no key that can empty this agent’s policy, so the
+            phone checks that the change really leaves no rules and then approves it.
+          </Text>
+          <Row
+            label="Enclave rules after"
+            value={prepared ? String(prepared.summary.ruleCount) : '…'}
+          />
+        </>
       ) : null}
       {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
       <View style={styles.sheetAction}>

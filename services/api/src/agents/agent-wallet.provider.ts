@@ -47,6 +47,12 @@ export interface EnclaveRequest {
   /** Path under the provider's API base, e.g. `/v1/policies/xyz`. */
   readonly path: string;
   readonly body: unknown;
+  /**
+   * What the request is ABOUT — a policy id today, a wallet id when SEN-42
+   * sends funds. Carried beside the path so nothing has to parse an id back out
+   * of a URL to say which object a refusal was about.
+   */
+  readonly subject: string;
 }
 
 /** An {@link EnclaveRequest} and the payload its owner must sign to authorise it. */

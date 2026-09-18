@@ -114,9 +114,12 @@ export interface MandateChangeSummary {
   policyId: string;
   /** How many rules the policy holds afterwards. Zero for a revoke: it signs nothing. */
   ruleCount: number;
-  /** The mandate being installed, as parsed. Absent on a revoke. */
-  mandate?: Mandate;
 }
+
+// The mandate itself is deliberately NOT here. The phone already holds the one
+// it is sending — that is the copy it checks the payload against — and echoing
+// a server-composed second copy back would only invite a screen to render the
+// wrong one.
 
 /** A mandate change waiting for its owner's signature. */
 export interface PreparedMandateChange {
@@ -712,7 +715,6 @@ export class AgentsService {
         agentName: agent.name,
         policyId: agent.policyId,
         ruleCount: rules.length,
-        ...(context.mandate ? { mandate: context.mandate } : {}),
       },
     };
   }

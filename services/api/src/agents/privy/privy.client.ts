@@ -28,6 +28,19 @@ import type { AuthorizationPayload } from '@sente/mandate';
 
 export const PRIVY_API_BASE = 'https://api.privy.io';
 
+/** The methods Privy checks an authorization signature on: everything but GET. */
+type SignableMethod = Exclude<AuthorizationPayload['method'], 'PUT'>;
+
+/** Refuses a GET rather than signing one that Privy will never check. */
+function signable(method: 'GET' | SignableMethod): SignableMethod {
+  if (method === 'GET') {
+    throw new Error(
+      'a GET is not signed — Privy only checks authorization signatures on mutations',
+    );
+  }
+  return method;
+}
+
 export interface PrivyCredentials {
   appId: string;
   appSecret: string;
@@ -131,21 +144,26 @@ export class PrivyClient {
     body?: unknown,
     options: Pick<RequestOptions, 'idempotencyKey'> = {},
   ): AuthorizationPayload {
-    if (method === 'GET') {
-      throw new Error(
-        'a GET is not signed — Privy only checks authorization signatures on mutations',
-      );
-    }
-    // The signed payload must mirror the request byte for byte on Privy's
-    // side: same URL (no trailing slash), same body object, and *only* the
-    // `privy-` headers. Anything else here silently breaks every signature.
-    return {
-      version: 1,
-      method,
-      url: `${this.#baseUrl}${path}`,
-      body: body ?? {},
-      headers: this.#privyHeaders(options),
-    };
+    return this.#payload(
+      signable(method),
+      `${this.#baseUrl}${path}`,
+      body,
+      this.#privyHeaders(options),
+    );
+  }
+
+  /**
+   * The signed payload must mirror the request byte for byte on Privy's side:
+   * same URL (no trailing slash), same body object, and *only* the `privy-`
+   * headers. Anything else here silently breaks every signature.
+   */
+  #payload(
+    method: SignableMethod,
+    url: string,
+    body: unknown,
+    headers: Record<string, string>,
+  ): AuthorizationPayload {
+    return { version: 1, method, url, body: body ?? {}, headers };
   }
 
   async request<T>(
@@ -156,8 +174,12 @@ export class PrivyClient {
   ): Promise<T> {
     const url = `${this.#baseUrl}${path}`;
 
+    // Built once and used for both the request and the signature: the headers
+    // are part of the signed bytes, so two constructions of them are two places
+    // they can disagree.
+    const privyHeaders = this.#privyHeaders(options);
     const headers: Record<string, string> = {
-      ...this.#privyHeaders(options),
+      ...privyHeaders,
       authorization: `Basic ${Buffer.from(`${this.appId}:${this.#appSecret}`).toString('base64')}`,
     };
     if (body !== undefined) headers['content-type'] = 'application/json';
@@ -165,7 +187,7 @@ export class PrivyClient {
     const approvals = options.approvals ?? [];
     const precomputed = options.signatures ?? [];
     if (approvals.length + precomputed.length > 0) {
-      const payload = this.authorizationPayload(method, path, body, options);
+      const payload = this.#payload(signable(method), url, body, privyHeaders);
       headers['privy-authorization-signature'] = [
         ...approvals.map((key) => signAuthorizationPayload(key.privateKey, payload)),
         ...precomputed,

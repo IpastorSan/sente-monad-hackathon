@@ -3,6 +3,8 @@
 // with it, not just with main.ts (same first-line import as main.ts).
 import 'reflect-metadata';
 
+import { BadRequestException } from '@nestjs/common';
+
 import { MANDATE_CHAIN_ID, type AuthorizationPayload, type Mandate } from '@sente/mandate';
 import { Type } from 'class-transformer';
 import {
@@ -20,7 +22,7 @@ import {
   MinLength,
 } from 'class-validator';
 
-import type { MandateChangeSummary, PreparedMandateChange } from '../agents.service';
+import type { PreparedMandateChange } from '../agents.service';
 import type { CommitTimes, ConsensusState } from '../../chain/consensus.service';
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
@@ -140,20 +142,21 @@ export class RevokeAgentDto {
 /**
  * The approval in a body, or `undefined` when there is none.
  *
- * Throws on a body that is half an approval, or both shapes at once: a
+ * Throws `BadRequestException` — the same 400 shape the global ValidationPipe
+ * produces — on a body that is half an approval, or both shapes at once: a
  * `mandate` beside a signature reads as "change it to this", and the signature
- * covers the rules the server already holds, not those — so the two could
- * differ and one of them would be silently ignored.
+ * covers the rules the server already holds, not those, so the two could differ
+ * and one of them would be silently ignored.
  */
 export function readMandateApproval(
   body: Pick<AmendMandateDto, 'mandate' | 'prepareId' | 'signature'>,
 ): { prepareId: string; signature: string } | undefined {
   if (body.prepareId === undefined && body.signature === undefined) return undefined;
   if (body.prepareId === undefined || body.signature === undefined) {
-    throw new Error('prepareId and signature go together: send both, or neither');
+    throw new BadRequestException('prepareId and signature go together: send both, or neither');
   }
   if (body.mandate !== undefined) {
-    throw new Error(
+    throw new BadRequestException(
       'send either { mandate } or { prepareId, signature }: a signed change carries its own ' +
         'mandate, the one the prepare returned',
     );
@@ -332,8 +335,6 @@ export interface MandateChangeSummaryDto {
   policyId: string;
   /** Rules the policy holds afterwards. Zero on a revoke: the wallet signs nothing. */
   ruleCount: number;
-  /** The mandate being installed. Absent on a revoke. */
-  mandate?: MandateDto;
 }
 
 /**
@@ -362,18 +363,9 @@ export function toPreparedMandateChangeResponse(
     prepareId: prepared.prepareId,
     payload: prepared.payload,
     expiresAt: prepared.expiresAt.toISOString(),
-    summary: toMandateChangeSummary(prepared.summary),
-  };
-}
-
-function toMandateChangeSummary(summary: MandateChangeSummary): MandateChangeSummaryDto {
-  return {
-    kind: summary.kind,
-    agentId: summary.agentId,
-    agentName: summary.agentName,
-    policyId: summary.policyId,
-    ruleCount: summary.ruleCount,
-    ...(summary.mandate ? { mandate: toMandateDto(summary.mandate) } : {}),
+    // The summary is already wire-shaped — it carries no bigints and no
+    // mandate — so it crosses as it stands.
+    summary: { ...prepared.summary },
   };
 }
 

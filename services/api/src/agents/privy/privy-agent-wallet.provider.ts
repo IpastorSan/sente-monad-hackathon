@@ -136,7 +136,7 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
     const path = policyPath(policyId);
     const body = policyRulesBody({ rules });
     return Promise.resolve({
-      request: { method: 'PATCH', path, body },
+      request: { method: 'PATCH', path, body, subject: policyId },
       payload: this.#client.authorizationPayload('PATCH', path, body),
     });
   }
@@ -152,7 +152,7 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
       // did not approve THIS request, which is what the caller must be told.
       if (error instanceof PrivyError && error.isMissingApproval) {
         throw new EnclaveApprovalRefusedError({
-          policyId: request.path.split('/').pop() ?? request.path,
+          policyId: request.subject,
           status: error.status,
           detail: error.code,
         });

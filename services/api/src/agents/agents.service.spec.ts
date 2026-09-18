@@ -273,8 +273,10 @@ describe('AgentsService', () => {
           agentId: agent.id,
           policyId: agent.policyId,
           ruleCount: rules.length,
-          mandate: parseMandate(next),
         });
+        // The summary carries no mandate: the phone already holds the one it is
+        // sending, and that is the copy it checks the payload against.
+        expect(prepared.summary).not.toHaveProperty('mandate');
         expect(prepared.expiresAt.getTime()).toBeGreaterThan(Date.now());
         // A prepare is a question, not a change.
         expect(wallets.policyUpdates).toHaveLength(0);
@@ -320,6 +322,35 @@ describe('AgentsService', () => {
         expect((error as EnclaveApprovalRefusedError).reason).toBe('mandate_approval_refused');
         expect(wallets.policyUpdates).toHaveLength(0);
         expect((await service.get(ALICE, agent.id)).mandate).toEqual(agent.mandate);
+      });
+
+      it('keeps one live prepare per agent: preparing again drops the last one', async () => {
+        const { service } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const first = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+        const second = await service.prepareMandateAmend(
+          ALICE,
+          agent.id,
+          mandateInput({ maxOrderNotional: '400' }),
+        );
+
+        // Otherwise every cancelled sheet would leave a committable change
+        // behind, and the one the user last read would be one of several.
+        const stale = await refusal(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: first.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(stale.reason).toBe('mandate_prepare_not_found');
+        await expect(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: second.prepareId,
+            signature: SIGNATURE,
+          }),
+        ).resolves.toMatchObject({
+          mandate: parseMandate(mandateInput({ maxOrderNotional: '400' })),
+        });
       });
 
       it('spends a prepare once: the same signature cannot be replayed', async () => {

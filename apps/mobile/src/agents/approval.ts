@@ -79,6 +79,18 @@ const PRIVY_API_BASE = 'https://api.privy.io';
 /** Headers a payload may carry. Anything else is unsigned by us, so unsignable. */
 const ALLOWED_HEADERS = ['privy-app-id', 'privy-idempotency-key'];
 
+/**
+ * The addresses a compiled policy names, checksummed once at module load.
+ *
+ * `getAddress` is a keccak256 per call, and this runs between the user's tap
+ * and the biometric prompt — hashing four constants on every verification is
+ * work that has one possible answer.
+ */
+const ACCOUNT_CORE = getAddress(KURU_TESTNET_CONTRACTS.accountCore);
+const EXCHANGE = getAddress(PERPL_EXCHANGE);
+const COLLATERAL = getAddress(AUSD.address);
+const ENROLL_VERIFYING_CONTRACT = getAddress(PERPL_ENROLL_VERIFYING_CONTRACT);
+
 /** A non-negative integer as Privy compares it: `0x`, lowercase, unpadded. */
 function hexUint(value: bigint | number): string {
   return `0x${BigInt(value).toString(16)}`;
@@ -125,11 +137,10 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
 
   const rules: ExpectedRule[] = [];
   if (mandate.venues.includes('kuru')) {
-    const accountCore = KURU_TESTNET_CONTRACTS.accountCore;
     for (const [key, cap] of Object.entries(mandate.kuru.maxDepositAtoms)) {
       const token = getAddress(key);
       const deposit = [
-        txTo(accountCore),
+        txTo(ACCOUNT_CORE),
         calldataEq('deposit.token', token),
         calldataLte('deposit.amount', cap),
       ];
@@ -143,7 +154,7 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
       rules.push(
         tx([
           txTo(token),
-          calldataEq('approve.spender', getAddress(accountCore)),
+          calldataEq('approve.spender', ACCOUNT_CORE),
           calldataLte('approve.amount', cap),
         ]),
       );
@@ -152,20 +163,20 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
     for (const market of mandate.kuru.markets) {
       rules.push(tx([txTo(market), calldataEq('function_name', 'batch')]));
     }
-    rules.push(recovery([txTo(accountCore), calldataEq('function_name', 'withdraw')]));
+    rules.push(recovery([txTo(ACCOUNT_CORE), calldataEq('function_name', 'withdraw')]));
   }
 
   if (mandate.venues.includes('perpl')) {
     const cap = mandate.perpl.maxCollateralAtoms;
     rules.push(
       tx([
-        txTo(AUSD.address),
-        calldataEq('approve.spender', getAddress(PERPL_EXCHANGE)),
+        txTo(COLLATERAL),
+        calldataEq('approve.spender', EXCHANGE),
         calldataLte('approve.amount', cap),
       ]),
     );
-    rules.push(tx([txTo(PERPL_EXCHANGE), calldataLte('createAccount.amountCNS', cap)]));
-    rules.push(tx([txTo(PERPL_EXCHANGE), calldataEq('function_name', 'allowOrderForwarding')]));
+    rules.push(tx([txTo(EXCHANGE), calldataLte('createAccount.amountCNS', cap)]));
+    rules.push(tx([txTo(EXCHANGE), calldataEq('function_name', 'allowOrderForwarding')]));
     rules.push({
       method: 'eth_signTypedData_v4',
       conditions: [
@@ -177,7 +188,7 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
           'ethereum_typed_data_domain',
           'verifyingContract',
           'eq',
-          getAddress(PERPL_ENROLL_VERIFYING_CONTRACT),
+          ENROLL_VERIFYING_CONTRACT,
         ),
         condition('ethereum_typed_data_message', 'statement', 'eq', PERPL_ENROLL_STATEMENT),
       ],
@@ -246,15 +257,21 @@ function compareRules(actual: unknown[], expected: ExpectedRule[]): VerifyResult
         `${expected.length}`,
     );
   }
-  const remaining = expected.map(fingerprint);
+  // A count per distinct rule rather than an array to splice: two rules can be
+  // identical (the same token capped twice), so this is a multiset, and it has
+  // to stay one — matching by presence would let a duplicate stand in for a
+  // rule that is missing.
+  const remaining = new Map<string, number>();
+  for (const rule of expected) {
+    const key = fingerprint(rule);
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
   for (const rule of actual) {
     const read = readRule(rule);
     if (!read.ok) return refuse(read.problem);
-    const index = remaining.indexOf(read.fingerprint);
-    if (index === -1) {
-      return refuse(`it contains a rule this mandate does not: ${read.label}`);
-    }
-    remaining.splice(index, 1);
+    const left = remaining.get(read.fingerprint) ?? 0;
+    if (left === 0) return refuse(`it contains a rule this mandate does not: ${read.label}`);
+    remaining.set(read.fingerprint, left - 1);
   }
   return { ok: true };
 }
@@ -338,45 +355,62 @@ export class NoDeviceKeyError extends Error {
  * confirmation sheet, so a user reads and approves ONE prepared change rather
  * than reading one and signing another.
  */
-export async function amendMandateWithApproval(
+export function amendMandateWithApproval(
   api: AgentsApi,
   agent: Agent,
   mandate: AgentMandate,
   sign: Approver | null,
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
-  if (!sign) throw new NoDeviceKeyError();
-  const change = prepared ?? (await api.prepareAmendMandate(agent.id, mandate));
-  const verdict = verifyPolicyPatch(change.payload, {
-    kind: 'amend',
-    policyId: agent.policyId,
-    mandate,
-  });
-  if (!verdict.ok) throw new MandateApprovalRefusedError(verdict.problem);
-  return api.commitAmendMandate(agent.id, {
-    prepareId: change.prepareId,
-    signature: sign(change.payload),
-  });
+  return approveChange(
+    api,
+    agent,
+    { kind: 'amend', policyId: agent.policyId, mandate },
+    sign,
+    prepared,
+  );
 }
 
 /** The same for a revoke: the policy must be left with no rules at all. */
-export async function revokeWithApproval(
+export function revokeWithApproval(
   api: AgentsApi,
   agent: Agent,
   sign: Approver | null,
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
+  return approveChange(api, agent, { kind: 'revoke', policyId: agent.policyId }, sign, prepared);
+}
+
+/**
+ * The one flow both changes take, written once.
+ *
+ * Every step here is on the signing path, so the two must not drift: a check
+ * added for the amend and forgotten for the revoke is a change nobody looked at
+ * being signed. The only thing the two differ in is which pair of routes the
+ * intent names.
+ */
+async function approveChange(
+  api: AgentsApi,
+  agent: Agent,
+  intent: MandateChangeIntent,
+  sign: Approver | null,
+  prepared?: PreparedMandateChange,
+): Promise<Agent> {
   if (!sign) throw new NoDeviceKeyError();
-  const change = prepared ?? (await api.prepareRevoke(agent.id));
-  const verdict = verifyPolicyPatch(change.payload, {
-    kind: 'revoke',
-    policyId: agent.policyId,
-  });
+  const amending = intent.kind === 'amend';
+  const change =
+    prepared ??
+    (amending
+      ? await api.prepareAmendMandate(agent.id, intent.mandate)
+      : await api.prepareRevoke(agent.id));
+
+  const verdict = verifyPolicyPatch(change.payload, intent);
   if (!verdict.ok) throw new MandateApprovalRefusedError(verdict.problem);
-  return api.commitRevoke(agent.id, {
-    prepareId: change.prepareId,
-    signature: sign(change.payload),
-  });
+
+  const approval = { prepareId: change.prepareId, signature: sign(change.payload) };
+  return amending
+    ? api.commitAmendMandate(agent.id, approval)
+    : api.commitRevoke(agent.id, approval);
 }
 
 /**

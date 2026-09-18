@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -187,12 +188,20 @@ export class AgentsController {
     @Body() body: AmendMandateDto,
   ): Promise<AgentResponseDto> {
     return this.guard(async () => {
-      const approval = this.approval(body);
+      const approval = readMandateApproval(body);
       const principal = this.auth.principal();
-      const agent = approval
-        ? await this.agents.commitMandateAmend(principal, params.id, approval)
-        : await this.agents.amendMandate(principal, params.id, this.requireMandate(body));
-      return toAgentResponse(agent);
+      if (approval) {
+        return toAgentResponse(
+          await this.agents.commitMandateAmend(principal, params.id, approval),
+        );
+      }
+      if (!body.mandate) {
+        throw new BadRequestException(
+          'send { mandate } to amend a server-owned agent, or { prepareId, signature } from ' +
+            'POST /agents/:id/mandate/prepare to amend a device-owned one',
+        );
+      }
+      return toAgentResponse(await this.agents.amendMandate(principal, params.id, body.mandate));
     });
   }
 
@@ -275,7 +284,7 @@ export class AgentsController {
     @Body() body: RevokeAgentDto,
   ): Promise<AgentResponseDto> {
     return this.guard(async () => {
-      const approval = this.approval(body);
+      const approval = readMandateApproval(body);
       const principal = this.auth.principal();
       const agent = approval
         ? await this.agents.commitRevoke(principal, params.id, approval)
@@ -320,37 +329,6 @@ export class AgentsController {
       );
     }
     return result;
-  }
-
-  /** A half-given approval is a 400 here, not a confusing refusal deeper in. */
-  private approval(
-    body: Pick<AmendMandateDto, 'mandate' | 'prepareId' | 'signature'>,
-  ): { prepareId: string; signature: string } | undefined {
-    try {
-      return readMandateApproval(body);
-    } catch (error) {
-      throw new HttpException(
-        {
-          statusCode: HttpStatus.BAD_REQUEST,
-          message: error instanceof Error ? error.message : String(error),
-        },
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-  }
-
-  /** The one-step amend body. Absent means the caller sent neither shape. */
-  private requireMandate(body: AmendMandateDto): Record<string, unknown> {
-    if (body.mandate) return body.mandate;
-    throw new HttpException(
-      {
-        statusCode: HttpStatus.BAD_REQUEST,
-        message:
-          'send { mandate } to amend a server-owned agent, or { prepareId, signature } from ' +
-          'POST /agents/:id/mandate/prepare to amend a device-owned one',
-      },
-      HttpStatus.BAD_REQUEST,
-    );
   }
 
   /** Refusals become a clean 4xx/5xx with a stable `reason`; the rest fall through. */

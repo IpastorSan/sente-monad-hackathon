@@ -10,6 +10,11 @@ import type {
   ProvisionedAgentWallet,
 } from '../agent-wallet.provider';
 import { EnclaveApprovalRefusedError } from '../agents.errors';
+import { policyPath, policyRulesBody } from '../privy/policies';
+import { PrivyClient } from '../privy/privy.client';
+
+/** Builds the payloads only; nothing here ever reaches the network. */
+const FAKE_PAYLOADS = new PrivyClient({ appId: 'fake-app', appSecret: 'fake-secret' });
 
 /**
  * An in-memory `AgentWalletProvider` for specs: no network, no Privy, no .env.
@@ -69,33 +74,33 @@ export class FakeAgentWalletProvider implements AgentWalletProvider {
    * The same request the real provider would send, down to the URL and body,
    * so a spec can assert on the exact bytes the phone is asked to sign.
    */
+  /**
+   * The same request the real provider would send, built by the same two
+   * functions and the same payload builder — a fake that composed its own bytes
+   * would keep passing after the real shape changed.
+   */
   preparePolicyUpdate(
     policyId: string,
     rules: readonly PolicyRule[],
   ): Promise<PreparedEnclaveRequest> {
-    const path = `/v1/policies/${policyId}`;
-    const body = { rules };
+    const path = policyPath(policyId);
+    const body = policyRulesBody({ rules });
     return Promise.resolve({
-      request: { method: 'PATCH', path, body },
-      payload: {
-        version: 1,
-        method: 'PATCH',
-        url: `https://api.privy.io${path}`,
-        body,
-        headers: { 'privy-app-id': 'fake-app' },
-      },
+      request: { method: 'PATCH', path, body, subject: policyId },
+      // No fetch is made from this client; it is here for `authorizationPayload`,
+      // which is pure.
+      payload: FAKE_PAYLOADS.authorizationPayload('PATCH', path, body),
     });
   }
 
   async commitPrepared(request: EnclaveRequest, approval: EnclaveApproval): Promise<void> {
     await this.beforeUpdatePolicy?.();
     if (this.updatePolicyError) throw this.updatePolicyError;
-    const policyId = request.path.slice('/v1/policies/'.length);
     if (approval.signature !== this.acceptedSignature) {
-      throw new EnclaveApprovalRefusedError({ policyId, status: 401 });
+      throw new EnclaveApprovalRefusedError({ policyId: request.subject, status: 401 });
     }
     const { rules } = request.body as { rules: readonly PolicyRule[] };
-    this.applyRules(policyId, rules);
+    this.applyRules(request.subject, rules);
   }
 
   private applyRules(policyId: string, rules: readonly PolicyRule[]): void {

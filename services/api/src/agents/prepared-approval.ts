@@ -83,10 +83,26 @@ export interface PreparedApproval<TContext> {
  */
 export class PreparedApprovals<TContext> {
   readonly #byId = new Map<string, PreparedApproval<TContext>>();
+  /** `userId:agentId` -> the one live prepare for it. See {@link put}. */
+  readonly #bySubject = new Map<string, string>();
 
+  /**
+   * Stores a prepared request, replacing whatever was pending for the same user
+   * and agent.
+   *
+   * One live prepare per agent per user, on purpose. It is all any screen uses
+   * — you approve the change in front of you — and without it every abandoned
+   * prepare (a cancelled sheet, an edited mandate, a retried tap) would hold a
+   * compiled policy body for the whole TTL, on a route that does no network
+   * I/O and can therefore be called in a loop.
+   */
   put(approval: PreparedApproval<TContext>): void {
     this.sweep(approval.createdAt);
+    const subject = `${approval.userId}:${approval.agentId}`;
+    const superseded = this.#bySubject.get(subject);
+    if (superseded !== undefined) this.#byId.delete(superseded);
     this.#byId.set(approval.id, approval);
+    this.#bySubject.set(subject, approval.id);
   }
 
   /** Undefined for unknown, expired, already-taken, or another user's id. */
@@ -96,14 +112,27 @@ export class PreparedApprovals<TContext> {
     // Not deleted on a mismatch: a wrong-user guess must not consume the
     // owner's prepare.
     if (found.userId !== userId) return undefined;
-    this.#byId.delete(id);
+    this.forget(found);
     return found.expiresAt.getTime() <= now.getTime() ? undefined : found;
   }
 
-  /** Drops what has expired. Cheap, and bounded by how often prepares happen. */
+  /**
+   * Drops what has expired, and stops at the first entry that has not.
+   *
+   * Every entry gets the same TTL and a `Map` iterates in insertion order, so
+   * the map is already ordered by expiry: the walk is the length of what it
+   * deletes rather than of everything being held.
+   */
   private sweep(now: Date): void {
-    for (const [id, approval] of this.#byId) {
-      if (approval.expiresAt.getTime() <= now.getTime()) this.#byId.delete(id);
+    for (const approval of this.#byId.values()) {
+      if (approval.expiresAt.getTime() > now.getTime()) return;
+      this.forget(approval);
     }
+  }
+
+  private forget(approval: PreparedApproval<TContext>): void {
+    this.#byId.delete(approval.id);
+    const subject = `${approval.userId}:${approval.agentId}`;
+    if (this.#bySubject.get(subject) === approval.id) this.#bySubject.delete(subject);
   }
 }

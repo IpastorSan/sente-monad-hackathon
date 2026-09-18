@@ -253,6 +253,7 @@ describe('PrivyAgentWalletProvider', () => {
       method: 'PATCH',
       path: `/v1/policies/${wallet.policyId}`,
       body: { rules: [] },
+      subject: wallet.policyId,
     });
     expect(payload.url).toBe(`https://api.privy.io/v1/policies/${wallet.policyId}`);
 
