@@ -57,8 +57,12 @@ export type UserWalletBindResult =
  * honest about: a Privy wallet is not re-derivable, so a lost binding means the
  * next register creates a SECOND wallet and the funded one is orphaned. The
  * wallet itself survives — Privy has it, owned by the same device key — but
- * nothing here remembers its id. Point this token at a real store before
- * anything of value lands in a user wallet.
+ * nothing here remembers its id.
+ *
+ * SEN-48 answered that: set `STATE_DIR` and `wallet.module.ts` binds
+ * `USER_WALLET_REGISTRY` to `FileUserWalletRegistry` instead, which is this
+ * class plus a JSON file. This one stays the default, and the one the specs
+ * use.
  */
 @Injectable()
 export class InMemoryUserWalletRegistry implements UserWalletRegistry {

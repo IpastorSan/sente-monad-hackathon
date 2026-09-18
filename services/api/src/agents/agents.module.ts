@@ -24,7 +24,9 @@ import {
   agentRunnerImports,
   agentRunnerProviders,
 } from './runner/agent-runner.providers';
+import { statePath } from '../state/json-file';
 import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './store/agent-store';
+import { FileAgentStore } from './store/file-agent-store';
 import {
   agentToolsControllers,
   agentToolsExports,
@@ -71,11 +73,20 @@ const agentWalletsProvider: Provider = {
 };
 
 /**
- * PERSISTENCE: in memory until the repo has a database (see `store/agent-store.ts`).
+ * PERSISTENCE: in memory until the repo has a database (see `store/agent-store.ts`),
+ * EXCEPT when `STATE_DIR` is set — then a JSON file, so a restart between hiring
+ * an agent and showing it off does not orphan the agent's funded wallet, its
+ * policy id and its ERC-8004 identity (SEN-48).
  */
 const agentStoreProvider: Provider = {
   provide: AGENT_STORE,
-  useFactory: (): AgentStore => new InMemoryAgentStore(),
+  useFactory: (): AgentStore => {
+    const path = statePath('agents');
+    if (!path) return new InMemoryAgentStore();
+    const store = new FileAgentStore(path);
+    Logger.log(`${store.size} agent(s) loaded from ${store.path}`, 'AgentStore');
+    return store;
+  },
 };
 
 /**

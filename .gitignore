@@ -19,6 +19,11 @@ android/
 *.jks
 apps/mobile/keystores/credentials.json
 
+# STATE_DIR (SEN-48): the API's file-backed stores. Holds live wallet ids,
+# agent ids and device PUBLIC keys for whoever ran this checkout — never a
+# secret, never someone else's business.
+.state/
+
 # Claude Code agent worktrees
 .claude/worktrees/
 
