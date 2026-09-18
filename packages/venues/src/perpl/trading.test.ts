@@ -16,6 +16,7 @@ import {
   PerplTradingSocket,
 } from './trading.ts';
 import { PerplSocketClosedError, type WebSocketLike } from './ws.ts';
+import type { PerplPosition } from './wire.ts';
 
 const SECRET = hexToBytes('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60');
 
@@ -206,4 +207,50 @@ test('a heartbeat gap drops the socket and fails in-flight requests as unknown',
   ws.push({ mt: 100, sn: 103, h: 103 }); // 102 missing
   await assert.rejects(result, PerplSocketClosedError);
   assert.equal(trading.connected, false);
+});
+
+/** Typed against the wire shape, so a field that moves breaks this loudly. */
+const positionFrame = (over: Partial<PerplPosition> = {}): PerplPosition => ({
+  at: { t: 1_789_065_422_000 },
+  mkt: 16,
+  acc: 493,
+  pid: 7,
+  st: 1,
+  sd: 1,
+  c: '1000000',
+  ep: 6_000_000,
+  s: 1000,
+  lv: 300,
+  ...over,
+});
+
+test('a closed position never inherits the open frame’s dpnl/fnd (SEN-33)', async () => {
+  const { trading, ws } = await connected();
+  // The live position had realised 5 so far, and the close is exactly what
+  // moves that number: a closing frame that does not carry it must report
+  // nothing rather than republish the pre-close figure as the settled one.
+  ws.push({ mt: 27, sn: 100, d: [positionFrame({ dpnl: '5000000', fnd: '100000' })] });
+  ws.push({ mt: 27, sn: 100, d: [positionFrame({ st: 2 })] });
+
+  const closed = trading.closedPosition(7)!;
+  assert.equal(closed.st, 2);
+  // The unchanging facts of the position are still merged across.
+  assert.equal(closed.ep, 6_000_000);
+  assert.equal(closed.dpnl, undefined);
+  assert.equal(closed.fnd, undefined);
+  trading.close();
+});
+
+test('a later closing frame keeps the settled dpnl an earlier one carried', async () => {
+  const { trading, ws } = await connected();
+  ws.push({ mt: 27, sn: 100, d: [positionFrame()] });
+  // The close can arrive in pieces (SEN-20): once the settled figures land
+  // they must survive the partial frames that follow them.
+  ws.push({ mt: 27, sn: 100, d: [positionFrame({ st: 2, dpnl: '9000000', fnd: '0' })] });
+  ws.push({ mt: 27, sn: 100, d: [positionFrame({ st: 2, xp: 3 })] });
+
+  const closed = trading.closedPosition(7)!;
+  assert.equal(closed.dpnl, '9000000');
+  assert.equal(closed.xp, 3);
+  trading.close();
 });

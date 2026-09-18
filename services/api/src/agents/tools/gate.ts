@@ -203,10 +203,17 @@ async function record(
 /**
  * A verdict event for the thesis a close just settled (SEN-22).
  *
- * `settle` is a pure read of the run's events, so it only sees the close once
+ * `settle` is a pure read of the agent's events, so it only sees the close once
  * the close above is on the log. Only a thesis whose position came back to zero
  * is settled — one that is still open, and a close with no thesis behind it,
  * record nothing.
+ *
+ * The log is read for the WHOLE AGENT, not for this run (SEN-33). A scheduled
+ * agent records its thesis in one tick and closes the position in a later one,
+ * and a run-scoped read never found that thesis: every such position settled to
+ * nothing and `theses.settled` stayed at zero in normal operation. Reading
+ * across runs means the same thesis can be reached by a second close, so a
+ * thesis that already has a verdict on the log is not settled twice.
  *
  * Like `record`, this never decides the outcome of the call: the close landed,
  * and a log that will not take the verdict must not tell the model otherwise.
@@ -218,9 +225,13 @@ async function recordVerdict(
   const market = fill?.['symbol'];
   if (typeof market !== 'string') return;
   try {
-    const events = await ctx.events.list(ctx.agent.id, { runId: ctx.runId });
+    const events = await ctx.events.list(ctx.agent.id);
     const verdict = settle(events).findLast((v) => v.market === market);
     if (verdict === undefined || verdict.held === 'open') return;
+    const settled = events.some(
+      (e) => e.kind === 'verdict' && e.detail['thesisSeq'] === verdict.thesisSeq,
+    );
+    if (settled) return;
     await record(ctx, {
       kind: 'verdict',
       tool: 'close_position',
@@ -263,11 +274,16 @@ function fillOf(
  * The venue's realised-PnL fields a closed position reports back, carried
  * onto the `close` event when present (Perpl's position `dpnl` and `fnd`,
  * mapped by the adapter to `realizedPnl` and `fundingPaid`).
+ *
+ * `positionId` travels with them and matters as much as they do (SEN-33): both
+ * figures are cumulative over ONE position, so a verdict can only read them as
+ * this thesis's money by knowing which position it is looking at.
  */
 function realisedOf(result: unknown): Record<string, unknown> {
   if (typeof result !== 'object' || result === null) return {};
   const order = result as Record<string, unknown>;
   return {
+    ...(order['positionId'] !== undefined ? { positionId: order['positionId'] } : {}),
     ...(order['realizedPnl'] !== undefined ? { realizedPnl: order['realizedPnl'] } : {}),
     ...(order['fundingPaid'] !== undefined ? { fundingPaid: order['fundingPaid'] } : {}),
   };

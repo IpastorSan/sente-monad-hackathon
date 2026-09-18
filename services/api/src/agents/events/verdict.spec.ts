@@ -211,8 +211,8 @@ describe('settle', () => {
       }),
       close({ realizedPnl: '12.5', fundingPaid: '-0.3', ...fee('0.05', 'AUSD') }),
     ];
-    // The fills paid fees and neither is netted: Perpl's dpnl is the settled
-    // position, and its fees are the venue's to account for.
+    // Perpl's dpnl is PRICE PnL, so the fills' fees come off it exactly as they
+    // do on Kuru (SEN-33): one verdict row, one definition of PnL.
 
     const [verdict] = settle(events);
 
@@ -220,14 +220,17 @@ describe('settle', () => {
       market: BTC,
       venue: 'perpl',
       direction: 'long',
-      // Perpl's settled dpnl less funding paid: -0.3 is funding RECEIVED.
-      realisedPnl: '12.8',
+      // Perpl's settled dpnl less funding paid (-0.3 is funding RECEIVED),
+      // less the 0.05 AUSD taker fee the opening fill paid.
+      realisedPnl: '12.75',
       pnlAsset: 'AUSD',
       costBasis: '60',
       fills: 2,
       held: true,
     });
     expect(verdict!.closedAt).toBe(events[3]!.at);
+    // Nothing to qualify: one position, opened and closed by this thesis.
+    expect(verdict!.notes).toBeUndefined();
   });
 
   it('reads a Perpl loss off the close as a loss', () => {
@@ -290,29 +293,31 @@ describe('settle', () => {
     });
   });
 
-  it('groups by run and by agent, not by market alone', () => {
+  it('groups by agent, and gives each thesis the fills logged after it', () => {
+    // Built in log order: `seq` is what `settle` sorts by, so a fixture that
+    // allocates its theses up front would not be the log this describes.
     const first = thesis({}, { runId: 'run-1' });
+    const firstFills = [
+      fill('buy', '1', '3', {}, { runId: 'run-1' }),
+      fill('sell', '1', '4', {}, { runId: 'run-1' }),
+    ];
     const second = thesis({}, { runId: 'run-2' });
+    const secondFills = [
+      fill('buy', '1', '3', {}, { runId: 'run-2' }),
+      fill('sell', '1', '2', {}, { runId: 'run-2' }),
+    ];
     const other = event({
       kind: 'thesis',
       agentId: 'agent-2',
       runId: 'run-1',
       detail: { market: MON, direction: 'long', thesis: 'Same idea, another agent.' },
     });
-    const events = [
-      first,
-      fill('buy', '1', '3', {}, { runId: 'run-1' }),
-      fill('sell', '1', '4', {}, { runId: 'run-1' }),
-      second,
-      fill('buy', '1', '3', {}, { runId: 'run-2' }),
-      fill('sell', '1', '2', {}, { runId: 'run-2' }),
-      other,
-    ];
 
-    const verdicts = settle(events);
+    const verdicts = settle([first, ...firstFills, second, ...secondFills, other]);
 
-    // The other agent's thesis has no fills to pair with, so two runs settling
-    // the same market stay two verdicts.
+    // One market, one agent, two ideas one after the other: still two verdicts,
+    // each carrying the run its thesis was recorded in. The other agent's
+    // thesis has no fills to pair with, so it settles nothing.
     expect(verdicts.map((v) => [v.runId, v.realisedPnl, v.held])).toEqual([
       ['run-1', '1', true],
       ['run-2', '-1', false],
@@ -346,11 +351,132 @@ describe('settle', () => {
     expect(verdict).toMatchObject({ fills: 3, costBasis: '30', realisedPnl: '10', held: true });
   });
 
-  it('leaves a closing fill with no lot to match out of the arithmetic', () => {
+  it('settles an over-close instead of leaving the thesis open for ever (SEN-33)', () => {
     // Base the agent held before the thesis: 3 of the 5 have a cost here, and
-    // the other 2 are not this thesis's to price.
-    const [verdict] = settle([thesis(), fill('buy', '3', '2'), fill('sell', '5', '3')]);
-    expect(verdict).toMatchObject({ realisedPnl: '3', costBasis: '6', held: 'open' });
+    // the other 2 are not this thesis's to price. The net is clamped at zero
+    // rather than driven to -2, which no later fill could bring back.
+    const events = [thesis(), fill('buy', '3', '2'), fill('sell', '5', '3')];
+    const [verdict] = settle(events);
+
+    expect(verdict).toMatchObject({ realisedPnl: '3', costBasis: '6', held: true });
+    expect(verdict!.closedAt).toBe(events[2]!.at);
+    // The thesis is settled and the part that could not be priced is said out
+    // loud rather than silently folded into the number.
+    expect(verdict!.notes).toEqual([expect.stringContaining('2 of size was closed with no lot')]);
+  });
+
+  it('credits each Perpl thesis only with the venue PnL that moved since the last close', () => {
+    // One position, two ideas. `dpnl` is cumulative over the position's life,
+    // so the second close reports the first thesis's money as well and paying
+    // it out twice was SEN-33's first defect.
+    const first = thesis({ market: BTC });
+    const opened = [
+      first,
+      fill('buy', '0.002', '60000', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      // A partial close: the position stays live, and the venue has realised 1.
+      fill('sell', '0.001', '60500', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      close({ realizedPnl: '1', fundingPaid: '0' }),
+    ];
+    const second = thesis({ market: BTC });
+    const rest = [
+      fill('sell', '0.001', '62000', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      close({ realizedPnl: '3', fundingPaid: '0' }),
+    ];
+
+    const verdicts = settle([...opened, second, ...rest]);
+
+    expect(verdicts).toHaveLength(2);
+    expect(verdicts[0]).toMatchObject({ thesisSeq: first.seq, realisedPnl: '1', held: 'open' });
+    // 3 cumulative, less the 1 the first thesis was already credited with.
+    expect(verdicts[1]).toMatchObject({ thesisSeq: second.seq, realisedPnl: '2', held: true });
+    expect(verdicts[1]!.notes?.[0]).toContain('only that part is this thesis');
+  });
+
+  it('tells one position from the next by the id the close names (SEN-33)', () => {
+    // The first thesis closed only PART of its position, so nothing resets a
+    // market-level baseline before position 7 ends out of band — a liquidation,
+    // say — and position 8 opens under the same symbol. Only the venue's own id
+    // for the position separates the two counts.
+    const perpl = { venue: 'perpl', symbol: BTC, leverage: 3 };
+    const trail = (position: (id: string) => Record<string, unknown>) => {
+      const first = thesis({ market: BTC });
+      const opened = [
+        first,
+        fill('buy', '0.002', '60000', perpl),
+        fill('sell', '0.001', '60500', perpl),
+        close({ ...position('7'), realizedPnl: '1' }),
+      ];
+      const second = thesis({ market: BTC });
+      const rest = [
+        fill('buy', '0.001', '58000', perpl),
+        fill('sell', '0.001', '62000', perpl),
+        close({ ...position('8'), realizedPnl: '4' }),
+      ];
+      return { first, second, verdicts: settle([...opened, second, ...rest]) };
+    };
+
+    const named = trail((id) => ({ positionId: id }));
+    expect(named.verdicts[0]).toMatchObject({ realisedPnl: '1', held: 'open' });
+    // Position 8's own figure, in full: its count started again at nothing.
+    expect(named.verdicts[1]).toMatchObject({ realisedPnl: '4', held: true });
+    expect(named.verdicts[1]!.notes).toBeUndefined();
+
+    // Without an id — a close from before SEN-33, or one whose final frame
+    // never arrived — the two positions share a key and the second is measured
+    // against the first's money. That is the number the id exists to fix.
+    const unnamed = trail(() => ({}));
+    expect(unnamed.verdicts[1]).toMatchObject({ realisedPnl: '3' });
+  });
+
+  it('starts the venue baseline again once a position has closed', () => {
+    // The fallback for a close that names no position: `dpnl` counts per
+    // POSITION, so the thesis after a full close is owed its own close in full
+    // — subtracting the last one would invent a loss.
+    const first = thesis({ market: BTC });
+    const opened = [
+      first,
+      fill('buy', '0.001', '60000', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      fill('sell', '0.001', '61000', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      close({ realizedPnl: '10' }),
+    ];
+    const second = thesis({ market: BTC });
+    const rest = [
+      fill('buy', '0.001', '61000', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      fill('sell', '0.001', '62000', { venue: 'perpl', symbol: BTC, leverage: 3 }),
+      close({ realizedPnl: '9' }),
+    ];
+
+    const verdicts = settle([...opened, second, ...rest]);
+
+    expect(verdicts.map((v) => [v.thesisSeq, v.realisedPnl, v.held])).toEqual([
+      [first.seq, '10', true],
+      [second.seq, '9', true],
+    ]);
+    expect(verdicts[1]!.notes).toBeUndefined();
+  });
+
+  it('settles a thesis recorded in one run with a close from a later one (SEN-33)', () => {
+    // A scheduled agent is woken tick after tick, and the close lands in
+    // whichever one it falls in. Settling by run left these open for ever.
+    const recorded = thesis({}, { runId: 'run-1' });
+    const events = [
+      recorded,
+      fill('buy', '10', '3.00', {}, { runId: 'run-1' }),
+      fill('sell', '10', '3.40', {}, { runId: 'run-2' }),
+    ];
+
+    const verdicts = settle(events);
+    const [verdict] = verdicts;
+
+    expect(verdicts).toHaveLength(1);
+    expect(verdict).toMatchObject({
+      // The run the THESIS was recorded in, not the one that closed it.
+      runId: 'run-1',
+      thesisSeq: recorded.seq,
+      realisedPnl: '4',
+      held: true,
+    });
+    expect(verdict!.closedAt).toBe(events[2]!.at);
   });
 
   it('reads a Kuru quote out of the symbol, and AUSD out of Perpl', () => {

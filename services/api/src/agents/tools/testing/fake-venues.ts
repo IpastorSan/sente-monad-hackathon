@@ -217,8 +217,11 @@ export class FakePerplVenue extends FakeVenue implements PerpsVenue {
   readonly kind = 'perps' as const;
   /** Leverage `toOrder`-style fills report; the venue default is 1x. */
   leverage = 3;
-  /** Set to have `closePosition` report the settled position PnL (SEN-20). */
-  closePnl: { realizedPnl?: string; fundingPaid?: string } | undefined;
+  /**
+   * Set to have `closePosition` report the settled position PnL (SEN-20), and
+   * the id of the position those cumulative figures count (SEN-33).
+   */
+  closePnl: { realizedPnl?: string; fundingPaid?: string; positionId?: string } | undefined;
 
   getPositions(): Promise<Position[]> {
     this.record('getPositions', undefined);

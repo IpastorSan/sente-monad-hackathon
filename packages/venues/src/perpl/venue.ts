@@ -216,6 +216,10 @@ function withClosePnl(
   if (!closed) return order;
   return {
     ...order,
+    // Which position the cumulative figures below are counting (SEN-33): both
+    // run for the life of ONE position, so a reader that cannot name it cannot
+    // tell a later close of the same position from the first close of the next.
+    positionId: String(closed.pid),
     ...(closed.dpnl !== undefined
       ? { realizedPnl: fromScaled(BigInt(closed.dpnl), m.cd) }
       : {}),

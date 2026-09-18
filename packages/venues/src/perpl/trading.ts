@@ -412,17 +412,28 @@ export class PerplTradingSocket {
             // Record the frame that closed it, merged with the last known
             // one: a closePosition caller wants the settled dpnl/fnd the
             // live map no longer holds, and updates can be partial (SEN-20).
-            const known = this.positions.get(position.pid);
+            //
+            // The ACCRUING fields are the exception, and they are the whole
+            // point of retaining the frame (SEN-33): `dpnl`, `fnd` and `fee`
+            // are exactly what the close MOVES, so an open frame's values are
+            // stale by construction and merging them would publish a pre-close
+            // figure as the settled realised PnL. Only an already-closed frame
+            // may fill them in — the close itself can arrive in several partial
+            // updates, and the later ones need the settled figures the first
+            // one carried.
+            const retained = this.closedPositions.get(position.pid);
+            const live = this.positions.get(position.pid);
             this.positions.delete(position.pid);
-            if (this.closedPositions.size >= PerplTradingSocket.MAX_RETAINED_CLOSED) {
+            const known = retained ?? (live && stripAccrued(live));
+            if (
+              retained === undefined &&
+              this.closedPositions.size >= PerplTradingSocket.MAX_RETAINED_CLOSED
+            ) {
               // Oldest first: Map iteration order is insertion order.
               const oldest = this.closedPositions.keys().next();
               if (!oldest.done) this.closedPositions.delete(oldest.value);
             }
-            this.closedPositions.set(
-              position.pid,
-              known ? { ...known, ...position } : position,
-            );
+            this.closedPositions.set(position.pid, { ...known, ...position });
           }
         }
         break;
@@ -477,6 +488,22 @@ export class PerplTradingSocket {
     this.statusWaiters.clear();
     for (const watcher of [...this.watchers]) watcher.fail(error);
   }
+}
+
+/**
+ * A position frame with the figures that ACCRUE removed (SEN-33).
+ *
+ * `dpnl`, `fnd` and `fee` are cumulative up to the frame that carries them, and
+ * the close is exactly what moves them. Merging an OPEN frame into a closing
+ * one must therefore not carry them across: `withClosePnl` would publish that
+ * pre-close number as the position's settled realised PnL, and a caller has no
+ * way to tell it from the real one. Absent is honest; stale is not. What is
+ * left — the position's identity, side, entry and leverage — does not change
+ * over its life, which is what makes the merge safe for those.
+ */
+function stripAccrued(position: PerplPosition): PerplPosition {
+  const { dpnl: _dpnl, fnd: _fnd, fee: _fee, ...rest } = position;
+  return rest;
 }
 
 function orderKey(order: Pick<PerplOrder, 'oid' | 'rq'>): string {

@@ -55,7 +55,9 @@ export const LEADERBOARD_NOTES: readonly string[] = [
     'gas, never capital, and a 6dp token that is not one of those two stables (XAUt) is not ' +
     'capital either. Fees are not netted out of realised PnL.',
   'Theses held is a separate reading, from the agent’s own trail: a thesis settles only when its ' +
-    'own fills close it. It is counted per thesis and is never divided by n.',
+    'own fills close it, whichever run the close lands in. It is counted per thesis and is never ' +
+    'divided by n. A thesis’s own PnL IS net of fees, on Kuru and on Perpl alike — the opposite ' +
+    'of realised PnL above, which is the indexer’s gross figure.',
   'Kuru’s PnL is USDC and Perpl’s is AUSD. Both are 6-decimal stables; they are summed, as the ' +
     'indexer’s own *Usd fields do.',
   'Monad testnet samples are thin. A win rate over four trades is a fact about four trades.',
