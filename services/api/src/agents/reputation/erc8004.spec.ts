@@ -10,6 +10,7 @@ import { getAddress } from 'viem';
 
 import type { Verdict } from '../events/verdict';
 import { AgentsService } from '../agents.service';
+import { ServerMandateOwners } from '../mandate-owner';
 import { InMemoryAgentEventLog, type NewAgentEvent } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
 import { FakeAgentWalletProvider } from '../testing/fake-agent-wallet.provider';
@@ -496,6 +497,7 @@ describe('AgentsService.hire with ERC-8004', () => {
     const service = new AgentsService(
       store,
       wallet(),
+      new ServerMandateOwners(),
       undefined,
       reputation(client, { get: (id) => store.get(id) }),
     );
@@ -512,7 +514,7 @@ describe('AgentsService.hire with ERC-8004', () => {
     const store = new InMemoryAgentStore();
     const client = new FakeErc8004Client();
     client.registerError = new Error('insufficient funds for gas');
-    const service = new AgentsService(store, wallet(), undefined, reputation(client));
+    const service = new AgentsService(store, wallet(), new ServerMandateOwners(), undefined, reputation(client));
 
     const { agent } = await service.hire({ userId: 'alice' }, hireInput());
 
@@ -522,7 +524,7 @@ describe('AgentsService.hire with ERC-8004', () => {
 
   it('hires without an identity when ERC-8004 is not wired at all', async () => {
     const store = new InMemoryAgentStore();
-    const service = new AgentsService(store, wallet());
+    const service = new AgentsService(store, wallet(), new ServerMandateOwners());
     const { agent } = await service.hire({ userId: 'alice' }, hireInput());
     expect(agent.status).toBe('active');
     expect(agent.erc8004AgentId).toBeUndefined();

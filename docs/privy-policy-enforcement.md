@@ -80,6 +80,16 @@ Backed by three explicit statements in their security docs:
 That last one describes a recipient allowlist as unbypassable by a modified
 client — structurally identical to our demo.
 
+Since SEN-43 the sentence extends one party further, and this is the part worth
+saying out loud:
+
+> …and Sente cannot change it either. The policy is owned by a key that only
+> the user's phone holds.
+
+That is a claim about who holds which key, not about the enclave, and it is only
+true for agents hired in `device` mode. See §Phase 3 below for the live proof and
+for `AGENT_MANDATE_OWNER=server`, where it is **not** true.
+
 **Do not claim** that a Transfer-API amount limit is enclave-enforced, and do
 not describe Mera signing sessions as policy-bearing (they are an in-memory key
 with a manual `end()` — no TTL, no cap, no revocation).
@@ -516,6 +526,98 @@ answer 405, so this is the record). None of these is secret.
 Runs 1–5 left their own `sente-probe-…` wallets and policies in the app. They
 are unfunded, owned by the two quorums above (so still controllable with our
 keys), and their ids were not kept — only the last run's are in `.env`.
+
+## Phase 3 owner model — the user's device key owns the mandate (SEN-43, 2026-09-18)
+
+SEN-31 proved the **agent** cannot rewrite its own mandate. It said nothing
+about **us**: the owner of every policy and wallet was `PRIVY_MANDATE_QUORUM_ID`,
+a quorum over a key sitting in this server's `.env`. So the honest claim was
+"the agent cannot exceed its mandate, and you are trusting Sente not to change
+it". Phase 3 removes the second half.
+
+At hire and at fork, `AgentsService` looks up the caller's user wallet (SEN-40)
+and passes its `ownerQuorumId` — the 1-key quorum over the phone's `device`
+P-256 key — into `AgentWalletProvider.provision`. `PrivyAgentWalletProvider`
+uses it as `owner_id` on **both** the policy and the wallet. The agent quorum is
+still only an `additional_signers` entry, exactly as SEN-31 left it.
+
+Both objects get the same owner deliberately. An owner who can PATCH the wallet
+but not the policy could simply detach the policy — the SEN-31 hole wearing a
+different hat.
+
+| Object                     | Owner                           | Can change it                       |
+| -------------------------- | ------------------------------- | ----------------------------------- |
+| mandate policy             | the hirer's device quorum       | the phone, and nobody else          |
+| agent wallet               | the hirer's device quorum       | the phone, and nobody else          |
+| agent wallet, as a signer  | `PRIVY_AGENT_QUORUM_ID`         | signs trades within the policy only |
+
+### Verified live on 10143
+
+`services/api/scripts/sen43-device-owner-probe.ts`, the SEN-31 probe pattern one
+level up. It generates a throwaway P-256 key (standing in for the phone's, which
+this server never sees), makes a quorum for it, provisions a real compiled
+mandate through `PrivyAgentWalletProvider.provision({ ownerQuorumId })`, and
+then tries to change it with the server's key. Nothing is signed for a chain and
+nothing is broadcast; the only resources it creates are named
+`sente-agent-device-probe`.
+
+| #   | Check                                                     | Expected | Got                       |
+| --- | --------------------------------------------------------- | -------- | ------------------------- |
+| a   | `owner_id` of the policy AND the wallet is the device quorum | device   | **device quorum** on both, agent quorum still an `additional_signers` override |
+| b   | `PRIVY_MANDATE_OWNER_KEY` `PATCH /v1/policies/{id}`       | 401      | **401 `invalid_data`**    |
+| c   | `PRIVY_MANDATE_OWNER_KEY` `PATCH /v1/wallets/{id}`        | 401      | **401 `invalid_data`**    |
+| d   | the DEVICE key `PATCH /v1/policies/{id}`                  | 200      | **200**                   |
+
+The 401 body, verbatim, for both (b) and (c):
+
+```json
+{
+  "error": "No valid authorization signatures were provided. Your payload may be malformed or your signing keys may be incorrect or expired. Docs: https://docs.privy.io/api-reference/authorization-signatures",
+  "code": "invalid_data"
+}
+```
+
+Ids from the run (none is secret; the device private key was never written down
+and is gone):
+
+| Object                            | Id                                                     |
+| --------------------------------- | ------------------------------------------------------ |
+| device quorum (throwaway key)     | `z9w2gf6fb9nawmaq0ev7saja`                             |
+| mandate policy                    | `thjdyllm10poub07iytapyp1`                             |
+| agent wallet                      | `cpaccgin5vhoawuf7wb6hrdf` → `0xcdB9A20a351c79E07FB7E72695d697890060ffdd` |
+| signer quorum (unchanged)         | `v4akc7n2q006kndzefpksv0j` (`PRIVY_AGENT_QUORUM_ID`)    |
+
+(An earlier run of the same probe left `ch6ztohyh4unb9fw15tmdenz` /
+`m0ctrk5xecxts00lt3d4ollb` / `tr76ph1noho0w3d421k0q1cb` behind, same verdict.
+Both sets are unfunded and their device keys no longer exist anywhere, so those
+wallets can never sign and their policies can never be changed by anyone.)
+
+So on a device-owned agent the server can neither widen the mandate nor detach
+it, and the trading key could never do either. The only party who can is the
+phone.
+
+### What this costs, and `AGENT_MANDATE_OWNER`
+
+**Amend and revoke stop working from the server, by construction.**
+`AgentsService.amendMandate` and `revoke` sign policy PATCHes with
+`PRIVY_MANDATE_OWNER_KEY`, so on a device-owned agent they now get that same 401
+and surface as `wallet_policy_update_failed`. SEN-44 adds the path that carries
+the phone's signature. Revoke still stops the agent — the status flips to
+`revoked` **before** the enclave call, so the runner and the MCP token refuse it
+whatever Privy says; what fails is only emptying the policy of a wallet nothing
+is driving.
+
+`AGENT_MANDATE_OWNER` picks the mode. Unset means `device`. `server` restores the
+pre-Phase-3 behaviour for the scripted refusal demo and for hires by users with
+no registered wallet, and **refuses to boot under `NODE_ENV=production`** — a
+server-owned mandate is indistinguishable from a device-owned one until the day
+the server changes it, so the mode that removes the guarantee has to be the loud
+one. In `device` mode a caller with no user wallet gets `wallet_not_registered`
+(409) and nothing is provisioned.
+
+Each agent records which it got, as `ownerKind: 'device' | 'server'`. It is
+written at provision and never recomputed: registering a wallet later does not
+hand a user control of an agent whose policy a server quorum already owns.
 
 ## Recipient pinning (SEN-15)
 

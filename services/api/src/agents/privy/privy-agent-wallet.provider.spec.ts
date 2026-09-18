@@ -116,6 +116,30 @@ describe('PrivyAgentWalletProvider', () => {
     expect(created).toEqual([{ agentQuorumId: 'kq1', mandateQuorumId: 'kq2' }]);
   });
 
+  it('provisions under a caller-supplied owner quorum: policy AND wallet belong to the device key (SEN-43)', async () => {
+    const { provider, calls } = setup({ agentQuorumId: 'kq-agent', mandateQuorumId: 'kq-server' });
+    const wallet = await provider.provision({
+      rules: RULES,
+      displayName: 'agent-1',
+      ownerQuorumId: 'kq-device',
+    });
+
+    const [policy, walletCall] = calls;
+    // Both objects, not just one: an owner that can rewrite the wallet but not
+    // its policy could still detach the policy (the SEN-31 hole).
+    expect(policy!.body).toMatchObject({ owner_id: 'kq-device', rules: RULES });
+    expect(walletCall!.body).toMatchObject({
+      owner_id: 'kq-device',
+      policy_ids: [wallet.policyId],
+      // The trading key is STILL only a signer — the owner moved, the signer did not.
+      additional_signers: [{ signer_id: 'kq-agent', override_policy_ids: [wallet.policyId] }],
+    });
+    // The server's mandate quorum owns nothing here, so no owner signature and
+    // no server-owned resource: this server cannot amend this agent.
+    expect(calls.map(signedBy)).toEqual(['none', 'none']);
+    expect(JSON.stringify(calls.map((c) => c.body))).not.toContain('kq-server');
+  });
+
   it('the fake enforces the SEN-31 owner/signer split: a signer-key wallet PATCH is refused, the owner-key one is not', async () => {
     const fake = fakePrivy();
     const client = new PrivyClient({
@@ -153,6 +177,41 @@ describe('PrivyAgentWalletProvider', () => {
     await expect(
       client.patch(`/v1/wallets/${wallet.id}`, { policy_ids: [] }, { approvals: [mandateOwnerKey] }),
     ).resolves.toMatchObject({ policy_ids: [] });
+  });
+
+  it("updatePolicy is refused on a device-owned policy: this server cannot widen a user's mandate", async () => {
+    const deviceKey = generateAuthorizationKey();
+    const fake = fakePrivy();
+    const client = new PrivyClient({
+      appId: FAKE_APP_ID,
+      appSecret: FAKE_APP_SECRET,
+      fetch: fake.fetch,
+    });
+    const device = await createKeyQuorum(client, {
+      displayName: 'device',
+      threshold: 1,
+      publicKeys: [deviceKey.publicKey],
+    });
+    const provider = new PrivyAgentWalletProvider({
+      client,
+      agentKey,
+      mandateOwnerKey,
+      agentQuorumId: 'kq-agent',
+      mandateQuorumId: 'kq-server',
+    });
+    const wallet = await provider.provision({
+      rules: RULES,
+      displayName: 'agent-1',
+      ownerQuorumId: device.id,
+    });
+
+    // The server's mandate key owns nothing here, so Privy refuses it.
+    await expect(provider.updatePolicy(wallet.policyId, [])).rejects.toMatchObject({ status: 401 });
+
+    // The device key — which only the phone holds — is the one that can.
+    await expect(
+      client.patch(`/v1/policies/${wallet.policyId}`, { rules: [] }, { approvals: [deviceKey] }),
+    ).resolves.toMatchObject({ rules: [] });
   });
 
   it('creates the quorums once, and reuses pinned ones without creating any', async () => {

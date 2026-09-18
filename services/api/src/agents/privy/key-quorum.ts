@@ -14,9 +14,21 @@
 // wallet owner can PATCH the wallet to detach its own policy (verified live,
 // SEN-31). The mandate-owner quorum owns both the wallet and the policy, so
 // only it can change either, and the key that signs trades can never rewrite
-// the policy that bounds them. Phase 3 moves the mandate-owner key onto the
-// user's device; the shape of this call does not change, because a quorum has
-// only ever needed the public half.
+// the policy that bounds them.
+//
+// PHASE 3 (SEN-43) MOVED THE OWNER OFF THIS SERVER. A hired agent's policy and
+// wallet are now owned by a THIRD kind of quorum: the 1-key quorum over the
+// hirer's phone `device` key, created by `createUserWallet` (SEN-40) and passed
+// back in as `provision({ ownerQuorumId })`. `PRIVY_MANDATE_QUORUM_ID` is then
+// only the fallback for `AGENT_MANDATE_OWNER=server` (dev and demo).
+//
+// | Quorum        | Key                       | Role                             |
+// |---------------|---------------------------|----------------------------------|
+// | device        | the phone's `device` P-256 | OWNER of a hired agent's wallet AND policy |
+//
+// The shape of this call never changed for any of it: a quorum has only ever
+// needed the public half, which is precisely why the owner key can live on a
+// phone this server cannot read.
 
 import type { PrivyClient } from './privy.client.ts';
 

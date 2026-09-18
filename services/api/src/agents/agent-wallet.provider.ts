@@ -12,6 +12,17 @@ export interface ProvisionAgentWalletInput {
   rules: readonly PolicyRule[];
   /** Shown in the provider's dashboard. Truncated to 50 characters. */
   displayName: string;
+  /**
+   * The quorum that will OWN both the policy and the wallet (SEN-43). Set it to
+   * the hirer's device-key quorum and this server can never change that agent's
+   * mandate again — creating the policy needs no owner signature, changing one
+   * does. Unset keeps the provider's own mandate quorum, which is the pre-SEN-43
+   * behaviour and what the scripted demo and the specs use.
+   *
+   * It never affects who SIGNS: the trading key stays an additional signer
+   * either way (SEN-31).
+   */
+  ownerQuorumId?: string;
 }
 
 export interface ProvisionedAgentWallet {
@@ -38,6 +49,10 @@ export interface ProvisionedAgentWallet {
  *   the one that signs trades. The trading key is only a wallet SIGNER (SEN-31),
  *   never the owner, so it can neither change the policy nor PATCH the wallet to
  *   detach it: the key that spends can never raise its own limit.
+ * - `provision` takes the owner quorum from its caller (SEN-43). When that is
+ *   the hirer's device quorum, `updatePolicy` on the resulting policy will be
+ *   refused with a 401 for THIS server too — by design; SEN-44 collects the
+ *   phone's signature instead.
  */
 export interface AgentWalletProvider {
   /** Human-readable, for logs. */

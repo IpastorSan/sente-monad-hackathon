@@ -107,6 +107,11 @@ async function main(): Promise<number> {
     return 1;
   }
   delete process.env['AGENT_TICK_SECONDS']; // nothing runs but the demo
+  // The demo is a SERVER-owned-mandate demo (SEN-43): Act 4 amends the mandate
+  // with PRIVY_MANDATE_OWNER_KEY, and its principal has no registered user
+  // wallet, so it declares the mode rather than depending on the operator's
+  // .env. A device-owned mandate can only be amended by the phone (SEN-44).
+  process.env['AGENT_MANDATE_OWNER'] ??= 'server';
   const model = arg('--model') ?? DEFAULT_MODEL;
   const out = arg('--out');
 

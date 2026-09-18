@@ -46,16 +46,20 @@ export const AGENT_MODEL_REQUEST_EXTRAS: Readonly<Record<AgentModel, OpenRouterR
  * - `agentAuthKey` is the trading SIGNER on every agent WALLET (SEN-31). The
  *   server uses it on every `eth_signTransaction`, so it is the hot key — but
  *   it only ever SIGNS; it never owns a wallet.
- * - `mandateOwnerKey` OWNS every wallet AND every policy. Only it can change
- *   what a wallet may sign, or the wallet's owner and signers.
+ * - `mandateOwnerKey` OWNS a wallet and its policy where nobody else does. Only
+ *   an owner can change what a wallet may sign, or its owner and signers.
  *
  * The trading key being a signer, not an owner, is what stops the trading path
  * raising its own limit: a Privy wallet owner can PATCH the wallet to detach
  * its own policy, a signer cannot (verified live on 10143, SEN-31). Either key
  * doing both jobs — or the agent key owning the wallet, as it did before
- * SEN-31 — is the single thing the mandate exists to prevent. Phase 3 moves the
- * mandate-owner key onto the user's device; until then both sit in `.env`,
- * which is honest for testnet and wrong for production.
+ * SEN-31 — is the single thing the mandate exists to prevent.
+ *
+ * SEN-43 NARROWED `mandateOwnerKey`'s REACH, and did not widen it. A hired
+ * agent's policy and wallet are now owned by the hirer's own device-key quorum
+ * (see `mandateOwner` below), so this key gets a 401 on them too — deliberately.
+ * It still owns whatever was provisioned under `AGENT_MANDATE_OWNER=server`, the
+ * probe and demo resources, and the pre-Phase-3 agents.
  */
 export interface PrivyAgentsConfig {
   appId: string;
@@ -71,9 +75,59 @@ export interface PrivyAgentsConfig {
   mandateQuorumId: string | undefined;
 }
 
+/**
+ * Who owns a newly hired agent's mandate policy and wallet (SEN-43).
+ *
+ * - `device` — the caller's own device-key quorum, the one that owns their user
+ *   wallet (SEN-40). The server then holds no key that can widen that agent's
+ *   mandate, so amend and revoke need a signature from the phone (SEN-44). This
+ *   is what Phase 3 is for.
+ * - `server` — `PRIVY_MANDATE_QUORUM_ID`, the pre-SEN-43 behaviour. The server
+ *   can still amend and revoke, so it is a DEV/DEMO mode: the scripted refusal
+ *   demo and the unit specs run in it, and no caller needs a registered wallet.
+ */
+export const AGENT_MANDATE_OWNER_MODES = ['device', 'server'] as const;
+export type AgentMandateOwnerMode = (typeof AGENT_MANDATE_OWNER_MODES)[number];
+
 export interface AgentsConfig {
   /** `undefined` when Privy is not configured at all — agent wallets refuse. */
   privy: PrivyAgentsConfig | undefined;
+  /**
+   * `AGENT_MANDATE_OWNER`. Defaults to `device`, because the unsafe mode is the
+   * invisible one: a server-owned mandate behaves exactly like a device-owned
+   * one right up to the day the server changes it.
+   */
+  mandateOwner: AgentMandateOwnerMode;
+}
+
+/**
+ * `AGENT_MANDATE_OWNER`, and why `server` cannot boot in production.
+ *
+ * In server mode this API keeps the key that owns every mandate, so the claim
+ * Phase 3 exists to make — "the server cannot change any user's mandate" — is
+ * simply false. That is a fine trade on testnet, where the scripted demo needs
+ * an owner it can drive. It is not one anywhere real, so the mode that removes
+ * the guarantee refuses to start under `NODE_ENV=production` rather than
+ * removing it quietly.
+ */
+function parseMandateOwner(env: NodeJS.ProcessEnv): AgentMandateOwnerMode {
+  const raw = env['AGENT_MANDATE_OWNER']?.trim();
+  if (!raw) return 'device';
+  if (!(AGENT_MANDATE_OWNER_MODES as readonly string[]).includes(raw)) {
+    throw new Error(
+      `AGENT_MANDATE_OWNER must be one of ${AGENT_MANDATE_OWNER_MODES.join(', ')} ` +
+        '(unset means device)',
+    );
+  }
+  const mode = raw as AgentMandateOwnerMode;
+  if (mode === 'server' && env['NODE_ENV'] === 'production') {
+    throw new Error(
+      'AGENT_MANDATE_OWNER=server leaves the mandate-owner key on this server, so the server ' +
+        "could change any user's mandate. It is a dev/demo mode and is refused in production: " +
+        'unset it and have each user register a wallet (POST /wallet/register).',
+    );
+  }
+  return mode;
 }
 
 const REQUIRED = [
@@ -101,8 +155,9 @@ function parseKey(raw: string, name: string): AuthorizationKey {
  */
 export function loadAgentsConfig(env: NodeJS.ProcessEnv = process.env): AgentsConfig {
   const value = (name: string): string | undefined => env[name]?.trim() || undefined;
+  const mandateOwner = parseMandateOwner(env);
   const present = REQUIRED.filter((name) => value(name) !== undefined);
-  if (present.length === 0) return { privy: undefined };
+  if (present.length === 0) return { privy: undefined, mandateOwner };
 
   const missing = REQUIRED.filter((name) => value(name) === undefined);
   if (missing.length > 0) {
@@ -122,6 +177,7 @@ export function loadAgentsConfig(env: NodeJS.ProcessEnv = process.env): AgentsCo
   }
 
   return {
+    mandateOwner,
     privy: {
       appId: value('PRIVY_APP_ID')!,
       appSecret: value('PRIVY_APP_SECRET')!,
@@ -146,6 +202,13 @@ export function describeAgentsConfig(config: AgentsConfig, logger: Logger): void
   logger.log(
     `agent wallets=privy app=${appId} ` +
       `agentQuorum=${agentQuorumId ?? '(created on first use)'} ` +
-      `mandateQuorum=${mandateQuorumId ?? '(created on first use)'}`,
+      `mandateQuorum=${mandateQuorumId ?? '(created on first use)'} ` +
+      `mandateOwner=${config.mandateOwner}`,
   );
+  if (config.mandateOwner === 'server') {
+    logger.warn(
+      "AGENT_MANDATE_OWNER=server: every hired agent's policy and wallet are owned by this " +
+        "server's mandate key, so the server CAN change any mandate. Dev and demo only.",
+    );
+  }
 }

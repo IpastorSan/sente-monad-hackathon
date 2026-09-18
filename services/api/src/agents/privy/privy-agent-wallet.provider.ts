@@ -69,16 +69,21 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
 
   async provision(input: ProvisionAgentWalletInput): Promise<ProvisionedAgentWallet> {
     const { agentQuorumId, mandateQuorumId } = await this.quorums();
+    // The caller's quorum when it named one — the hirer's device key (SEN-43);
+    // otherwise this server's mandate quorum, the pre-Phase-3 shape.
+    const ownerQuorumId = input.ownerQuorumId ?? mandateQuorumId;
     const policy = await createPolicy(this.#client, {
       name: `Sente mandate: ${input.displayName}`,
       rules: input.rules,
-      ownerQuorumId: mandateQuorumId,
+      ownerQuorumId,
     });
-    // Owner = mandate quorum; the agent quorum is only an additional SIGNER
+    // Owner = that same quorum; the agent quorum is only an additional SIGNER
     // (SEN-31). The trading key can sign within the mandate but cannot PATCH
-    // the wallet to detach or widen it.
+    // the wallet to detach or widen it. Policy and wallet share one owner on
+    // purpose: an owner that can rewrite the wallet but not its policy could
+    // still detach the policy, which is the SEN-31 hole all over again.
     const wallet = await createAgentWallet(this.#client, {
-      ownerQuorumId: mandateQuorumId,
+      ownerQuorumId,
       signerQuorumId: agentQuorumId,
       policyId: policy.id,
       displayName: input.displayName,
@@ -98,6 +103,12 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
     );
   }
 
+  /**
+   * Only works on a policy this server's mandate quorum owns. On a policy
+   * provisioned under a user's device quorum (SEN-43) Privy answers 401, and it
+   * should: the whole point is that this process cannot rewrite that mandate.
+   * SEN-44 is the path that asks the phone to sign the PATCH instead.
+   */
   async updatePolicy(policyId: string, rules: readonly PolicyRule[]): Promise<void> {
     await updatePolicyRules(this.#client, {
       policyId,

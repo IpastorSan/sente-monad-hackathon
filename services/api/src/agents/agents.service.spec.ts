@@ -1,12 +1,13 @@
 import { compileMandate, parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
-import type { Address, Hash } from 'viem';
+import { getAddress, type Address, type Hash } from 'viem';
 
 import { loadGasDripConfig } from '../gas/gas.config';
 import { GasDripService, type AgentDripCommand, type AgentDripOutcome } from '../gas/gas.service';
 import { InMemoryDripLedger } from '../gas/ledger/in-memory-drip-ledger';
 import type { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
 import type { SenderPool } from '../gas/sender/sender-pool';
+import { InMemoryUserWalletRegistry } from '../wallet/store/user-wallet-registry';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentRefusedError, AgentWalletsUnconfiguredError } from './agents.errors';
 import {
@@ -16,6 +17,7 @@ import {
   type HireAgentInput,
 } from './agents.service';
 import { toAgentResponse } from './dto/agent.dto';
+import { DeviceMandateOwners, ServerMandateOwners } from './mandate-owner';
 import { InMemoryAgentStore, type AgentRecord } from './store/agent-store';
 import { hashMcpToken } from './store/mcp-token';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
@@ -55,7 +57,7 @@ function hireInput(over: Partial<HireAgentInput> = {}): HireAgentInput {
 function setup() {
   const store = new InMemoryAgentStore();
   const wallets = new FakeAgentWalletProvider();
-  const service = new AgentsService(store, wallets);
+  const service = new AgentsService(store, wallets, new ServerMandateOwners());
   return { store, wallets, service };
 }
 
@@ -96,7 +98,10 @@ describe('AgentsService', () => {
         policyId: 'policy-1',
         status: 'active',
         policyCleared: false,
+        // ServerMandateOwners: the pre-SEN-43 shape, owned by this server.
+        ownerKind: 'server',
       });
+      expect(wallets.provisioned[0]!.ownerQuorumId).toBeUndefined();
       // Stored parsed: bigint atoms and checksummed addresses.
       expect(agent.mandate.kuru.markets).toEqual([MARKET_A]);
       expect(agent.mandate.perpl.maxCollateralAtoms).toBe(500_000_000n);
@@ -142,10 +147,82 @@ describe('AgentsService', () => {
 
     it('lets "not configured" through with its own reason', async () => {
       const store = new InMemoryAgentStore();
-      const service = new AgentsService(store, new UnconfiguredAgentWalletProvider());
+      const service = new AgentsService(
+        store,
+        new UnconfiguredAgentWalletProvider(),
+        new ServerMandateOwners(),
+      );
       await expect(service.hire(ALICE, hireInput())).rejects.toBeInstanceOf(
         AgentWalletsUnconfiguredError,
       );
+    });
+  });
+
+  /**
+   * The Phase 3 half: whose key owns the mandate. `device` mode is driven
+   * through the real `DeviceMandateOwners` over the real registry, so the spec
+   * exercises the same lookup the module wires.
+   */
+  describe('device-owned mandates (SEN-43)', () => {
+    const DEVICE_KEY = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE-fake-device-key';
+
+    async function deviceSetup(registered: string[] = ['alice']) {
+      const registry = new InMemoryUserWalletRegistry();
+      for (const userId of registered) {
+        await registry.bind({
+          userId,
+          walletId: `user-wallet-${userId}`,
+          address: getAddress(`0x${'b'.repeat(40)}`),
+          ownerQuorumId: `kq-device-${userId}`,
+          devicePublicKey: DEVICE_KEY,
+        });
+      }
+      const store = new InMemoryAgentStore();
+      const wallets = new FakeAgentWalletProvider();
+      const service = new AgentsService(store, wallets, new DeviceMandateOwners(registry));
+      return { store, wallets, service, registry };
+    }
+
+    it("hires under the caller's device quorum and records ownerKind: device", async () => {
+      const { service, wallets } = await deviceSetup();
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(wallets.provisioned[0]!.ownerQuorumId).toBe('kq-device-alice');
+      expect(agent.ownerKind).toBe('device');
+    });
+
+    it('forks under the FORKER’s quorum, not the source agent’s owner', async () => {
+      const { service, wallets } = await deviceSetup(['alice', 'bob']);
+      const { agent: source } = await service.hire(ALICE, hireInput());
+
+      const { agent: fork } = await service.fork(BOB, source.id, { mandate: mandateInput() });
+
+      expect(fork.userId).toBe('bob');
+      expect(fork.ownerKind).toBe('device');
+      expect(wallets.provisioned.map((p) => p.ownerQuorumId)).toEqual([
+        'kq-device-alice',
+        'kq-device-bob',
+      ]);
+    });
+
+    it('refuses a caller with no registered wallet, before any Privy call', async () => {
+      const { service, wallets, store } = await deviceSetup([]);
+      const error = await refusal(service.hire(ALICE, hireInput()));
+
+      expect(error.reason).toBe('wallet_not_registered');
+      expect(error.message).toMatch(/wallet\/register/);
+      // Nothing provisioned: a refused hire must not leave a Privy policy behind.
+      expect(wallets.provisioned).toHaveLength(0);
+      expect(await store.listByUser('alice')).toEqual([]);
+    });
+
+    it('refuses a fork by an unregistered caller too', async () => {
+      const { service, wallets } = await deviceSetup(['alice']);
+      const { agent: source } = await service.hire(ALICE, hireInput());
+
+      const error = await refusal(service.fork(BOB, source.id, { mandate: mandateInput() }));
+      expect(error.reason).toBe('wallet_not_registered');
+      expect(wallets.provisioned).toHaveLength(1);
     });
   });
 
@@ -180,7 +257,15 @@ describe('AgentsService', () => {
 
     function withGas(gas: AgentGasFunder = new FakeGasFunder()) {
       const store = new InMemoryAgentStore();
-      return { store, service: new AgentsService(store, new FakeAgentWalletProvider(), gas) };
+      return {
+        store,
+        service: new AgentsService(
+          store,
+          new FakeAgentWalletProvider(),
+          new ServerMandateOwners(),
+          gas,
+        ),
+      };
     }
 
     it('drips MON to the new agent’s own address, once, and records it', async () => {

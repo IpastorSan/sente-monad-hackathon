@@ -5,6 +5,11 @@ import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { GasModule } from '../gas/gas.module';
 import {
+  USER_WALLET_REGISTRY,
+  type UserWalletRegistry,
+} from '../wallet/store/user-wallet-registry';
+import { WalletModule } from '../wallet/wallet.module';
+import {
   AGENT_WALLETS,
   UnconfiguredAgentWalletProvider,
   type AgentWalletProvider,
@@ -17,6 +22,12 @@ import {
 } from './agents.config';
 import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
+import {
+  DeviceMandateOwners,
+  MANDATE_OWNERS,
+  ServerMandateOwners,
+  type MandateOwners,
+} from './mandate-owner';
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
 import {
@@ -71,6 +82,23 @@ const agentWalletsProvider: Provider = {
 };
 
 /**
+ * MANDATE_OWNERS: who owns each new agent's policy and wallet (SEN-43).
+ *
+ * `device` (the default) reads the hirer's device-key quorum out of the SAME
+ * `USER_WALLET_REGISTRY` that `POST /wallet/register` writes — hence the
+ * `WalletModule` import. `AGENT_MANDATE_OWNER=server` keeps the pre-Phase-3
+ * shape for the scripted demo, and `agents.config.ts` refuses it in production.
+ */
+const mandateOwnersProvider: Provider = {
+  provide: MANDATE_OWNERS,
+  inject: [AGENTS_CONFIG, USER_WALLET_REGISTRY],
+  useFactory: (config: AgentsConfig, registry: UserWalletRegistry): MandateOwners =>
+    config.mandateOwner === 'server'
+      ? new ServerMandateOwners()
+      : new DeviceMandateOwners(registry),
+};
+
+/**
  * PERSISTENCE: in memory until the repo has a database (see `store/agent-store.ts`).
  */
 const agentStoreProvider: Provider = {
@@ -98,12 +126,15 @@ const authProvider: Provider = {
   // CreditsService: the owner's OpenRouter key the runner bills (SEN-8).
   // ChainModule: ConsensusService, which `GET /agents/:id/events` decorates
   // its order and fill events with (SEN-21).
-  imports: [GasModule, ChainModule, ...agentRunnerImports],
+  // WalletModule: for USER_WALLET_REGISTRY, the device-key quorum that owns a
+  // hired agent's mandate (SEN-43). One-way — `wallet/` does not import this.
+  imports: [GasModule, ChainModule, WalletModule, ...agentRunnerImports],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   controllers: [AgentsController, ...agentToolsControllers],
   providers: [
     configProvider,
     agentWalletsProvider,
+    mandateOwnersProvider,
     agentStoreProvider,
     authProvider,
     SessionAuthGuard,

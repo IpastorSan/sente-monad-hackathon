@@ -88,15 +88,17 @@ interface FakeWallet {
  *
  * Default routes cover what the provider calls: quorums, policies, wallets and
  * the wallet `/rpc`. It also models the SEN-31 owner/signer split: it remembers
- * each quorum's public keys and each wallet's owner, and a `PATCH
- * /v1/wallets/{id}` is honoured only when signed by the wallet's OWNER quorum —
- * a signer key alone gets 401, exactly as Privy answers live. `handle` runs
- * first and may answer anything itself — that is how a spec makes the enclave
- * refuse.
+ * each quorum's public keys, each wallet's owner and each POLICY's owner, and a
+ * `PATCH` of either is honoured only when signed by that object's OWNER quorum —
+ * anything else gets 401, exactly as Privy answers live. The policy half is what
+ * makes SEN-43 testable without the network: a policy created under a user's
+ * device quorum refuses this server's mandate key. `handle` runs first and may
+ * answer anything itself — that is how a spec makes the enclave refuse.
  */
 export function fakePrivy(handle: Handler = () => undefined) {
   const calls: CapturedRequest[] = [];
   const quorums = new Map<string, string[]>(); // quorum id -> public keys
+  const policies = new Map<string, string>(); // policy id -> owner quorum id
   const wallets = new Map<string, FakeWallet>();
   let seq = 0;
 
@@ -128,10 +130,23 @@ export function fakePrivy(handle: Handler = () => undefined) {
       return { status: 200, body: { id, ...body } };
     }
     if (request.method === 'POST' && path === '/v1/policies') {
-      return { status: 200, body: { id: `pol${seq}`, ...body } };
+      const id = `pol${seq}`;
+      policies.set(id, String(body['owner_id']));
+      return { status: 200, body: { id, ...body } };
     }
     if (request.method === 'PATCH' && path.startsWith('/v1/policies/')) {
-      return { status: 200, body: { id: path.split('/').pop(), ...body } };
+      // Same rule as a wallet PATCH, and the one SEN-43 turns on us: only the
+      // policy's OWNER quorum may change its rules. A policy owned by a user's
+      // device quorum refuses this server's mandate key with a 401.
+      const id = path.split('/').pop()!;
+      const ownerId = policies.get(id);
+      if (ownerId !== undefined && !requestSignedByAny(request, quorums.get(ownerId) ?? [])) {
+        return {
+          status: 401,
+          body: { error: 'No valid authorization signatures were provided.', code: 'invalid_data' },
+        };
+      }
+      return { status: 200, body: { id, ...body } };
     }
     if (request.method === 'POST' && path === '/v1/wallets') {
       const wallet: FakeWallet = {
