@@ -18,7 +18,13 @@ import { ConsensusService, type CommitState, type CommitTimes } from './consensu
 /** A block's consensus record on the wire. */
 export interface ConsensusBlockResponseDto {
   blockNumber: number;
-  blockId: string;
+  /**
+   * Monad's consensus id, present once the socket has reported this height.
+   * Absent while only the HTTP fallback has seen it (SEN-35).
+   */
+  blockId?: string;
+  /** The execution hash, from the HTTP fallback. A different value from `blockId`. */
+  blockHash?: string;
   /** `Proposed` | `Voted` | `Finalized` | `Verified`. */
   state: CommitState;
   /** Epoch ms each state was first observed, keyed `proposed`/`voted`/… */
@@ -54,8 +60,11 @@ export class ChainController {
    * consensus ramp polls for the `blockNumber` an SEN-20 order or fill event
    * carries.
    *
-   * - 200 with the record: the height, Monad's `blockId` for it, its furthest
-   *   state, and `at`, the epoch ms at which each state was first seen. A gap
+   * - 200 with the record: the height, whichever ids have been observed for it
+   *   (`blockId` from the socket, `blockHash` from the HTTP fallback — never
+   *   the same value, so a reader compares each against its own kind), its
+   *   furthest state, and `at`, the epoch ms at which each state was first
+   *   seen. A gap
    *   between two entries means the block never reported that state — a block
    *   that skips `Voted` shows `proposed` and `finalized` and nothing between.
    * - 400 `height_invalid`: not a non-negative integer.
@@ -85,7 +94,8 @@ export class ChainController {
     }
     return {
       blockNumber: record.blockNumber,
-      blockId: record.blockId,
+      ...(record.blockId !== undefined ? { blockId: record.blockId } : {}),
+      ...(record.blockHash !== undefined ? { blockHash: record.blockHash } : {}),
       state: record.state,
       at: { ...record.at },
     };

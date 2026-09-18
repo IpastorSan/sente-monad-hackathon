@@ -242,9 +242,13 @@ export interface AgentEventResponseDto {
   /** JSON-safe: the log already stored bigints as decimal strings. */
   detail: Record<string, unknown>;
   /**
-   * Where Monad has taken `detail.blockNumber` (SEN-21). Present on every
-   * `order` and `fill` that names a block, and on nothing else — a thesis or a
-   * refusal has no block to ask about.
+   * Where Monad has taken `detail.blockNumber` (SEN-21). Present on every event
+   * that names a block — `order`, `fill` and `close` today — and on nothing
+   * else: a thesis or a refusal has no block to ask about.
+   *
+   * This is what the Ledger's ramp draws from (SEN-35). It polls
+   * `GET /chain/blocks/:n/consensus` only while the state here is not yet
+   * final, so a screenful of settled trades asks for nothing.
    */
   consensus?: AgentEventConsensusDto;
 }

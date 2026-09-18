@@ -49,7 +49,7 @@ import {
 } from '@/agents/ledger';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { useSession } from '@/session';
-import { ConsensusRamp } from '@/ui/ConsensusRamp';
+import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
 import { Button, Loading, Notice, Screen, Tag, TopBar } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
 
@@ -176,16 +176,22 @@ export default function LedgerScreen() {
       {!loaded ? (
         <Loading />
       ) : (
-        <View style={styles.list}>
-          {rows.map((entry, index) => (
-            <Entry
-              key={`${empty ? 'sample' : 'live'}-${entry.seq}`}
-              entry={entry}
-              delay={Math.min(index, STAGGER_ROWS) * STAGGER_MS}
-              animate={index < BUILD_ROWS}
-            />
-          ))}
-        </View>
+        // One consensus poller for the whole screen (SEN-35). Every ramp below
+        // opens on the state its own event carried and registers here; only the
+        // blocks that have not finalized are ever requested, so a screenful of
+        // settled trades asks the API for nothing.
+        <ConsensusFeed>
+          <View style={styles.list}>
+            {rows.map((entry, index) => (
+              <Entry
+                key={`${empty ? 'sample' : 'live'}-${entry.seq}`}
+                entry={entry}
+                delay={Math.min(index, STAGGER_ROWS) * STAGGER_MS}
+                animate={index < BUILD_ROWS}
+              />
+            ))}
+          </View>
+        </ConsensusFeed>
       )}
     </Screen>
   );
@@ -308,11 +314,21 @@ function TradeBody({ entry }: { entry: TradeEntry }) {
           Did not fill{entry.status !== null ? ` · ${entry.status}` : ''}
         </Text>
       ) : null}
-      {/* The ramp owns the height: it is what the ramp is about, and it prints
-          it in the same mono a chain fact gets anywhere else. */}
-      {entry.blockNumber !== null ? <ConsensusRamp blockNumber={entry.blockNumber} /> : null}
+      <Ramp entry={entry} />
     </>
   );
+}
+
+/**
+ * Any row that landed in a block gets the ramp, and the ramp owns the height:
+ * it is what the ramp is about, and it prints it in the same mono a chain fact
+ * gets anywhere else. A close settles on chain like a trade does, so it draws
+ * one too (SEN-35); SEN-22's own verdict is a judgement rather than a
+ * transaction and has no block to draw.
+ */
+function Ramp({ entry }: { entry: TradeEntry | VerdictEntry }) {
+  if (entry.blockNumber === null) return null;
+  return <ConsensusRamp blockNumber={entry.blockNumber} consensus={entry.consensus} />;
 }
 
 /** The layer that refused, plainly. Pride, not an error. */
@@ -350,6 +366,7 @@ function VerdictBody({ entry }: { entry: VerdictEntry }) {
           ? 'No realised PnL on this event'
           : `Realised PnL${entry.market !== null ? ` · ${entry.market}` : ''}, as the venue reported it`}
       </Text>
+      <Ramp entry={entry} />
     </>
   );
 }

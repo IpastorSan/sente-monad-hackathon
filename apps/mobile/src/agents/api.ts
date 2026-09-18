@@ -176,6 +176,29 @@ export type WireAgentEvent = {
   layer?: string;
   tool?: string;
   detail: Record<string, unknown>;
+  /**
+   * Where Monad has taken `detail.blockNumber`, attached by the API to every
+   * `order`, `fill` and `close` that names a block (SEN-21, SEN-35).
+   *
+   * This is the ONE consensus path to the Ledger. The ramp seeds itself from
+   * this and asks `GET /chain/blocks/:n/consensus` only while the state here is
+   * not yet final, so a screenful of settled trades costs no extra requests.
+   * Absent from an API that predates it — the ramp then falls back to polling.
+   */
+  consensus?: WireEventConsensus;
+};
+
+/** Epoch ms per commit state, keyed as the API spells them. */
+export type WireCommitTimes = Partial<
+  Record<'proposed' | 'voted' | 'finalized' | 'verified', number>
+>;
+
+/** The consensus block attached to an event: where the block is, and when each state landed. */
+export type WireEventConsensus = {
+  /** `Proposed` | `Voted` | `Finalized` | `Verified`, or `unknown` past the API's window. */
+  state: string;
+  /** Empty when `state` is `unknown`. */
+  at: WireCommitTimes;
 };
 
 export type AgentEventsPage = {

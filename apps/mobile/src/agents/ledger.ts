@@ -26,6 +26,41 @@ export type Direction = 'long' | 'short';
 /** Who refused. `sente` is our own pre-check (layer 1), `enclave` is Privy. */
 export type RefusalLayer = 'sente' | 'enclave';
 
+/** Epoch ms at which each Monad commit state was first observed, as the API keys them. */
+export type CommitTimes = Partial<Record<'proposed' | 'voted' | 'finalized' | 'verified', number>>;
+
+/**
+ * Where Monad has taken the block a trade landed in, exactly as the event
+ * carries it (SEN-21, SEN-35). The API attaches this to every `order`, `fill`
+ * and `close` that names a block, so the ramp is seeded from the row it is
+ * drawn under rather than from a request per row.
+ */
+export type EventConsensus = {
+  /** `Proposed` | `Voted` | `Finalized` | `Verified`, or `unknown` past the API's window. */
+  readonly state: string;
+  /** Empty when `state` is `unknown`. */
+  readonly at: CommitTimes;
+};
+
+/** The states Monad's commit process ends at. Both mean "the block is final". */
+export const FINAL_CONSENSUS_STATES: readonly string[] = ['Finalized', 'Verified'];
+
+/**
+ * Whether this row still has anything to ask the API about its block.
+ *
+ * This is what makes the Ledger cheap (SEN-35): a row whose event already says
+ * `Finalized`, or that the block is past the API's window, is settled the
+ * moment it arrives, so a screenful of finished trades issues NO consensus
+ * requests at all. Only a block that can still move is polled — and an event
+ * with no `consensus` at all means an API older than SEN-21, where the ramp has
+ * no choice but to ask.
+ */
+export function consensusNeedsPolling(consensus: EventConsensus | null | undefined): boolean {
+  if (!consensus) return true;
+  if (consensus.state === 'unknown' || consensus.state === 'reorged') return false;
+  return !FINAL_CONSENSUS_STATES.includes(consensus.state);
+}
+
 /**
  * An event as `GET /agents/:id/events` returns it (SEN-20). Structurally a
  * `WireAgentEvent`, restated here so this module owns its own input contract
@@ -39,6 +74,8 @@ export type LedgerEvent = {
   readonly tool?: string;
   readonly runId?: string;
   readonly detail: Readonly<Record<string, unknown>>;
+  /** Absent on an event with no block, and on an API that predates SEN-21. */
+  readonly consensus?: EventConsensus;
 };
 
 type Base = {
@@ -77,6 +114,8 @@ export type TradeEntry = Base & {
   /** Chain facts: the screen sets these in mono. */
   txHash: string | null;
   blockNumber: number | null;
+  /** The block's consensus state as the event reported it. What seeds the ramp. */
+  consensus: EventConsensus | null;
   filled: boolean;
   status: string | null;
 };
@@ -101,6 +140,13 @@ export type VerdictEntry = Base & {
   /** `null` when the event did not say — a venue close, or a quiet venue. */
   held: boolean | null;
   market: string | null;
+  /**
+   * A `close` lands in a block like any other trade, so it gets the ramp too
+   * (SEN-35 — it did not before). SEN-22's own `verdict` is a judgement rather
+   * than a transaction and carries neither of these.
+   */
+  blockNumber: number | null;
+  consensus: EventConsensus | null;
 };
 
 export type LedgerEntry = ThesisEntry | TradeEntry | RefusalEntry | VerdictEntry;
@@ -178,6 +224,7 @@ function tradeEntry(event: LedgerEvent): TradeEntry {
     leverage: numberAt(detail, 'leverage') ?? numberAt(asked, 'leverage'),
     txHash: text(detail, 'txHash'),
     blockNumber: numberAt(detail, 'blockNumber'),
+    consensus: event.consensus ?? null,
     filled: !failed,
     status: text(detail, 'status'),
   };
@@ -211,6 +258,8 @@ function verdictEntry(event: LedgerEvent): VerdictEntry {
     pnl: text(detail, 'pnl') ?? text(detail, 'realizedPnl'),
     held: booleanAt(detail, 'held') ?? booleanAt(detail, 'thesisHeld'),
     market: text(detail, 'symbol') ?? text(detail, 'market'),
+    blockNumber: numberAt(detail, 'blockNumber'),
+    consensus: event.consensus ?? null,
   };
 }
 
@@ -346,6 +395,7 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
       leverage: null,
       txHash: '0x4f2a9c1e7b3d5086a2f4e9c1b7d3058a6c2e4f9b1d7a30586c2e4f9b1d7a3058',
       blockNumber: 12_345_678,
+      consensus: null,
       filled: true,
       status: 'filled',
     },
@@ -376,6 +426,8 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
       pnl: '12.4',
       held: true,
       market: 'MON-USDC',
+      blockNumber: null,
+      consensus: null,
     },
   ];
 }

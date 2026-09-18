@@ -317,7 +317,7 @@ describe('AgentsController', () => {
       });
     });
 
-    it('decorates order and fill events with how far Monad has taken their block (SEN-21)', async () => {
+    it('decorates order, fill and close events with how far Monad has taken their block', async () => {
       const h = setup();
       const { agent } = await h.controller.hire(body() as unknown as CreateAgentDto);
       const at = { agentId: agent.id, runId: 'run-2' };
@@ -349,6 +349,14 @@ describe('AgentsController', () => {
         tool: 'place_limit',
         detail: { orderId: '9:3', blockNumber: 74_000_099 },
       });
+      // SEN-20 gave `close` a `blockNumber` and SEN-21 did not read it, so
+      // closing a position was the one trade whose row had no ramp (SEN-35).
+      await h.events.append({
+        ...at,
+        kind: 'close',
+        tool: 'close_position',
+        detail: { symbol: 'MON-USDC', realizedPnl: '12.4', blockNumber: TRACKED },
+      });
       await h.consent(TRACKED);
 
       const page = await h.controller.listEvents({ id: agent.id }, {});
@@ -363,6 +371,8 @@ describe('AgentsController', () => {
       expect(events[2]).not.toHaveProperty('consensus'); // no block to ask about
       expect(events[3]).not.toHaveProperty('consensus'); // a thesis has no block
       expect(events[4]!.consensus).toEqual({ state: 'unknown', at: {} });
+      // A close carries a block, so it gets the ramp too.
+      expect(events[5]!.consensus).toEqual(events[0]!.consensus);
 
       // `detail` is the log's, byte for byte: the decoration adds a sibling.
       expect(events[0]!.detail).toEqual({ orderId: '9:1', blockNumber: TRACKED });
