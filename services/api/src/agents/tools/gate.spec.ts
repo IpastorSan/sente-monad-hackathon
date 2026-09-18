@@ -471,7 +471,7 @@ describe('gate', () => {
 
   it('close_position emits a close event with the venue realised PnL', async () => {
     const h = await harness();
-    h.perpl.closePnl = { realizedPnl: '12.5', fundingPaid: '-0.3' };
+    h.perpl.closePnl = { realizedPnl: '12.5', fundingPaid: '-0.3', positionId: '7' };
     const outcome = await h.call('close_position', { market: BTC_PERP });
     expect(outcome.ok).toBe(true);
 
@@ -485,6 +485,9 @@ describe('gate', () => {
       leverage: 3,
       realizedPnl: '12.5',
       fundingPaid: '-0.3',
+      // Both figures are cumulative over ONE position, so the id that says
+      // which one has to travel with them (SEN-33).
+      positionId: '7',
     });
   });
 
@@ -534,6 +537,57 @@ describe('gate', () => {
       held: true,
     });
     // The Ledger reads it off the events route, by kind, like every other event.
+    expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toHaveLength(1);
+  });
+
+  it('settles a thesis recorded in an earlier run, and only once (SEN-33)', async () => {
+    const h = await harness();
+    h.perpl.closePnl = { realizedPnl: '4' };
+    // Tick one: the thesis and the position it opened.
+    await h.thesis(BTC_PERP);
+    await h.call('place_market', {
+      venue: 'perpl',
+      market: BTC_PERP,
+      side: 'buy',
+      size: '0.001',
+      slippageLimitPrice: '61000',
+      leverage: 3,
+    });
+
+    // Tick two, a new run: a scheduled agent is woken again, and the close
+    // lands there. Settling by run left this thesis open for ever.
+    const later = h.tools.context(h.agent, { runId: 'run-2' });
+    const closed = await h.call(
+      'close_position',
+      { market: BTC_PERP, size: '0.001', slippageLimitPrice: '61000' },
+      later,
+    );
+    expect(closed.ok).toBe(true);
+
+    const verdicts = await h.events.list(h.agent.id, { kind: 'verdict' });
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]!.detail).toMatchObject({
+      // The verdict is stamped with the run the THESIS was recorded in, even
+      // though a later run settled it.
+      runId: 'run-1',
+      market: BTC_PERP,
+      realisedPnl: '4',
+      held: true,
+    });
+    // The event itself belongs to the run that wrote it.
+    expect(verdicts[0]!.runId).toBe('run-2');
+
+    // A second close on the same market settles nothing new: the thesis behind
+    // it already has its verdict, and two would be counted twice.
+    expect(
+      (
+        await h.call(
+          'close_position',
+          { market: BTC_PERP, size: '0.001', slippageLimitPrice: '61000' },
+          later,
+        )
+      ).ok,
+    ).toBe(true);
     expect(await h.events.list(h.agent.id, { kind: 'verdict' })).toHaveLength(1);
   });
 

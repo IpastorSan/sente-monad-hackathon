@@ -175,6 +175,13 @@ export interface Order {
   realizedPnl?: Decimal;
   /** Collateral paid (positive = paid out) as funding on that position (Perpl's `fnd`, sign-flipped). */
   fundingPaid?: Decimal;
+  /**
+   * Perps only, set alongside `realizedPnl`: the venue's own id for the
+   * position those cumulative figures are counting (Perpl's `pid`). It is what
+   * makes them readable — a consumer can tell "the same position, later" from
+   * "a new position whose count starts again at nothing" without guessing.
+   */
+  positionId?: string;
 }
 
 export interface Balance {
