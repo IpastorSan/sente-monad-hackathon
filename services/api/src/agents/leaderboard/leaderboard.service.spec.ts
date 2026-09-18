@@ -219,7 +219,10 @@ describe('LeaderboardService', () => {
           winningTradeCount: 1,
           losingTradeCount: 0,
           realizedPnlUsd: '9',
-          balances: [{ token: USDC, decimals: 6, deposited: '10', withdrawn: '0', net: '10' }],
+          // Raw atoms, as the indexer sends them (SEN-32): 10 USDC.
+          balances: [
+            { token: USDC, decimals: 6, deposited: '10000000', withdrawn: '0', net: '10000000' },
+          ],
         }),
         // NIGHT: 4 settled of 9 fills, 3 of them wins.
         account({
@@ -227,7 +230,9 @@ describe('LeaderboardService', () => {
           losingTradeCount: 1,
           totalTradeCount: 9,
           realizedPnlUsd: '25',
-          balances: [{ token: USDC, decimals: 6, deposited: '100', withdrawn: '0', net: '100' }],
+          balances: [
+            { token: USDC, decimals: 6, deposited: '100000000', withdrawn: '0', net: '100000000' },
+          ],
         }),
       ],
     });
@@ -264,7 +269,9 @@ describe('LeaderboardService', () => {
           winningTradeCount: 4,
           losingTradeCount: 0,
           realizedPnlUsd: '10',
-          balances: [{ token: USDC, decimals: 6, deposited: '100', withdrawn: '0', net: '100' }],
+          balances: [
+            { token: USDC, decimals: 6, deposited: '100000000', withdrawn: '0', net: '100000000' },
+          ],
         }),
         // Same record, but nothing was deposited — no capital to divide by.
         account({

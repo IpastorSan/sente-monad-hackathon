@@ -53,20 +53,47 @@ Published verbatim as `formula` in the response:
 
 > n = settled trades (wins + losses) · win rate = wins ÷ n · ROI = realised PnL ÷ capital deployed
 
-| Metric            | Definition                                                                                                                                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `n`               | settled trades: the fills that closed a position. The indexer's `winningTradeCount + losingTradeCount` — each _reducing_ fill, counted by the sign of the delta it produced (`docs/indexer.md` §pnl).                                                  |
-| `wins`            | `winningTradeCount`, summed over the agent's venue accounts.                                                                                                                                                                                           |
-| `winRate`         | `wins / n`, rounded half up at 4dp in integer arithmetic. `null` at `n = 0`: 0/0 is not a perfect record.                                                                                                                                              |
-| `realisedPnl`     | `realizedPnlUsd`, summed over the agent's accounts. Signed exact decimal string; fees are NOT netted out (the indexer does not either).                                                                                                                |
-| `capitalDeployed` | the stablecoin **net flow** into the venues: every 6-decimal `AccountBalance`'s `net` (`deposited − withdrawn`), summed. MON is 18dp, is gas, and is never capital. A negative total clamps to 0, so a partial sync cannot flip the sign of every ROI. |
-| `roi`             | `realisedPnl / capitalDeployed`, rounded half up at 4dp. `null` when there is no capital to divide by.                                                                                                                                                 |
+| Metric            | Definition                                                                                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n`               | settled trades: the fills that closed a position. The indexer's `winningTradeCount + losingTradeCount` — each _reducing_ fill, counted by the sign of the delta it produced (`docs/indexer.md` §pnl).                                                                                                         |
+| `wins`            | `winningTradeCount`, summed over the agent's venue accounts.                                                                                                                                                                                                                                                  |
+| `winRate`         | `wins / n`, rounded half up at 4dp in integer arithmetic. `null` at `n = 0`: 0/0 is not a perfect record.                                                                                                                                                                                                     |
+| `realisedPnl`     | `realizedPnlUsd`, summed over the agent's accounts. Signed exact decimal string; fees are NOT netted out (the indexer does not either).                                                                                                                                                                       |
+| `capitalDeployed` | the stablecoin **net flow** into the venues: each allowlisted stablecoin `AccountBalance`'s `net` (`deposited − withdrawn`), **converted from raw atoms to dollars** before it is summed. MON is gas and is never capital. A negative total clamps to 0, so a partial sync cannot flip the sign of every ROI. |
+| `roi`             | `realisedPnl / capitalDeployed`, rounded half up at 4dp. `null` when there is no capital to divide by.                                                                                                                                                                                                        |
 
 Everything is summed with `BigInt` and a scale — a float only ever appears
 after the digit has been decided (`metrics.ts`). The one mixed-unit caveat, and
 it is in the response's `notes` too: Kuru's PnL is USDC and Perpl's is AUSD.
 Both are 6-decimal stables on Monad testnet and the indexer's own `*Usd` field
 names treat them as one unit; this sums them the same way.
+
+### Units: two domains arrive, one leaves (SEN-32)
+
+The indexer speaks two of them, and the schema says so:
+
+| Wire field                               | Type          | Unit                           |
+| ---------------------------------------- | ------------- | ------------------------------ |
+| `realizedPnlUsd`, `totalVolumeUsd`       | `BigDecimal!` | dollars, already human         |
+| `AccountBalance.deposited/withdrawn/net` | `BigInt!`     | **raw token atoms** (6dp here) |
+
+`capitalOfAccount` is the seam between them: it divides each `net` by its
+token's decimals — exactly, by giving the `BigInt` a scale, so no float and no
+division error — **before** any addition, and every number downstream is in
+dollars. Summing a raw `net` straight into the dollar total is the SEN-32 bug:
+25 USDC deployed printed as `25,000,000.00` and pushed every ROI to `0%`.
+
+What counts as a dollar is an **allowlist of token addresses**, not a decimals
+test: Kuru's own USDC and Perpl's AUSD collateral, taken from
+`packages/venues` (`CAPITAL_TOKENS` in `metrics.ts`). The decimals alone cannot
+tell a dollar from an ounce — Kuru also lists **XAUt, tokenised gold with the
+same 6 decimals**, and counting a gold balance as USD capital would deflate
+that agent's ROI by whatever gold trades at. A venue that adds a new stable
+quote has to be added to that map, and until it is, its capital reads as zero
+and the ROI column shows `—` rather than a wrong number.
+
+`capitalDeployed` leaves the API as an exact decimal string with trailing zeros
+trimmed (`'25'`); `amountLabel` in the app is what renders it as `25.00`.
 
 ### The `n < 3` rule
 

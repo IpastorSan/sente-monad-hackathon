@@ -4,10 +4,18 @@
  * These are the definitions the screen publishes, so they are tested as
  * definitions: what `n` counts, what the win rate divides by, what counts as
  * capital, and that a rate over nothing is `null` rather than `0`.
+ *
+ * **Balances are fed as RAW ATOMS here, because that is what the indexer
+ * sends** (`AccountBalance.net` is `BigInt!`). The old fixtures passed human
+ * units, which is exactly why SEN-32's 1,000,000× error survived a green
+ * suite: a spec that feeds the wrong units cannot see a units bug.
  */
+import { KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
+
 import type { IndexerAccount, IndexerAccountBalance } from './indexer';
 import {
-  CAPITAL_DECIMALS,
+  CAPITAL_TOKENS,
   FORMULA,
   MIN_RANKED_TRADES,
   compareRows,
@@ -15,12 +23,23 @@ import {
   metricsOf,
 } from './metrics';
 
-const USDC = '0xee0722ead54f1b4fe97be399be43bc0226a6f97e';
+const USDC = KURU_TESTNET_TOKENS.USDC.address.toLowerCase();
+const AUSD = PERPL_TESTNET_CONTRACTS.collateral.toLowerCase();
+/** Tokenised gold on Kuru — 6 decimals, and not a dollar. */
+const XAUT = KURU_TESTNET_TOKENS.XAUt.address.toLowerCase();
 const MON = '0x0000000000000000000000000000000000000000';
 
-/** A stablecoin custody row: a 6dp token, deposited or withdrawn. */
+/** One whole USDC or AUSD, in atoms. */
+const ONE = 10n ** 6n;
+
+/** `usdc(25)` → the wire's `"25000000"`: 25 USDC as the indexer stores it. */
+function usdc(whole: number): string {
+  return String(BigInt(whole) * ONE);
+}
+
+/** A stablecoin custody row, in RAW ATOMS, deposited or withdrawn. */
 function stable(net: string, over: Partial<IndexerAccountBalance> = {}): IndexerAccountBalance {
-  return { token: USDC, decimals: CAPITAL_DECIMALS, deposited: net, withdrawn: '0', net, ...over };
+  return { token: USDC, decimals: 6, deposited: net, withdrawn: '0', net, ...over };
 }
 
 function account(over: Partial<IndexerAccount> = {}): IndexerAccount {
@@ -73,7 +92,7 @@ describe('metricsOf', () => {
   });
 
   it('measures ROI as realised PnL over capital deployed', () => {
-    const metrics = metricsOf([account({ realizedPnlUsd: '25', balances: [stable('100')] })]);
+    const metrics = metricsOf([account({ realizedPnlUsd: '25', balances: [stable(usdc(100))] })]);
 
     expect(metrics).toMatchObject({
       realisedPnlUsd: '25',
@@ -82,18 +101,38 @@ describe('metricsOf', () => {
     });
   });
 
+  it('reads the net flow as raw atoms, not as dollars: 25 USDC is 25, not 25 million', () => {
+    // SEN-32, the whole bug in one case: `net` is `BigInt!` atoms and
+    // `realizedPnlUsd` is a human `BigDecimal!`. Summed as one domain, the
+    // denominator came out a million times too big and every ROI rounded to 0.
+    const metrics = metricsOf([account({ realizedPnlUsd: '5', balances: [stable('25000000')] })]);
+
+    // Trailing zeros are trimmed on the wire; `amountLabel` prints this 25.00.
+    expect(metrics.capitalDeployedUsd).toBe('25');
+    expect(metrics.roi).toBe(0.2);
+  });
+
+  it('rescales each stablecoin by its own decimals, whichever venue reported it', () => {
+    const metrics = metricsOf([
+      account({ balances: [stable('1500000')] }),
+      account({ id: 'perpl-1', venue: 'PERPL', balances: [stable('2500000', { token: AUSD })] }),
+    ]);
+
+    expect(metrics.capitalDeployedUsd).toBe('4');
+  });
+
   it('counts a loss as a negative ROI', () => {
-    const metrics = metricsOf([account({ realizedPnlUsd: '-12.5', balances: [stable('50')] })]);
+    const metrics = metricsOf([account({ realizedPnlUsd: '-12.5', balances: [stable(usdc(50))] })]);
 
     expect(metrics.roi).toBe(-0.25);
   });
 
   it('rounds ROI at 4dp too, half up, and keeps the sign', () => {
     // 1/32 = 0.03125 exactly — the digit a float would round either way.
-    expect(metricsOf([account({ realizedPnlUsd: '1', balances: [stable('32')] })]).roi).toBe(
+    expect(metricsOf([account({ realizedPnlUsd: '1', balances: [stable(usdc(32))] })]).roi).toBe(
       0.0313,
     );
-    expect(metricsOf([account({ realizedPnlUsd: '-1', balances: [stable('32')] })]).roi).toBe(
+    expect(metricsOf([account({ realizedPnlUsd: '-1', balances: [stable(usdc(32))] })]).roi).toBe(
       -0.0313,
     );
   });
@@ -111,8 +150,8 @@ describe('metricsOf', () => {
     const metrics = metricsOf([
       account({
         balances: [
-          stable('120', { deposited: '150', withdrawn: '30', net: '120' }),
-          stable('40', { token: '0xa9012a055bd4e0edff8ce09f960291c09d5322dc' }),
+          stable(usdc(120), { deposited: usdc(150), withdrawn: usdc(30) }),
+          stable(usdc(40), { token: AUSD }),
         ],
         realizedPnlUsd: '32',
       }),
@@ -125,17 +164,45 @@ describe('metricsOf', () => {
     const metrics = metricsOf([
       account({
         realizedPnlUsd: '4',
-        balances: [stable('500000000', { token: MON, decimals: 18 })],
+        // 0.5 MON, in 18dp atoms.
+        balances: [stable('500000000000000000', { token: MON, decimals: 18 })],
       }),
     ]);
 
     expect(metrics).toMatchObject({ capitalDeployedUsd: '0', roi: null });
   });
 
-  it('does not let a negative net flip the sign of every ROI', () => {
-    const metrics = metricsOf([account({ realizedPnlUsd: '3', balances: [stable('-10')] })]);
+  it('does not count a 6-decimal non-stable as USD capital: XAUt is gold, not a dollar', () => {
+    // The decimals alone cannot tell a dollar from an ounce, so the test is the
+    // token's address (`CAPITAL_TOKENS`). Counting XAUt would deflate this
+    // agent's ROI by whatever gold happens to trade at.
+    const metrics = metricsOf([
+      account({ realizedPnlUsd: '7', balances: [stable(usdc(3), { token: XAUT })] }),
+    ]);
 
     expect(metrics).toMatchObject({ capitalDeployedUsd: '0', roi: null });
+    expect(CAPITAL_TOKENS.has(XAUT)).toBe(false);
+  });
+
+  it('matches the token address whatever case the indexer sent it in', () => {
+    const metrics = metricsOf([
+      account({
+        realizedPnlUsd: '5',
+        balances: [stable(usdc(50), { token: KURU_TESTNET_TOKENS.USDC.address })],
+      }),
+    ]);
+
+    expect(metrics).toMatchObject({ capitalDeployedUsd: '50', roi: 0.1 });
+  });
+
+  it('does not let a negative net flip the sign of every ROI', () => {
+    const metrics = metricsOf([account({ realizedPnlUsd: '3', balances: [stable(usdc(-10))] })]);
+
+    expect(metrics).toMatchObject({ capitalDeployedUsd: '0', roi: null });
+  });
+
+  it('refuses a balance that is not whole atoms rather than reading it as zero', () => {
+    expect(() => metricsOf([account({ balances: [stable('25.5')] })])).toThrow(/not an integer/);
   });
 
   it('refuses a decimal it cannot trust rather than reading it as zero', () => {
