@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Address, LocalAccount } from 'viem';
 
 import { clearCredential, loadCredential, saveCredential } from './credentialStore';
+import type { AuthorizationPayload } from './deviceKey';
 import {
   createWallet,
   describeAuthError,
@@ -34,6 +35,20 @@ export type UseAccount = {
   /** viem account, or `null` unless `status === 'ready'`. */
   readonly account: LocalAccount<'mera'> | null;
   readonly address: Address | null;
+  /**
+   * The session's device key as base64 SPKI DER, or `null` unless
+   * `status === 'ready'`. What `POST /wallet/register` sends so Privy will name
+   * this phone the owner of the user's wallet (SEN-40/41).
+   */
+  readonly devicePublicKey: string | null;
+  /**
+   * Signs a Privy authorization payload with the session's device key, or
+   * `null` unless `status === 'ready'` — nullable for the same reason `account`
+   * is: without a session there is no key, and there is nothing sensible to
+   * return. Handed out as-is, so it stays stable for the session's lifetime and
+   * refuses to sign once the session has ended.
+   */
+  readonly signPrivyAuthorization: ((payload: AuthorizationPayload) => string) | null;
   /** Whether a credential hint is stored. Only affects the sign-in prompt. */
   readonly hasCredential: boolean;
   readonly error: AuthErrorDescription | null;
@@ -146,6 +161,8 @@ export function useAccount(): UseAccount {
     status,
     account: session?.account ?? null,
     address: session?.address ?? null,
+    devicePublicKey: session?.devicePublicKey ?? null,
+    signPrivyAuthorization: session?.signPrivyAuthorization ?? null,
     hasCredential: storedCredential !== null,
     error,
     createPasskey,
