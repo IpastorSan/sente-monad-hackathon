@@ -32,6 +32,25 @@ export class RegisterWalletDto {
   owner!: string;
 }
 
+/** Base64 (standard alphabet, padded). A P-256 SPKI DER is 91 bytes -> 124 chars. */
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export class RegisterUserWalletDto {
+  /**
+   * The PUBLIC half of the phone's `device` P-256 key (SEN-38), base64 SPKI
+   * DER — exactly what `key_quorums.public_keys[]` takes. It becomes the OWNER
+   * of the Privy wallet, so the server can never sign for it.
+   *
+   * The shape is checked twice on purpose: here, cheaply, and again in
+   * `agents/privy/user-wallet.ts`, which actually decodes it and checks the
+   * curve. A key the phone cannot sign with owns the wallet forever.
+   */
+  @IsString()
+  @MaxLength(512)
+  @Matches(BASE64, { message: 'devicePublicKey must be base64 (SPKI DER of a P-256 public key)' })
+  devicePublicKey!: string;
+}
+
 export class CallDto {
   @IsString()
   @IsEthereumAddress()
@@ -107,6 +126,38 @@ export interface WalletAccountResponseDto {
   entryPoint: string;
   /** Whether a paymaster is configured AND willing. Never optimistic. */
   sponsorshipAvailable: boolean;
+}
+
+export interface TokenBalanceDto {
+  symbol: string;
+  /** The ERC-20, or the zero address for native MON. */
+  address: string;
+  decimals: number;
+  /** Atoms, as a decimal string: bigint is not JSON. */
+  raw: string;
+  /** The same number decimal-shifted, e.g. "1.5" USDC. What the app shows. */
+  amount: string;
+}
+
+/** `GET /wallet` and `POST /wallet/register` — the user's Privy wallet (SEN-40). */
+export interface UserWalletResponseDto {
+  userId: string;
+  /** Privy's wallet id. SEN-42 addresses its `/rpc` with this. */
+  walletId: string;
+  address: string;
+  /**
+   * The 1-key quorum that owns the wallet. Echoed because recovery (adding a
+   * second device key) is a PATCH to THIS id, and only the device key can
+   * authorize it.
+   */
+  ownerQuorumId: string;
+  /** Echoed so the phone can confirm the server bound the key it just derived. */
+  devicePublicKey: string;
+  chainId: number;
+  /** ISO-8601. */
+  createdAt: string;
+  /** MON, USDC and AUSD, in that order. */
+  balances: TokenBalanceDto[];
 }
 
 export interface UserOperationDto {

@@ -28,10 +28,25 @@ export interface PaymasterConfig {
   policyId: string | undefined;
 }
 
+/**
+ * Privy credentials for the USER's wallet (SEN-40).
+ *
+ * Only the app credentials, and that is the point: the user wallet's owner is
+ * the phone's device key, so there is no authorization key to configure here —
+ * unlike `agents.config.ts`, which needs two. The app secret alone creates
+ * wallets and reads them; it cannot sign for one.
+ */
+export interface WalletPrivyConfig {
+  appId: string;
+  appSecret: string;
+}
+
 export interface WalletConfig {
   /** ERC-4337 bundler endpoint. Always set — see BUNDLER_URL_DEFAULT. */
   bundlerUrl: string;
   paymaster: PaymasterConfig;
+  /** `undefined` when Privy is not configured — user wallets then refuse. */
+  privy: WalletPrivyConfig | undefined;
   /** Optional Monad RPC override; falls back to viem's default for monadTestnet. */
   rpcUrl: string | undefined;
   /**
@@ -134,6 +149,23 @@ function resolvePaymaster(env: NodeJS.ProcessEnv, bundlerUrl: string): Paymaster
   return { provider, url: pimlicoUrl ?? bundlerUrl, policyId: pimlicoPolicy };
 }
 
+/** The same two variables `agents.config.ts` reads; neither, or both. */
+function resolvePrivy(env: NodeJS.ProcessEnv): WalletPrivyConfig | undefined {
+  const appId = env.PRIVY_APP_ID?.trim() || undefined;
+  const appSecret = env.PRIVY_APP_SECRET?.trim() || undefined;
+  if (!appId && !appSecret) {
+    return undefined;
+  }
+  if (!appId || !appSecret) {
+    throw new Error(
+      `Privy is half-configured: set ${appId ? 'PRIVY_APP_SECRET' : 'PRIVY_APP_ID'} too, or ` +
+        'neither. User wallets refuse cleanly when both are unset; they fail at the first ' +
+        'request when one is missing.',
+    );
+  }
+  return { appId, appSecret };
+}
+
 /**
  * Pure env -> config, so a bad deployment fails at boot rather than on the
  * first UserOperation, and so it can be unit tested without Nest.
@@ -147,6 +179,7 @@ export function loadWalletConfig(env: NodeJS.ProcessEnv = process.env): WalletCo
   return {
     bundlerUrl,
     paymaster: resolvePaymaster(env, bundlerUrl),
+    privy: resolvePrivy(env),
     rpcUrl: env.MONAD_TESTNET_RPC_URL?.trim() || undefined,
     confirmationPollMs: parsePositiveInt(
       env.WALLET_CONFIRMATION_POLL_MS,
@@ -173,8 +206,15 @@ export function describeWalletConfig(config: WalletConfig, logger: Logger): void
     `bundler=${host} paymaster=${config.paymaster.provider}` +
       `${config.paymaster.policyId ? ' (policy set)' : ''} ` +
       `poll=${config.confirmationPollMs}ms timeout=${config.confirmationTimeoutMs}ms ` +
-      `prepareTtl=${config.prepareTtlMs}ms`,
+      `prepareTtl=${config.prepareTtlMs}ms ` +
+      `userWallets=${config.privy ? `privy app=${config.privy.appId}` : 'unconfigured'}`,
   );
+  if (!config.privy) {
+    logger.warn(
+      'Privy not configured: POST /wallet/register will refuse with user_wallets_unconfigured. ' +
+        'Set PRIVY_APP_ID and PRIVY_APP_SECRET.',
+    );
+  }
   if (config.paymaster.provider === 'none') {
     logger.warn(
       'No paymaster configured: UserOperations will be built and signed but NOT sponsored, ' +

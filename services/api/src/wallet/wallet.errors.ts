@@ -23,6 +23,21 @@ export const WALLET_REFUSAL_REASONS = [
   'sponsorship_unavailable',
   /** The bundler rejected the UserOperation (AA2x/AA3x, fee too low, ...). */
   'bundler_rejected',
+  /**
+   * `devicePublicKey` is not the base64 SPKI DER of a P-256 public key — the
+   * one encoding a Privy key quorum accepts (SEN-40).
+   */
+  'invalid_device_key',
+  /**
+   * This user already has a wallet owned by a DIFFERENT device key. A Privy
+   * wallet's address is not derived from its owner, so minting a second one
+   * would strand the first; see `store/user-wallet-registry.ts`.
+   */
+  'device_key_mismatch',
+  /** No Privy credentials, so no user wallet can be created. */
+  'user_wallets_unconfigured',
+  /** Privy itself refused or was unreachable. */
+  'user_wallet_provider_failed',
 ] as const;
 
 export type WalletRefusalReason = (typeof WALLET_REFUSAL_REASONS)[number];
@@ -52,6 +67,12 @@ const REFUSAL_STATUS: Record<WalletRefusalReason, HttpStatus> = {
   invalid_authorization: HttpStatus.UNAUTHORIZED,
   sponsorship_unavailable: HttpStatus.SERVICE_UNAVAILABLE,
   bundler_rejected: HttpStatus.BAD_GATEWAY,
+  invalid_device_key: HttpStatus.BAD_REQUEST,
+  // 409 for the same reason `owner_conflict` is: the request is valid, it just
+  // contradicts a binding that already exists and will not be overwritten.
+  device_key_mismatch: HttpStatus.CONFLICT,
+  user_wallets_unconfigured: HttpStatus.SERVICE_UNAVAILABLE,
+  user_wallet_provider_failed: HttpStatus.BAD_GATEWAY,
 };
 
 export function walletRefusalStatus(reason: WalletRefusalReason): HttpStatus {

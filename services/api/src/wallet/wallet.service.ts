@@ -435,7 +435,7 @@ export class WalletService {
     if (!binding) {
       throw new WalletRefusedError(
         'account_not_registered',
-        'No smart account for this user; POST /wallet/register with the owner address first',
+        'No smart account for this user; POST /wallet/kernel/register with the owner address first',
       );
     }
     return binding;

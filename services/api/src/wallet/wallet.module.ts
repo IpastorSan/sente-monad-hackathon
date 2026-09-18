@@ -2,8 +2,14 @@ import { Logger, Module, type Provider } from '@nestjs/common';
 import { createPublicClient, http } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
+import { PrivyClient } from '../agents/privy/privy.client';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import {
+  TOKEN_BALANCES,
+  ViemTokenBalanceReader,
+  type TokenBalanceReader,
+} from './balances/token-balances';
 import { BUNDLER, type Bundler } from './bundler/bundler';
 import { PimlicoBundler } from './bundler/pimlico-bundler';
 import {
@@ -26,6 +32,14 @@ import {
   InMemorySmartAccountRegistry,
   SMART_ACCOUNT_REGISTRY,
 } from './store/smart-account-registry';
+import { InMemoryUserWalletRegistry, USER_WALLET_REGISTRY } from './store/user-wallet-registry';
+import {
+  PrivyUserWalletProvider,
+  UnconfiguredUserWalletProvider,
+  USER_WALLETS,
+  type UserWalletProvider,
+} from './user-wallet.provider';
+import { UserWalletService } from './user-wallet.service';
 import {
   describeWalletConfig,
   loadWalletConfig,
@@ -118,6 +132,42 @@ const preparedStoreProvider: Provider = {
   useClass: InMemoryPreparedOperationStore,
 };
 
+const userWalletRegistryProvider: Provider = {
+  provide: USER_WALLET_REGISTRY,
+  useClass: InMemoryUserWalletRegistry,
+};
+
+/**
+ * USER_WALLETS: Privy when configured, and an implementation that refuses
+ * (`user_wallets_unconfigured`) when not, so the API still boots without
+ * credentials — the same call the paymaster and AGENT_WALLETS make.
+ *
+ * Its own `PrivyClient` rather than one borrowed from `AgentsModule`: the two
+ * share app credentials and nothing else, and a user wallet must never be
+ * reachable from a code path that holds the agent signing key.
+ */
+const userWalletsProvider: Provider = {
+  provide: USER_WALLETS,
+  inject: [WALLET_CONFIG],
+  useFactory: ({ privy }: WalletConfig): UserWalletProvider =>
+    privy
+      ? new PrivyUserWalletProvider(
+          new PrivyClient({ appId: privy.appId, appSecret: privy.appSecret }),
+        )
+      : new UnconfiguredUserWalletProvider(),
+};
+
+/** Balances for `GET /wallet`, over the same Monad client the rest of the module uses. */
+const tokenBalancesProvider: Provider = {
+  provide: TOKEN_BALANCES,
+  inject: [MONAD_PUBLIC_CLIENT],
+  useFactory: (client: MonadPublicClient): TokenBalanceReader =>
+    new ViemTokenBalanceReader({
+      getBalance: (args) => client.getBalance(args),
+      readContract: (args) => client.readContract(args),
+    }),
+};
+
 /**
  * AUTH: the shared seam rather than a second one of its own — `SessionAuthGuard`
  * verifies the session token and `Auth` reads the principal back out.
@@ -128,12 +178,16 @@ const authProvider: Provider = {
 };
 
 /**
- * Gas-sponsored ERC-7579 Kernel smart accounts owned by the user's Mera key.
+ * The user's account — two of them, for one release.
  *
- * Privy is deliberately absent: it cannot sponsor gas for an external EOA (its
- * smart wallets are driven by Privy's own embedded signers, and its 7702
- * sponsorship is embedded-wallet-only), so the account is built with
- * `permissionless` where the sole owner is an ordinary viem `LocalAccount`.
+ * **The Privy wallet (SEN-40) is the account from now on**: a server wallet
+ * owned by the phone's device P-256 key, created here and signable only there.
+ * `GET /wallet` and `POST /wallet/register` serve it.
+ *
+ * **The Kernel smart account is what it replaces**: gas-sponsored ERC-7579,
+ * owned by the user's Mera EOA, built with `permissionless` because Privy could
+ * not sponsor gas for an external EOA. `prepare` / `execute` / `operations`
+ * still drive it and SEN-45 retires them.
  */
 @Module({
   controllers: [WalletController],
@@ -146,10 +200,14 @@ const authProvider: Provider = {
     trackerProvider,
     registryProvider,
     preparedStoreProvider,
+    userWalletRegistryProvider,
+    userWalletsProvider,
+    tokenBalancesProvider,
     authProvider,
     SessionAuthGuard,
     WalletService,
+    UserWalletService,
   ],
-  exports: [WalletService],
+  exports: [WalletService, UserWalletService],
 })
 export class WalletModule {}
