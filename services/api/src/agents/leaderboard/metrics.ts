@@ -32,7 +32,19 @@
  * 6-decimal stables on Monad testnet, and the indexer's own `*Usd` field names
  * treat them as one unit. This module sums them the same way, and the API
  * returns a note saying so.
+ *
+ * **Two unit domains arrive here and exactly one leaves** (SEN-32). The
+ * indexer's `*Usd` fields are `BigDecimal!` — human units already — while
+ * every `AccountBalance` amount is `BigInt!` RAW TOKEN ATOMS. Summing a raw
+ * `net` into the same total as `realizedPnlUsd` put 25 USDC on the board as
+ * "25,000,000.00" and made every ROI round to 0%. `capitalOfAccount` is
+ * therefore the seam: it divides each atom count by its token's decimals
+ * (exactly, by giving the BigInt a scale — no division, no float) before a
+ * single addition happens, so everything downstream is in quote units.
  */
+import { KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { PERPL_COLLATERAL_DECIMALS, PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
+
 import type { IndexerAccount } from './indexer';
 
 /**
@@ -50,11 +62,23 @@ export const FORMULA =
   'n = settled trades (wins + losses) · win rate = wins ÷ n · ROI = realised PnL ÷ capital deployed';
 
 /**
- * What counts as capital: the stablecoin quote both venues settle in. USDC and
- * AUSD are 6-decimal tokens; MON (18) is gas an agent spends, not collateral it
- * risks, and counting it would inflate every denominator.
+ * What counts as capital, BY ADDRESS: the stablecoin quote each venue settles
+ * in — Kuru's testnet USDC and Perpl's AUSD collateral — mapped to the decimals
+ * its raw atoms are denominated in. Lowercase, because the indexer keys token
+ * addresses lowercase (`schema.graphql`).
+ *
+ * An allowlist rather than "any 6-decimal token" (SEN-32): Kuru lists XAUt, a
+ * 6-decimal token that is tokenised gold, not a dollar. Counting a gold balance
+ * as USD capital would silently deflate that agent's ROI by whatever gold
+ * trades at. MON (18) is gas an agent spends, not collateral it risks, and is
+ * excluded for its own reason. A venue that adds a stable quote must be added
+ * here or its capital reads as zero — loud in the ROI column, and the right way
+ * round: a missing denominator shows as `null`, never as a wrong number.
  */
-export const CAPITAL_DECIMALS = 6;
+export const CAPITAL_TOKENS: ReadonlyMap<string, number> = new Map([
+  [KURU_TESTNET_TOKENS.USDC.address.toLowerCase(), KURU_TESTNET_TOKENS.USDC.decimals],
+  [PERPL_TESTNET_CONTRACTS.collateral.toLowerCase(), PERPL_COLLATERAL_DECIMALS],
+]);
 
 export interface LeaderboardMetrics {
   /** Settled trades: `wins + losses`, the denominator of the win rate. */
@@ -65,7 +89,12 @@ export interface LeaderboardMetrics {
   readonly fills: number;
   /** Exact decimal string, quote units, signed. */
   readonly realisedPnlUsd: string;
-  /** Exact decimal string, quote units: stablecoin net-deposited into the venues. */
+  /**
+   * Exact decimal string, quote units: stablecoin net-deposited into the
+   * venues, rescaled out of the raw atoms the indexer stores. Trailing zeros
+   * are trimmed, so 25 USDC is `'25'`; the screen's `amountLabel` is what
+   * prints it as `25.00`.
+   */
   readonly capitalDeployedUsd: string;
   /** `wins / n`, 4dp. `null` when nothing has settled: 0/0 is not a rate. */
   readonly winRate: number | null;
@@ -108,15 +137,21 @@ export function metricsOf(accounts: readonly IndexerAccount[]): LeaderboardMetri
 }
 
 /**
- * Capital deployed on one venue account: the net stablecoin flow, in quote
- * units. Balances the venue reports (`freeRaw`/`reservedRaw`) are deliberately
- * not used; see the module doc.
+ * Capital deployed on one venue account: the net stablecoin flow, converted
+ * from raw atoms into quote units. Balances the venue reports
+ * (`freeRaw`/`reservedRaw`) are deliberately not used; see the module doc.
+ *
+ * The token's decimals come from `CAPITAL_TOKENS`, not from the row's own
+ * `decimals`: the allowlist already decided this address is a dollar, and the
+ * scale of a known token is a fact about the token, not a field to be trusted
+ * from a response.
  */
 function capitalOfAccount(account: IndexerAccount): Scaled {
   let capital = scaled('0');
   for (const balance of account.balances) {
-    if (balance.decimals !== CAPITAL_DECIMALS) continue;
-    capital = add(capital, scaled(balance.net));
+    const decimals = CAPITAL_TOKENS.get(balance.token.toLowerCase());
+    if (decimals === undefined) continue;
+    capital = add(capital, atoms(balance.net, decimals));
   }
   return capital;
 }
@@ -175,6 +210,7 @@ interface Scaled {
 
 const ZERO: Scaled = { units: 0n, scale: 0 };
 const DECIMAL = /^-?\d+(\.\d+)?$/;
+const INTEGER = /^-?\d+$/;
 
 /** `wins / n`, rounded half up at 4dp, decided in integers. */
 function winRateOf(wins: number, n: number): number | null {
@@ -207,6 +243,18 @@ function scaled(value: string): Scaled {
   const [whole = '0', fraction = ''] = magnitude.split('.');
   const units = BigInt(whole + fraction);
   return { units: negative ? -units : units, scale: fraction.length };
+}
+
+/**
+ * Raw token atoms (`BigInt!` on the wire) as a quote-unit decimal: `value /
+ * 10^decimals`, and exact because the division is only a change of scale.
+ * Throws rather than counting an unparseable balance as 0, like `scaled`.
+ */
+function atoms(value: string, decimals: number): Scaled {
+  if (!INTEGER.test(value)) {
+    throw new Error(`leaderboard: not an integer amount of atoms: ${JSON.stringify(value)}`);
+  }
+  return { units: BigInt(value), scale: decimals };
 }
 
 function rescaled(value: Scaled, scale: number): bigint {

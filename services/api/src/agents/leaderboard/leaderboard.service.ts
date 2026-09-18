@@ -51,8 +51,9 @@ export const LEADERBOARD_NOTES: readonly string[] = [
     'agent needs at least 3 of them to be ranked; below that a win rate is noise, so the row is ' +
     'shown under “too few trades” instead of ordered.',
   'ROI is realised PnL ÷ capital deployed, where capital deployed is the stablecoin (USDC, AUSD — ' +
-    'both 6dp) net-deposited into the venues. MON is gas, never capital. Fees are not netted out ' +
-    'of realised PnL.',
+    'both 6dp) net-deposited into the venues, converted from raw token units to dollars. MON is ' +
+    'gas, never capital, and a 6dp token that is not one of those two stables (XAUt) is not ' +
+    'capital either. Fees are not netted out of realised PnL.',
   'Theses held is a separate reading, from the agent’s own trail: a thesis settles only when its ' +
     'own fills close it. It is counted per thesis and is never divided by n.',
   'Kuru’s PnL is USDC and Perpl’s is AUSD. Both are 6-decimal stables; they are summed, as the ' +
