@@ -1014,9 +1014,10 @@ function describeError(error: unknown): string {
  * The event log, with the ERC-8004 feedback attached to it.
  *
  * A verdict is appended exactly once per settled thesis (`verdict.ts`), in one
- * place (the gated `close_position`), and both the Tool Runner and the MCP
- * session write through the same log — so decorating the log is the hook that
- * catches every verdict without a second call site to keep in sync.
+ * place (`recordVerdict` in the gate, reached by any write that filled — SEN-47
+ * widened it from the Perpl-only `close_position`), and both the Tool Runner and
+ * the MCP session write through the same log — so decorating the log is the hook
+ * that catches every verdict without a second call site to keep in sync.
  *
  * `append` returns as soon as the event is stored: publishing to a registry over
  * RPC must not slow the tool call that closed a position, and a stored verdict

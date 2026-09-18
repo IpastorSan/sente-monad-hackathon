@@ -13,7 +13,8 @@ export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
 /**
  * `run`: one summary per Tool Runner run (SEN-8) — trigger, stop reason, iterations, cost.
  * `verdict`: a settled thesis (SEN-22) — its realised PnL and whether it held — appended
- * when a close completes one, so the Ledger reads it through the events route like the rest.
+ * when a fill completes one (any filling tool, not just the Perpl-only `close_position`:
+ * SEN-47), so the Ledger reads it through the events route like the rest.
  */
 export const AGENT_EVENT_KINDS = [
   'thesis',

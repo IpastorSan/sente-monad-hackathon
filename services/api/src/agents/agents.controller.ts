@@ -106,9 +106,9 @@ export class AgentsController {
    * read what comes next. Oldest-first within the page.
    *
    * SEN-21, widened in SEN-35: every event that carries a `blockNumber` —
-   * `order`, `fill` and `close` today — also carries `consensus`, so the
-   * Ledger's ramp can show how far Monad has taken that block without asking a
-   * second route per row. See `withConsensus`.
+   * `order`, `fill`, `close` and the `verdict` a fill settled (SEN-47) — also
+   * carries `consensus`, so the Ledger's ramp can show how far Monad has taken
+   * that block without asking a second route per row. See `withConsensus`.
    */
   @Get(':id/events')
   async listEvents(
@@ -138,9 +138,10 @@ export class AgentsController {
    * kept a hand-written list of kinds (`order` and `fill`) beside a check that
    * already answers the question generally, and SEN-20's `close` was added to
    * the log without being added to the list, so closing a position was the one
-   * trade whose row had no ramp. A thesis, a refusal, a run summary and a
-   * verdict carry no `blockNumber`, so they are still untouched, and the next
-   * kind that lands in a block needs nothing here.
+   * trade whose row had no ramp. SEN-47 proved the point from the other side: a
+   * `verdict` started naming the block of the fill that settled it, and got its
+   * ramp here with no change at all. A thesis, a refusal and a run summary name
+   * no block, so they are still untouched.
    *
    * This is the ONLY consensus path to the Ledger: the mobile ramp reads the
    * state off the event it is drawn under and only asks
