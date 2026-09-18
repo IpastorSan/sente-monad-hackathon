@@ -49,6 +49,8 @@ const CALLS = [
 const config = (over: Partial<WalletConfig> = {}): WalletConfig => ({
   bundlerUrl: WALLET_DEFAULTS.bundlerUrl,
   paymaster: { provider: 'pimlico', url: 'https://example.invalid', policyId: 'sp_test' },
+  // The Kernel path has nothing to do with Privy; the user wallet does (SEN-40).
+  privy: undefined,
   rpcUrl: undefined,
   confirmationPollMs: 300,
   confirmationTimeoutMs: 5_000,
