@@ -114,10 +114,15 @@ export async function recordMarketDay(context: Ctx, args: MarketDayInput): Promi
     baseVolume,
     highPrice: high,
     lowPrice: low,
-    // quote per base over the day. Division is the only rounding step in the
+    // Quote per base over the day. Division is the only rounding step in the
     // aggregates, so it is given an explicit precision instead of inheriting
-    // bignumber.js's default of 20.
-    vwapPrice: baseVolume.isZero() ? undefined : volumeUsd.div(baseVolume, 18),
+    // bignumber.js's default of 20 — but that precision is `decimalPlaces`,
+    // NOT a second argument to `div`: bignumber.js reads `div(y, base)` as the
+    // numeric BASE of the operands. `div(x, 18)` therefore reparsed both
+    // operands as base-18 numerals (the live MON-USDC fill came out 0.009867
+    // instead of 0.030974) and returned NaN whenever an operand carried an
+    // exponent. See markets.test.ts.
+    vwapPrice: baseVolume.isZero() ? undefined : volumeUsd.div(baseVolume).decimalPlaces(18),
     activeAccountIds: active,
   });
 }

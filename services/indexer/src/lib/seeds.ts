@@ -152,6 +152,13 @@ export const PERP_COLLATERAL_DECIMALS = 6; // AUSD
 export const PERPL_COLLATERAL =
   '0xa9012a055bd4e0edff8ce09f960291c09d5322dc';
 
+/**
+ * Perpl's Exchange proxy (instance 12), the contract every event in
+ * config.yaml comes from. Named here because `accountAddress.ts` reads it
+ * directly; config.yaml stays the source of truth for what is *indexed*.
+ */
+export const PERPL_EXCHANGE = '0x1964c32f0be608e7d29302aff5e61268e72080cc';
+
 export const PERPL_MARKETS: readonly PerplMarketSeed[] = [
   { marketId: 'perpl-16', perpId: 16n, base: 'BTC', priceDecimals: 1, sizeDecimals: 5 },
   { marketId: 'perpl-32', perpId: 32n, base: 'ETH', priceDecimals: 2, sizeDecimals: 3 },

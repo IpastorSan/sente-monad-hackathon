@@ -110,6 +110,7 @@ export interface EnvioIndexerStatsOptions {
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 export class EnvioIndexerStats implements IndexerStats {
+  private readonly logger = new Logger(EnvioIndexerStats.name);
   private readonly url: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -164,7 +165,21 @@ export class EnvioIndexerStats implements IndexerStats {
     if (!Array.isArray(rows)) {
       throw new IndexerQueryError('the indexer answered without an Account list');
     }
-    return rows.map(toAccount);
+    const accounts = rows.map(toAccount);
+    // An account with no address cannot be matched to an agent, so
+    // `LeaderboardService.indexAccounts` drops it. Silently, until now: an
+    // empty board then looked identical to an agent that has never traded.
+    // The indexer backfills the address from the venue on first sight
+    // (services/indexer/src/lib/accountAddress.ts), so a count above zero
+    // means that backfill failed, not that the account is new.
+    const unaddressed = accounts.filter((account) => account.address === null).length;
+    if (unaddressed > 0) {
+      this.logger.warn(
+        `the indexer returned ${unaddressed} of ${accounts.length} accounts with no address; ` +
+          'they cannot be matched to an agent and are left off the board',
+      );
+    }
+    return accounts;
   }
 }
 

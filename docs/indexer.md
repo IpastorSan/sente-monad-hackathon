@@ -20,8 +20,9 @@ services/indexer/
   src/lib/perpl.ts        Perpl side mapping + tx-scoped attribution rules
   src/lib/markets.ts      market + daily aggregate writes
   src/lib/common.ts       entity helpers, BigDecimal bridging
+  src/lib/accountAddress.ts  account id -> address, read off the venue (§addresses)
   src/lib/seeds.ts        market/token tables (mirrored from packages/venues)
-  src/lib/*.test.ts       node --test suites (27 tests)
+  src/lib/*.test.ts       node --test suites (42 tests)
   scripts/verify-config-topics.ts   re-checks every signature against the chain
   abis/PerplExchange.events.json    vendored Perpl events
 ```
@@ -140,6 +141,56 @@ arrives is corrected by the next one, whereas an accumulated balance drifts
 forever. For Perpl, `CollateralDeposit`/`CollateralWithdrawal` carry `balanceCNS`
 (absolute) into `freeRaw`, and `reservedRaw` stays 0 because Perpl's
 `lockedBalanceCNS` is not on those events.
+
+### §addresses
+
+`Account.address` is what the API joins on — `services/api` asks the indexer
+`where: { address: { _in: [<agent wallets>] } }` — so an account without one is
+not on the leaderboard at all.
+
+The address used to come **only** from the one-shot registration events, Kuru's
+`AccountRegistered` and Perpl's `AccountCreated`, and `config.yaml` starts at
+block 61294867, about seven days. An account registered before that window never
+emits its registration again, and a Kuru maker seen only as a record inside
+somebody else's `TradesPacked` log never had an address in any event at all.
+Both were invisible on the board forever, and nothing healed them. In the
+§proven Kuru run, *all three* accounts are of this kind.
+
+Two cheaper fixes do not work, and it is worth writing down why:
+
+- **Taking it off the fill events.** Kuru's `TradesPacked` carries an
+  `executor` — whoever submitted the order, an authorised signer rather than the
+  account — and the maker leg inside `packedTrades` is a bare `uint40`. Every
+  Perpl fill event carries an `accountId` at best. A wrong address on a
+  leaderboard row is worse than none.
+- **An earlier `start_block` for the registration events only.** Envio's
+  per-contract `start_block` is documented in `envio/evm.schema.json` as "Can be
+  greater than the chain start_block for more specific indexing" — later only.
+  Reaching older registrations means moving the whole chain back, which is the
+  seven-day window itself.
+
+So `src/lib/accountAddress.ts` resolves the id against the contract the first
+time the account is seen, through an Envio **effect** — deduplicated and cached,
+so it is one RPC read per account id ever, not one per fill:
+
+| Venue | Call                                    | Unknown id      |
+| ----- | --------------------------------------- | --------------- |
+| Kuru  | `AccountCore.userAddressById(uint40)`   | the zero address |
+| Perpl | `Exchange.getAccountById(uint256)`      | reverts          |
+
+Neither read is in its venue's docs; both were found by selector and verified
+against the live contracts — `userAddressById(62)` and `(47)` answer the two
+accounts of the §proven Kuru fill, and `getAccountById(1)` answers the
+`AccountInfo` whose fifth word is `accountAddr`. `accountAddress.test.ts` pins
+the exact calldata and the exact responses, so an ABI drift fails loudly.
+"Unknown" is stored as **no address**, never as `0x000…0`, which would match an
+agent's wallet exactly as badly as a wrong one. A revert is an answer; a
+transport failure throws, so Envio retries instead of caching a null.
+
+`ENVIO_MONAD_RPC_URL` overrides the RPC these reads go to (default:
+`https://testnet-rpc.monad.xyz`, the same fallback `config.yaml` names). The
+registration events are still indexed and still authoritative when they land
+inside the window — they also carry `owner`, which no read gives.
 
 ### §perpl
 
@@ -397,10 +448,26 @@ workspace.
 cd services/indexer
 mise exec -- npm install                 # its own lockfile, not the workspace one
 mise exec -- npm run codegen             # regenerates .envio/ from config + schema
-mise exec -- npm test                    # 27 unit tests, no network
-mise exec -- npm run typecheck           # tsc -p tsconfig.json --noEmit
+mise exec -- npm test                    # 42 unit tests, no network
+mise exec -- npm run typecheck           # codegen, then tsc -p tsconfig.json --noEmit
 mise exec -- npm run verify:topics       # config.yaml vs the chain
 ```
+
+`typecheck` runs `codegen` first on purpose. `.envio/` is gitignored, and
+without it `envio`'s types degrade to a "Run `envio codegen`" placeholder that
+fails every handler registration — so on a fresh clone a bare `tsc` reports
+dozens of errors that say nothing about the code. Running codegen first makes
+the typecheck mean what it says.
+
+The whole thing from the repo root, which is what CI and a fresh clone want:
+
+```bash
+mise exec -- pnpm run check:indexer      # npm ci + codegen + typecheck + tests
+```
+
+That script exists because `pnpm-workspace.yaml` excludes `services/indexer`, so
+the root `typecheck`/`lint`/`test` walk straight past it — for two months
+nothing in the repo ran these tests at all.
 
 Then the environment. `ENVIO_PG_*` selects the database (defaults shown; these
 are already exported in this repo's shell):
@@ -479,11 +546,29 @@ Trade=1 AccountMarketStats=2 Account=3 Market=4 MarketDay=1 MakerOrderUpdate=0
         rawSize=31773742494 price=0.030974 notional=9.841599 taker=kuru-62 maker=kuru-47
   stats kuru-62-… n=1 takerN=1 vol=9.841599 open=31773742494/9841599
   stats kuru-47-… n=1 makerN=1 vol=9.841599 open=-31773742494/-9841599
+  account kuru-47 KURU address=0x74443181214751970a785f5675bd372735245c9e
+  account kuru-62 KURU address=0x15bbc549326dd8d053233c3a546aa7fdabb57256
+  account kuru-1  KURU address=0xfba882999b0210a2eb80cc066e4d54529239e71d
+  day kuru-0xfdbe…ef61-20260910 trades=1 volumeUsd=9.841599
+        baseVolume=317.73742494 vwap=0.030973999999711838
 ```
 
 Price 0.030974 and $9.841599 match the on-chain fill exactly, and the two legs
 are mirrored. `MakerOrderUpdate=0` is right: that transaction contains no
 `BookUpdatesPacked` log.
+
+Two numbers in that output are the SEN-34 fixes, re-run on the same block:
+
+- **`vwap=0.03097399…`** is the fill's own price, as a one-fill day must be.
+  Until SEN-34 it read `0.009867`: `MarketDay.vwapPrice` was
+  `volumeUsd.div(baseVolume, 18)`, and bignumber.js reads `div`'s second
+  argument as the numeric **base** of the operands, not as a decimal-place
+  count. Every VWAP the indexer ever wrote was a base-18 reading of two base-10
+  numerals, and any operand large enough to print in exponential notation came
+  out `NaN`. It is now `div(baseVolume).decimalPlaces(18)`, pinned in
+  `markets.test.ts` against exactly these numbers.
+- **`address=…` on all three accounts**, which were `NULL` before. None of the
+  three registered inside the indexed window; see §addresses.
 
 **Perpl** — block 63311165, tx `0xd58c92ad…`:
 
@@ -494,10 +579,17 @@ PerplOrderContext=33 PerplMakerFill=1
         price=76810.9 notional=451.648092 taker=perpl-2 maker=perpl-1
   stats perpl-1-perpl-16 n=1 makerN=1 open=588/451648092
   stats perpl-2-perpl-16 n=1 takerN=1 open=-588/-451648092
+  account perpl-1 PERPL address=0xa91f9339e65d6d0ded8861aa91de9e6ae9910cab
+  account perpl-2 PERPL address=0x306e1912f314af6fca9832c13875e734172b4d46
+  day perpl-16-20260917 trades=1 volumeUsd=451.648092
+        baseVolume=0.00588 vwap=76810.9
 ```
 
 The taker is `SELL` (orderType 1 = `OpenShort`), BTC prices at 76810.9, and the
 maker is resolved from `MakerOrderFilledV2` across the `PerplMakerFill` join.
+The day's VWAP is the fill price and both accounts carry an address, neither of
+which was true before SEN-34 — `AccountCreated` for these two is older than the
+indexed range.
 
 ---
 
@@ -550,11 +642,12 @@ no deployment exists.** The commands above are from
 
 | Check                        | Command                                     | State |
 | ---------------------------- | ------------------------------------------- | ----- |
-| Unit tests (27)              | `mise exec -- npm test`                     | pass  |
+| Unit tests (42)              | `mise exec -- npm test`                     | pass  |
 | Indexer typecheck            | `mise exec -- npm run typecheck`            | pass  |
 | Config vs chain              | `mise exec -- npm run verify:topics`        | pass  |
 | Real blocks → real entities  | `scripts/local/live-range.ts <block>`       | pass (both venues) |
 | Root typecheck / lint        | `mise exec -- pnpm run typecheck` (root)    | pass (indexer excluded) |
+| The indexer, from the root   | `mise exec -- pnpm run check:indexer`       | pass  |
 | Live GraphQL query           | `envio dev` + Hasura on :8080               | **not run** |
 | Envio Cloud deployment       | `envio-cloud …`                             | **not run** |
 

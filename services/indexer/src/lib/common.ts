@@ -11,10 +11,14 @@
  * `BigDecimal` is Envio's re-export of bignumber.js. Note what it does *not*
  * have: `BigDecimal.fromNumber` / `fromRawString` do not exist on bignumber.js
  * 9.x, so every value is built from an exact decimal *string*. Construction and
- * addition are exact; only division rounds, and `div` is always given an
- * explicit decimal-places argument rather than mutating global config.
+ * addition are exact; only division rounds, and it is rounded explicitly with
+ * `.decimalPlaces(n)` rather than by mutating global config. `div`'s own second
+ * argument is NOT a decimal-place count — it is the numeric base of the
+ * operands, and reading it as precision is what made every VWAP wrong until
+ * SEN-34 (see markets.ts).
  */
 import { BigDecimal, type EvmOnEventContext } from 'envio';
+import { accountAddressEffect } from './accountAddress.ts';
 import { applyFill, statsId } from './stats.ts';
 
 export type Ctx = EvmOnEventContext;
@@ -40,6 +44,29 @@ export function addBd(a: BigDecimal, b: BigDecimal): BigDecimal {
 
 export const ZERO_BD = (): BigDecimal => new BigDecimal('0');
 
+/**
+ * The account's address, read off the venue the first time the account is
+ * seen.
+ *
+ * The registration events (`AccountRegistered`, `AccountCreated`) are one-shot
+ * and most of them are older than `config.yaml`'s `start_block`, so an account
+ * that only ever *trades* inside the window would otherwise carry a null
+ * address forever — and the API matches agents by address, dropping null rows.
+ * The read is an Envio effect, so it is deduplicated and cached: one RPC call
+ * per account id, not per fill. See src/lib/accountAddress.ts for why this is
+ * a contract read rather than something taken off the fill events.
+ *
+ * `undefined` (no such account) is stored as no address, never as `0x000…0`.
+ */
+async function lookupAccountAddress(
+  context: Ctx,
+  venue: 'KURU' | 'PERPL',
+  accountId: bigint,
+): Promise<string | undefined> {
+  const address = await context.effect(accountAddressEffect, { venue, accountId });
+  return address === null ? undefined : address.toLowerCase();
+}
+
 export async function ensureAccount(
   context: Ctx,
   id: string,
@@ -54,7 +81,7 @@ export async function ensureAccount(
     id,
     venue,
     accountId,
-    address: undefined,
+    address: await lookupAccountAddress(context, venue, accountId),
     owner: undefined,
     firstSeenBlock: BigInt(blockNumber),
     firstSeenAt: new Date(timestampSec * 1000),
