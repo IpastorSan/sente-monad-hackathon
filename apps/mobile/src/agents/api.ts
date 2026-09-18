@@ -11,6 +11,7 @@
  */
 import type { Address } from 'viem';
 
+import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 
 /** Mirrors `AGENT_MODELS` in `services/api/src/agents/agents.config.ts`. */
@@ -100,6 +101,20 @@ type AgentFields = {
   walletId: string;
   policyId: string;
   status: AgentStatus;
+  /**
+   * WHO OWNS THIS AGENT'S MANDATE, and so whether changing it needs this
+   * phone's signature (SEN-43/SEN-44).
+   *
+   * - `device` — the key quorum holding this phone's device key owns the
+   *   enclave policy. Amending or revoking goes prepare → sign → commit; see
+   *   `src/agents/approval.ts`. The API cannot make the change on its own, and
+   *   refuses a one-step request with `mandate_approval_required`.
+   * - `server` — the API's own key owns it and signs the change itself.
+   *
+   * An API that predates the field sends nothing; that reads as `server`,
+   * which is what those agents are.
+   */
+  ownerKind?: 'device' | 'server';
   /** Only once revoked: whether the enclave policy has actually been emptied. */
   policyCleared?: boolean;
   createdAt: string;
@@ -138,6 +153,40 @@ export type HireAgentResult = {
   agent: Agent;
   /** The agent's MCP bearer token. The API returns it this once and keeps only a hash. */
   mcpToken: string;
+};
+
+/**
+ * What a mandate change is, in the API's words (SEN-44). Shown to the user; not
+ * what the app decides from — see `approval.ts`, which decides from the payload.
+ */
+export type MandateChangeSummary = {
+  kind: 'amend' | 'revoke';
+  agentId: string;
+  agentName: string;
+  policyId: string;
+  /** Rules the policy holds afterwards. Zero on a revoke: the wallet signs nothing. */
+  ruleCount: number;
+};
+
+/**
+ * The answer to a `/prepare` call: the exact Privy payload to sign, and an id
+ * to send back with the signature.
+ *
+ * Single-use, and `expiresAt` is when it stops being committable — a signature
+ * is an approval of a change now, not a standing permission.
+ */
+export type PreparedMandateChange = {
+  prepareId: string;
+  payload: AuthorizationPayload;
+  /** ISO 8601. */
+  expiresAt: string;
+  summary: MandateChangeSummary;
+};
+
+/** One device signature: base64 DER, as `privy-authorization-signature` carries it. */
+export type MandateApproval = {
+  prepareId: string;
+  signature: string;
 };
 
 /** SEN-8's `RunResult`. Loose on purpose: the route does not exist yet. */
@@ -340,6 +389,12 @@ export class AgentsApi {
     return { agent: fromWireAgent(agent), mcpToken };
   }
 
+  /**
+   * Amend a SERVER-owned agent's mandate in one step. On a device-owned agent
+   * the API refuses this with `mandate_approval_required`; use
+   * {@link prepareAmendMandate} and {@link commitAmendMandate} — or
+   * `amendMandateWithApproval` in `approval.ts`, which does both.
+   */
   async amendMandate(id: string, mandate: AgentMandate): Promise<Agent> {
     return fromWireAgent(
       await this.request<WireAgent>('PATCH', `/agents/${encodeURIComponent(id)}/mandate`, {
@@ -348,10 +403,48 @@ export class AgentsApi {
     );
   }
 
+  /**
+   * The enclave PATCH that would install `mandate`, and the payload this phone
+   * must sign for it (SEN-44). Changes nothing.
+   *
+   * VERIFY WHAT COMES BACK BEFORE SIGNING. The payload is composed by the
+   * server, and signing it unread would hand the server the authority the
+   * device key exists to withhold. `verifyPolicyPatch` in `approval.ts` is the
+   * check, and `amendMandateWithApproval` is the flow that runs it.
+   */
+  prepareAmendMandate(id: string, mandate: AgentMandate): Promise<PreparedMandateChange> {
+    return this.request<PreparedMandateChange>(
+      'POST',
+      `/agents/${encodeURIComponent(id)}/mandate/prepare`,
+      { mandate: toWireMandate(mandate) },
+    );
+  }
+
+  /** Sends the signature for a prepared amend. The mandate is not resent: the server holds it. */
+  async commitAmendMandate(id: string, approval: MandateApproval): Promise<Agent> {
+    return fromWireAgent(
+      await this.request<WireAgent>('PATCH', `/agents/${encodeURIComponent(id)}/mandate`, approval),
+    );
+  }
+
   /** Permanent. Safe to retry, and retrying is how a failed policy clear is retried. */
   async revoke(id: string): Promise<Agent> {
     return fromWireAgent(
       await this.request<WireAgent>('POST', `/agents/${encodeURIComponent(id)}/revoke`),
+    );
+  }
+
+  /** The PATCH that empties the policy, for this phone to sign (SEN-44). */
+  prepareRevoke(id: string): Promise<PreparedMandateChange> {
+    return this.request<PreparedMandateChange>(
+      'POST',
+      `/agents/${encodeURIComponent(id)}/revoke/prepare`,
+    );
+  }
+
+  async commitRevoke(id: string, approval: MandateApproval): Promise<Agent> {
+    return fromWireAgent(
+      await this.request<WireAgent>('POST', `/agents/${encodeURIComponent(id)}/revoke`, approval),
     );
   }
 
@@ -572,6 +665,28 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
           detail:
             'On an amend, the old mandate still stands. On a revoke, the agent is revoked but its ' +
             'wallet policy isn’t cleared yet; revoke again to retry.',
+        };
+      case 'mandate_approval_required':
+        return {
+          title: 'This mandate needs your approval',
+          detail:
+            'Only the key on this phone can change it. Reopen the change and confirm it with your passkey.',
+        };
+      case 'mandate_approval_not_required':
+        return {
+          title: 'This agent’s mandate is server-owned',
+          detail: 'It was hired before device ownership, so it changes without a signature.',
+        };
+      case 'mandate_prepare_not_found':
+        return {
+          title: 'That approval expired',
+          detail: 'Approvals are single-use and short-lived. Make the change again.',
+        };
+      case 'mandate_approval_refused':
+        return {
+          title: 'The enclave refused your signature',
+          detail:
+            'It must come from the key that owns this agent’s mandate — the passkey that hired it, on this device.',
         };
       case 'agent_wallets_unconfigured':
         return {

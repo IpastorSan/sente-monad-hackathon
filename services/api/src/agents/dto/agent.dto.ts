@@ -3,7 +3,9 @@
 // with it, not just with main.ts (same first-line import as main.ts).
 import 'reflect-metadata';
 
-import { MANDATE_CHAIN_ID, type Mandate } from '@sente/mandate';
+import { BadRequestException } from '@nestjs/common';
+
+import { MANDATE_CHAIN_ID, type AuthorizationPayload, type Mandate } from '@sente/mandate';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -20,9 +22,11 @@ import {
   MinLength,
 } from 'class-validator';
 
+import type { PreparedMandateChange } from '../agents.service';
 import type { CommitTimes, ConsensusState } from '../../chain/consensus.service';
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
+import type { AgentMandateOwnerMode } from '../agents.config';
 import type { AgentRecord, AgentStatus } from '../store/agent-store';
 
 export const AGENT_NAME_MAX_LENGTH = 64;
@@ -79,9 +83,85 @@ export class CreateAgentDto {
   'public'?: boolean;
 }
 
+/** base64 DER, as `privy-authorization-signature` carries it. Room for P-256 plus slack. */
+export const MANDATE_SIGNATURE_MAX_LENGTH = 512;
+
+/**
+ * `PATCH /agents/:id/mandate` — one route, two shapes, decided by who owns the
+ * mandate (SEN-43/SEN-44):
+ *
+ * - `{ mandate }` for a `ownerKind: 'server'` agent, whose policy this server
+ *   signs for itself.
+ * - `{ prepareId, signature }` for a `ownerKind: 'device'` agent: the id of a
+ *   change from `POST /agents/:id/mandate/prepare`, and the owner's signature
+ *   over the payload it returned. The mandate is not resent — the approved
+ *   bytes are the ones the server is holding, and a second copy could differ
+ *   from them.
+ *
+ * `forbidNonWhitelisted` makes an unknown field a 400; a body that is neither
+ * shape, or both, is refused here with the same message for everyone.
+ */
 export class AmendMandateDto {
+  @IsOptional()
+  @IsObject()
+  mandate?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsUUID('4')
+  prepareId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(MANDATE_SIGNATURE_MAX_LENGTH)
+  signature?: string;
+}
+
+/** `POST /agents/:id/mandate/prepare` — the mandate whose PATCH is to be signed. */
+export class PrepareMandateDto {
   @IsObject()
   mandate!: Record<string, unknown>;
+}
+
+/**
+ * `POST /agents/:id/revoke` — empty for a server-owned agent, or the prepared
+ * revoke and its signature for a device-owned one.
+ */
+export class RevokeAgentDto {
+  @IsOptional()
+  @IsUUID('4')
+  prepareId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(MANDATE_SIGNATURE_MAX_LENGTH)
+  signature?: string;
+}
+
+/**
+ * The approval in a body, or `undefined` when there is none.
+ *
+ * Throws `BadRequestException` — the same 400 shape the global ValidationPipe
+ * produces — on a body that is half an approval, or both shapes at once: a
+ * `mandate` beside a signature reads as "change it to this", and the signature
+ * covers the rules the server already holds, not those, so the two could differ
+ * and one of them would be silently ignored.
+ */
+export function readMandateApproval(
+  body: Pick<AmendMandateDto, 'mandate' | 'prepareId' | 'signature'>,
+): { prepareId: string; signature: string } | undefined {
+  if (body.prepareId === undefined && body.signature === undefined) return undefined;
+  if (body.prepareId === undefined || body.signature === undefined) {
+    throw new BadRequestException('prepareId and signature go together: send both, or neither');
+  }
+  if (body.mandate !== undefined) {
+    throw new BadRequestException(
+      'send either { mandate } or { prepareId, signature }: a signed change carries its own ' +
+        'mandate, the one the prepare returned',
+    );
+  }
+  return { prepareId: body.prepareId, signature: body.signature };
 }
 
 /**
@@ -194,6 +274,22 @@ export interface AgentResponseDto {
   walletId: string;
   policyId: string;
   status: AgentStatus;
+  /**
+   * WHO CAN CHANGE THIS AGENT'S MANDATE (SEN-43), and therefore whether
+   * amending or revoking it needs a signature from this phone (SEN-44).
+   *
+   * - `device` — the key quorum holding the hirer's device key owns the policy.
+   *   `PATCH /agents/:id/mandate` and `POST /agents/:id/revoke` take
+   *   `{ prepareId, signature }` after a `/prepare` call, and refuse a plain
+   *   mandate with `mandate_approval_required`.
+   * - `server` — this server's mandate key owns it and signs the change itself
+   *   (dev and demo mode). The one-step routes work; the prepare routes refuse
+   *   with `mandate_approval_not_required`.
+   *
+   * The app branches on this, so it is API surface: an agent hired before it
+   * existed reads `server`, which is what it was.
+   */
+  ownerKind: AgentMandateOwnerMode;
   /** Only once revoked: whether the enclave policy has been emptied. */
   policyCleared?: boolean;
   createdAt: string;
@@ -223,6 +319,54 @@ export interface HireAgentResponseDto {
 
 export interface AgentListResponseDto {
   agents: AgentResponseDto[];
+}
+
+/**
+ * What the owner is being asked to approve (SEN-44). Prose and numbers for the
+ * confirmation sheet — NOT the thing the phone decides from. The decision is
+ * made against `payload.body`, which the phone recompiles from the mandate it
+ * is holding before it signs; a summary is composed by the party the signature
+ * exists to bind, so it can only ever be a label.
+ */
+export interface MandateChangeSummaryDto {
+  kind: 'amend' | 'revoke';
+  agentId: string;
+  agentName: string;
+  policyId: string;
+  /** Rules the policy holds afterwards. Zero on a revoke: the wallet signs nothing. */
+  ruleCount: number;
+}
+
+/**
+ * The answer to a `/prepare` call: an id, the exact payload to sign, and what
+ * it means.
+ *
+ * `payload` is the Privy authorization payload — `{version, method, url, body,
+ * headers}` — and `payload.body` is the literal `PATCH /v1/policies/{id}` body
+ * the server will send. Check it against the change you asked for before
+ * signing: the `privy-app-id` header and the URL are part of the signed bytes
+ * too, and the rules are the mandate itself.
+ */
+export interface PreparedMandateChangeDto {
+  /** Single-use. Send it back with the signature to commit the change. */
+  prepareId: string;
+  payload: AuthorizationPayload;
+  /** ISO 8601. After this, prepare again — the signature is over stale bytes. */
+  expiresAt: string;
+  summary: MandateChangeSummaryDto;
+}
+
+export function toPreparedMandateChangeResponse(
+  prepared: PreparedMandateChange,
+): PreparedMandateChangeDto {
+  return {
+    prepareId: prepared.prepareId,
+    payload: prepared.payload,
+    expiresAt: prepared.expiresAt.toISOString(),
+    // The summary is already wire-shaped — it carries no bigints and no
+    // mandate — so it crosses as it stands.
+    summary: { ...prepared.summary },
+  };
 }
 
 /**
@@ -330,6 +474,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     walletId: agent.walletId,
     policyId: agent.policyId,
     status: agent.status,
+    ownerKind: agent.ownerKind,
     ...(agent.status === 'revoked' ? { policyCleared: agent.policyCleared } : {}),
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),

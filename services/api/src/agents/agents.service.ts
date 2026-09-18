@@ -5,6 +5,7 @@ import {
   compileMandate,
   MandateError,
   parseMandate,
+  type AuthorizationPayload,
   type Mandate,
   type PolicyRule,
 } from '@sente/mandate';
@@ -20,10 +21,16 @@ import { AGENT_MODELS, isAgentModel } from './agents.config';
 import {
   AgentRefusedError,
   AgentWalletsUnconfiguredError,
+  EnclaveApprovalRefusedError,
   type AgentRefusalReason,
 } from './agents.errors';
 import { AGENT_NAME_MAX_LENGTH } from './dto/agent.dto';
 import { MANDATE_OWNERS, type MandateOwners } from './mandate-owner';
+import {
+  PreparedApprovals,
+  PREPARED_APPROVAL_TTL_MS,
+  type PreparedApprovalKind,
+} from './prepared-approval';
 import {
   AGENT_STORE,
   type AgentGasFunding,
@@ -91,6 +98,50 @@ export interface HiredAgent {
   mcpToken: string;
 }
 
+/**
+ * What the owner is being asked to approve, in the terms they wrote it in
+ * (SEN-44). The phone renders this; it does NOT decide from it.
+ *
+ * The decision is made against `payload.body`, which the phone checks against
+ * the mandate it is holding — see `apps/mobile/src/agents/approval.ts`. A
+ * summary is server-composed prose, so trusting it would be trusting the party
+ * the signature exists to bind.
+ */
+export interface MandateChangeSummary {
+  kind: 'amend' | 'revoke';
+  agentId: string;
+  agentName: string;
+  policyId: string;
+  /** How many rules the policy holds afterwards. Zero for a revoke: it signs nothing. */
+  ruleCount: number;
+}
+
+// The mandate itself is deliberately NOT here. The phone already holds the one
+// it is sending — that is the copy it checks the payload against — and echoing
+// a server-composed second copy back would only invite a screen to render the
+// wrong one.
+
+/** A mandate change waiting for its owner's signature. */
+export interface PreparedMandateChange {
+  prepareId: string;
+  /** The exact bytes to sign. Rebuild it from the intent before you do. */
+  payload: AuthorizationPayload;
+  expiresAt: Date;
+  summary: MandateChangeSummary;
+}
+
+/** One phone signature, base64 DER, as Privy's header carries it. */
+export interface MandateApproval {
+  prepareId: string;
+  signature: string;
+}
+
+/** What committing a prepared mandate change needs that its request does not carry. */
+interface MandateChangeContext {
+  /** Stored once the enclave accepts the change. Absent on a revoke. */
+  mandate?: Mandate;
+}
+
 /** The slice of `GasDripService` hiring needs. */
 export type AgentGasFunder = Pick<GasDripService, 'dripToAgent'>;
 
@@ -109,6 +160,15 @@ export class AgentsService {
   private readonly logger = new Logger(AgentsService.name);
   /** Serialises amend and revoke per agent; see `withAgentLock`. */
   private readonly locks = new Map<string, Promise<void>>();
+  /**
+   * Mandate changes prepared for a device owner and not yet committed (SEN-44).
+   *
+   * Process-local state, like `locks`, so it is constructed here rather than
+   * injected: there is nothing a caller would want to substitute, and a prepare
+   * that outlived the process would be an approval outliving the thing it was
+   * given for.
+   */
+  private readonly prepared = new PreparedApprovals<MandateChangeContext>();
 
   constructor(
     @Inject(AGENT_STORE) private readonly store: AgentStore,
@@ -417,14 +477,15 @@ export class AgentsService {
    * If the provider fails, the stored mandate stays the old one — which is
    * still what the enclave enforces.
    *
-   * ON A `ownerKind: 'device'` AGENT THIS FAILS, AND THAT IS THE POINT (SEN-43):
-   * the policy is owned by the hirer's phone key, so Privy answers 401 and the
-   * caller gets `wallet_policy_update_failed`. SEN-44 adds the path that carries
-   * the phone's signature; until it lands, a device-owned mandate is immutable.
+   * ONLY FOR A `ownerKind: 'server'` AGENT. A device-owned policy is owned by
+   * the hirer's phone key (SEN-43), so this server has nothing to sign the PATCH
+   * with; the request is refused here with `mandate_approval_required` rather
+   * than sent for Privy to answer 401. {@link prepareMandateAmend} is that path.
    */
   amendMandate(principal: Principal, id: string, rawMandate: unknown): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {
       const agent = await this.owned(principal, id);
+      this.requireServerOwned(agent, 'amended');
       if (agent.status === 'revoked') {
         throw new AgentRefusedError(
           'agent_revoked',
@@ -457,16 +518,15 @@ export class AgentsService {
    * agent stays revoked with `policyCleared: false`, and calling revoke again
    * retries it. Idempotent once cleared.
    *
-   * That ordering is what keeps revoke useful on a `ownerKind: 'device'` agent
-   * (SEN-43): this server cannot empty a policy the phone owns, so the clear
-   * fails with a 401, but the agent is already `revoked` — the runner and its
-   * MCP token refuse it, so nothing drives the wallet. Emptying the policy needs
-   * the phone's signature (SEN-44).
+   * ONLY FOR A `ownerKind: 'server'` AGENT, like {@link amendMandate}:
+   * emptying a device-owned policy needs the phone's signature, so this refuses
+   * with `mandate_approval_required` and {@link prepareRevoke} carries it.
    */
   revoke(principal: Principal, id: string): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {
       let agent = await this.owned(principal, id);
       if (agent.status === 'revoked' && agent.policyCleared) return agent;
+      this.requireServerOwned(agent, 'revoked');
       if (agent.status === 'active') {
         const now = new Date();
         agent = await this.store.update(id, { status: 'revoked', revokedAt: now, updatedAt: now });
@@ -484,6 +544,225 @@ export class AgentsService {
       this.logger.log(`revoked agent ${id}: policy ${agent.policyId} emptied`);
       return this.store.update(id, { policyCleared: true, updatedAt: new Date() });
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // SEN-44: changing a mandate whose owner is a phone
+  //
+  // `prepare` composes the enclave request and hands back the payload to sign;
+  // `commit` sends THAT request with the signature attached. Nothing between
+  // them touches Privy, and nothing after them recomposes the request — the
+  // signature covers its bytes, so composing it twice is how an approved change
+  // and a sent change come to differ.
+  //
+  // Neither half can make the server the owner of anything. The server can
+  // refuse to send a signed change, and can propose one the owner then refuses
+  // to sign; what it cannot do is change a mandate, which is the property.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The PATCH that would install `rawMandate` on a device-owned agent, held for
+   * its owner to approve. Mutates nothing: a prepare that failed to be committed
+   * must leave the agent exactly as it was.
+   */
+  async prepareMandateAmend(
+    principal: Principal,
+    id: string,
+    rawMandate: unknown,
+  ): Promise<PreparedMandateChange> {
+    const agent = await this.owned(principal, id);
+    this.requireDeviceOwned(agent, 'amended');
+    if (agent.status === 'revoked') {
+      throw new AgentRefusedError(
+        'agent_revoked',
+        `agent ${id} is revoked; revocation is permanent, so hire a new agent`,
+      );
+    }
+    const mandate = this.parse(rawMandate);
+    // The SAME compiler the one-step path and the hire use: what the owner
+    // approves has to be what the enclave would have been given anyway.
+    const rules = compileMandate(mandate);
+    return this.prepare(principal, agent, 'mandate_amend', rules, { mandate });
+  }
+
+  /** The same, for the PATCH that empties the policy. `rules: []` signs nothing. */
+  async prepareRevoke(principal: Principal, id: string): Promise<PreparedMandateChange> {
+    const agent = await this.owned(principal, id);
+    this.requireDeviceOwned(agent, 'revoked');
+    if (agent.status === 'revoked' && agent.policyCleared) {
+      throw new AgentRefusedError(
+        'agent_revoked',
+        `agent ${id} is already revoked and its policy is empty; there is nothing to sign`,
+      );
+    }
+    return this.prepare(principal, agent, 'mandate_revoke', [], {});
+  }
+
+  /**
+   * Sends a prepared amend with the owner's signature, and records the new
+   * mandate once the enclave has taken it.
+   *
+   * The prepare is spent whatever happens next, including a failure at the
+   * enclave: a signature that stays committable is a signature waiting to be
+   * replayed, and preparing again costs one round trip and one prompt. If the
+   * enclave refused, the stored mandate is untouched — which is still exactly
+   * what the policy enforces.
+   */
+  commitMandateAmend(
+    principal: Principal,
+    id: string,
+    approval: MandateApproval,
+  ): Promise<AgentRecord> {
+    return this.withAgentLock(id, async () => {
+      const agent = await this.owned(principal, id);
+      const prepared = this.takePrepared(principal, agent, 'mandate_amend', approval.prepareId);
+      if (agent.status === 'revoked') {
+        throw new AgentRefusedError(
+          'agent_revoked',
+          `agent ${id} is revoked; revocation is permanent, so hire a new agent`,
+        );
+      }
+      try {
+        await this.wallets.commitPrepared(prepared.request, { signature: approval.signature });
+      } catch (error) {
+        throw this.walletFailure(
+          'wallet_policy_update_failed',
+          error,
+          `could not update the policy of agent ${id}; its previous mandate still applies`,
+        );
+      }
+      const mandate = prepared.context.mandate;
+      if (!mandate) throw new Error(`prepared amend ${approval.prepareId} carried no mandate`);
+      this.logger.log(
+        `amended agent ${id} with an owner signature: policy ${agent.policyId} replaced`,
+      );
+      return this.store.update(id, { mandate, updatedAt: new Date() });
+    });
+  }
+
+  /**
+   * Sends a prepared revoke with the owner's signature.
+   *
+   * Status first, then the enclave, exactly as the server-owned path does: a
+   * revocation must not wait on the provider. Unlike that path, the prepare is
+   * checked BEFORE the status flips — a malformed commit is a bad request, not
+   * a reason to stop someone's agent.
+   */
+  commitRevoke(principal: Principal, id: string, approval: MandateApproval): Promise<AgentRecord> {
+    return this.withAgentLock(id, async () => {
+      let agent = await this.owned(principal, id);
+      const prepared = this.takePrepared(principal, agent, 'mandate_revoke', approval.prepareId);
+      if (agent.status === 'active') {
+        const now = new Date();
+        agent = await this.store.update(id, { status: 'revoked', revokedAt: now, updatedAt: now });
+      }
+      try {
+        await this.wallets.commitPrepared(prepared.request, { signature: approval.signature });
+      } catch (error) {
+        throw this.walletFailure(
+          'wallet_policy_update_failed',
+          error,
+          `agent ${id} is revoked and will not run, but its wallet policy was not emptied; ` +
+            'prepare and sign a revoke again to retry',
+        );
+      }
+      this.logger.log(
+        `revoked agent ${id} with an owner signature: policy ${agent.policyId} emptied`,
+      );
+      return this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+    });
+  }
+
+  /** Composes the request, stores it, and returns what the phone needs. */
+  private async prepare(
+    principal: Principal,
+    agent: AgentRecord,
+    kind: PreparedApprovalKind,
+    rules: readonly PolicyRule[],
+    context: MandateChangeContext,
+  ): Promise<PreparedMandateChange> {
+    let prepared;
+    try {
+      prepared = await this.wallets.preparePolicyUpdate(agent.policyId, rules);
+    } catch (error) {
+      throw this.walletFailure(
+        'wallet_policy_update_failed',
+        error,
+        `could not prepare a policy change for agent ${agent.id}; nothing was changed`,
+      );
+    }
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + PREPARED_APPROVAL_TTL_MS);
+    const id = randomUUID();
+    this.prepared.put({
+      id,
+      kind,
+      userId: principal.userId,
+      agentId: agent.id,
+      request: prepared.request,
+      payload: prepared.payload,
+      context,
+      createdAt,
+      expiresAt,
+    });
+    return {
+      prepareId: id,
+      payload: prepared.payload,
+      expiresAt,
+      summary: {
+        kind: kind === 'mandate_amend' ? 'amend' : 'revoke',
+        agentId: agent.id,
+        agentName: agent.name,
+        policyId: agent.policyId,
+        ruleCount: rules.length,
+      },
+    };
+  }
+
+  /**
+   * The prepared change this commit names, spent.
+   *
+   * Every mismatch — unknown id, expired, already committed, another user's,
+   * another agent's, prepared for the other operation — is the same
+   * `mandate_prepare_not_found`, because they are all "there is no such
+   * pending change", and telling them apart would describe other people's.
+   */
+  private takePrepared(
+    principal: Principal,
+    agent: AgentRecord,
+    kind: PreparedApprovalKind,
+    prepareId: string,
+  ) {
+    this.requireDeviceOwned(agent, kind === 'mandate_amend' ? 'amended' : 'revoked');
+    const prepared = this.prepared.take(prepareId, principal.userId, new Date());
+    if (!prepared || prepared.kind !== kind || prepared.agentId !== agent.id) {
+      throw new AgentRefusedError(
+        'mandate_prepare_not_found',
+        `no pending change ${prepareId} for agent ${agent.id}; prepared changes are single-use ` +
+          `and expire after ${PREPARED_APPROVAL_TTL_MS / 60000} minutes, so prepare it again`,
+      );
+    }
+    return prepared;
+  }
+
+  /** The one-step routes: refused when only a phone can approve the change. */
+  private requireServerOwned(agent: AgentRecord, verb: string): void {
+    if (agent.ownerKind !== 'device') return;
+    throw new AgentRefusedError(
+      'mandate_approval_required',
+      `agent ${agent.id}'s mandate is owned by the device key that hired it, so this server ` +
+        `cannot have it ${verb} on its own; prepare the change and sign it on that device`,
+    );
+  }
+
+  /** The prepare/commit routes: refused when the server owns the policy itself. */
+  private requireDeviceOwned(agent: AgentRecord, verb: string): void {
+    if (agent.ownerKind === 'device') return;
+    throw new AgentRefusedError(
+      'mandate_approval_not_required',
+      `agent ${agent.id}'s mandate is owned by this server, so there is no device signature to ` +
+        `collect; have it ${verb} with the one-step route`,
+    );
   }
 
   /**
@@ -528,6 +807,9 @@ export class AgentsService {
    */
   private walletFailure(reason: AgentRefusalReason, error: unknown, message: string): Error {
     if (error instanceof AgentWalletsUnconfiguredError) return error;
+    // The owner's own signature was refused: that is an answer about the
+    // request, not a provider outage, and the caller must see it as itself.
+    if (error instanceof EnclaveApprovalRefusedError) return error;
     this.logger.error(`${reason}: ${error instanceof Error ? error.message : String(error)}`);
     return new AgentRefusedError(reason, message);
   }

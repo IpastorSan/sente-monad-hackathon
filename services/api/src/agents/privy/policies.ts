@@ -32,6 +32,39 @@ export async function getPolicy(privy: PrivyClient, policyId: string): Promise<P
   return privy.get<Policy>(`/v1/policies/${policyId}`);
 }
 
+/** The path of one policy. One spelling, because a signature covers the URL. */
+export function policyPath(policyId: string): string {
+  return `/v1/policies/${policyId}`;
+}
+
+/**
+ * The body of a rules replacement, built in one place because the owner signs
+ * these exact bytes: a prepared PATCH (SEN-44) is signed on a phone minutes
+ * before it is sent, and a body composed twice is a body that can differ twice.
+ */
+export function policyRulesBody(options: { rules: readonly PolicyRule[]; name?: string }): {
+  rules: readonly PolicyRule[];
+  name?: string;
+} {
+  return {
+    ...(options.name === undefined ? {} : { name: name50(options.name) }),
+    rules: options.rules,
+  };
+}
+
+/**
+ * Who approves a rules replacement.
+ *
+ * `approvals` are keys this process holds and signs with. `approval` is a
+ * signature made elsewhere — the owner's phone (SEN-44) — over the payload
+ * `PrivyClient.authorizationPayload` builds for this same PATCH. Exactly one
+ * form, never both: a device-owned policy has no server key to add, and mixing
+ * them would quietly let a server signature stand in for a missing device one.
+ */
+export type PolicyApproval =
+  | { approvals: readonly AuthorizationKey[]; approval?: never }
+  | { approval: { signature: string }; approvals?: never };
+
 /**
  * Replace a policy's rules. **The owner-gated operation**: Privy counts the
  * signatures against the owner quorum's threshold and answers 401 when one is
@@ -43,15 +76,13 @@ export async function updatePolicyRules(
     policyId: string;
     rules: readonly PolicyRule[];
     name?: string;
-    approvals: readonly AuthorizationKey[];
-  },
+  } & PolicyApproval,
 ): Promise<Policy> {
   return privy.patch<Policy>(
-    `/v1/policies/${options.policyId}`,
-    {
-      ...(options.name === undefined ? {} : { name: name50(options.name) }),
-      rules: options.rules,
-    },
-    { approvals: options.approvals },
+    policyPath(options.policyId),
+    policyRulesBody(options),
+    options.approval
+      ? { signatures: [options.approval.signature] }
+      : { approvals: options.approvals },
   );
 }

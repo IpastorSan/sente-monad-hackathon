@@ -23,8 +23,11 @@ import {
   forkName,
   modelLabel,
   type Agent,
+  type AgentMandate,
   type HireAgentResult,
+  type PreparedMandateChange,
 } from '@/agents/api';
+import { amendMandateWithApproval, describeApprovalError, needsApproval } from '@/agents/approval';
 import { MandateSummary } from '@/agents/MandateSummary';
 import {
   AUSD,
@@ -52,6 +55,7 @@ import {
   Screen,
   Section,
   SelectRow,
+  Sheet,
   ToggleRow,
   TopBar,
 } from '@/ui/kit';
@@ -78,7 +82,7 @@ export default function HireAgentScreen() {
     fork?: string;
     from?: string;
   }>();
-  const { agents: api } = useSession();
+  const { agents: api, auth } = useSession();
 
   /** The agent being forked, named for the copy. Falls back to the raw id. */
   const source = fork ? from?.trim() || fork : undefined;
@@ -104,6 +108,16 @@ export default function HireAgentScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<ErrorCopy | null>(null);
   const [hired, setHired] = useState<HireAgentResult | null>(null);
+  /**
+   * SEN-44: on a device-owned agent the amend is not sent from here. The API
+   * prepares the enclave PATCH, this holds it, and the sheet below shows what
+   * it does before the passkey signs it — the user approves ONE prepared
+   * change, the one they read.
+   */
+  const [pending, setPending] = useState<{
+    change: PreparedMandateChange;
+    mandate: AgentMandate;
+  } | null>(null);
 
   useEffect(() => {
     if (!amend || !api) return;
@@ -177,7 +191,13 @@ export default function HireAgentScreen() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      if (amend) {
+      if (amend && target && needsApproval(target)) {
+        // Ask for the change; nothing is amended until it is signed.
+        setPending({
+          change: await api.prepareAmendMandate(target.id, result.mandate),
+          mandate: result.mandate,
+        });
+      } else if (amend) {
         await api.amendMandate(amend, result.mandate);
         router.back();
       } else if (fork) {
@@ -203,6 +223,31 @@ export default function HireAgentScreen() {
       }
     } catch (error) {
       setSubmitError(describeAgentsError(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const approve = async () => {
+    if (!api || !target || !pending) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await amendMandateWithApproval(
+        api,
+        target,
+        pending.mandate,
+        auth.signPrivyAuthorization,
+        pending.change,
+      );
+      setPending(null);
+      router.back();
+    } catch (error) {
+      setSubmitError(describeApprovalError(error));
+      // The prepared change is spent whatever happened: preparing again is one
+      // round trip, and a signature that stays usable is one waiting to be
+      // replayed.
+      setPending(null);
     } finally {
       setSubmitting(false);
     }
@@ -377,6 +422,43 @@ export default function HireAgentScreen() {
           ) : null}
         </>
       ) : null}
+
+      {/* SEN-44: the approval step for a device-owned mandate. */}
+      <Sheet
+        visible={pending !== null}
+        title={`Approve this mandate for ${target?.name ?? 'your agent'}?`}
+        onClose={() => setPending(null)}
+      >
+        <Text style={text.body}>
+          Your passkey signs the policy change itself. Sente holds no key that can widen this
+          agent’s mandate — this phone checks that the change is exactly what you wrote and then
+          approves it.
+        </Text>
+        {pending ? (
+          <>
+            <Row label="Enclave rules after" value={String(pending.change.summary.ruleCount)} />
+            <Row label="Policy" value={pending.change.summary.policyId} mono />
+            <View style={styles.approvalSummary}>
+              <MandateSummary mandate={pending.mandate} />
+            </View>
+          </>
+        ) : null}
+        {submitError ? (
+          <Notice tone="error" title={submitError.title} detail={submitError.detail} />
+        ) : null}
+        <View style={styles.approvalActions}>
+          <ButtonRow>
+            <Button label="Cancel" onPress={() => setPending(null)} style={styles.grow} />
+            <Button
+              label="Approve with passkey"
+              kind="primary"
+              busy={submitting}
+              onPress={() => void approve()}
+              style={styles.grow}
+            />
+          </ButtonRow>
+        </View>
+      </Sheet>
     </Screen>
   );
 }
@@ -590,4 +672,6 @@ const styles = StyleSheet.create({
   railSegment: { flex: 1, height: 2, backgroundColor: color.rule },
   railOn: { backgroundColor: color.text },
   token: { color: color.text },
+  approvalSummary: { marginTop: 8 },
+  approvalActions: { marginTop: 20 },
 });

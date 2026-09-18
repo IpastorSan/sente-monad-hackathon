@@ -35,6 +35,32 @@ export class EnclaveRefusedError extends Error {
   }
 }
 
+/**
+ * The enclave refused the APPROVAL, not the request: a signature over other
+ * bytes, or one made by a key outside the policy's owner quorum (Privy answers
+ * 401/403). SEN-44's refusal, and the one the demo shows — a mandate change
+ * signed by anything but the owner's phone does not happen.
+ *
+ * Distinct from `wallet_policy_update_failed`, which is the enclave being
+ * unreachable or unhappy for any other reason: this one says the caller did not
+ * authorise what they asked for, and no retry of the same bytes will help.
+ */
+export class EnclaveApprovalRefusedError extends Error {
+  readonly reason = 'mandate_approval_refused' as const;
+  /** Privy's status, 401 or 403. */
+  readonly status: number;
+
+  constructor(options: { policyId: string; status: number; detail?: string }) {
+    super(
+      `the enclave refused the approval for policy ${options.policyId} (${options.status}): ` +
+        'the signature must be the policy owner’s, over exactly this request' +
+        (options.detail ? ` (${options.detail})` : ''),
+    );
+    this.name = 'EnclaveApprovalRefusedError';
+    this.status = options.status;
+  }
+}
+
 /** Privy credentials are not configured, so no agent wallet can exist. */
 export class AgentWalletsUnconfiguredError extends Error {
   readonly reason = 'agent_wallets_unconfigured' as const;
@@ -76,6 +102,24 @@ export const AGENT_REFUSAL_REASONS = [
    * but its policy still holds the old rules until a retried revoke succeeds.
    */
   'wallet_policy_update_failed',
+  /**
+   * This agent's mandate is owned by its hirer's phone (`ownerKind: 'device'`,
+   * SEN-43), so amending or revoking it needs a signature from that phone. Ask
+   * `POST /agents/:id/mandate/prepare` (or `/revoke/prepare`), have the device
+   * key sign the payload it returns, and send it back with the prepare id.
+   */
+  'mandate_approval_required',
+  /**
+   * The opposite: a prepared, phone-signed change was offered for a
+   * `ownerKind: 'server'` agent, whose policy this server owns and signs for.
+   * There is nothing for the phone to approve; use the one-step route.
+   */
+  'mandate_approval_not_required',
+  /**
+   * The prepare id is unknown, already used, or past its TTL. Prepared changes
+   * are single-use and short-lived: prepare again and sign the new payload.
+   */
+  'mandate_prepare_not_found',
   /** `POST /agents/:id/run` while a run of the same agent is still going (SEN-8). One at a time. */
   'run_in_progress',
   /**
@@ -107,7 +151,10 @@ export class AgentRefusedError extends Error {
 
 /** Every reason an agents route answers with: the refusals above plus the two wallet errors. */
 export type AgentErrorReason =
-  AgentRefusalReason | AgentWalletsUnconfiguredError['reason'] | EnclaveRefusedError['reason'];
+  | AgentRefusalReason
+  | AgentWalletsUnconfiguredError['reason']
+  | EnclaveRefusedError['reason']
+  | EnclaveApprovalRefusedError['reason'];
 
 const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   agent_not_found: 404,
@@ -120,6 +167,13 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   // it yet. Registering a wallet makes the same request succeed.
   wallet_not_registered: 409,
   wallet_policy_update_failed: 502,
+  // 409: well-formed, and the agent's owner model forbids answering it this
+  // way. Both are fixed by using the other route, not by retrying.
+  mandate_approval_required: 409,
+  mandate_approval_not_required: 409,
+  // 404: the prepared change is gone — unknown id, already committed, or
+  // expired. Nothing to commit against.
+  mandate_prepare_not_found: 404,
   run_in_progress: 409,
   // 402 Payment Required: exactly what OpenRouter itself answered.
   credits_exhausted: 402,
@@ -127,6 +181,9 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   agent_wallets_unconfigured: 503,
   // The enclave refused to sign: the mandate working, not an outage.
   policy_violation: 403,
+  // 403: the enclave refused the approval. The owner did not authorise this
+  // request, so it is a permission answer, not a gateway one.
+  mandate_approval_refused: 403,
 };
 
 export function agentErrorStatus(reason: AgentErrorReason): number {
@@ -148,7 +205,8 @@ export function agentErrorToHttpBody(error: unknown): AgentErrorBody | undefined
   if (
     !(error instanceof AgentRefusedError) &&
     !(error instanceof AgentWalletsUnconfiguredError) &&
-    !(error instanceof EnclaveRefusedError)
+    !(error instanceof EnclaveRefusedError) &&
+    !(error instanceof EnclaveApprovalRefusedError)
   ) {
     return undefined;
   }

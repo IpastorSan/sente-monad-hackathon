@@ -8,13 +8,15 @@ import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
 import { AGENT_REFUSAL_REASONS, agentErrorStatus } from './agents.errors';
 import { AgentsService } from './agents.service';
-import { ServerMandateOwners } from './mandate-owner';
+import { DeviceMandateOwners, ServerMandateOwners } from './mandate-owner';
+import { InMemoryUserWalletRegistry } from '../wallet/store/user-wallet-registry';
 import {
   AgentEventsQueryDto,
   AgentIdParamDto,
   AmendMandateDto,
   CreateAgentDto,
   ForkAgentDto,
+  RevokeAgentDto,
 } from './dto/agent.dto';
 import { InMemoryAgentEventLog } from './events/agent-event-log';
 import { InMemoryAgentStore } from './store/agent-store';
@@ -129,7 +131,7 @@ describe('AgentsController', () => {
         { id: agent.id },
         { mandate: body()['mandate'] as Record<string, unknown> },
       ),
-      controller.revoke({ id: agent.id }),
+      controller.revoke({ id: agent.id }, {}),
     ]) {
       const { status, body: response } = await httpError(attempt);
       expect(status).toBe(404);
@@ -150,7 +152,7 @@ describe('AgentsController', () => {
     ).toMatchObject({ status: 400, body: { reason: 'mandate_invalid' } });
 
     const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
-    const revoked = await controller.revoke({ id: agent.id });
+    const revoked = await controller.revoke({ id: agent.id }, {});
     expect(revoked).toMatchObject({ status: 'revoked', policyCleared: true });
     expect(revoked.revokedAt).toEqual(expect.any(String));
     expect(
@@ -232,7 +234,7 @@ describe('AgentsController', () => {
 
       as('alice');
       const revoked = await controller.hire(body() as unknown as CreateAgentDto);
-      await controller.revoke({ id: revoked.agent.id });
+      await controller.revoke({ id: revoked.agent.id }, {});
       const { status, body: refusalBody } = await httpError(
         controller.fork({ id: revoked.agent.id }, { mandate: mine() }),
       );
@@ -403,6 +405,130 @@ describe('AgentsController', () => {
           pipe.transform(query, { type: 'query', metatype: AgentEventsQueryDto }),
         ).rejects.toBeInstanceOf(BadRequestException);
       }
+    });
+  });
+
+  /**
+   * SEN-44 over HTTP: one route per verb, two body shapes, and the owner model
+   * deciding which. The service spec covers what each does; this covers that
+   * the route hands the right one over and refuses a body that is neither.
+   */
+  describe('a device-owned mandate (SEN-44)', () => {
+    async function deviceSetup() {
+      const registry = new InMemoryUserWalletRegistry();
+      await registry.bind({
+        userId: 'alice',
+        walletId: 'user-wallet-alice',
+        address: `0x${'b'.repeat(40)}`,
+        ownerQuorumId: 'kq-device-alice',
+        devicePublicKey: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE-fake',
+      });
+      const wallets = new FakeAgentWalletProvider();
+      const base = setup(wallets);
+      const controller = new AgentsController(
+        new AgentsService(new InMemoryAgentStore(), wallets, new DeviceMandateOwners(registry)),
+        { principal: () => ({ userId: 'alice' }) },
+        {} as never,
+        base.events,
+        {} as never,
+      );
+      return { controller, wallets };
+    }
+
+    it('says who owns each mandate, so the app knows whether to ask for a signature', async () => {
+      const server = setup();
+      const device = await deviceSetup();
+      expect(
+        (await server.controller.hire(body() as unknown as CreateAgentDto)).agent.ownerKind,
+      ).toBe('server');
+      expect(
+        (await device.controller.hire(body() as unknown as CreateAgentDto)).agent.ownerKind,
+      ).toBe('device');
+    });
+
+    it('prepares, then commits with the signature, over the two routes', async () => {
+      const { controller, wallets } = await deviceSetup();
+      const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
+
+      const prepared = await controller.prepareMandate(
+        { id: agent.id },
+        { mandate: body({})['mandate'] as Record<string, unknown> },
+      );
+      expect(prepared.summary).toMatchObject({ kind: 'amend', agentId: agent.id });
+      expect(prepared.payload.method).toBe('PATCH');
+      expect(new Date(prepared.expiresAt).getTime()).toBeGreaterThan(Date.now());
+
+      const amended = await controller.amendMandate(
+        { id: agent.id },
+        { prepareId: prepared.prepareId, signature: wallets.acceptedSignature },
+      );
+      expect(amended.ownerKind).toBe('device');
+      expect(wallets.policyUpdates).toHaveLength(1);
+
+      const revokePrepare = await controller.prepareRevoke({ id: agent.id });
+      const revoked = await controller.revoke(
+        { id: agent.id },
+        { prepareId: revokePrepare.prepareId, signature: wallets.acceptedSignature },
+      );
+      expect(revoked).toMatchObject({ status: 'revoked', policyCleared: true });
+    });
+
+    it('refuses the one-step routes, and a half-given approval', async () => {
+      const { controller } = await deviceSetup();
+      const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
+
+      expect(
+        await httpError(
+          controller.amendMandate(
+            { id: agent.id },
+            { mandate: body()['mandate'] as Record<string, unknown> },
+          ),
+        ),
+      ).toMatchObject({ status: 409, body: { reason: 'mandate_approval_required' } });
+      expect(await httpError(controller.revoke({ id: agent.id }, {}))).toMatchObject({
+        status: 409,
+        body: { reason: 'mandate_approval_required' },
+      });
+
+      // A prepare id with no signature is a 400, not a change made without one.
+      expect(
+        await httpError(controller.amendMandate({ id: agent.id }, { prepareId: agent.id })),
+      ).toMatchObject({ status: 400 });
+      expect(await httpError(controller.amendMandate({ id: agent.id }, {}))).toMatchObject({
+        status: 400,
+      });
+      // Both shapes at once: one of them would have to be ignored, and the
+      // signature covers the rules the server is holding, not this mandate.
+      expect(
+        await httpError(
+          controller.amendMandate(
+            { id: agent.id },
+            {
+              mandate: body()['mandate'] as Record<string, unknown>,
+              prepareId: agent.id,
+              signature: 'sig',
+            },
+          ),
+        ),
+      ).toMatchObject({ status: 400 });
+    });
+
+    it('validates the commit body: a signature must be a string with a plausible length', async () => {
+      await expect(
+        pipe.transform(
+          { prepareId: '00000000-0000-4000-8000-000000000000', signature: 'x'.repeat(513) },
+          { type: 'body', metatype: AmendMandateDto },
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        pipe.transform(
+          { prepareId: 'not-a-uuid', signature: 'sig' },
+          { type: 'body', metatype: RevokeAgentDto },
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(pipe.transform({}, { type: 'body', metatype: RevokeAgentDto })).resolves.toEqual(
+        {},
+      );
     });
   });
 

@@ -9,7 +9,11 @@ import type { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
 import type { SenderPool } from '../gas/sender/sender-pool';
 import { InMemoryUserWalletRegistry } from '../wallet/store/user-wallet-registry';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
-import { AgentRefusedError, AgentWalletsUnconfiguredError } from './agents.errors';
+import {
+  AgentRefusedError,
+  AgentWalletsUnconfiguredError,
+  EnclaveApprovalRefusedError,
+} from './agents.errors';
 import {
   AgentsService,
   forkName,
@@ -223,6 +227,223 @@ describe('AgentsService', () => {
       const error = await refusal(service.fork(BOB, source.id, { mandate: mandateInput() }));
       expect(error.reason).toBe('wallet_not_registered');
       expect(wallets.provisioned).toHaveLength(1);
+    });
+
+    /**
+     * SEN-44: the phone approves, the server sends. Every test here asserts
+     * one of two things — that the server cannot change a device-owned mandate
+     * on its own, or that the bytes the owner signed are the bytes that go.
+     */
+    describe('prepare and commit (SEN-44)', () => {
+      const SIGNATURE = 'device-signature';
+
+      it('refuses the one-step amend and revoke: no server key can approve them', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+
+        const amend = await refusal(
+          service.amendMandate(ALICE, agent.id, mandateInput({ venues: ['kuru'] })),
+        );
+        expect(amend.reason).toBe('mandate_approval_required');
+        const revoke = await refusal(service.revoke(ALICE, agent.id));
+        expect(revoke.reason).toBe('mandate_approval_required');
+
+        // Not attempted-and-failed: never sent. The policy is untouched and the
+        // agent is still active, because a refusal here is a refusal to ask.
+        expect(wallets.policyUpdates).toHaveLength(0);
+        expect((await service.get(ALICE, agent.id)).status).toBe('active');
+      });
+
+      it('prepares the exact PATCH the owner must sign, and changes nothing', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const next = mandateInput({ venues: ['kuru'], maxOrderNotional: '900' });
+
+        const prepared = await service.prepareMandateAmend(ALICE, agent.id, next);
+
+        const rules = compileMandate(parseMandate(next));
+        expect(prepared.payload).toMatchObject({
+          version: 1,
+          method: 'PATCH',
+          url: `https://api.privy.io/v1/policies/${agent.policyId}`,
+          body: { rules },
+        });
+        expect(prepared.summary).toMatchObject({
+          kind: 'amend',
+          agentId: agent.id,
+          policyId: agent.policyId,
+          ruleCount: rules.length,
+        });
+        // The summary carries no mandate: the phone already holds the one it is
+        // sending, and that is the copy it checks the payload against.
+        expect(prepared.summary).not.toHaveProperty('mandate');
+        expect(prepared.expiresAt.getTime()).toBeGreaterThan(Date.now());
+        // A prepare is a question, not a change.
+        expect(wallets.policyUpdates).toHaveLength(0);
+        expect((await service.get(ALICE, agent.id)).mandate).toEqual(agent.mandate);
+      });
+
+      it('commits the STORED request, not a recomposed one, and records the mandate', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const next = mandateInput({
+          kuru: { markets: [MARKET_A, MARKET_B], maxDepositAtoms: { [USDC]: '5000000' } },
+        });
+        const prepared = await service.prepareMandateAmend(ALICE, agent.id, next);
+
+        const amended = await service.commitMandateAmend(ALICE, agent.id, {
+          prepareId: prepared.prepareId,
+          signature: SIGNATURE,
+        });
+
+        expect(wallets.policyUpdates).toEqual([
+          { policyId: agent.policyId, rules: compileMandate(parseMandate(next)) },
+        ]);
+        expect(amended.mandate).toEqual(parseMandate(next));
+        // The enclave holds exactly the rules that were on screen, not a rebuild.
+        expect(wallets.policies.get(agent.policyId)).toEqual(
+          (prepared.payload.body as { rules: unknown }).rules,
+        );
+      });
+
+      it('refuses a commit signed by anything but the policy owner', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const prepared = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+
+        const error: unknown = await service
+          .commitMandateAmend(ALICE, agent.id, {
+            prepareId: prepared.prepareId,
+            signature: 'signed-by-someone-else',
+          })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(EnclaveApprovalRefusedError);
+        expect((error as EnclaveApprovalRefusedError).reason).toBe('mandate_approval_refused');
+        expect(wallets.policyUpdates).toHaveLength(0);
+        expect((await service.get(ALICE, agent.id)).mandate).toEqual(agent.mandate);
+      });
+
+      it('keeps one live prepare per agent: preparing again drops the last one', async () => {
+        const { service } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const first = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+        const second = await service.prepareMandateAmend(
+          ALICE,
+          agent.id,
+          mandateInput({ maxOrderNotional: '400' }),
+        );
+
+        // Otherwise every cancelled sheet would leave a committable change
+        // behind, and the one the user last read would be one of several.
+        const stale = await refusal(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: first.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(stale.reason).toBe('mandate_prepare_not_found');
+        await expect(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: second.prepareId,
+            signature: SIGNATURE,
+          }),
+        ).resolves.toMatchObject({
+          mandate: parseMandate(mandateInput({ maxOrderNotional: '400' })),
+        });
+      });
+
+      it('spends a prepare once: the same signature cannot be replayed', async () => {
+        const { service } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const prepared = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+        const approval = { prepareId: prepared.prepareId, signature: SIGNATURE };
+        await service.commitMandateAmend(ALICE, agent.id, approval);
+
+        const replay = await refusal(service.commitMandateAmend(ALICE, agent.id, approval));
+        expect(replay.reason).toBe('mandate_prepare_not_found');
+      });
+
+      it('will not commit one user’s prepare for another, or a revoke as an amend', async () => {
+        const { service } = await deviceSetup(['alice', 'bob']);
+        const { agent } = await service.hire(ALICE, hireInput());
+        const { agent: bobs } = await service.hire(BOB, hireInput());
+
+        const revokePrepare = await service.prepareRevoke(ALICE, agent.id);
+        const crossed = await refusal(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: revokePrepare.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(crossed.reason).toBe('mandate_prepare_not_found');
+
+        const alices = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+        const stolen = await refusal(
+          service.commitMandateAmend(BOB, bobs.id, {
+            prepareId: alices.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(stolen.reason).toBe('mandate_prepare_not_found');
+        // Bob's guess must not spend Alice's prepare either.
+        await expect(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: alices.prepareId,
+            signature: SIGNATURE,
+          }),
+        ).resolves.toMatchObject({ id: agent.id });
+      });
+
+      it('empties the policy on a signed revoke, and stops the agent first', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const prepared = await service.prepareRevoke(ALICE, agent.id);
+        expect(prepared.payload.body).toEqual({ rules: [] });
+        expect(prepared.summary).toMatchObject({ kind: 'revoke', ruleCount: 0 });
+
+        const revoked = await service.commitRevoke(ALICE, agent.id, {
+          prepareId: prepared.prepareId,
+          signature: SIGNATURE,
+        });
+
+        expect(revoked).toMatchObject({ status: 'revoked', policyCleared: true });
+        expect(wallets.policies.get(agent.policyId)).toEqual([]);
+      });
+
+      it('leaves a bad revoke commit’s agent running: a malformed request is not a revocation', async () => {
+        const { service } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+
+        const error = await refusal(
+          service.commitRevoke(ALICE, agent.id, {
+            prepareId: '00000000-0000-4000-8000-000000000000',
+            signature: SIGNATURE,
+          }),
+        );
+        expect(error.reason).toBe('mandate_prepare_not_found');
+        expect((await service.get(ALICE, agent.id)).status).toBe('active');
+      });
+
+      it('refuses prepare on a server-owned agent: there is nothing to approve', async () => {
+        const { service } = setup();
+        const { agent } = await service.hire(ALICE, hireInput());
+
+        const amend = await refusal(service.prepareMandateAmend(ALICE, agent.id, mandateInput()));
+        expect(amend.reason).toBe('mandate_approval_not_required');
+        const revoke = await refusal(service.prepareRevoke(ALICE, agent.id));
+        expect(revoke.reason).toBe('mandate_approval_not_required');
+      });
+
+      it('refuses to prepare a mandate the API would refuse, before any prompt', async () => {
+        const { service } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+
+        const error = await refusal(
+          service.prepareMandateAmend(ALICE, agent.id, mandateInput({ chainId: 1 })),
+        );
+        expect(error.reason).toBe('mandate_invalid');
+      });
     });
   });
 

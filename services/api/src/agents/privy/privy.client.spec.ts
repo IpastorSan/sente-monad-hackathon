@@ -149,6 +149,51 @@ describe('PrivyClient', () => {
     ).toBe(true);
   });
 
+  it('a precomputed signature is sent as it stands, over the payload the client publishes', async () => {
+    // What the phone does in SEN-44, with node standing in for the device key:
+    // ask for the payload, sign it elsewhere, hand back the signature.
+    const phone = generateAuthorizationKey();
+    const { client: privy, calls } = client();
+    const body = { rules: [] };
+
+    const payload = privy.authorizationPayload('PATCH', '/v1/policies/pol-1', body);
+    expect(payload).toEqual({
+      version: 1,
+      method: 'PATCH',
+      url: 'https://api.privy.io/v1/policies/pol-1',
+      body,
+      headers: { 'privy-app-id': FAKE_APP_ID },
+    });
+
+    const signature = signAuthorizationPayload(phone.privateKey, payload);
+    await privy.patch('/v1/policies/pol-1', body, { signatures: [signature] });
+
+    const call = calls[0]!;
+    expect(call.headers['privy-authorization-signature']).toBe(signature);
+    // The signature verifies against the request as SENT, which is the only
+    // claim that matters: the payload was not a description of it, it was it.
+    expect(signatureVerifies(phone.publicKey, payload, signature)).toBe(true);
+    expect(call.rawBody).toBe(JSON.stringify(body));
+  });
+
+  it('a server key and a phone signature can approve the same request together', async () => {
+    const server = generateAuthorizationKey();
+    const phone = generateAuthorizationKey();
+    const { client: privy, calls } = client();
+
+    const payload = privy.authorizationPayload('POST', '/v1/wallets/w1/rpc', { m: 1 });
+    await privy.post(
+      '/v1/wallets/w1/rpc',
+      { m: 1 },
+      { approvals: [server], signatures: [signAuthorizationPayload(phone.privateKey, payload)] },
+    );
+
+    const signatures = calls[0]!.headers['privy-authorization-signature']!.split(',');
+    expect(signatures).toHaveLength(2);
+    expect(signatureVerifies(server.publicKey, payload, signatures[0]!)).toBe(true);
+    expect(signatureVerifies(phone.publicKey, payload, signatures[1]!)).toBe(true);
+  });
+
   it('signing a GET is refused rather than silently ignored', async () => {
     const { client: privy, calls } = client();
     await expect(

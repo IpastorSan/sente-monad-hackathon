@@ -286,7 +286,7 @@ Refusals all read `"RPC request denied due to policy violation"`, code
    (SEN-31).** The agent key gets a 401 editing the _policy_; only the
    mandate-owner key can. That much is real. What this run missed is that the
    agent key also **owned the wallet**, and a Privy wallet owner can `PATCH
-   /v1/wallets/{id}` to set `policy_ids: []`, swap in a permissive policy, add an
+/v1/wallets/{id}` to set `policy_ids: []`, swap in a permissive policy, add an
    unrestricted `additional_signers` entry, or change `owner_id` — none of which
    touches the policy, so all of them slipped past the 401 above. Verified live
    2026-09-13: an agent-owned wallet detached its own mandate and the previously
@@ -319,14 +319,14 @@ policies"; only the owner can. Confirmed live on Monad testnet 10143 by
 `services/api/scripts/sen31-signer-probe.ts` (sign-only, nonce 1,000,000, never
 broadcast, `sente-sen31-probe-*` resources only):
 
-| #   | Check                                                                             | Expected                | Got                           |
-| --- | --------------------------------------------------------------------------------- | ----------------------- | ----------------------------- |
-| a   | the agent SIGNER signs an ALLOWED `eth_signTransaction` (to allowlisted, 10143)    | signed                  | **SIGNED**, parsed to 10143   |
-| b   | the agent SIGNER signs a NOT-allowed one                                           | refused                 | **refused `policy_violation`** (400) |
-| c1  | agent SIGNER `PATCH /v1/wallets/{id}` `{policy_ids: []}` (detach)                  | 401                     | **401 `invalid_data`**        |
-| c2  | agent SIGNER `PATCH` `{owner_id: <attacker quorum>}`                               | 401                     | **401 `invalid_data`**        |
-| c3  | agent SIGNER `PATCH` `{additional_signers: [{attacker, override: permissive}]}`    | 401                     | **401 `invalid_data`**        |
-| d   | the OWNER (mandate) key `PATCH /v1/wallets/{id}` `{policy_ids: []}`                | ok                      | **200** (then restored)       |
+| #   | Check                                                                           | Expected | Got                                  |
+| --- | ------------------------------------------------------------------------------- | -------- | ------------------------------------ |
+| a   | the agent SIGNER signs an ALLOWED `eth_signTransaction` (to allowlisted, 10143) | signed   | **SIGNED**, parsed to 10143          |
+| b   | the agent SIGNER signs a NOT-allowed one                                        | refused  | **refused `policy_violation`** (400) |
+| c1  | agent SIGNER `PATCH /v1/wallets/{id}` `{policy_ids: []}` (detach)               | 401      | **401 `invalid_data`**               |
+| c2  | agent SIGNER `PATCH` `{owner_id: <attacker quorum>}`                            | 401      | **401 `invalid_data`**               |
+| c3  | agent SIGNER `PATCH` `{additional_signers: [{attacker, override: permissive}]}` | 401      | **401 `invalid_data`**               |
+| d   | the OWNER (mandate) key `PATCH /v1/wallets/{id}` `{policy_ids: []}`             | ok       | **200** (then restored)              |
 
 After each refused (c) attempt the wallet still refused the not-allowed
 transaction, and the read-back showed `policy_ids`, `owner_id` and
@@ -342,10 +342,10 @@ skipped). Run 2026-09-13, both moved and then verified sign-only that the agent
 key can no longer detach the policy (`PATCH {policy_ids: []}` by the agent key →
 401, policy still attached):
 
-| `.env` var                     | wallet id                  | owner before → after                | result   | detach by agent key |
-| ------------------------------ | -------------------------- | ----------------------------------- | -------- | ------------------- |
-| `PRIVY_AGENT_VENUES_WALLET_ID` | `qqhg4rxobx0qnjg398tjzgi9` | agent quorum → **mandate quorum**   | migrated | **401, refused**    |
-| `PRIVY_PROBE_WALLET_ID`        | `j1vvfuszwb4vzw2z3gb613oh` | agent quorum → **mandate quorum**   | migrated | **401, refused**    |
+| `.env` var                     | wallet id                  | owner before → after              | result   | detach by agent key |
+| ------------------------------ | -------------------------- | --------------------------------- | -------- | ------------------- |
+| `PRIVY_AGENT_VENUES_WALLET_ID` | `qqhg4rxobx0qnjg398tjzgi9` | agent quorum → **mandate quorum** | migrated | **401, refused**    |
+| `PRIVY_PROBE_WALLET_ID`        | `j1vvfuszwb4vzw2z3gb613oh` | agent quorum → **mandate quorum** | migrated | **401, refused**    |
 
 The agent quorum is now an `additional_signers` entry on each, its
 `override_policy_ids` the wallet's own mandate policy
@@ -515,13 +515,13 @@ wallet its own aggregation.
 Also written to the repo-root `.env` as `PRIVY_PROBE_*` (the list endpoints
 answer 405, so this is the record). None of these is secret.
 
-| Object                               | Id                                                                        |
-| ------------------------------------ | ------------------------------------------------------------------------- |
-| agent-key quorum (owns wallets)      | `<privy-probe-agent-quorum-id>` (also `PRIVY_AGENT_QUORUM_ID`)                 |
-| mandate-owner quorum (owns policies) | `<privy-probe-mandate-quorum-id>` (also `PRIVY_MANDATE_QUORUM_ID`)               |
+| Object                               | Id                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------ |
+| agent-key quorum (owns wallets)      | `<privy-probe-agent-quorum-id>` (also `PRIVY_AGENT_QUORUM_ID`)           |
+| mandate-owner quorum (owns policies) | `<privy-probe-mandate-quorum-id>` (also `PRIVY_MANDATE_QUORUM_ID`)       |
 | mandate wallet                       | `<privy-probe-wallet-id>` → `0x9c3cf0f7D73C4386E63754d9e42593141DDCDb3c` |
 | its policy (cap now 1 USDC after 7c) | `<privy-probe-policy-id>`                                                |
-| aggregation, hex cap / decimal cap   | `<privy-probe-aggregation-id>` / `<privy-probe-aggregation-id-decimal>`                   |
+| aggregation, hex cap / decimal cap   | `<privy-probe-aggregation-id>` / `<privy-probe-aggregation-id-decimal>`  |
 
 Runs 1–5 left their own `sente-probe-…` wallets and policies in the app. They
 are unfunded, owned by the two quorums above (so still controllable with our
@@ -545,11 +545,11 @@ Both objects get the same owner deliberately. An owner who can PATCH the wallet
 but not the policy could simply detach the policy — the SEN-31 hole wearing a
 different hat.
 
-| Object                     | Owner                           | Can change it                       |
-| -------------------------- | ------------------------------- | ----------------------------------- |
-| mandate policy             | the hirer's device quorum       | the phone, and nobody else          |
-| agent wallet               | the hirer's device quorum       | the phone, and nobody else          |
-| agent wallet, as a signer  | `PRIVY_AGENT_QUORUM_ID`         | signs trades within the policy only |
+| Object                    | Owner                     | Can change it                       |
+| ------------------------- | ------------------------- | ----------------------------------- |
+| mandate policy            | the hirer's device quorum | the phone, and nobody else          |
+| agent wallet              | the hirer's device quorum | the phone, and nobody else          |
+| agent wallet, as a signer | `PRIVY_AGENT_QUORUM_ID`   | signs trades within the policy only |
 
 ### Verified live on 10143
 
@@ -561,12 +561,12 @@ then tries to change it with the server's key. Nothing is signed for a chain and
 nothing is broadcast; the only resources it creates are named
 `sente-agent-device-probe`.
 
-| #   | Check                                                     | Expected | Got                       |
-| --- | --------------------------------------------------------- | -------- | ------------------------- |
+| #   | Check                                                        | Expected | Got                                                                            |
+| --- | ------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------ |
 | a   | `owner_id` of the policy AND the wallet is the device quorum | device   | **device quorum** on both, agent quorum still an `additional_signers` override |
-| b   | `PRIVY_MANDATE_OWNER_KEY` `PATCH /v1/policies/{id}`       | 401      | **401 `invalid_data`**    |
-| c   | `PRIVY_MANDATE_OWNER_KEY` `PATCH /v1/wallets/{id}`        | 401      | **401 `invalid_data`**    |
-| d   | the DEVICE key `PATCH /v1/policies/{id}`                  | 200      | **200**                   |
+| b   | `PRIVY_MANDATE_OWNER_KEY` `PATCH /v1/policies/{id}`          | 401      | **401 `invalid_data`**                                                         |
+| c   | `PRIVY_MANDATE_OWNER_KEY` `PATCH /v1/wallets/{id}`           | 401      | **401 `invalid_data`**                                                         |
+| d   | the DEVICE key `PATCH /v1/policies/{id}`                     | 200      | **200**                                                                        |
 
 The 401 body, verbatim, for both (b) and (c):
 
@@ -580,12 +580,12 @@ The 401 body, verbatim, for both (b) and (c):
 Ids from the run (none is secret; the device private key was never written down
 and is gone):
 
-| Object                            | Id                                                     |
-| --------------------------------- | ------------------------------------------------------ |
-| device quorum (throwaway key)     | `z9w2gf6fb9nawmaq0ev7saja`                             |
-| mandate policy                    | `thjdyllm10poub07iytapyp1`                             |
-| agent wallet                      | `cpaccgin5vhoawuf7wb6hrdf` → `0xcdB9A20a351c79E07FB7E72695d697890060ffdd` |
-| signer quorum (unchanged)         | `v4akc7n2q006kndzefpksv0j` (`PRIVY_AGENT_QUORUM_ID`)    |
+| Object                        | Id                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| device quorum (throwaway key) | `z9w2gf6fb9nawmaq0ev7saja`                                                |
+| mandate policy                | `thjdyllm10poub07iytapyp1`                                                |
+| agent wallet                  | `cpaccgin5vhoawuf7wb6hrdf` → `0xcdB9A20a351c79E07FB7E72695d697890060ffdd` |
+| signer quorum (unchanged)     | `v4akc7n2q006kndzefpksv0j` (`PRIVY_AGENT_QUORUM_ID`)                      |
 
 (An earlier run of the same probe left `ch6ztohyh4unb9fw15tmdenz` /
 `m0ctrk5xecxts00lt3d4ollb` / `tr76ph1noho0w3d421k0q1cb` behind, same verdict.
@@ -600,11 +600,12 @@ phone.
 
 **Amend and revoke stop working from the server, by construction.**
 `AgentsService.amendMandate` and `revoke` sign policy PATCHes with
-`PRIVY_MANDATE_OWNER_KEY`, so on a device-owned agent they now get that same 401
-and surface as `wallet_policy_update_failed`. SEN-44 adds the path that carries
-the phone's signature. Revoke still stops the agent — the status flips to
-`revoked` **before** the enclave call, so the runner and the MCP token refuse it
-whatever Privy says; what fails is only emptying the policy of a wallet nothing
+`PRIVY_MANDATE_OWNER_KEY`, which a device-owned policy does not accept. Since
+SEN-44 they refuse such an agent outright (`mandate_approval_required`, 409)
+rather than asking Privy for the 401 — see §Phase 3, amending with the phone.
+Revoke still stops the agent — the status flips to `revoked` **before** the
+enclave call, so the runner and the MCP token refuse it whatever Privy says;
+what fails without a signature is only emptying the policy of a wallet nothing
 is driving.
 
 `AGENT_MANDATE_OWNER` picks the mode. Unset means `device`. `server` restores the
@@ -618,6 +619,105 @@ one. In `device` mode a caller with no user wallet gets `wallet_not_registered`
 Each agent records which it got, as `ownerKind: 'device' | 'server'`. It is
 written at provision and never recomputed: registering a wallet later does not
 hand a user control of an agent whose policy a server quorum already owns.
+
+## Phase 3, amending with the phone — prepare and commit (SEN-44, 2026-09-18)
+
+Phase 3 left device-owned mandates immutable: the one party who could change
+them was not in the request. SEN-44 puts them back in it, without giving the
+server anything.
+
+```
+POST  /agents/:id/mandate/prepare  { mandate }   -> { prepareId, payload, summary, expiresAt }
+PATCH /agents/:id/mandate          { prepareId, signature }
+POST  /agents/:id/revoke/prepare                 -> { prepareId, payload, summary, expiresAt }
+POST  /agents/:id/revoke           { prepareId, signature }
+```
+
+`prepare` compiles the mandate with the same `compileMandate` a hire uses,
+builds the exact `PATCH /v1/policies/{id}` body and the `AuthorizationPayload`
+Privy checks a signature against (`{version, method, url, body, headers}`, only
+the `privy-` headers), and keeps the **request itself** in a short-lived
+single-use store (`agents/prepared-approval.ts`, 5 minutes). `commit` sends that
+stored request with the phone's signature in `privy-authorization-signature`.
+Nothing is recomposed in between: the signature covers those bytes, so a rebuilt
+body is a body that can differ from the approved one.
+
+`ownerKind: 'server'` agents keep the one-step routes and are refused on these
+(`mandate_approval_not_required`), so neither owner model can be driven through
+the other's path by accident.
+
+### What the phone checks before it signs
+
+`signPrivyAuthorization` signs what it is handed, so a payload approved unread
+would make the device key a rubber stamp for exactly the change it exists to
+prevent. `apps/mobile/src/agents/approval.ts` therefore rebuilds the change from
+the mandate the app is sending and refuses to sign anything else:
+
+- `version` 1 and method `PATCH`;
+- `url` equal to `https://api.privy.io/v1/policies/<this agent's policyId>`,
+  character for character;
+- `headers` limited to `privy-app-id` (plus an idempotency key if ever present) —
+  headers are signed too;
+- `body` with exactly one key, `rules`;
+- a revoke: `rules` is `[]`;
+- an amend: the rules are **equal** to the mandate's own compiled rules — same
+  set of rules, each with the same method and the same set of
+  `field_source|field|operator|value` conditions. Not a subset: one extra rule is
+  one extra thing the agent could sign.
+
+Condition `abi` and `typed_data` blobs are not compared. A wrong one can only
+stop a rule matching, never widen it, and mirroring Perpl's drifting enrollment
+struct (CLAUDE.md gotcha 13) on the security path would be worse than the risk.
+`compileMandate` itself is mirrored rather than imported (the app bundles no
+`@sente/mandate`), and `approval.test.ts` pins the mirror equal to the real
+compiler over a fixture set — the same arrangement `deviceKey.ts` uses for its
+canonicalizer.
+
+### Verified live on 10143
+
+Against the booted API (`AUTH_PLACEHOLDER=1`, device mode) with a throwaway
+P-256 key standing in for a phone: `POST /wallet/register`, hire, then the four
+calls below. The device key was generated in memory and is gone; its wallet and
+policy are unfunded and unusable by anyone.
+
+| #   | Call                                                                   | Expected | Got                                                           |
+| --- | ---------------------------------------------------------------------- | -------- | ------------------------------------------------------------- |
+| a   | `PATCH /agents/:id/mandate { mandate }` (one step, device-owned agent) | refused  | **409 `mandate_approval_required`**                           |
+| b   | prepare → sign with the device key → `PATCH .../mandate`               | 200      | **200**, cap raised to 900000000                              |
+| c   | the same commit replayed                                               | refused  | **404 `mandate_prepare_not_found`**                           |
+| d   | prepare → sign with a DIFFERENT P-256 key → commit                     | refused  | **403 `mandate_approval_refused`** (Privy 401 `invalid_data`) |
+| e   | revoke prepare → sign → `POST .../revoke`                              | 200      | **200**, `policyCleared: true`                                |
+
+Read straight back from Privy after (e):
+
+```json
+{ "id": "xdk61x2eo9gapwey67rf4pmc", "owner_id": "fq8yb9uqtkzb26y7u87sxo1t", "rules": [] }
+```
+
+| Object                        | Id                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| device quorum (throwaway key) | `fq8yb9uqtkzb26y7u87sxo1t`                                                |
+| user wallet                   | `pdb1p9ga7pw0bfr21x0kh03o` → `0xEc2cB68AE11D36403BC4b457Df62A778E234a06b` |
+| agent policy                  | `xdk61x2eo9gapwey67rf4pmc`                                                |
+| agent wallet                  | `vlsk5jw7svt664vhzakk3x30` → `0xa9916b12194bC0d3b236F8E0339e828ACEFEACBF` |
+
+Re-run end to end after the follow-up cleanup commit, on a second throwaway key
+(device quorum `i4dy6ctfksj11z9o1pq9h21s`, policy `tvonjhteroqmapjok3sjc4xr`):
+(b) and (e) were 200 again and the policy read back `"rules": []`. A third
+policy, `sgeg7iqal193afjquy2jvi98`, produced (d) once more by accident — it is
+owned by a quorum whose key that run did not hold, and every attempt on it, both
+through the API and straight at Privy with our own client, was refused 401. It
+is unfunded and, its owner key being unknown to anyone, permanently unchangeable.
+
+### The consequence gotcha 13 warns about
+
+`PERPL_ENROLL_TYPED_DATA` drifting means **every existing policy must be
+re-PATCHed**, and under device ownership this server cannot do that for anyone:
+each agent's owner has to open the app and approve an amend. Plan a constant
+change as a user-facing migration, not a script — and expect agents whose owners
+never open the app to stay unable to enroll. `AGENT_MANDATE_OWNER=server` agents
+are still re-PATCHable with `PRIVY_MANDATE_OWNER_KEY`
+(`scripts/migrate-agent-wallets.ts`).
 
 ## Recipient pinning (SEN-15)
 
