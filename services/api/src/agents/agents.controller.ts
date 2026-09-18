@@ -105,9 +105,10 @@ export class AgentsController {
    * `nextSeq` is the highest `seq` in the page: pass it back as `afterSeq` to
    * read what comes next. Oldest-first within the page.
    *
-   * SEN-21: every `order` and `fill` that carries a `blockNumber` also carries
-   * `consensus`, so the Ledger's ramp can show how far Monad has taken that
-   * block. See `withConsensus`.
+   * SEN-21, widened in SEN-35: every event that carries a `blockNumber` —
+   * `order`, `fill` and `close` today — also carries `consensus`, so the
+   * Ledger's ramp can show how far Monad has taken that block without asking a
+   * second route per row. See `withConsensus`.
    */
   @Get(':id/events')
   async listEvents(
@@ -130,9 +131,21 @@ export class AgentsController {
   }
 
   /**
-   * Adds `consensus` to an order or a fill — the two kinds a venue reports a
-   * block for — and leaves every other event, and `detail` itself, exactly as
-   * the log stored it.
+   * Adds `consensus` to every event that NAMES a block, and leaves every other
+   * event, and `detail` itself, exactly as the log stored it.
+   *
+   * Naming a block is the whole condition — deliberately, since SEN-35. SEN-21
+   * kept a hand-written list of kinds (`order` and `fill`) beside a check that
+   * already answers the question generally, and SEN-20's `close` was added to
+   * the log without being added to the list, so closing a position was the one
+   * trade whose row had no ramp. A thesis, a refusal, a run summary and a
+   * verdict carry no `blockNumber`, so they are still untouched, and the next
+   * kind that lands in a block needs nothing here.
+   *
+   * This is the ONLY consensus path to the Ledger: the mobile ramp reads the
+   * state off the event it is drawn under and only asks
+   * `GET /chain/blocks/:n/consensus` while that state is not yet final. A
+   * screenful of settled trades therefore costs no consensus requests at all.
    *
    * `state` is `unknown` with an empty `at` when the block is outside the
    * window `ConsensusService` keeps. That is the ordinary outcome for a trade
@@ -140,7 +153,6 @@ export class AgentsController {
    * incomplete ramp, not a missing field.
    */
   private withConsensus(event: AgentEventResponseDto): AgentEventResponseDto {
-    if (event.kind !== 'order' && event.kind !== 'fill') return event;
     const blockNumber = eventBlockNumber(event.detail);
     if (blockNumber === undefined) return event;
     const record = this.consensus.stateOf(blockNumber);

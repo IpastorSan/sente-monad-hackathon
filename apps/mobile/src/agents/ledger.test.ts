@@ -11,6 +11,7 @@ import { test } from 'node:test';
 
 import {
   clockTime,
+  consensusNeedsPolling,
   demoLedger,
   directionLabel,
   heldLabel,
@@ -22,6 +23,7 @@ import {
   type LedgerEntry,
   type LedgerEntryKind,
   type LedgerEvent,
+  type TradeEntry,
 } from './ledger.ts';
 
 const AT = Date.parse('2026-09-17T12:00:00.000Z');
@@ -108,6 +110,94 @@ test('a fill is a trade: direction off the venue side, with size, price and chai
   assert.equal(entry.txHash, '0xabcdef');
   assert.equal(entry.blockNumber, 12_345_678);
   assert.equal(entry.status, 'filled');
+  assert.equal(entry.consensus, null, 'an API that sent no consensus block invents none');
+});
+
+test('the consensus block rides on the event, so the ramp needs no request of its own', () => {
+  // SEN-35: the API attaches this to every order, fill and close that names a
+  // block. A finalized row is settled on arrival and asks the API for nothing.
+  const at = { proposed: AT, voted: AT + 216, finalized: AT + 510 };
+  const fill = only('trade', [
+    event(
+      2,
+      'fill',
+      { filledSize: '1', blockNumber: 12_345_678 },
+      {
+        consensus: { state: 'Finalized', at },
+      },
+    ),
+  ]);
+  assert.deepEqual(fill.consensus, { state: 'Finalized', at });
+
+  // A block past the API's window says so rather than going missing.
+  const old = only('trade', [
+    event(
+      3,
+      'fill',
+      { filledSize: '1', blockNumber: 1 },
+      {
+        consensus: { state: 'unknown', at: {} },
+      },
+    ),
+  ]);
+  assert.deepEqual(old.consensus, { state: 'unknown', at: {} });
+});
+
+test('a Ledger of finalized rows asks the API for no consensus at all', () => {
+  // The acceptance criterion of SEN-35: 20 finalized rows, zero requests. The
+  // ramp polls a row only while `consensusNeedsPolling` is true of it.
+  const at = { proposed: AT, voted: AT + 216, finalized: AT + 510 };
+  const page = Array.from({ length: 20 }, (_unused, index) =>
+    event(
+      index + 1,
+      'fill',
+      { filledSize: '1', blockNumber: 12_345_678 + index },
+      {
+        consensus: { state: 'Finalized', at },
+      },
+    ),
+  );
+  const entries = toLedgerEntries(page) as TradeEntry[];
+
+  assert.equal(entries.length, 20);
+  assert.equal(
+    entries.filter((entry) => consensusNeedsPolling(entry.consensus)).length,
+    0,
+    'a finalized row is settled on arrival and never polled',
+  );
+
+  // `Verified` is past finality, and a block past the API's window has nothing
+  // left to say either. A block still moving is the one case worth a request.
+  assert.equal(consensusNeedsPolling({ state: 'Verified', at }), false);
+  assert.equal(consensusNeedsPolling({ state: 'unknown', at: {} }), false);
+  assert.equal(consensusNeedsPolling({ state: 'Proposed', at: { proposed: AT } }), true);
+  assert.equal(consensusNeedsPolling({ state: 'Voted', at: { proposed: AT } }), true);
+  // An API older than SEN-21 sends no consensus block: the ramp has to ask.
+  assert.equal(consensusNeedsPolling(null), true);
+  assert.equal(consensusNeedsPolling(undefined), true);
+});
+
+test('a close carries its block and its consensus, so the close row gets a ramp too', () => {
+  // SEN-20 gave `close` a block number and SEN-21 did not read it, so closing a
+  // position was the one trade whose row had no ramp (SEN-35).
+  const at = { proposed: AT, finalized: AT + 480 };
+  const entry = only('verdict', [
+    event(
+      9,
+      'close',
+      { symbol: 'BTC-PERP', realizedPnl: '-3.25', blockNumber: 12_345_679 },
+      {
+        consensus: { state: 'Finalized', at },
+      },
+    ),
+  ]);
+  assert.equal(entry.blockNumber, 12_345_679);
+  assert.deepEqual(entry.consensus, { state: 'Finalized', at });
+
+  // SEN-22's own verdict is a judgement, not a transaction: no block, no ramp.
+  const verdict = only('verdict', [event(10, 'verdict', { pnl: '12.4', held: true })]);
+  assert.equal(verdict.blockNumber, null);
+  assert.equal(verdict.consensus, null);
 });
 
 test('a buy reads as a long, and a missing or unknown side is left unknown', () => {

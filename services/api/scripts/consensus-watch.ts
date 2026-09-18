@@ -65,7 +65,16 @@ const logger = {
   warn: (message: string) => console.warn(`  ! ${message}`),
 };
 
-const short = (blockId: string): string => `${blockId.slice(0, 10)}…${blockId.slice(-4)}`;
+/**
+ * Whichever id was observed for the block: Monad's consensus `blockId` when the
+ * socket reported it, the execution hash when only the fallback did. They are
+ * different values for the same block (SEN-35), so this prints which one it is.
+ */
+const short = (ids: { blockId?: string; blockHash?: string }): string => {
+  const id = ids.blockId ?? ids.blockHash;
+  if (id === undefined) return '—';
+  return `${ids.blockId === undefined ? 'hash ' : ''}${id.slice(0, 10)}…${id.slice(-4)}`;
+};
 
 /** `proposed+0  voted+216  finalized+510`, in commit order. */
 function offsetsOf(record: ConsensusRecord): string {
@@ -114,7 +123,7 @@ async function main(): Promise<number> {
         if (transition.state === 'reorged') reorgs += 1;
         console.log(
           `+${String(Date.now() - startedAt).padStart(5)}ms  #${transition.blockNumber}  ` +
-            `${transition.state.padEnd(9)} ${short(transition.blockId)}  ` +
+            `${transition.state.padEnd(9)} ${short(transition)}  ` +
             `${transition.state === 'reorged' ? `replacing ${transition.previousState}` : ''}` +
             `  (block +${transition.elapsedMs}ms)`,
         );
@@ -143,12 +152,12 @@ async function main(): Promise<number> {
   service.stop();
 
   console.log('');
-  console.log('  #  block          state      blockId        offsets');
+  console.log('  #  block          state      block id                offsets');
   for (const [index, height] of followed.entries()) {
     const record = service.stateOf(height);
     console.log(
       `  ${index + 1}  ${String(height).padEnd(13)}  ${(record?.state ?? 'unknown').padEnd(9)}  ` +
-        `${record ? short(record.blockId).padEnd(16) : '—'.padEnd(16)}  ` +
+        `${(record ? short(record) : '—').padEnd(22)}  ` +
         `${record ? offsetsOf(record) : ''}`,
     );
   }

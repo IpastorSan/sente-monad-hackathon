@@ -10,7 +10,8 @@ import {
 } from './consensus.service';
 
 const BLOCK = 63_310_247;
-const ID_A = `0x${'a'.repeat(64)}`;
+/** An execution hash: what the HTTP tags report, and so what `blockHash` holds. */
+const HASH_A = `0x${'a'.repeat(64)}`;
 
 const quiet = { log: () => undefined, warn: () => undefined };
 
@@ -49,13 +50,15 @@ describe('ChainController', () => {
   describe('GET /chain/blocks/:n/consensus', () => {
     it('answers with the block, its state and the ms each state was seen at', async () => {
       const { controller, service, tags } = setup();
-      tags.byTag.set('finalized', { number: BLOCK, id: ID_A });
+      tags.byTag.set('finalized', { number: BLOCK, id: HASH_A });
       await service.pollOnce();
 
       const response: ConsensusBlockResponseDto = await controller.blockConsensus(BLOCK);
+      // No `blockId`: only the socket reports Monad's consensus id, and the two
+      // are different values for the same block (SEN-35).
       expect(response).toEqual({
         blockNumber: BLOCK,
-        blockId: ID_A,
+        blockHash: HASH_A,
         state: 'Finalized',
         at: { finalized: expect.any(Number) },
       });
@@ -84,7 +87,7 @@ describe('ChainController', () => {
 
     it('refuses a height that is not a non-negative integer', async () => {
       const { controller, service, tags } = setup();
-      tags.byTag.set('finalized', { number: BLOCK, id: ID_A });
+      tags.byTag.set('finalized', { number: BLOCK, id: HASH_A });
       await service.pollOnce();
 
       // What ParseIntPipe does with the raw path segment, before the handler.

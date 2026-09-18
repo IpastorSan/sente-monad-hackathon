@@ -23,6 +23,12 @@ const BLOCK = 63_310_247;
 const ID_A = `0x${'a'.repeat(64)}`;
 /** A different block at the same height — what a reorg looks like. */
 const ID_B = `0x${'b'.repeat(64)}`;
+/**
+ * The EXECUTION hash of the block whose consensus id is `ID_A`. The two are
+ * different strings for the same block, which is the whole of SEN-35's bug:
+ * comparing one against the other made every socket flap look like a reorg.
+ */
+const HASH_A = `0x${'c'.repeat(64)}`;
 
 /** The head `monadNewHeads` pushes: a whole block header, three fields of which matter. */
 function head(blockNumber: number, blockId: string, commitState: string): Record<string, unknown> {
@@ -389,9 +395,69 @@ describe('ConsensusService', () => {
     h.tags.byTag.set('latest', { number: BLOCK, id: ID_B });
     await h.service.pollOnce();
 
-    expect(await first).toMatchObject({ state: 'reorged', blockId: ID_A, elapsedMs: 120 });
-    expect(h.service.stateOf(BLOCK)!.blockId).toBe(ID_B);
+    // The fallback's id is the execution HASH, so it is stored and compared as
+    // one: `blockId` stays empty until the socket reports Monad's own id.
+    expect(await first).toMatchObject({ state: 'reorged', blockHash: ID_A, elapsedMs: 120 });
+    expect(h.service.stateOf(BLOCK)!.blockHash).toBe(ID_B);
+    expect(h.service.stateOf(BLOCK)!.blockId).toBeUndefined();
 
+    h.service.stop();
+  });
+
+  it('does not call a socket flap a reorg: the fallback hash is not the socket id', async () => {
+    // Its own socket, so the reconnect is something this spec can wait for
+    // rather than race: `connects` ticks when the service asks for one again.
+    const socket = new FakeSocket();
+    let connects = 0;
+    const h = setup({
+      reconnect: { baseMs: 1, maxMs: 1 },
+      pollIntervalMs: 10_000,
+      connect: () => {
+        connects += 1;
+        return socket;
+      },
+    });
+    h.service.start();
+    socket.accept();
+
+    // The socket has the block at `Voted`, under Monad's consensus id.
+    socket.pushHead(BLOCK, ID_A, 'Proposed');
+    h.advanced(OFF_VOTED_MS);
+    socket.pushHead(BLOCK, ID_A, 'Voted');
+
+    const feed = h.service.watch(BLOCK);
+    const moves: string[] = [];
+    void (async () => {
+      for await (const transition of feed) moves.push(transition.state);
+    })();
+
+    // The socket drops. The HTTP tags report the SAME block, by its execution
+    // hash, which is a different string from `blockId` and always was.
+    const connectsBefore = connects;
+    socket.drop();
+    h.advanced(OFF_FINALIZED_MS - OFF_VOTED_MS);
+    h.tags.byTag.set('finalized', { number: BLOCK, id: HASH_A });
+    await h.service.pollOnce();
+
+    // The socket comes back and pushes the same block again.
+    await waitFor(() => connects > connectsBefore);
+    socket.accept();
+    h.advanced(OFF_VERIFIED_MS - OFF_FINALIZED_MS);
+    socket.pushHead(BLOCK, ID_A, 'Verified');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // No `reorged` anywhere: the block never moved, so the ramp never plays
+    // backwards. It simply walked Voted -> Finalized -> Verified.
+    expect(moves).toEqual(['Finalized', 'Verified']);
+
+    const record = h.service.stateOf(BLOCK)!;
+    expect(record.state).toBe('Verified');
+    expect(record.blockId).toBe(ID_A);
+    expect(record.blockHash).toBe(HASH_A);
+    // Everything the block has been through is still on the record.
+    expect(Object.keys(record.at).sort()).toEqual(['finalized', 'proposed', 'verified', 'voted']);
+
+    await feed.return?.();
     h.service.stop();
   });
 

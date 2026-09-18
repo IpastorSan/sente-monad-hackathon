@@ -3,11 +3,19 @@
  * Monad purple as the block the order landed in acquires consensus.
  *
  * A Monad block goes `Proposed` -> `Voted` -> `Finalized`, and SEN-21 exposes
- * exactly that per height at `GET /chain/blocks/:n/consensus`, with the epoch ms
- * at which each state was first seen. This draws those states as progress — one
- * Skia hairline, a third per stop — and only ever animates between states the
- * block's own record contains. A block that skipped `Voted` (Monad does) jumps a
- * third and leaves `VOTED` dark, because that is what the network did.
+ * exactly that per height, with the epoch ms at which each state was first
+ * seen. This draws those states as progress — one Skia hairline, a third per
+ * stop — and only ever animates between states the block's own record contains.
+ * A block that skipped `Voted` (Monad does) jumps a third and leaves `VOTED`
+ * dark, because that is what the network did.
+ *
+ * WHERE THE STATE COMES FROM (SEN-35): off the event itself. The API attaches
+ * `consensus` to every `order`, `fill` and `close` that names a block, so a row
+ * arrives knowing where its block is, and a ledger of settled trades makes ZERO
+ * consensus requests. `GET /chain/blocks/:n/consensus` is asked only while a
+ * block has not reached finality yet, through `ConsensusFeed` — ONE poller per
+ * screen, shared by every row, not one per row. Before that, every row polled
+ * from mount and a screenful was a request burst on open.
  *
  * Purple marks an event, not a block. A record whose last state landed more than
  * a couple of seconds ago is settled on arrival — no fill, no ticks, just the
@@ -23,7 +31,7 @@
  * go. A block nobody would call current gets none, because a buzz that says
  * "this just happened" about a five-minute-old block is a lie you can feel.
  *
- * A reorg — the same height now holding a different `blockId` — plays the fill
+ * A reorg — the same height now holding a different block — plays the fill
  * backwards and says `reordered, resubmitting`, calmly, not as an error.
  * Following the resubmission is the event trail's job: the order that is sent
  * again gets its own `order` event, its own row and its own ramp.
@@ -34,7 +42,16 @@
  * shared-value binding, which is the pair Expo SDK 57 pins (Skia 2.6.2,
  * Reanimated 4.5.1).
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Canvas, Rect } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
@@ -47,7 +64,13 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { groupThousands } from '@/agents/amounts';
-import { CONSENSUS_STOPS } from '@/agents/ledger';
+import {
+  consensusNeedsPolling,
+  CONSENSUS_STOPS,
+  FINAL_CONSENSUS_STATES,
+  type CommitTimes,
+  type EventConsensus,
+} from '@/agents/ledger';
 import { useSession } from '@/session';
 import { API_URL, type SessionAuth } from '@/wallet/api';
 
@@ -66,7 +89,8 @@ const FINAL_STOP = STOPS - 1;
 
 /**
  * 150 ms while the whole window is ~500 ms wide and the answers are public chain
- * data: fine enough to catch each state, coarse enough not to hammer.
+ * data: fine enough to catch each state, coarse enough not to hammer. Only
+ * blocks that have not finalized are asked for at all.
  */
 const POLL_MS = 150;
 /**
@@ -92,9 +116,6 @@ const FILL_MS = 240;
 const HOLD_MS = 260;
 const DRAIN_MS = 420;
 
-/** The states Monad's commit process ends at. Both mean "the block is final". */
-const FINAL_STATES = new Set(['Finalized', 'Verified']);
-
 /**
  * How far up the ramp each state sits, by the name the socket uses. `Verified`
  * is past finality and Monad only reports it over the socket (SEN-21 says so),
@@ -107,9 +128,6 @@ const STOP_OF_STATE: Record<string, number> = {
   Verified: 2,
 };
 
-/** Epoch ms per state, keyed as the API spells them. */
-type CommitTimes = Partial<Record<'proposed' | 'voted' | 'finalized' | 'verified', number>>;
-
 type TimeKey = keyof CommitTimes;
 
 /** The `at` key behind each stop. `finalized` falls back to `verified`. */
@@ -119,20 +137,28 @@ const TIME_OF_STOP: Record<number, TimeKey> = {
   2: 'finalized',
 };
 
-/** One block's consensus record, as `GET /chain/blocks/:n/consensus` returns it. */
+/**
+ * One block's consensus record, as `GET /chain/blocks/:n/consensus` returns it.
+ *
+ * The two ids are different values for the same block and are never compared
+ * against each other (SEN-35): `blockId` is Monad's consensus id, from the
+ * socket, and `blockHash` is the execution hash, from the API's HTTP fallback.
+ * Either one changing at the same height is a reorg; one of them merely
+ * appearing is the API learning the block's other name.
+ */
 type ConsensusRecord = {
   readonly blockNumber: number;
-  /** Monad's id for the block. Stable across its states, so a reorg breaks it. */
-  readonly blockId: string;
+  readonly blockId?: string;
+  readonly blockHash?: string;
   /** `Proposed` | `Voted` | `Finalized` | `Verified`. */
   readonly state: string;
   readonly at: CommitTimes;
 };
 
 type Phase =
-  /** The first read is in flight. */
+  /** Nothing known yet: no state on the event, and the first read is in flight. */
   | 'reading'
-  /** The block's record is in hand, and may still move. */
+  /** The block's state is in hand, and may still move. */
   | 'live'
   /** The height now holds a different block. */
   | 'reorged'
@@ -141,8 +167,37 @@ type Phase =
   /** The API is not answering. */
   | 'unreachable';
 
+/** What one row knows about its block, from the event or from a read. */
+type Reading = {
+  readonly phase: Phase;
+  readonly state: string | null;
+  readonly at: CommitTimes;
+  /** Nothing left to ask: final, reorged, past the window, or unreachable. */
+  readonly done: boolean;
+};
+
+const EMPTY_TIMES: CommitTimes = {};
+const READING: Reading = { phase: 'reading', state: null, at: EMPTY_TIMES, done: false };
+
+/** A reading with nothing left to ask: `done` is the point, so it is not optional. */
+function terminal(phase: Phase, at: CommitTimes = EMPTY_TIMES): Reading {
+  return { phase, state: null, at, done: true };
+}
+
+/**
+ * The event's own `consensus` block, turned into a reading. This is the whole of
+ * SEN-35's cheapness: a finalized or out-of-window row is `done` on arrival and
+ * is never asked about.
+ */
+function seedReading(seed: EventConsensus | null | undefined): Reading {
+  if (!seed) return READING;
+  if (seed.state === 'unknown') return terminal('beyond');
+  if (seed.state === 'reorged') return terminal('reorged', seed.at);
+  return { phase: 'live', state: seed.state, at: seed.at, done: !consensusNeedsPolling(seed) };
+}
+
 // ---------------------------------------------------------------------------
-// Reading consensus
+// One poller for the whole screen
 // ---------------------------------------------------------------------------
 
 /**
@@ -183,89 +238,222 @@ function sendRead(
   });
 }
 
+/** What the feed remembers per block between reads. Not rendered directly. */
+type Watched = {
+  /** How many rows are showing this height. A block is dropped at zero. */
+  rows: number;
+  /** Epoch ms this block was first tracked: what the slow-down is measured from. */
+  since: number;
+  failures: number;
+  /** The ids this height held when we started. Either one changing is a reorg. */
+  blockId?: string;
+  blockHash?: string;
+  /** Where the block is now, and the rows to tell when that moves. */
+  reading: Reading;
+  listeners: Set<(reading: Reading) => void>;
+};
+
+type Feed = {
+  /**
+   * Register a row's interest in a height and subscribe it to that height's
+   * readings; the returned function drops both.
+   */
+  track(
+    blockNumber: number,
+    seed: EventConsensus | null | undefined,
+    onReading: (reading: Reading) => void,
+  ): () => void;
+};
+
+const FeedContext = createContext<Feed | null>(null);
+
 /**
- * Follow one block's consensus until it is final, or until we learn why we
- * cannot. It reports the record and whether the record is current; it never
- * invents a state the block has not been in.
+ * The screen's single consensus poller. Wrap the Ledger's list in it; every
+ * `ConsensusRamp` underneath shares it.
+ *
+ * Each row registers its height and its seed state. Only the heights that have
+ * not reached finality are ever requested, all of them in one pass per tick, so
+ * a screenful of settled trades costs nothing and two rows on the same block
+ * cost one request rather than two. Without this provider a ramp still renders
+ * what its event told it — it simply never refreshes.
+ *
+ * A tick pushes each height's reading to the rows showing THAT height rather
+ * than re-rendering the list through the context: the context value is stable
+ * for the screen's whole life, so the one row that is moving is the only one
+ * that re-renders.
  */
-function useConsensus(blockNumber: number, session: SessionAuth | null) {
-  const [phase, setPhase] = useState<Phase>('reading');
-  const [record, setRecord] = useState<ConsensusRecord | null>(null);
-  /** `null` until the first read decides it. See `isCurrent`. */
-  const [live, setLive] = useState<boolean | null>(null);
+export function ConsensusFeed({ children }: { children: ReactNode }) {
+  const { auth, api } = useSession();
+  const session = auth.address === null ? null : api;
+
+  const watched = useRef<Map<number, Watched>>(new Map());
+  /** Bumped when a height that can still move is tracked, to restart the loop. */
+  const [wake, setWake] = useState(0);
+
+  const track = useCallback<Feed['track']>((blockNumber, seed, onReading) => {
+    let entry = watched.current.get(blockNumber);
+    if (!entry) {
+      entry = {
+        rows: 0,
+        since: Date.now(),
+        failures: 0,
+        reading: seedReading(seed),
+        listeners: new Set(),
+      };
+      watched.current.set(blockNumber, entry);
+      // A block the event already settled needs no poller at all.
+      if (!entry.reading.done) setWake((n) => n + 1);
+    }
+    entry.rows += 1;
+    entry.listeners.add(onReading);
+    // A row joining a height another row is already watching starts where that
+    // reading is, not where its own event left off.
+    onReading(entry.reading);
+
+    return () => {
+      const held = watched.current.get(blockNumber);
+      if (!held) return;
+      held.listeners.delete(onReading);
+      held.rows -= 1;
+      if (held.rows <= 0) watched.current.delete(blockNumber);
+    };
+  }, []);
 
   useEffect(() => {
     if (session === null) return;
-
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let failures = 0;
-    /** The block this height held when we started: what a reorg changes. */
-    let blockId: string | undefined;
-    let decided = false;
-    const fastUntil = Date.now() + SLOW_AFTER_MS;
 
-    const poll = async (): Promise<void> => {
+    const settle = (blockNumber: number, reading: Reading): void => {
+      const entry = watched.current.get(blockNumber);
+      if (!entry) return;
+      entry.reading = reading;
+      for (const listener of entry.listeners) listener(reading);
+    };
+
+    const readOne = async (blockNumber: number): Promise<void> => {
       const controller = new AbortController();
       const abort = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
         const read = await readConsensus(blockNumber, session, controller.signal);
-        if (stopped) return;
-        failures = 0;
+        const entry = watched.current.get(blockNumber);
+        if (stopped || !entry) return;
+        entry.failures = 0;
 
         if (read === 'beyond') {
-          setPhase('beyond');
+          settle(blockNumber, terminal('beyond'));
           return;
         }
-
-        if (blockId === undefined) {
-          blockId = read.blockId;
-        } else if (read.blockId !== blockId) {
-          setPhase('reorged');
+        if (reorgedAway(entry, read)) {
+          settle(blockNumber, terminal('reorged', read.at));
           return;
         }
-
-        setRecord(read);
-        setPhase('live');
-        if (!decided) {
-          decided = true;
-          setLive(isCurrent(read));
-        }
-
-        // Terminal, or still moving: keep reading while it moves. A block that
-        // is taking longer than it should gets asked less often, not never.
-        if (!FINAL_STATES.has(read.state)) {
-          timer = setTimeout(() => poll(), Date.now() < fastUntil ? POLL_MS : SLOW_POLL_MS);
-        }
+        entry.blockId ??= read.blockId;
+        entry.blockHash ??= read.blockHash;
+        settle(blockNumber, {
+          phase: 'live',
+          state: read.state,
+          at: read.at,
+          done: FINAL_CONSENSUS_STATES.includes(read.state),
+        });
       } catch {
-        if (stopped) return;
-        failures += 1;
-        if (failures >= MAX_FAILURES) {
-          setPhase('unreachable');
-          return;
-        }
-        timer = setTimeout(() => poll(), POLL_MS);
+        const entry = watched.current.get(blockNumber);
+        if (stopped || !entry) return;
+        entry.failures += 1;
+        if (entry.failures >= MAX_FAILURES) settle(blockNumber, terminal('unreachable'));
       } finally {
         clearTimeout(abort);
       }
     };
 
-    void poll();
+    const tick = async (): Promise<void> => {
+      const pending = [...watched.current.entries()]
+        .filter(([, entry]) => !entry.reading.done)
+        .map(([blockNumber]) => blockNumber);
+      // Nothing is moving: the loop ends rather than idling. `track` wakes it.
+      if (pending.length === 0) return;
+
+      await Promise.all(pending.map(readOne));
+      if (stopped) return;
+
+      // The fastest cadence any pending block still deserves: a block that has
+      // been stuck for a while is asked about less often, never not at all.
+      const oldest = Math.min(
+        ...pending.map((blockNumber) => watched.current.get(blockNumber)?.since ?? Date.now()),
+      );
+      const delay = Date.now() - oldest < SLOW_AFTER_MS ? POLL_MS : SLOW_POLL_MS;
+      timer = setTimeout(() => void tick(), delay);
+    };
+
+    void tick();
 
     return () => {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [blockNumber, session]);
+  }, [session, wake]);
 
-  // The stops the block's record actually contains, ascending. `at` is the whole
-  // map the service holds, so this is the chain's sequence, not our polling's.
-  const stops = useMemo(() => stopsIn(record?.at ?? {}), [record]);
-
-  return { phase, stops, at: record?.at ?? EMPTY_TIMES, live };
+  const feed = useMemo<Feed>(() => ({ track }), [track]);
+  return <FeedContext.Provider value={feed}>{children}</FeedContext.Provider>;
 }
 
-const EMPTY_TIMES: CommitTimes = {};
+/**
+ * Whether this height now holds a different block than the one we started on.
+ *
+ * Each id is compared only against its own kind: `blockId` is Monad's consensus
+ * id and `blockHash` the execution hash, so they are different strings for the
+ * same block and one of them merely appearing is not a reorg (SEN-35).
+ */
+function reorgedAway(entry: Watched, read: ConsensusRecord): boolean {
+  const moved = (was: string | undefined, now: string | undefined): boolean =>
+    was !== undefined && now !== undefined && was !== now;
+  return moved(entry.blockId, read.blockId) || moved(entry.blockHash, read.blockHash);
+}
+
+/**
+ * One row's view of its block: what the event said, kept current by the feed for
+ * as long as the block can still move.
+ */
+function useConsensus(blockNumber: number, seed: EventConsensus | null | undefined) {
+  const track = useContext(FeedContext)?.track;
+
+  // The row opens on what its own event said, and the feed pushes it every move
+  // after that — so a poll re-renders the rows on THAT block and no others.
+  const [reading, setReading] = useState<Reading>(() => seedReading(seed));
+
+  // The seed is read once, when the row registers: what happens to the block
+  // afterwards is the feed's answer, not the event's. Hence the ref — a fresh
+  // `consensus` object on a re-render must not re-register the row.
+  const seedRef = useRef(seed);
+  seedRef.current = seed;
+  useEffect(() => {
+    if (track) return track(blockNumber, seedRef.current, setReading);
+    // A ramp outside `ConsensusFeed` would sit on its seed for good, which for a
+    // block still acquiring consensus is a ramp that silently stops. Say so
+    // rather than shipping a frozen hairline.
+    if (consensusNeedsPolling(seedRef.current)) {
+      console.warn(
+        `ConsensusRamp for block ${blockNumber} is outside a <ConsensusFeed>, so it cannot follow ` +
+          'the block past the state its event carried',
+      );
+    }
+    return;
+  }, [track, blockNumber]);
+
+  // The stops the block's record actually contains, ascending. `at` is the whole
+  // map the API holds, so this is the chain's sequence, not our polling's.
+  const stops = useMemo(() => stopsIn(reading.at), [reading.at]);
+
+  // Whether this is something happening now, decided from the FIRST reading —
+  // the moment the answer matters. A row that arrives already final is a record
+  // being read, and reading a record is not an event.
+  const live = useRef<boolean | null>(null);
+  if (live.current === null && reading.phase !== 'reading') {
+    live.current = isCurrent(reading);
+  }
+
+  return { phase: reading.phase, stops, at: reading.at, live: live.current };
+}
 
 // ---------------------------------------------------------------------------
 // What the record says
@@ -292,12 +480,12 @@ function newestAt(at: CommitTimes): number | null {
 
 /**
  * Whether the block is something happening now: still moving, or final within
- * `LIVE_MS`. Decided once, on the first read, because that is the moment the
- * answer matters — the ramp either caught the event or it is reading a record.
+ * `LIVE_MS`.
  */
-function isCurrent(record: ConsensusRecord): boolean {
-  if (!FINAL_STATES.has(record.state)) return true;
-  const newest = newestAt(record.at);
+function isCurrent(reading: Reading): boolean {
+  if (reading.phase !== 'live') return false;
+  if (reading.state === null || !FINAL_CONSENSUS_STATES.includes(reading.state)) return true;
+  const newest = newestAt(reading.at);
   return newest !== null && Date.now() - newest <= LIVE_MS;
 }
 
@@ -385,12 +573,15 @@ function stopColor(index: number, stop: number | null, phase: Phase, drained: bo
 // The ramp
 // ---------------------------------------------------------------------------
 
-export function ConsensusRamp({ blockNumber }: { blockNumber: number }) {
-  // The placeholder identity the API's guard wants, from the one place the app
-  // keeps it. Consensus itself is public chain data; the route is only behind
-  // the same guard as every other Sente route.
-  const { auth, api } = useSession();
-  const { phase, stops, at, live } = useConsensus(blockNumber, auth.address === null ? null : api);
+export function ConsensusRamp({
+  blockNumber,
+  consensus,
+}: {
+  blockNumber: number;
+  /** The event's own `consensus` block. What the ramp opens on (SEN-35). */
+  consensus?: EventConsensus | null;
+}) {
+  const { phase, stops, at, live } = useConsensus(blockNumber, consensus);
 
   const [width, setWidth] = useState(0);
   /** The stop being shown. Walks up the record's own sequence, one beat apart. */

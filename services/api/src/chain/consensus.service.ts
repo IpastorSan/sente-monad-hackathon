@@ -24,6 +24,12 @@
  *      `Proposed` / `Voted` / `Finalized`. `Verified` is simply unobservable
  *      over HTTP and is never invented.
  *
+ * The two sources do not name a block the same way — the socket reports Monad's
+ * consensus `blockId`, `eth_getBlockByNumber` reports the execution hash — so a
+ * record keeps both under their own names and a reorg is only ever decided
+ * between two ids from the SAME source (SEN-35). Comparing across them made
+ * every socket flap look like a reorg.
+ *
  * Erasable syntax only and no Nest imports: `scripts/consensus-watch.ts` loads
  * this file under node's type stripping (CLAUDE.md gotcha 10). The Nest wiring
  * lives in `chain.module.ts`.
@@ -110,14 +116,34 @@ export const POLL_TAG_STATES: Record<PollTag, CommitState> = {
  * where a block skipped `Voted`). Instances are replaced, never mutated —
  * `stateOf` hands out the stored record.
  */
+/**
+ * Which source an id came from. This matters because the two sources do NOT
+ * report the same value for the same block: the socket reports Monad's
+ * consensus `blockId`, the HTTP tags report the execution block hash. An id is
+ * only ever a reorg witness against another id from its own source (SEN-35).
+ */
+export type BlockIdSource = 'socket' | 'http';
+
+/** One observation's identity for a height: the id, and which source said so. */
+export interface BlockIdentity {
+  readonly id: string;
+  readonly source: BlockIdSource;
+}
+
 export interface ConsensusRecord {
   /** The height. The map key, and the number an order's event carries. */
   readonly blockNumber: number;
   /**
-   * Monad's id for the block. Stable across every one of its commit states,
-   * which is exactly what makes it the reorg witness.
+   * Monad's consensus id for the block. Stable across every one of its commit
+   * states, which is what makes it the reorg witness. Only the socket reports
+   * it, so it is `undefined` for a height the HTTP fallback found on its own.
    */
-  readonly blockId: string;
+  readonly blockId?: string;
+  /**
+   * The execution hash, as `eth_getBlockByNumber` reports it. A DIFFERENT value
+   * from `blockId` for the same block — never compare the two.
+   */
+  readonly blockHash?: string;
   /** The furthest state observed. Never regresses, however the pushes arrive. */
   readonly state: CommitState;
   readonly at: Readonly<CommitTimes>;
@@ -127,7 +153,9 @@ export interface ConsensusRecord {
 export interface ConsensusTransition {
   readonly blockNumber: number;
   /** The block this is about — the OLD one when `state` is `reorged`. */
-  readonly blockId: string;
+  readonly blockId?: string;
+  /** Its execution hash, when the fallback is what saw this block. */
+  readonly blockHash?: string;
   readonly state: BlockState;
   /** The state it moved from; `undefined` when the block is first seen. */
   readonly previousState?: BlockState;
@@ -156,10 +184,13 @@ export interface ConsensusSource {
 // What the service needs from the outside
 // ---------------------------------------------------------------------------
 
-/** One block as the HTTP tags report it: a height and an id. */
+/** One block as the HTTP tags report it: a height and its execution hash. */
 export interface TaggedBlock {
   readonly number: number;
-  /** The block hash. Stands in for `blockId`, which only the socket reports. */
+  /**
+   * The block hash. NOT Monad's `blockId`, which only the socket reports — it
+   * is stored as `blockHash` and only ever compared against another hash.
+   */
   readonly id: string;
 }
 
@@ -270,6 +301,16 @@ export function connectWebSocket(url: string): ConsensusSocket {
 // ---------------------------------------------------------------------------
 // The service
 // ---------------------------------------------------------------------------
+
+/** The id this record holds from `source`, or `undefined` if that source has not spoken. */
+function idFrom(record: ConsensusRecord, source: BlockIdSource): string | undefined {
+  return source === 'socket' ? record.blockId : record.blockHash;
+}
+
+/** One observation's id, under the field name its own source owns. */
+function idFields(identity: BlockIdentity): Pick<ConsensusRecord, 'blockId' | 'blockHash'> {
+  return identity.source === 'socket' ? { blockId: identity.id } : { blockHash: identity.id };
+}
 
 /** Epoch ms of the block's first observation, derived from `at`. */
 export function firstObservedAt(record: ConsensusRecord): number {
@@ -484,7 +525,7 @@ export class ConsensusService implements ConsensusSource {
       this.logger?.warn(`consensus: dropped an unrecognised ${MONAD_NEW_HEADS} head`);
       return;
     }
-    this.apply(head.blockNumber, head.blockId, head.state, this.now());
+    this.apply(head.blockNumber, { id: head.blockId, source: 'socket' }, head.state, this.now());
   }
 
   // -- the map --------------------------------------------------------------
@@ -493,16 +534,33 @@ export class ConsensusService implements ConsensusSource {
    * Fold one observation in, emitting whatever it changed. Everything the two
    * sources know arrives here, so a block that skips `Voted` needs no special
    * case: the states are simply the ones that were seen.
+   *
+   * SEN-35: a reorg is decided by comparing the incoming id against the id this
+   * record already holds FROM THE SAME SOURCE. The socket's `blockId` and the
+   * fallback's block hash are different values for the same block, so comparing
+   * across the two reported a reorg on every socket flap — the ramp played
+   * backwards and said "reordered, resubmitting" about a block that never
+   * moved. A source whose id this record has not seen yet simply contributes
+   * it; learning the socket's id for a height the fallback found is not a
+   * reorg, and does not reset what the block has already been through.
    */
-  private apply(blockNumber: number, blockId: string, state: CommitState, when: number): void {
+  private apply(
+    blockNumber: number,
+    identity: BlockIdentity,
+    state: CommitState,
+    when: number,
+  ): void {
     const existing = this.blocks.get(blockNumber);
+    const held = existing ? idFrom(existing, identity.source) : undefined;
+    const reorged = held !== undefined && held !== identity.id;
 
-    if (existing && existing.blockId !== blockId) {
+    if (existing && reorged) {
       // A reorg: this height now holds a different block. Say so about the old
       // one before the new one takes its place in the map.
       this.emit({
         blockNumber,
         blockId: existing.blockId,
+        blockHash: existing.blockHash,
         state: 'reorged',
         previousState: existing.state,
         at: existing.at,
@@ -511,10 +569,12 @@ export class ConsensusService implements ConsensusSource {
       });
     }
 
-    if (!existing || existing.blockId !== blockId) {
+    if (!existing || reorged) {
+      // A fresh block carries only the id that was actually observed: the other
+      // source's id, if there was one, described the block that is now gone.
       const record: ConsensusRecord = {
         blockNumber,
-        blockId,
+        ...idFields(identity),
         state,
         at: commitTimes(state, when),
       };
@@ -529,11 +589,19 @@ export class ConsensusService implements ConsensusSource {
       return;
     }
 
-    // Same block. A repeat or an out-of-order push is not a transition.
-    if (STATE_RANK[state] <= STATE_RANK[existing.state]) return;
+    // Same block, possibly seen for the first time by this source.
+    const known: ConsensusRecord =
+      held === undefined ? { ...existing, ...idFields(identity) } : existing;
+
+    // A repeat or an out-of-order push is not a transition — but the id it
+    // carried is still worth keeping.
+    if (STATE_RANK[state] <= STATE_RANK[existing.state]) {
+      if (known !== existing) this.blocks.set(blockNumber, known);
+      return;
+    }
 
     const record: ConsensusRecord = {
-      ...existing,
+      ...known,
       state,
       at: { ...existing.at, ...commitTimes(state, when) },
     };
@@ -590,7 +658,7 @@ export class ConsensusService implements ConsensusSource {
     );
     for (const { tag, block } of readings) {
       if (!block) continue;
-      this.apply(block.number, block.id, POLL_TAG_STATES[tag], observedAt);
+      this.apply(block.number, { id: block.id, source: 'http' }, POLL_TAG_STATES[tag], observedAt);
     }
   }
 
