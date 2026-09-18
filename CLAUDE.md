@@ -113,9 +113,24 @@ unrecoverable and costs every user their account.**
 ### PRF salt namespaces: `sente.prf.v1.*`
 
 `apps/mobile/src/auth/derive.ts` derives each key domain's salt as
-`sha256("sente.prf.v1." + namespace)` — `wallet` today, `agent-memory` reserved. One passkey, many
-independent keys. These strings are inputs to the derivation exactly as `rpId` is, so they are
-equally permanent. Add namespaces; never rename one.
+`sha256("sente.prf.v1." + namespace)` — `wallet` and `device` today, `agent-memory` reserved. One
+passkey, many independent keys. These strings are inputs to the derivation exactly as `rpId` is, so
+they are equally permanent. Add namespaces; never rename one.
+
+| Namespace      | Key                    | Owns                                             |
+| -------------- | ---------------------- | ------------------------------------------------ |
+| `wallet`       | secp256k1 EOA (BIP-44) | signs on chain; the user's identity to our API   |
+| `device`       | P-256 (SEN-38)         | the user's Privy wallet and its agents' policies |
+| `agent-memory` | reserved               | the encrypted agent-memory vault                 |
+
+`device` carries a consequence the other two do not: the salt becomes permanent the moment a Privy
+wallet is registered under the key it derives, because that key is the wallet's **owner** and Privy
+will not accept a mutation signed by anything else. There is no recovery path — renaming the salt
+does not lock the user out of an app, it makes their funds unreachable.
+
+**A second salt costs a second WebAuthn prompt.** mera returns the first PRF output for one salt per
+ceremony (`getPasskeyPrfOutput`), so `signIn` runs a second assertion for the `device` salt, pinned
+to the credential the first one chose. Two prompts at sign-in, none afterwards.
 
 ## Gotchas that will burn you
 

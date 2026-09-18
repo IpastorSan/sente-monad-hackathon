@@ -77,6 +77,19 @@ test('prfSaltFor is deterministic across calls', () => {
   assert.deepEqual(prfSaltFor('wallet'), prfSaltFor('wallet'));
 });
 
+test('the namespace list is append-only and its salts are pinned', () => {
+  // Counting namespaces would not catch the mistake that matters. These strings
+  // are permanent inputs to the derivation (CLAUDE.md), so a rename silently
+  // strands every key already derived under the old salt — including, for
+  // `device`, every Privy wallet whose owner the phone could then no longer
+  // reproduce. Pin the list and the bytes, not the length.
+  assert.deepEqual([...PRF_NAMESPACES], ['wallet', 'agent-memory', 'device']);
+  assert.equal(
+    bytesToHex(prfSaltFor('device')),
+    '0x8a34f722d90c3832e7745deef93794a35a96616cf76d0db2ddab132d03d366f8',
+  );
+});
+
 test('deriveEvmKey returns a 32-byte key and does not mutate its input', () => {
   const prf = Uint8Array.from(PRF_A);
   const key = deriveEvmKey(prf);
