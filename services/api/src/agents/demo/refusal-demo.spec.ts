@@ -23,6 +23,7 @@ import { createOpenRouterKeys, CreditsService } from '../../credits/credits.serv
 import { InMemoryCreditKeyStore } from '../../credits/store/credit-key-store';
 import { FAKE_MANAGEMENT_KEY, fakeOpenRouter } from '../../credits/testing/fake-openrouter';
 import { AgentsService } from '../agents.service';
+import { ServerMandateOwners } from '../mandate-owner';
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { privyTransaction } from '../privy/agent-wallet';
 import { generateAuthorizationKey } from '../privy/authorization-key';
@@ -135,7 +136,7 @@ async function world() {
   });
   const store = new InMemoryAgentStore();
   const events = new InMemoryAgentEventLog();
-  const agents = new AgentsService(store, provider);
+  const agents = new AgentsService(store, provider, new ServerMandateOwners());
   const venuesFor = (a: AgentRecord) =>
     venues.forAgent({ agentId: a.id, walletId: a.walletId, address: a.address });
   const tools = {

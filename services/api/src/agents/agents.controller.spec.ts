@@ -8,6 +8,7 @@ import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
 import { AGENT_REFUSAL_REASONS, agentErrorStatus } from './agents.errors';
 import { AgentsService } from './agents.service';
+import { ServerMandateOwners } from './mandate-owner';
 import {
   AgentEventsQueryDto,
   AgentIdParamDto,
@@ -60,7 +61,7 @@ function setup(wallets = new FakeAgentWalletProvider()) {
     autoStart: false,
   });
   const controller = new AgentsController(
-    new AgentsService(new InMemoryAgentStore(), wallets),
+    new AgentsService(new InMemoryAgentStore(), wallets, new ServerMandateOwners()),
     auth,
     // The run route has its own spec (runner/run-route.spec.ts).
     {} as never,

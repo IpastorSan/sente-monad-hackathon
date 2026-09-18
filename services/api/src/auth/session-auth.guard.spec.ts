@@ -3,6 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import { AgentsController } from '../agents/agents.controller';
 import { AgentsService } from '../agents/agents.service';
+import { ServerMandateOwners } from '../agents/mandate-owner';
 import { InMemoryAgentEventLog } from '../agents/events/agent-event-log';
 import { InMemoryAgentStore } from '../agents/store/agent-store';
 import { FakeAgentWalletProvider } from '../agents/testing/fake-agent-wallet.provider';
@@ -130,7 +131,11 @@ describe('challenge -> signature -> token -> GET /agents', () => {
     expect(new SessionAuthGuard().canActivate(contextFor(target))).toBe(true);
 
     const agents = new AgentsController(
-      new AgentsService(new InMemoryAgentStore(), new FakeAgentWalletProvider()),
+      new AgentsService(
+        new InMemoryAgentStore(),
+        new FakeAgentWalletProvider(),
+        new ServerMandateOwners(),
+      ),
       new RequestContextAuth(target),
       {} as never,
       new InMemoryAgentEventLog(),

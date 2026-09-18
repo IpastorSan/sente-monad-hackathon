@@ -9,6 +9,7 @@ import type { CreditsConfig } from '../../../credits/credits.config';
 import { InMemoryCreditKeyStore } from '../../../credits/store/credit-key-store';
 import { FAKE_MANAGEMENT_KEY, fakeOpenRouter } from '../../../credits/testing/fake-openrouter';
 import { AgentsService } from '../../agents.service';
+import { ServerMandateOwners } from '../../mandate-owner';
 import { InMemoryAgentEventLog } from '../../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../../store/agent-store';
 import { FakeAgentWalletProvider } from '../../testing/fake-agent-wallet.provider';
@@ -69,7 +70,7 @@ export async function runnerHarness(
     writeSpacingMs: 0,
     ...options.config,
   };
-  const agents = new AgentsService(store, new FakeAgentWalletProvider());
+  const agents = new AgentsService(store, new FakeAgentWalletProvider(), new ServerMandateOwners());
   const runner = new AgentRunnerService(
     agents,
     store,

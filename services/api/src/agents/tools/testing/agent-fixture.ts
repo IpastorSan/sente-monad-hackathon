@@ -47,6 +47,8 @@ export function testAgent(patch: Partial<AgentRecord> = {}): AgentRecord {
     walletId: 'wallet-1',
     address: getAddress(`0x${'4'.repeat(40)}`),
     policyId: 'policy-1',
+    // Server-owned: the mode these specs run in (SEN-43).
+    ownerKind: 'server',
     mcpTokenHash: 'a'.repeat(64),
     status: 'active',
     policyCleared: false,

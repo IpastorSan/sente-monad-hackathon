@@ -2,7 +2,7 @@ import type { Mandate } from '@sente/mandate';
 import type { Address, Hash } from 'viem';
 
 import type { AgentDripRefusalReason } from '../../gas/gas.errors';
-import type { AgentModel } from '../agents.config';
+import type { AgentMandateOwnerMode, AgentModel } from '../agents.config';
 
 /** DI token for agent persistence. */
 export const AGENT_STORE = Symbol('AGENT_STORE');
@@ -53,6 +53,20 @@ export interface AgentRecord {
   readonly address: Address;
   /** The policy that bounds the wallet. Emptied (`[]`) on revoke. */
   readonly policyId: string;
+  /**
+   * WHO CAN CHANGE THIS AGENT'S MANDATE (SEN-43).
+   *
+   * - `device` — the quorum holding the hirer's phone key owns the policy and
+   *   the wallet, so amend and revoke need a signature from that phone (SEN-44).
+   *   This server's `PRIVY_MANDATE_OWNER_KEY` gets a 401 on that policy.
+   * - `server` — this server's mandate quorum owns them, so `AgentsService` can
+   *   amend and revoke on its own. Dev and demo only.
+   *
+   * Recorded on the agent rather than derived at read time because the owner is
+   * fixed at provision: a user who registers a wallet later does not retroactively
+   * gain control of an agent whose policy a server quorum already owns.
+   */
+  readonly ownerKind: AgentMandateOwnerMode;
   /**
    * sha256 (hex) of the agent's MCP bearer token. The token itself is handed
    * out once, by `hire`, and never stored — see `mcp-token.ts`.

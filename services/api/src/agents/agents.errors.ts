@@ -65,6 +65,12 @@ export const AGENT_REFUSAL_REASONS = [
   /** The wallet provider failed to create the wallet or its policy. Nothing was stored. */
   'wallet_provision_failed',
   /**
+   * The caller has no registered user wallet, so there is no device-key quorum
+   * to own the new agent's mandate (SEN-43). `POST /wallet/register` first. Only
+   * reachable in `device` mode — `AGENT_MANDATE_OWNER=server` skips the lookup.
+   */
+  'wallet_not_registered',
+  /**
    * The provider failed to replace the wallet's policy. On amend, the old
    * mandate still stands. On revoke, the agent IS revoked and will not run,
    * but its policy still holds the old rules until a retried revoke succeeds.
@@ -110,6 +116,9 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   // 409: the request is well-formed; the agent's state forbids it, for good.
   agent_revoked: 409,
   wallet_provision_failed: 502,
+  // 409: the request is well-formed, the caller's account is just not ready for
+  // it yet. Registering a wallet makes the same request succeed.
+  wallet_not_registered: 409,
   wallet_policy_update_failed: 502,
   run_in_progress: 409,
   // 402 Payment Required: exactly what OpenRouter itself answered.

@@ -71,4 +71,34 @@ describe('loadAgentsConfig', () => {
     expect(message).toMatch(/must be different keys/);
     for (const secret of SECRETS) expect(message).not.toContain(secret);
   });
+
+  describe('AGENT_MANDATE_OWNER (SEN-43)', () => {
+    it('defaults to device, configured or not: the safe mode is the invisible one', () => {
+      expect(loadAgentsConfig({}).mandateOwner).toBe('device');
+      expect(loadAgentsConfig(FULL).mandateOwner).toBe('device');
+      expect(loadAgentsConfig({ ...FULL, AGENT_MANDATE_OWNER: '  ' }).mandateOwner).toBe('device');
+    });
+
+    it('accepts server, the dev/demo mode', () => {
+      expect(loadAgentsConfig({ ...FULL, AGENT_MANDATE_OWNER: 'server' }).mandateOwner).toBe(
+        'server',
+      );
+    });
+
+    it('refuses server in production: it would leave the mandate key on this server', () => {
+      const message = errorOf({
+        ...FULL,
+        AGENT_MANDATE_OWNER: 'server',
+        NODE_ENV: 'production',
+      });
+      expect(message).toMatch(/refused in production/);
+      for (const secret of SECRETS) expect(message).not.toContain(secret);
+    });
+
+    it('refuses an unknown mode rather than guessing which one was meant', () => {
+      expect(errorOf({ ...FULL, AGENT_MANDATE_OWNER: 'phone' })).toMatch(
+        /AGENT_MANDATE_OWNER must be one of device, server/,
+      );
+    });
+  });
 });

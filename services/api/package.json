@@ -18,6 +18,7 @@
     "privy:keys": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-keys.ts",
     "probe:privy": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-probe.ts",
     "probe:privy-sponsor": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-sponsor-probe.ts",
+    "probe:device-owner": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/sen43-device-owner-probe.ts",
     "agent:fund": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/fund-agent.ts",
     "agent:venues-live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-venues-live.ts",
     "agent:withdraw-live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-withdraw-live.ts",

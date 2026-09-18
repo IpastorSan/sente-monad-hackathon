@@ -49,6 +49,7 @@ function agent(over: Partial<AgentRecord> & { id: string; address: Address }): A
     mandate: parseMandate(MANDATE),
     walletId: `wallet-${over.id}`,
     policyId: `policy-${over.id}`,
+    ownerKind: 'server',
     mcpTokenHash: `hash-${over.id}`,
     status: 'active',
     policyCleared: false,

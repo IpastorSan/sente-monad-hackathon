@@ -1,11 +1,21 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { compileMandate, MandateError, parseMandate, type Mandate } from '@sente/mandate';
+import {
+  compileMandate,
+  MandateError,
+  parseMandate,
+  type Mandate,
+  type PolicyRule,
+} from '@sente/mandate';
 
 import type { Principal } from '../auth/principal';
 import { GasDripService } from '../gas/gas.service';
-import { AGENT_WALLETS, type AgentWalletProvider } from './agent-wallet.provider';
+import {
+  AGENT_WALLETS,
+  type AgentWalletProvider,
+  type ProvisionedAgentWallet,
+} from './agent-wallet.provider';
 import { AGENT_MODELS, isAgentModel } from './agents.config';
 import {
   AgentRefusedError,
@@ -13,6 +23,7 @@ import {
   type AgentRefusalReason,
 } from './agents.errors';
 import { AGENT_NAME_MAX_LENGTH } from './dto/agent.dto';
+import { MANDATE_OWNERS, type MandateOwners } from './mandate-owner';
 import {
   AGENT_STORE,
   type AgentGasFunding,
@@ -103,6 +114,18 @@ export class AgentsService {
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_WALLETS) private readonly wallets: AgentWalletProvider,
     /**
+     * Who owns each new agent's mandate (SEN-43).
+     *
+     * REQUIRED, unlike the two below, and that is the point: they degrade to a
+     * missing feature, this one would degrade to a missing GUARANTEE. An absent
+     * binding means `ServerMandateOwners` — every mandate owned by a key this
+     * process holds — which is exactly what `AGENT_MANDATE_OWNER` refuses to do
+     * silently. So a dropped wire has to be a boot failure, not a default. A
+     * caller that really wants the server-owned shape says
+     * `new ServerMandateOwners()` out loud.
+     */
+    @Inject(MANDATE_OWNERS) private readonly owners: MandateOwners,
+    /**
      * The MON gas drip (SEN-14). Optional so a caller without the gas module
      * still hires; its agents come back `gasFunded: false`,
      * `gas_drip_unavailable`. AgentsModule imports GasModule, so the app has it.
@@ -138,15 +161,8 @@ export class AgentsService {
     }
     const mandate = this.parse(input.mandate);
     const rules = compileMandate(mandate);
-
     const id = randomUUID();
-    let wallet;
-    try {
-      // The id, not the user-chosen name: the display name goes to a third party.
-      wallet = await this.wallets.provision({ rules, displayName: `sente-agent-${id}` });
-    } catch (error) {
-      throw this.walletFailure('wallet_provision_failed', error, 'could not provision the wallet');
-    }
+    const { wallet, ownerQuorumId } = await this.provisionWallet(principal, id, rules);
 
     const mcpToken = generateMcpToken();
     const now = new Date();
@@ -161,6 +177,7 @@ export class AgentsService {
       walletId: wallet.walletId,
       address: wallet.address,
       policyId: wallet.policyId,
+      ownerKind: this.owners.mode,
       mcpTokenHash: hashMcpToken(mcpToken),
       status: 'active',
       policyCleared: false,
@@ -173,7 +190,8 @@ export class AgentsService {
     await this.store.insert(agent);
     this.logger.log(
       `hired agent ${id} for ${principal.userId}: wallet ${wallet.address} ` +
-        `policy ${wallet.policyId} (${rules.length} rules, ${this.wallets.name})`,
+        `policy ${wallet.policyId} (${rules.length} rules, ${this.wallets.name}, ` +
+        `owner ${this.describeOwner(ownerQuorumId)})`,
     );
     return this.completeHire(principal, agent, mcpToken);
   }
@@ -212,15 +230,10 @@ export class AgentsService {
     }
     const mandate = this.parse(input.mandate);
     const rules = compileMandate(mandate);
-
     const id = randomUUID();
-    let wallet;
-    try {
-      // Same naming rule as hire: the id, not a name a third party supplied.
-      wallet = await this.wallets.provision({ rules, displayName: `sente-agent-${id}` });
-    } catch (error) {
-      throw this.walletFailure('wallet_provision_failed', error, 'could not provision the wallet');
-    }
+    // Provisioned for the FORKER, so the owner quorum is theirs and never the
+    // source agent's: a fork is bounded by the person who made it.
+    const { wallet, ownerQuorumId } = await this.provisionWallet(principal, id, rules);
 
     const mcpToken = generateMcpToken();
     const now = new Date();
@@ -236,6 +249,7 @@ export class AgentsService {
       walletId: wallet.walletId,
       address: wallet.address,
       policyId: wallet.policyId,
+      ownerKind: this.owners.mode,
       mcpTokenHash: hashMcpToken(mcpToken),
       status: 'active',
       policyCleared: false,
@@ -249,10 +263,67 @@ export class AgentsService {
     await this.store.insert(agent);
     this.logger.log(
       `forked agent ${source.id} into ${id} for ${principal.userId}: wallet ${wallet.address} ` +
-        `policy ${wallet.policyId} (${rules.length} rules, prompt ` +
+        `policy ${wallet.policyId} (${rules.length} rules, owner ` +
+        `${this.describeOwner(ownerQuorumId)}, prompt ` +
         `${source.public ? 'copied' : 'not copied: the source is private'})`,
     );
     return this.completeHire(principal, agent, mcpToken);
+  }
+
+  /**
+   * The whole enclave-facing half of a hire: who will own the new mandate, the
+   * wallet and policy created under them, and the one failure both share.
+   * `hire` and `fork` differ in everything they STORE and in nothing they
+   * provision, so this is shared rather than written twice.
+   *
+   * The display name is the id, never the user-chosen name: it goes to a third
+   * party. The owner lookup sits outside the try on purpose — a caller with no
+   * registered wallet is a refusal of theirs, not a provider failure.
+   */
+  private async provisionWallet(
+    principal: Principal,
+    id: string,
+    rules: readonly PolicyRule[],
+  ): Promise<{ wallet: ProvisionedAgentWallet; ownerQuorumId: string | undefined }> {
+    const ownerQuorumId = await this.ownerQuorum(principal);
+    try {
+      const wallet = await this.wallets.provision({
+        rules,
+        displayName: `sente-agent-${id}`,
+        ownerQuorumId,
+      });
+      return { wallet, ownerQuorumId };
+    } catch (error) {
+      throw this.walletFailure('wallet_provision_failed', error, 'could not provision the wallet');
+    }
+  }
+
+  /**
+   * The quorum that will own this hire's policy and wallet, or `undefined` in
+   * `server` mode (the provider then uses its own mandate quorum).
+   *
+   * Resolved BEFORE anything is provisioned, so a caller with no wallet is
+   * refused without leaving a Privy policy behind — the same rule the rest of
+   * `hire` follows.
+   */
+  private async ownerQuorum(principal: Principal): Promise<string | undefined> {
+    if (this.owners.mode === 'server') return undefined;
+    const quorumId = await this.owners.ownerQuorumFor(principal.userId);
+    if (!quorumId) {
+      throw new AgentRefusedError(
+        'wallet_not_registered',
+        'this account has no wallet yet, so there is no device key to own the agent’s ' +
+          'mandate; POST /wallet/register from the phone first',
+      );
+    }
+    return quorumId;
+  }
+
+  /** For the hire log: which key can change this agent's mandate from now on. */
+  private describeOwner(ownerQuorumId: string | undefined): string {
+    return ownerQuorumId === undefined
+      ? 'server mandate quorum (this server CAN amend)'
+      : `device quorum ${ownerQuorumId} (this server cannot amend)`;
   }
 
   /**
@@ -345,6 +416,11 @@ export class AgentsService {
    * Recompiles and replaces the wallet's policy, then records the new mandate.
    * If the provider fails, the stored mandate stays the old one — which is
    * still what the enclave enforces.
+   *
+   * ON A `ownerKind: 'device'` AGENT THIS FAILS, AND THAT IS THE POINT (SEN-43):
+   * the policy is owned by the hirer's phone key, so Privy answers 401 and the
+   * caller gets `wallet_policy_update_failed`. SEN-44 adds the path that carries
+   * the phone's signature; until it lands, a device-owned mandate is immutable.
    */
   amendMandate(principal: Principal, id: string, rawMandate: unknown): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {
@@ -380,6 +456,12 @@ export class AgentsService {
    * wait on, or be blocked by, the provider. If the policy update fails the
    * agent stays revoked with `policyCleared: false`, and calling revoke again
    * retries it. Idempotent once cleared.
+   *
+   * That ordering is what keeps revoke useful on a `ownerKind: 'device'` agent
+   * (SEN-43): this server cannot empty a policy the phone owns, so the clear
+   * fails with a 401, but the agent is already `revoked` — the runner and its
+   * MCP token refuse it, so nothing drives the wallet. Emptying the policy needs
+   * the phone's signature (SEN-44).
    */
   revoke(principal: Principal, id: string): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {

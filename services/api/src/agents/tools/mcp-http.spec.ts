@@ -8,6 +8,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
 import { AgentsService } from '../agents.service';
+import { ServerMandateOwners } from '../mandate-owner';
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore } from '../store/agent-store';
 import { FakeAgentWalletProvider } from '../testing/fake-agent-wallet.provider';
@@ -53,7 +54,7 @@ describe('/mcp over HTTP', () => {
 
   beforeEach(async () => {
     const store = new InMemoryAgentStore();
-    service = new AgentsService(store, new FakeAgentWalletProvider());
+    service = new AgentsService(store, new FakeAgentWalletProvider(), new ServerMandateOwners());
     fakes = fakeVenues();
     const tools = new AgentTools({
       store,

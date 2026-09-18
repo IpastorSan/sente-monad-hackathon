@@ -208,6 +208,10 @@ const authProvider: Provider = {
     WalletService,
     UserWalletService,
   ],
-  exports: [WalletService, UserWalletService],
+  // USER_WALLET_REGISTRY is exported because `agents/` needs one fact from it:
+  // the device-key quorum that must own a new agent's mandate (SEN-43). It is
+  // the SAME instance, deliberately — a second registry would be a second set of
+  // bindings and hire would never find the wallet register just created.
+  exports: [WalletService, UserWalletService, USER_WALLET_REGISTRY],
 })
 export class WalletModule {}
