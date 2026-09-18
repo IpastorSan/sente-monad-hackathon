@@ -50,19 +50,19 @@ mise exec -- npm run verify:topics          # 5 windows of 100 blocks
 mise exec -- npm run verify:topics -- 20    # 20 windows
 ```
 
-| Contract           | Event                  | Indexed? | Leaderboard role               |
-| ------------------ | ---------------------- | -------- | ------------------------------ |
-| KuruOrderBook ×4   | `TradesPacked`         | ✓ live   | fills → `Trade` + stats        |
-| KuruOrderBook ×4   | `BookUpdatesPacked`    | ✓ live   | order lifecycle (`MakerOrderUpdate`) |
-| KuruAccountCore    | `SpotReserveUpdated`   | ✓ live   | absolute balances              |
-| KuruAccountCore    | `Deposit` / `Withdrawal` | ✓      | cumulative custody flow        |
-| KuruAccountCore    | `AccountRegistered`    | ✓        | account id → address           |
-| PerplExchange      | `OrderRequestV2`       | ✓ live   | taker identity + intent        |
-| PerplExchange      | `MakerOrderFilledV2`   | ✓ live   | maker leg                      |
-| PerplExchange      | `TakerOrderFilledV2`   | ✓ live   | `Trade` row                    |
-| PerplExchange      | `AccountCreated`       | rare     | account id → address           |
-| PerplExchange      | `CollateralDeposit` / `CollateralWithdrawal` | rare | custody, `balanceCNS` |
-| PerplExchange      | `ContractAdded`        | rare     | a perp listed inside the range |
+| Contract         | Event                                        | Indexed? | Leaderboard role                     |
+| ---------------- | -------------------------------------------- | -------- | ------------------------------------ |
+| KuruOrderBook ×4 | `TradesPacked`                               | ✓ live   | fills → `Trade` + stats              |
+| KuruOrderBook ×4 | `BookUpdatesPacked`                          | ✓ live   | order lifecycle (`MakerOrderUpdate`) |
+| KuruAccountCore  | `SpotReserveUpdated`                         | ✓ live   | absolute balances                    |
+| KuruAccountCore  | `Deposit` / `Withdrawal`                     | ✓        | cumulative custody flow              |
+| KuruAccountCore  | `AccountRegistered`                          | ✓        | account id → address                 |
+| PerplExchange    | `OrderRequestV2`                             | ✓ live   | taker identity + intent              |
+| PerplExchange    | `MakerOrderFilledV2`                         | ✓ live   | maker leg                            |
+| PerplExchange    | `TakerOrderFilledV2`                         | ✓ live   | `Trade` row                          |
+| PerplExchange    | `AccountCreated`                             | rare     | account id → address                 |
+| PerplExchange    | `CollateralDeposit` / `CollateralWithdrawal` | rare     | custody, `balanceCNS`                |
+| PerplExchange    | `ContractAdded`                              | rare     | a perp listed inside the range       |
 
 Kuru addresses are the "Set C" Spot V2 deployment; the source of truth is
 `packages/venues/src/kuru/constants.ts` and this file is a copy, because the
@@ -82,17 +82,17 @@ Envio maps a schema relation `market: Market!` to a plain `market_id` column on
 the entity, so handlers write `market_id`, not `market`. Derived fields
 (`@derivedFrom`) do not exist on the write side at all.
 
-| Entity               | One row per                | Read by the leaderboard as        |
-| -------------------- | -------------------------- | --------------------------------- |
-| `Account`            | venue account              | identity + cross-market rollup    |
-| `AccountMarketStats` | (account, market)          | **the leaderboard row**           |
-| `AccountBalance`     | (account, token)           | custody                           |
-| `Trade`              | match (see §perpl)         | trade tape                        |
-| `Market`             | market                     | market metadata + rollup          |
-| `MarketDay`          | (market, UTC day)          | daily series, VWAP                |
-| `MakerOrderUpdate`   | resting order update       | order lifecycle feed              |
-| `PerplOrderContext`  | Perpl order request        | internal join key (`@internal`)   |
-| `PerplMakerFill`     | Perpl maker leg            | internal join key (`@internal`)   |
+| Entity               | One row per          | Read by the leaderboard as      |
+| -------------------- | -------------------- | ------------------------------- |
+| `Account`            | venue account        | identity + cross-market rollup  |
+| `AccountMarketStats` | (account, market)    | **the leaderboard row**         |
+| `AccountBalance`     | (account, token)     | custody                         |
+| `Trade`              | match (see §perpl)   | trade tape                      |
+| `Market`             | market               | market metadata + rollup        |
+| `MarketDay`          | (market, UTC day)    | daily series, VWAP              |
+| `MakerOrderUpdate`   | resting order update | order lifecycle feed            |
+| `PerplOrderContext`  | Perpl order request  | internal join key (`@internal`) |
+| `PerplMakerFill`     | Perpl maker leg      | internal join key (`@internal`) |
 
 Ids are venue- and chain-qualified so the two venues never collide:
 `kuru-62`, `perpl-1`, `kuru-<orderBookAddress>`, `perpl-16`,
@@ -108,7 +108,7 @@ quote atoms, floored:
   realises `(price − avgCost) × closed` for a long (mirrored for a short);
 - a **flip** consumes the whole old basis and reopens the remainder at the trade
   price;
-- `wins`/`losses` count each *reducing* fill by the sign of the delta it
+- `wins`/`losses` count each _reducing_ fill by the sign of the delta it
   produced, so a flip counts once.
 
 Two things it is not:
@@ -118,7 +118,7 @@ Two things it is not:
    netted out of `realizedPnlUsd`.
 2. **Perpl funding and premium are invisible to fills.** A perp position's PnL
    includes funding and premium settlements that no fill event carries, so on
-   Perpl this number is a *price-based approximation* of what the exchange
+   Perpl this number is a _price-based approximation_ of what the exchange
    actually settled. See §perpl for the authoritative source.
 
 `boughtBase`/`soldBase`/`baseVolume` are scaled by the **book/LNS size unit**
@@ -131,10 +131,10 @@ decimals as display metadata.
 
 AccountCore is read three ways, and they answer different questions:
 
-| Field                                      | Meaning                                                             |
-| ------------------------------------------ | ------------------------------------------------------------------- |
-| `deposited`, `withdrawn`, `net`            | cumulative wallet ↔ venue **flow**; `net` is not a balance          |
-| `freeRaw`, `reservedRaw`                   | the **balance** the venue reports, written as absolute values        |
+| Field                           | Meaning                                                       |
+| ------------------------------- | ------------------------------------------------------------- |
+| `deposited`, `withdrawn`, `net` | cumulative wallet ↔ venue **flow**; `net` is not a balance    |
+| `freeRaw`, `reservedRaw`        | the **balance** the venue reports, written as absolute values |
 
 The absolute pair is what makes this robust: a `SpotReserveUpdated` that never
 arrives is corrected by the next one, whereas an accumulated balance drifts
@@ -154,7 +154,7 @@ block 61294867, about seven days. An account registered before that window never
 emits its registration again, and a Kuru maker seen only as a record inside
 somebody else's `TradesPacked` log never had an address in any event at all.
 Both were invisible on the board forever, and nothing healed them. In the
-§proven Kuru run, *all three* accounts are of this kind.
+§proven Kuru run, _all three_ accounts are of this kind.
 
 Two cheaper fixes do not work, and it is worth writing down why:
 
@@ -173,10 +173,10 @@ So `src/lib/accountAddress.ts` resolves the id against the contract the first
 time the account is seen, through an Envio **effect** — deduplicated and cached,
 so it is one RPC read per account id ever, not one per fill:
 
-| Venue | Call                                    | Unknown id      |
-| ----- | --------------------------------------- | --------------- |
-| Kuru  | `AccountCore.userAddressById(uint40)`   | the zero address |
-| Perpl | `Exchange.getAccountById(uint256)`      | reverts          |
+| Venue | Call                                  | Unknown id       |
+| ----- | ------------------------------------- | ---------------- |
+| Kuru  | `AccountCore.userAddressById(uint40)` | the zero address |
+| Perpl | `Exchange.getAccountById(uint256)`    | reverts          |
 
 Neither read is in its venue's docs; both were found by selector and verified
 against the live contracts — `userAddressById(62)` and `(47)` answer the two
@@ -234,7 +234,7 @@ Perpl trade:
 `OpenLong`/`OpenShort` are not "open only" — Perpl uses them to decrease, close
 or invert a position; only the `*Close*` pair are reduce-only. Authority:
 `PerplFoundation/dex-sdk`, `crates/sdk/src/types/order.rs`. Confirmed live: this
-transaction's `orderType` reads 1 while its long position *decreases* by the fill
+transaction's `orderType` reads 1 while its long position _decreases_ by the fill
 size, which is only consistent with a sell.
 
 Only the taker leg creates a `Trade` row, once per match: a multi-maker sweep
@@ -251,7 +251,7 @@ PositionDecreased(perpId, accountId, positionType, startDepositCNS,
                   endDepositCNS, startLotLNS, endLotLNS, deltaPnlCNS, fundingCNS)
 ```
 
-`deltaPnlCNS` (a signed `int256`) *is* the answer a trading leaderboard wants —
+`deltaPnlCNS` (a signed `int256`) _is_ the answer a trading leaderboard wants —
 it includes funding and premium, which our fill-derived number cannot see. It is
 a schema addition plus one handler, and it should be the next step before the
 Perpl leaderboard is shown to anyone. The same is true of `PositionIncreasedV2`
@@ -294,8 +294,18 @@ query MarketLeaderboard($marketId: String!, $limit: Int!) {
     limit: $limit
   ) {
     id
-    account { id address venue }
-    market { id symbol venue base quote }
+    account {
+      id
+      address
+      venue
+    }
+    market {
+      id
+      symbol
+      venue
+      base
+      quote
+    }
     n
     takerN
     makerN
@@ -332,8 +342,14 @@ query Trades($marketId: String!, $limit: Int!) {
     timestamp
     txHash
     logIndex
-    taker { id address }
-    maker { id address }
+    taker {
+      id
+      address
+    }
+    maker {
+      id
+      address
+    }
   }
 }
 
@@ -390,7 +406,11 @@ query AccountProfile($accountId: String!) {
     losingTradeCount
     marketStats {
       id
-      market { id symbol venue }
+      market {
+        id
+        symbol
+        venue
+      }
       volumeUsd
       realizedPnlUsd
       wins
@@ -640,16 +660,16 @@ no deployment exists.** The commands above are from
 
 ## Verification
 
-| Check                        | Command                                     | State |
-| ---------------------------- | ------------------------------------------- | ----- |
-| Unit tests (42)              | `mise exec -- npm test`                     | pass  |
-| Indexer typecheck            | `mise exec -- npm run typecheck`            | pass  |
-| Config vs chain              | `mise exec -- npm run verify:topics`        | pass  |
-| Real blocks → real entities  | `scripts/local/live-range.ts <block>`       | pass (both venues) |
-| Root typecheck / lint        | `mise exec -- pnpm run typecheck` (root)    | pass (indexer excluded) |
-| The indexer, from the root   | `mise exec -- pnpm run check:indexer`       | pass  |
-| Live GraphQL query           | `envio dev` + Hasura on :8080               | **not run** |
-| Envio Cloud deployment       | `envio-cloud …`                             | **not run** |
+| Check                       | Command                                  | State                   |
+| --------------------------- | ---------------------------------------- | ----------------------- |
+| Unit tests (42)             | `mise exec -- npm test`                  | pass                    |
+| Indexer typecheck           | `mise exec -- npm run typecheck`         | pass                    |
+| Config vs chain             | `mise exec -- npm run verify:topics`     | pass                    |
+| Real blocks → real entities | `scripts/local/live-range.ts <block>`    | pass (both venues)      |
+| Root typecheck / lint       | `mise exec -- pnpm run typecheck` (root) | pass (indexer excluded) |
+| The indexer, from the root  | `mise exec -- pnpm run check:indexer`    | pass                    |
+| Live GraphQL query          | `envio dev` + Hasura on :8080            | **not run**             |
+| Envio Cloud deployment      | `envio-cloud …`                          | **not run**             |
 
 ## Open work
 
@@ -662,7 +682,7 @@ no deployment exists.** The commands above are from
 4. **Deploy to Cloud** and set `ENVIO_API_TOKEN` on the deployment.
 5. **Kuru `Withdrawal` has never been observed on chain** in the windows
    scanned. Its signature comes straight from the SDK ABI and its topic-count
-   check is the same shape as `Deposit`, which *was* observed — but it is
+   check is the same shape as `Deposit`, which _was_ observed — but it is
    verified by argument, not by a log.
 6. **Fee accounting** — fees are recorded but not applied to
    `realizedPnlUsd` (§pnl).

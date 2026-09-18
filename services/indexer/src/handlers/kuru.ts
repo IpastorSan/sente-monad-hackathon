@@ -19,12 +19,7 @@
 import { indexer } from 'envio';
 import { decodeBookUpdatesPacked, decodeTradesPacked } from '../lib/packed.ts';
 import { kuruMarketByAddress, kuruTokenDecimals } from '../lib/seeds.ts';
-import {
-  decimalsFromPrecision,
-  kuruAccountId,
-  kuruQuoteAtoms,
-  tradeId,
-} from '../lib/stats.ts';
+import { decimalsFromPrecision, kuruAccountId, kuruQuoteAtoms, tradeId } from '../lib/stats.ts';
 import { bumpMarket, ensureKuruMarkets, recordMarketDay } from '../lib/markets.ts';
 import {
   type Ctx,
@@ -40,102 +35,112 @@ import {
 /** Kuru's fee denominator: parts per ten million. */
 const PPS = 10_000_000n;
 
-indexer.onEvent({ contract: 'KuruOrderBook', event: 'TradesPacked' }, async ({ event, context }) => {
-  const market = kuruMarketByAddress(event.srcAddress);
-  if (market === undefined) {
-    // A book we never seeded. Guessing its precision would silently corrupt
-    // every USD figure downstream, so refuse instead.
-    context.log.warn('TradesPacked from unseeded order book — skipped', {
-      srcAddress: event.srcAddress,
-    });
-    return;
-  }
-  await ensureKuruMarkets(context);
+indexer.onEvent(
+  { contract: 'KuruOrderBook', event: 'TradesPacked' },
+  async ({ event, context }) => {
+    const market = kuruMarketByAddress(event.srcAddress);
+    if (market === undefined) {
+      // A book we never seeded. Guessing its precision would silently corrupt
+      // every USD figure downstream, so refuse instead.
+      context.log.warn('TradesPacked from unseeded order book — skipped', {
+        srcAddress: event.srcAddress,
+      });
+      return;
+    }
+    await ensureKuruMarkets(context);
 
-  const records = decodeTradesPacked(event.params.packedTrades);
-  const takerId = kuruAccountId(event.params.accountId);
-  const { number: blockNumber, timestamp: timestampSec } = event.block;
-  const txHash = event.transaction.hash;
-  const logIndex = event.logIndex;
-  // Raw book units → human base is the *book* size scale (10^8 on MON-USDC),
-  // not the base token's ERC-20 decimals; see decimalsFromPrecision.
-  const baseUnitDecimals = decimalsFromPrecision(market.sizePrecision);
-  const priceDecimals = decimalsFromPrecision(market.pricePrecision);
-  await ensureAccount(context, takerId, 'KURU', event.params.accountId, blockNumber, timestampSec);
-
-  for (const [recordIdx, rec] of records.entries()) {
-    if (rec.fillSize === 0n) continue; // zero-fill bookkeeping record
-    const quoteAtoms = kuruQuoteAtoms(
-      rec.price,
-      rec.fillSize,
-      market.pricePrecision,
-      market.sizePrecision,
-      market.quoteDecimals,
-    );
-    // makerIsBuy=true → the maker bought, so the taker sold (and vice versa)
-    const takerBuy = !rec.makerIsBuy;
-    const takerSigned = takerBuy ? rec.fillSize : -rec.fillSize;
-    const makerId = kuruAccountId(rec.makerId);
-    await ensureAccount(context, makerId, 'KURU', rec.makerId, blockNumber, timestampSec);
-
-    const priceBd = bd(rec.price, priceDecimals);
-    const notionalBd = bd(quoteAtoms, market.quoteDecimals);
-
-    context.Trade.set({
-      id: tradeId(event.chainId, blockNumber, logIndex, recordIdx),
-      venue: 'KURU',
-      market_id: market.marketId,
-      side: takerBuy ? 'BUY' : 'SELL',
-      rawPrice: rec.price,
-      rawSize: rec.fillSize,
-      price: priceBd,
-      notionalUsd: notionalBd,
-      maker_id: makerId,
-      taker_id: takerId,
-      takerFeeRaw: (quoteAtoms * event.params.effectiveTakerFeePps) / PPS,
-      makerFeeRaw: (quoteAtoms * BigInt(rec.makerFeePps)) / PPS,
-      blockNumber: BigInt(blockNumber),
-      timestamp: new Date(timestampSec * 1000),
-      txHash,
-      logIndex,
-    });
-
-    const leg: Omit<FillInput, 'accountId' | 'role' | 'signedBaseRaw'> = {
-      marketId: market.marketId,
-      venue: 'KURU',
-      baseUnitDecimals,
-      quoteAtoms,
-      quoteDecimals: market.quoteDecimals,
+    const records = decodeTradesPacked(event.params.packedTrades);
+    const takerId = kuruAccountId(event.params.accountId);
+    const { number: blockNumber, timestamp: timestampSec } = event.block;
+    const txHash = event.transaction.hash;
+    const logIndex = event.logIndex;
+    // Raw book units → human base is the *book* size scale (10^8 on MON-USDC),
+    // not the base token's ERC-20 decimals; see decimalsFromPrecision.
+    const baseUnitDecimals = decimalsFromPrecision(market.sizePrecision);
+    const priceDecimals = decimalsFromPrecision(market.pricePrecision);
+    await ensureAccount(
+      context,
+      takerId,
+      'KURU',
+      event.params.accountId,
       blockNumber,
       timestampSec,
-    };
-    // Both legs of the match: the taker's direction is the record's, the
-    // maker's is its mirror.
-    await recordPartyFill(context, {
-      ...leg,
-      accountId: takerId,
-      role: 'taker',
-      signedBaseRaw: takerSigned,
-    });
-    await recordPartyFill(context, {
-      ...leg,
-      accountId: makerId,
-      role: 'maker',
-      signedBaseRaw: -takerSigned,
-    });
+    );
 
-    await bumpMarket(context, market.marketId, notionalBd, blockNumber);
-    await recordMarketDay(context, {
-      marketId: market.marketId,
-      isBuy: takerBuy,
-      notionalBd,
-      baseBd: bd(rec.fillSize, baseUnitDecimals),
-      priceBd,
-      accountIds: [takerId, makerId],
-      timestampSec,
-    });
-  }
-});
+    for (const [recordIdx, rec] of records.entries()) {
+      if (rec.fillSize === 0n) continue; // zero-fill bookkeeping record
+      const quoteAtoms = kuruQuoteAtoms(
+        rec.price,
+        rec.fillSize,
+        market.pricePrecision,
+        market.sizePrecision,
+        market.quoteDecimals,
+      );
+      // makerIsBuy=true → the maker bought, so the taker sold (and vice versa)
+      const takerBuy = !rec.makerIsBuy;
+      const takerSigned = takerBuy ? rec.fillSize : -rec.fillSize;
+      const makerId = kuruAccountId(rec.makerId);
+      await ensureAccount(context, makerId, 'KURU', rec.makerId, blockNumber, timestampSec);
+
+      const priceBd = bd(rec.price, priceDecimals);
+      const notionalBd = bd(quoteAtoms, market.quoteDecimals);
+
+      context.Trade.set({
+        id: tradeId(event.chainId, blockNumber, logIndex, recordIdx),
+        venue: 'KURU',
+        market_id: market.marketId,
+        side: takerBuy ? 'BUY' : 'SELL',
+        rawPrice: rec.price,
+        rawSize: rec.fillSize,
+        price: priceBd,
+        notionalUsd: notionalBd,
+        maker_id: makerId,
+        taker_id: takerId,
+        takerFeeRaw: (quoteAtoms * event.params.effectiveTakerFeePps) / PPS,
+        makerFeeRaw: (quoteAtoms * BigInt(rec.makerFeePps)) / PPS,
+        blockNumber: BigInt(blockNumber),
+        timestamp: new Date(timestampSec * 1000),
+        txHash,
+        logIndex,
+      });
+
+      const leg: Omit<FillInput, 'accountId' | 'role' | 'signedBaseRaw'> = {
+        marketId: market.marketId,
+        venue: 'KURU',
+        baseUnitDecimals,
+        quoteAtoms,
+        quoteDecimals: market.quoteDecimals,
+        blockNumber,
+        timestampSec,
+      };
+      // Both legs of the match: the taker's direction is the record's, the
+      // maker's is its mirror.
+      await recordPartyFill(context, {
+        ...leg,
+        accountId: takerId,
+        role: 'taker',
+        signedBaseRaw: takerSigned,
+      });
+      await recordPartyFill(context, {
+        ...leg,
+        accountId: makerId,
+        role: 'maker',
+        signedBaseRaw: -takerSigned,
+      });
+
+      await bumpMarket(context, market.marketId, notionalBd, blockNumber);
+      await recordMarketDay(context, {
+        marketId: market.marketId,
+        isBuy: takerBuy,
+        notionalBd,
+        baseBd: bd(rec.fillSize, baseUnitDecimals),
+        priceBd,
+        accountIds: [takerId, makerId],
+        timestampSec,
+      });
+    }
+  },
+);
 
 indexer.onEvent(
   { contract: 'KuruOrderBook', event: 'BookUpdatesPacked' },

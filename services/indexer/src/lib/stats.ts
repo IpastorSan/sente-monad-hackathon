@@ -74,7 +74,7 @@ export function applyFill(
       ? 0n
       : leftover > 0n === b > 0n
         ? (c * leftover) / b
-      : (atoms * leftover) / absTrade;
+        : (atoms * leftover) / absTrade;
   return { baseRaw: leftover, costRaw, realizedRaw, reduces: true };
 }
 
@@ -86,9 +86,7 @@ export function kuruQuoteAtoms(
   sizePrecision: bigint,
   quoteDecimals: number,
 ): bigint {
-  return (
-    (priceRaw * sizeRaw * 10n ** BigInt(quoteDecimals)) / (pricePrecision * sizePrecision)
-  );
+  return (priceRaw * sizeRaw * 10n ** BigInt(quoteDecimals)) / (pricePrecision * sizePrecision);
 }
 
 /** Perpl CNS for a fill: pricePNS × lotLNS × 10^collatDecimals / (10^pd × 10^sd). */
@@ -106,8 +104,7 @@ export function perplQuoteAtoms(
 /** Entity-id helpers: everything lowercase, venue-prefixed. */
 export const kuruAccountId = (id: bigint): string => `kuru-${id}`;
 export const perplAccountId = (id: bigint): string => `perpl-${id}`;
-export const statsId = (accountId: string, marketId: string): string =>
-  `${accountId}-${marketId}`;
+export const statsId = (accountId: string, marketId: string): string => `${accountId}-${marketId}`;
 export const balanceId = (accountId: string, token: string): string =>
   `${accountId}-${token.toLowerCase()}`;
 export const dayId = (marketId: string, day: number): string => `${marketId}-${day}`;

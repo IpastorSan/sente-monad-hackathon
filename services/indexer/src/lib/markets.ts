@@ -10,11 +10,7 @@
  */
 import { BigDecimal } from 'envio';
 import { addBd, bd, type Ctx } from './common.ts';
-import {
-  KURU_MARKET_SEEDS,
-  PERPL_MARKET_SEEDS,
-  type MarketSeed,
-} from './seeds.ts';
+import { KURU_MARKET_SEEDS, PERPL_MARKET_SEEDS, type MarketSeed } from './seeds.ts';
 import { dayId, yyyymmdd } from './stats.ts';
 
 /** Create the market row if it is not there yet; idempotent. */

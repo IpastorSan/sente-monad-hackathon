@@ -14,7 +14,6 @@ Design notes:
   on stored fields, never computes at query time.
 - Token and address keys are lowercase for cross-source joins.
 """
-
 enum Side {
   BUY
   SELL

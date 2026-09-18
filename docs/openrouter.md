@@ -129,12 +129,12 @@ Run with an OpenRouter **inference** key (not a management key — see below), t
 `https://openrouter.ai/api` with `authToken` set and `apiKey: null`. One tool (`get_price`), two turns
 (tool_use → tool_result → final answer), `max_tokens: 1024`.
 
-| Model | Tool round trip | Final stop | Thinking blocks returned |
-| --- | --- | --- | --- |
-| `anthropic/claude-sonnet-5` | ✅ `get_price {"symbol":"MON-USDC"}` | `end_turn` | no |
-| `anthropic/claude-sonnet-5` + `thinking: {type:'adaptive'}` | ✅ | `end_turn` | **no** — the parameter is accepted but no thinking block came back, so pass-through is unproven; keep `AGENT_RUNNER_THINKING=off` |
-| `moonshotai/kimi-k2.6`, `provider: {order:['Moonshot AI'], allow_fallbacks:false}` | ✅ | `end_turn` | yes |
-| `moonshotai/kimi-k2.6`, any provider | ✅ | `end_turn` | yes |
+| Model                                                                              | Tool round trip                      | Final stop | Thinking blocks returned                                                                                                          |
+| ---------------------------------------------------------------------------------- | ------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic/claude-sonnet-5`                                                        | ✅ `get_price {"symbol":"MON-USDC"}` | `end_turn` | no                                                                                                                                |
+| `anthropic/claude-sonnet-5` + `thinking: {type:'adaptive'}`                        | ✅                                   | `end_turn` | **no** — the parameter is accepted but no thinking block came back, so pass-through is unproven; keep `AGENT_RUNNER_THINKING=off` |
+| `moonshotai/kimi-k2.6`, `provider: {order:['Moonshot AI'], allow_fallbacks:false}` | ✅                                   | `end_turn` | yes                                                                                                                               |
+| `moonshotai/kimi-k2.6`, any provider                                               | ✅                                   | `end_turn` | yes                                                                                                                               |
 
 **Kimi tool calls do round-trip through `/api/v1/messages`**, despite OpenRouter's blog saying non-Anthropic models
 "aren't supported through the native endpoint" for Claude Code. So the runner works with Kimi as-is, and no

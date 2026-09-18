@@ -104,7 +104,9 @@ async function main(): Promise<number> {
   const managementKey = process.env['OPENROUTER_MANAGEMENT_KEY']?.trim();
   const sharedKey = process.env['OPENROUTER_API_KEY']?.trim();
   if (!managementKey && !sharedKey) {
-    console.log('pending credentials: neither OPENROUTER_MANAGEMENT_KEY nor OPENROUTER_API_KEY is set');
+    console.log(
+      'pending credentials: neither OPENROUTER_MANAGEMENT_KEY nor OPENROUTER_API_KEY is set',
+    );
     console.log(
       'Set it in the repo-root .env, then: pnpm --filter @sente/api run probe:openrouter',
     );
@@ -197,7 +199,9 @@ async function probeSharedKey(
       keyUsageDeltaUsd: null,
     });
   }
-  console.log(JSON.stringify({ probedAt: new Date().toISOString(), mode: 'shared', results }, null, 2));
+  console.log(
+    JSON.stringify({ probedAt: new Date().toISOString(), mode: 'shared', results }, null, 2),
+  );
   return 0;
 }
 

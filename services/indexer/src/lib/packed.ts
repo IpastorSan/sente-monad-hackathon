@@ -70,7 +70,9 @@ function hexToBytes(hex: string): Uint8Array {
 
 function assertPackedLength(bytes: Uint8Array, recordSize: number, label: string): void {
   if (bytes.length % recordSize !== 0) {
-    throw new Error(`${label} length must be a multiple of ${recordSize} bytes, got ${bytes.length}`);
+    throw new Error(
+      `${label} length must be a multiple of ${recordSize} bytes, got ${bytes.length}`,
+    );
   }
 }
 

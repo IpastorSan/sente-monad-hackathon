@@ -94,21 +94,13 @@ export async function ensureAccount(
 }
 
 /** The Kuru account address (`AccountRegistered.account`). */
-export async function setAccountAddress(
-  context: Ctx,
-  id: string,
-  address: string,
-): Promise<void> {
+export async function setAccountAddress(context: Ctx, id: string, address: string): Promise<void> {
   const account = await context.Account.getOrThrow(id);
   context.Account.set({ ...account, address: address.toLowerCase() });
 }
 
 /** The owner the venue names separately (`AccountRegistered.owner`). */
-export async function setAccountOwner(
-  context: Ctx,
-  id: string,
-  owner: string,
-): Promise<void> {
+export async function setAccountOwner(context: Ctx, id: string, owner: string): Promise<void> {
   const account = await context.Account.getOrThrow(id);
   context.Account.set({ ...account, owner: owner.toLowerCase() });
 }

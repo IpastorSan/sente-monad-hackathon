@@ -514,7 +514,13 @@ describe('AgentsService.hire with ERC-8004', () => {
     const store = new InMemoryAgentStore();
     const client = new FakeErc8004Client();
     client.registerError = new Error('insufficient funds for gas');
-    const service = new AgentsService(store, wallet(), new ServerMandateOwners(), undefined, reputation(client));
+    const service = new AgentsService(
+      store,
+      wallet(),
+      new ServerMandateOwners(),
+      undefined,
+      reputation(client),
+    );
 
     const { agent } = await service.hire({ userId: 'alice' }, hireInput());
 

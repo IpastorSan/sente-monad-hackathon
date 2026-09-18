@@ -149,8 +149,7 @@ export type PerplMarketSeed = {
 export const PERP_COLLATERAL_DECIMALS = 6; // AUSD
 
 /** Agora AUSD on Monad testnet — the collateral token Perpl's events are priced in. */
-export const PERPL_COLLATERAL =
-  '0xa9012a055bd4e0edff8ce09f960291c09d5322dc';
+export const PERPL_COLLATERAL = '0xa9012a055bd4e0edff8ce09f960291c09d5322dc';
 
 /**
  * Perpl's Exchange proxy (instance 12), the contract every event in

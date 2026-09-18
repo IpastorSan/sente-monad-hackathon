@@ -218,9 +218,7 @@ function tradeEntry(event: LedgerEvent): TradeEntry {
     direction: directionOf(text(detail, 'side') ?? text(asked, 'side')),
     size: text(detail, 'filledSize') ?? text(asked, 'size') ?? '—',
     price:
-      text(detail, 'averageFillPrice') ??
-      text(asked, 'price') ??
-      text(asked, 'slippageLimitPrice'),
+      text(detail, 'averageFillPrice') ?? text(asked, 'price') ?? text(asked, 'slippageLimitPrice'),
     leverage: numberAt(detail, 'leverage') ?? numberAt(asked, 'leverage'),
     txHash: text(detail, 'txHash'),
     blockNumber: numberAt(detail, 'blockNumber'),

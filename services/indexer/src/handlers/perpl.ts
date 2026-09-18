@@ -330,17 +330,20 @@ async function applyCollateralFlow(
   });
 }
 
-indexer.onEvent({ contract: 'PerplExchange', event: 'CollateralDeposit' }, async ({ event, context }) => {
-  await applyCollateralFlow(
-    context,
-    'deposit',
-    event.params.accountId,
-    event.params.amountCNS,
-    event.params.balanceCNS,
-    event.block.number,
-    event.block.timestamp,
-  );
-});
+indexer.onEvent(
+  { contract: 'PerplExchange', event: 'CollateralDeposit' },
+  async ({ event, context }) => {
+    await applyCollateralFlow(
+      context,
+      'deposit',
+      event.params.accountId,
+      event.params.amountCNS,
+      event.params.balanceCNS,
+      event.block.number,
+      event.block.timestamp,
+    );
+  },
+);
 
 indexer.onEvent(
   { contract: 'PerplExchange', event: 'CollateralWithdrawal' },
@@ -362,19 +365,22 @@ indexer.onEvent(
  * `ensureMarket` is a no-op when the row exists, so a differing off-chain
  * snapshot cannot overwrite what the chain reported.
  */
-indexer.onEvent({ contract: 'PerplExchange', event: 'ContractAdded' }, async ({ event, context }) => {
-  await ensureMarket(
-    context,
-    perplMarketSeedFromContract(
-      event.params.perpId,
-      event.params.symbol,
-      event.params.priceDecimals,
-      event.params.lotDecimals,
-    ),
-  );
-  context.log.info('Perpl perpetual added inside the indexed range', {
-    perpId: event.params.perpId.toString(),
-    symbol: event.params.symbol,
-    marketId: perplMarketId(event.params.perpId),
-  });
-});
+indexer.onEvent(
+  { contract: 'PerplExchange', event: 'ContractAdded' },
+  async ({ event, context }) => {
+    await ensureMarket(
+      context,
+      perplMarketSeedFromContract(
+        event.params.perpId,
+        event.params.symbol,
+        event.params.priceDecimals,
+        event.params.lotDecimals,
+      ),
+    );
+    context.log.info('Perpl perpetual added inside the indexed range', {
+      perpId: event.params.perpId.toString(),
+      symbol: event.params.symbol,
+      marketId: perplMarketId(event.params.perpId),
+    });
+  },
+);

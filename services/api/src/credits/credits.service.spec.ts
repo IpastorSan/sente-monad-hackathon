@@ -1,6 +1,11 @@
 import { CREDITS_DEFAULTS, loadCreditsConfig, type CreditsConfig } from './credits.config';
 import { CreditsRefusedError } from './credits.errors';
-import { createOpenRouterKeys, createSharedKey, CreditsService, nextResetUtc } from './credits.service';
+import {
+  createOpenRouterKeys,
+  createSharedKey,
+  CreditsService,
+  nextResetUtc,
+} from './credits.service';
 import {
   InMemoryCreditKeyStore,
   type CreditKeyClaim,
@@ -321,7 +326,12 @@ describe('shared-key dev mode (SEN-18)', () => {
       resetsAt: null,
       created: false,
     });
-    expect(status).toEqual({ limitUsd: 10, remainingUsd: 8.75, usageMonthUsd: 1.25, resetsAt: null });
+    expect(status).toEqual({
+      limitUsd: 10,
+      remainingUsd: 8.75,
+      usageMonthUsd: 1.25,
+      resetsAt: null,
+    });
     expect(paths(fake)).toEqual(['GET /api/v1/key', 'GET /api/v1/key']);
     expect(JSON.stringify([provisioned, status])).not.toContain(FAKE_SHARED_KEY);
   });

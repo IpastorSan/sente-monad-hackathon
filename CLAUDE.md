@@ -144,7 +144,7 @@ that plainly exist on disk.
 
 **The setting is `nodeLinker: hoisted` in `pnpm-workspace.yaml`.** pnpm 12 ignores
 `node-linker=hoisted` in `.npmrc`: from at least 2026-09-10 to 2026-09-11 the repo installed
-*isolated* while `.npmrc` said hoisted, and nothing complained (found in SEN-10:
+_isolated_ while `.npmrc` said hoisted, and nothing complained (found in SEN-10:
 `pnpm config get node-linker` → `undefined`, `node_modules/.modules.yaml` → `"nodeLinker":
 "isolated"`). `.npmrc` keeps the line only as a pointer. To check what you actually have, don't
 read either config file; read the result:

@@ -197,9 +197,10 @@ export function fakeEnclave(options: FakeEnclaveOptions) {
       const id = `wal-${seq}`;
       const account = privateKeyToAccount(generatePrivateKey());
       const policyIds = body['policy_ids'] as string[];
-      const signers = ((body['additional_signers'] as
-        | { signer_id: string; override_policy_ids: string[] }[]
-        | undefined) ?? []).map((s) => ({
+      const signers = (
+        (body['additional_signers'] as
+          { signer_id: string; override_policy_ids: string[] }[] | undefined) ?? []
+      ).map((s) => ({
         signerId: s.signer_id,
         overridePolicyIds: s.override_policy_ids ?? [],
       }));

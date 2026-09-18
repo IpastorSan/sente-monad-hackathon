@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyFill, kuruQuoteAtoms, perplQuoteAtoms, yyyymmdd, type PositionState } from './stats.ts';
+import {
+  applyFill,
+  kuruQuoteAtoms,
+  perplQuoteAtoms,
+  yyyymmdd,
+  type PositionState,
+} from './stats.ts';
 
 test('long opened at 10, closed at 12 realises +2', () => {
   const open = applyFill({ baseRaw: 0n, costRaw: 0n }, 1n, 10n);

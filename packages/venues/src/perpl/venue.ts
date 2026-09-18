@@ -208,11 +208,7 @@ export function toOrder(
  * that frame has not arrived — or never comes, on a venue that does not push
  * it — the fields are simply absent.
  */
-function withClosePnl(
-  order: Order,
-  closed: PerplPosition | undefined,
-  m: ResolvedMarket,
-): Order {
+function withClosePnl(order: Order, closed: PerplPosition | undefined, m: ResolvedMarket): Order {
   if (!closed) return order;
   return {
     ...order,
@@ -220,13 +216,9 @@ function withClosePnl(
     // run for the life of ONE position, so a reader that cannot name it cannot
     // tell a later close of the same position from the first close of the next.
     positionId: String(closed.pid),
-    ...(closed.dpnl !== undefined
-      ? { realizedPnl: fromScaled(BigInt(closed.dpnl), m.cd) }
-      : {}),
+    ...(closed.dpnl !== undefined ? { realizedPnl: fromScaled(BigInt(closed.dpnl), m.cd) } : {}),
     // Same sign convention as `toPosition`: `fnd` is received > 0.
-    ...(closed.fnd !== undefined
-      ? { fundingPaid: fromScaled(-BigInt(closed.fnd), m.cd) }
-      : {}),
+    ...(closed.fnd !== undefined ? { fundingPaid: fromScaled(-BigInt(closed.fnd), m.cd) } : {}),
   };
 }
 

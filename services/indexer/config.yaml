@@ -54,35 +54,35 @@ chains:
     contracts:
       - name: KuruOrderBook
         address:
-          - "0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61" # MON-USDC
-          - "0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7" # WETH-USDC
-          - "0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f" # cbBTC-USDC
-          - "0x0B4dD2A7b09d5c5401149fFe51301Cc589017343" # XAUt-USDC
+          - '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61' # MON-USDC
+          - '0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7' # WETH-USDC
+          - '0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f' # cbBTC-USDC
+          - '0x0B4dD2A7b09d5c5401149fFe51301Cc589017343' # XAUt-USDC
       - name: KuruAccountCore
-        address: "0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22"
+        address: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22'
       - name: PerplExchange
-        address: "0x1964C32f0bE608E7D29302AFF5E61268E72080cc"
+        address: '0x1964C32f0bE608E7D29302AFF5E61268E72080cc'
 
 contracts:
   - name: KuruOrderBook
     events:
       # Signatures copied from @toxicflow-labs/ts-sdk's spotOrderBookAbi so
       # the topic0 hashes cannot drift from what the contract emits.
-      - event: "TradesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, uint24 effectiveTakerFeePps, address builder, uint24 builderFeePps, bytes packedTrades)"
-      - event: "BookUpdatesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, bytes packedUpdates)"
+      - event: 'TradesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, uint24 effectiveTakerFeePps, address builder, uint24 builderFeePps, bytes packedTrades)'
+      - event: 'BookUpdatesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, bytes packedUpdates)'
 
   - name: KuruAccountCore
     events:
-      - event: "Deposit(uint40 indexed accountId, address indexed token, address indexed payer, uint256 amount)"
-      - event: "Withdrawal(uint40 indexed accountId, address indexed token, address indexed recipient, uint256 amount)"
+      - event: 'Deposit(uint40 indexed accountId, address indexed token, address indexed payer, uint256 amount)'
+      - event: 'Withdrawal(uint40 indexed accountId, address indexed token, address indexed recipient, uint256 amount)'
       # account id -> account address. Without it every leaderboard row is a
       # number nobody can pay.
-      - event: "AccountRegistered(address indexed account, uint40 indexed accountId, uint40 indexed rootAccountId, address owner, uint16 subaccountSeq)"
+      - event: 'AccountRegistered(address indexed account, uint40 indexed accountId, uint40 indexed rootAccountId, address owner, uint16 subaccountSeq)'
       # The balance itself: absolute free/reserved per (userId, token), emitted
       # on custody changes AND on fills. Not in the deployment docs — found by
       # scanning AccountCore's logs and matching topic0 against the SDK's
       # accountCoreAbi, confirmed to carry the post-fill USDC/MON split.
-      - event: "SpotReserveUpdated(uint40 indexed userId, address indexed token, uint256 freeBalance, uint256 reservedBalance)"
+      - event: 'SpotReserveUpdated(uint40 indexed userId, address indexed token, uint256 freeBalance, uint256 reservedBalance)'
 
   - name: PerplExchange
     abi_file_path: ./abis/PerplExchange.events.json
