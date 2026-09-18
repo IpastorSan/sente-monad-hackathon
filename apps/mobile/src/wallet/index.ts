@@ -2,13 +2,19 @@ export {
   API_URL,
   WalletApi,
   WalletApiError,
+  balanceOf,
   toUserOperation,
+  toUserWallet,
   type Erc7579CallRequest,
   type ExecuteResponse,
   type OperationStatusResponse,
   type PrepareResponse,
   type SessionAuth,
+  type TokenBalance,
+  type UserWallet,
   type WalletAccount,
+  type WireTokenBalance,
+  type WireUserWallet,
 } from './api';
 export {
   assertCallDataMatches,
@@ -50,3 +56,4 @@ export {
   type SmartAccountStatus,
   type UseSmartAccount,
 } from './useSmartAccount';
+export { useUserWallet, type UserWalletStatus, type UseUserWallet } from './useUserWallet';
