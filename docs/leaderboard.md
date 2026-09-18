@@ -39,14 +39,11 @@ AUTH_PLACEHOLDER=1 ENVIO_GRAPHQL_URL=http://localhost:8080/v1/graphql \
 curl -s localhost:3000/leaderboard -H 'x-sente-user-id: 0x…' | jq
 ```
 
-`GET /leaderboard` is the one route SEN-37 could not rebind to
-`SessionAuthGuard` (it is another agent's directory), so it still carries
-`PlaceholderGasDripAuthGuard`. That guard now accepts the same
-`authorization: Bearer <token>` every other route takes, and falls back to the
-`x-sente-user-id` header only outside production — hence the
-`AUTH_PLACEHOLDER=1` above, which is what the rest of the API needs for that
-header anyway. Rebinding this route to `SessionAuthGuard` is a one-line change
-in `leaderboard.controller.ts` and `leaderboard.module.ts`.
+`GET /leaderboard` carries `SessionAuthGuard` like every other route (SEN-37,
+rebound in SEN-36 — it was the last route on the placeholder guard, which is now
+deleted). So it takes an `authorization: Bearer <token>`, and falls back to the
+`x-sente-user-id` header only under `AUTH_PLACEHOLDER=1`, which is never
+production — hence the variable above.
 
 The ranking itself is global — every
 active agent, whichever owner hired it — and the service never reads the

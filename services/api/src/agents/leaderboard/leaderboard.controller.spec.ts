@@ -8,11 +8,10 @@
 import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 
-import {
-  PLACEHOLDER_USER_ID_HEADER,
-  PlaceholderGasDripAuthGuard,
-} from '../../gas/auth/gas-drip-auth.guard';
-import { readPrincipal } from '../../gas/auth/gas-drip-auth';
+import { resetAuthConfig } from '../../auth/auth.config';
+import { PLACEHOLDER_USER_ID_HEADER } from '../../auth/placeholder-header';
+import { readPrincipal } from '../../auth/principal';
+import { SessionAuthGuard } from '../../auth/session-auth.guard';
 import { LeaderboardController } from './leaderboard.controller';
 import { LeaderboardService } from './leaderboard.service';
 import type { LeaderboardResponseDto } from './leaderboard.dto';
@@ -42,25 +41,23 @@ describe('LeaderboardController', () => {
     expect(Reflect.getMetadata(PATH_METADATA, LeaderboardController.prototype.get)).toBe('/');
   });
 
-  it('keeps the auth guard, which becomes a deliberate change when the route goes public', () => {
-    expect(Reflect.getMetadata(GUARDS_METADATA, LeaderboardController)).toEqual([
-      PlaceholderGasDripAuthGuard,
-    ]);
+  it('carries the same session guard as every other route, and dropping it is a deliberate change', () => {
+    expect(Reflect.getMetadata(GUARDS_METADATA, LeaderboardController)).toEqual([SessionAuthGuard]);
   });
 
   it('refuses a caller with no principal, and admits one with the placeholder header', () => {
-    const guard = new PlaceholderGasDripAuthGuard();
-    const anonymous = request({});
-
-    expect(() => guard.canActivate(contextFor(anonymous))).toThrow(UnauthorizedException);
-
-    // The guard refuses everything under NODE_ENV=production (its own contract,
-    // `gas-drip-auth.guard.ts`), so the admitting half is pinned in the
-    // environment the placeholder seam is FOR, not in whatever the machine
-    // running the suite happens to have set.
-    const previous = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'test';
+    // The guard reads its mode from a process-wide memo, so this case states
+    // the environment it is FOR rather than trusting whatever the machine
+    // running the suite has set — and restores it, because the memo outlives
+    // this spec. `session-auth.guard.spec.ts` covers real bearer tokens.
+    const previous = process.env.AUTH_PLACEHOLDER;
+    process.env.AUTH_PLACEHOLDER = '1';
+    resetAuthConfig();
     try {
+      const guard = new SessionAuthGuard();
+
+      expect(() => guard.canActivate(contextFor(request({})))).toThrow(UnauthorizedException);
+
       const known = request({
         [PLACEHOLDER_USER_ID_HEADER]: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
       });
@@ -69,8 +66,9 @@ describe('LeaderboardController', () => {
         userId: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
       });
     } finally {
-      if (previous === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previous;
+      if (previous === undefined) delete process.env.AUTH_PLACEHOLDER;
+      else process.env.AUTH_PLACEHOLDER = previous;
+      resetAuthConfig();
     }
   });
 

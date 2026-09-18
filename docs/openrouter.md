@@ -6,12 +6,12 @@ Each user gets their own OpenRouter API key, minted through the Management API w
 limit that resets monthly**. That is the whole credit system. OpenRouter meters usage and enforces
 the limit, so we build no metering of our own.
 
-| Piece                                                | What it does                                                                                                                                                                                                                   |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                                      |
-| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                                       |
-| `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                            |
-| `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision`, `GET /credits` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt}`. `provision` adds `created`. The routes sit behind `PlaceholderGasDripAuthGuard` and use the same principal seam as `wallet/`. |
+| Piece                                                | What it does                                                                                                                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                           |
+| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                            |
+| `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                 |
+| `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision`, `GET /credits` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt}`. `provision` adds `created`. The routes sit behind `SessionAuthGuard` and use the same principal seam as `wallet/`. |
 
 The plaintext key (`sk-or-v1-…`) comes back **only** in the create response. The store keeps it,
 and only `CreditsService.keyFor` hands it out, to the agent runner. No HTTP response and no log line
