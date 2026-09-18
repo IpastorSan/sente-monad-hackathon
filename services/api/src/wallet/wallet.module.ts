@@ -5,6 +5,7 @@ import { monadTestnet } from 'viem/chains';
 import { PrivyClient } from '../agents/privy/privy.client';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import { statePath } from '../state/json-file';
 import {
   TOKEN_BALANCES,
   ViemTokenBalanceReader,
@@ -32,7 +33,12 @@ import {
   InMemorySmartAccountRegistry,
   SMART_ACCOUNT_REGISTRY,
 } from './store/smart-account-registry';
-import { InMemoryUserWalletRegistry, USER_WALLET_REGISTRY } from './store/user-wallet-registry';
+import { FileUserWalletRegistry } from './store/file-user-wallet-registry';
+import {
+  InMemoryUserWalletRegistry,
+  USER_WALLET_REGISTRY,
+  type UserWalletRegistry,
+} from './store/user-wallet-registry';
 import {
   PrivyUserWalletProvider,
   UnconfiguredUserWalletProvider,
@@ -132,9 +138,22 @@ const preparedStoreProvider: Provider = {
   useClass: InMemoryPreparedOperationStore,
 };
 
+/**
+ * USER_WALLET_REGISTRY is the exception to the note above (SEN-48): set
+ * `STATE_DIR` and it is file-backed, because losing THIS map costs a wallet.
+ * A Privy wallet's address is not derivable from the device key, so a
+ * forgotten binding does not mean "register again" — the next register mints a
+ * second wallet and the funded one is unreachable from the product.
+ */
 const userWalletRegistryProvider: Provider = {
   provide: USER_WALLET_REGISTRY,
-  useClass: InMemoryUserWalletRegistry,
+  useFactory: (): UserWalletRegistry => {
+    const path = statePath('user-wallets');
+    if (!path) return new InMemoryUserWalletRegistry();
+    const registry = new FileUserWalletRegistry(path);
+    Logger.log(`${registry.size} binding(s) loaded from ${registry.path}`, 'UserWalletRegistry');
+    return registry;
+  },
 };
 
 /**
