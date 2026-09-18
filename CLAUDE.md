@@ -60,10 +60,10 @@ All from the repo root:
 ```bash
 mise exec -- pnpm install          # clean install
 mise exec -- pnpm run typecheck    # tsc --noEmit across every package
-mise exec -- pnpm run lint         # eslint across every package
+mise exec -- pnpm run lint         # eslint across every package, then format:check
 mise exec -- pnpm run build        # topological build (venues -> api)
 mise exec -- pnpm run test         # per-package test scripts
-mise exec -- pnpm run format       # prettier --write .
+mise exec -- pnpm run format       # prettier --write . (the whole repo, indexer included)
 mise exec -- pnpm run check:indexer # services/indexer, which the four above skip:
                                     # npm ci + envio codegen + its typecheck + its tests
 ```
@@ -176,8 +176,11 @@ config.resolver.unstable_enablePackageExports = false;
 browser/node builds React Native cannot run. This bites essentially every RN crypto stack.
 
 **The trap: getting this wrong does not fail the build.** Measured on this repo — `expo export
---platform android` succeeds either way, it just picks different module variants (4.6MB bundle with
-the flag `false`, 5.1MB with it `true`). A green CI bundle is therefore _not_ evidence the setting
+--platform android` succeeds either way, it just picks different module variants. SEN-10 measured
+4.6 MB with the flag `false` against 5.1 MB with it `true`; **both numbers are stale** — the
+Android bundle is 8.1 MB today, after SEN-24 brought in Skia and the fonts, and nobody has
+re-measured the `true` side since. Compare a bundle against one you built yourself, not against
+these. A green CI bundle is therefore _not_ evidence the setting
 is right; the damage only shows up on device, as `undefined is not a function` from somewhere deep
 inside a bundled dependency. Leave it `false` unless you have re-verified the whole dependency
 graph on a real device.
@@ -248,8 +251,15 @@ it is a local artifact: regenerate it rather than hand-editing it, and put every
 `react-native-passkey` requires API 28+ and Expo SDK 57's default is 24.
 
 **The debug APK builds on this machine.** The Android SDK is in `~/Android/Sdk` and `mise.toml` pins
-JDK 21. That pin is load-bearing: Java 26's JNI restriction breaks the CMake configure step. Last built
-2026-09-11 (after SEN-10 added `expo-font`, a native module, so the dev client has to be rebuilt):
+JDK 21. That pin is load-bearing: Java 26's JNI restriction breaks the CMake configure step.
+
+**THE INSTALLED DEV CLIENT IS OUT OF DATE.** It was last built 2026-09-11, and SEN-24 has since
+added `@shopify/react-native-skia` and `expo-haptics` — both native modules, neither of which is in
+that APK. A dev client missing a native module does not fail to start: Metro serves the new JS to
+the old binary and the app throws at the first call into the missing module. Rebuild and reinstall
+before testing anything on the phone. (This is the same trap SEN-10's `expo-font` sprang, which is
+why the date is written down at all: **every new native dependency invalidates the APK on the
+device**, and only a rebuild fixes it.)
 
 ```bash
 cd apps/mobile

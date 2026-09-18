@@ -8,7 +8,7 @@
     "node": ">=26"
   },
   "scripts": {
-    "lint": "pnpm -r --if-present run lint",
+    "lint": "pnpm -r --if-present run lint && pnpm run format:check",
     "lint:fix": "pnpm -r --if-present run lint:fix",
     "typecheck": "pnpm -r --if-present run typecheck",
     "build": "pnpm -r --if-present run build",
