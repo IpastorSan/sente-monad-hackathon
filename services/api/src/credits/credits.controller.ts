@@ -1,24 +1,23 @@
 import { Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 
-import { GasDripAuth } from '../gas/auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { Auth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { creditsRefusalToHttpException } from './credits.errors';
 import { CreditsService, type CreditsView, type ProvisionResult } from './credits.service';
 
 /**
- * AUTH: the same placeholder seam `wallet/` reuses from `gas/` — the principal
- * comes from the guard, never from the request. MOV-251's real session guard
- * replaces both bindings in `credits.module.ts`.
+ * AUTH: the same seam `wallet/` uses — the principal comes from the session
+ * `SessionAuthGuard` verified, never from the request.
  *
  * SECRETS: every response is built field by field from `CreditsView`, which has
  * no key and no hash, so the plaintext key cannot leak through a spread.
  */
 @Controller('credits')
-@UseGuards(PlaceholderGasDripAuthGuard)
+@UseGuards(SessionAuthGuard)
 export class CreditsController {
   constructor(
     private readonly credits: CreditsService,
-    private readonly auth: GasDripAuth,
+    private readonly auth: Auth,
   ) {}
 
   /** Mints the caller's OpenRouter key. Idempotent: a second call reports the first key. */

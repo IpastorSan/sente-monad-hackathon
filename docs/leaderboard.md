@@ -33,12 +33,21 @@ With `services/indexer` running locally (`npx envio dev`), the endpoint is
 `http://localhost:8080/v1/graphql`:
 
 ```bash
-ENVIO_GRAPHQL_URL=http://localhost:8080/v1/graphql mise exec -- pnpm --filter @sente/api run start:dev
+AUTH_PLACEHOLDER=1 ENVIO_GRAPHQL_URL=http://localhost:8080/v1/graphql \
+  mise exec -- pnpm --filter @sente/api run start:dev
 curl -s localhost:3000/leaderboard -H 'x-sente-user-id: 0x…' | jq
 ```
 
-`GET /leaderboard` keeps the placeholder auth guard (`x-sente-user-id`, like
-every other route) until MOV-251 lands. The ranking itself is global — every
+`GET /leaderboard` is the one route SEN-37 could not rebind to
+`SessionAuthGuard` (it is another agent's directory), so it still carries
+`PlaceholderGasDripAuthGuard`. That guard now accepts the same
+`authorization: Bearer <token>` every other route takes, and falls back to the
+`x-sente-user-id` header only outside production — hence the
+`AUTH_PLACEHOLDER=1` above, which is what the rest of the API needs for that
+header anyway. Rebinding this route to `SessionAuthGuard` is a one-line change
+in `leaderboard.controller.ts` and `leaderboard.module.ts`.
+
+The ranking itself is global — every
 active agent, whichever owner hired it — and the service never reads the
 principal. **It becomes public later**: a ranking of agents is information
 about agents, not about the caller, and dropping the guard is the intended

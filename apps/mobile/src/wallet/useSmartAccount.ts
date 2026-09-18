@@ -38,6 +38,7 @@ import {
   WalletApiError,
   toUserOperation,
   type Erc7579CallRequest,
+  type SessionAuth,
   type WalletAccount,
 } from './api';
 import { assertCallDataMatches } from './batch';
@@ -54,6 +55,13 @@ import { ENTRY_POINT, toSenteKernelAccount, type SenteKernelAccount } from './ke
  * Leave this unset and the race simply runs on one source.
  */
 const BUNDLER_URL = process.env.EXPO_PUBLIC_BUNDLER_URL || undefined;
+
+/**
+ * The session for a caller that has none: every request goes out unauthenticated
+ * and the API answers 401. Used only when the hook runs with no `auth` and no
+ * injected client, which is the state before sign-in.
+ */
+const SIGNED_OUT: SessionAuth = { token: () => null, refresh: () => Promise.resolve(null) };
 
 export type SmartAccountStatus =
   /** No owner yet — the passkey session is not open. */
@@ -92,21 +100,19 @@ export type UseSmartAccount = {
 
 export type UseSmartAccountOptions = {
   /**
-   * Placeholder identity for the `x-sente-user-id` header.
-   *
-   * Defaults to the owner address, which is stable and unique per user, and is
-   * replaced wholesale when MOV-251's real session lands. It is NOT a secret
-   * and NOT an authorisation — the API only trusts it to look up which owner
-   * key must have signed the envelope.
+   * The API session (SEN-37). Required unless `api` is injected: the routes
+   * this hook calls are all behind `SessionAuthGuard`, and the principal the
+   * server resolves from the token is the owner it expects the envelope to be
+   * signed by.
    */
-  userId?: string;
+  auth?: SessionAuth;
   /** Injectable for tests. */
   api?: WalletApi;
 };
 
 export function useSmartAccount(
   owner: LocalAccount | null,
-  { userId, api: injectedApi }: UseSmartAccountOptions = {},
+  { auth, api: injectedApi }: UseSmartAccountOptions = {},
 ): UseSmartAccount {
   const [status, setStatus] = useState<SmartAccountStatus>('idle');
   const [account, setAccount] = useState<WalletAccount | null>(null);
@@ -138,8 +144,8 @@ export function useSmartAccount(
   }, []);
 
   const api = useMemo(
-    () => injectedApi ?? new WalletApi({ userId: userId ?? owner?.address ?? 'anonymous' }),
-    [injectedApi, userId, owner?.address],
+    () => injectedApi ?? new WalletApi({ auth: auth ?? SIGNED_OUT }),
+    [injectedApi, auth],
   );
 
   // Derive the account and bind it server-side whenever the owner changes.

@@ -1,6 +1,6 @@
 import { BadRequestException, HttpException, ParseIntPipe } from '@nestjs/common';
 
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ChainController, type ConsensusBlockResponseDto } from './chain.controller';
 import {
   ConsensusService,
@@ -71,11 +71,11 @@ describe('ChainController', () => {
       expect((body as { message: string }).message).toContain('512');
     });
 
-    it('is behind the same placeholder auth guard as every other route', () => {
+    it('is behind the same session auth guard as every other route', () => {
       // Nest's own metadata keys (GUARDS_METADATA / PATH_METADATA in
       // @nestjs/common/constants), spelled out rather than deep-imported.
       const guards = Reflect.getMetadata('__guards__', ChainController) as unknown[];
-      expect(guards).toContain(PlaceholderGasDripAuthGuard);
+      expect(guards).toContain(SessionAuthGuard);
       expect(Reflect.getMetadata('path', ChainController)).toBe('chain');
       expect(Reflect.getMetadata('path', ChainController.prototype.blockConsensus)).toBe(
         'blocks/:n/consensus',

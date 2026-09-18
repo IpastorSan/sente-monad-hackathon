@@ -6,11 +6,11 @@
  * asked for, is this my sender — lives in `useSmartAccount.ts`, next to the
  * signature it protects.
  *
- * AUTH is the placeholder `x-sente-user-id` header the API's `gas/auth` seam
- * defines. MOV-251's real Mera session replaces it; until then the header is
- * forgeable, which is exactly why `POST /wallet/execute` also demands an
- * EIP-712 signature by the owner key (see the API's
- * `authorization/authorization.ts`).
+ * AUTH is the session token from `session/auth.ts` (SEN-37), sent as
+ * `authorization: Bearer <token>`. `POST /wallet/execute` still demands an
+ * EIP-712 signature by the owner key on top of it (see the API's
+ * `authorization/authorization.ts`): the token says who is calling, the
+ * envelope says the owner approved this exact operation.
  */
 import type { Address, Hash, Hex } from 'viem';
 
@@ -19,8 +19,20 @@ const DEFAULT_API_URL = 'http://localhost:3000';
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL;
 
-/** Placeholder auth header. Replaced wholesale by MOV-251. */
-export const USER_ID_HEADER = 'x-sente-user-id';
+/**
+ * The bearer token these clients send, and how to get a fresh one.
+ *
+ * An indirection rather than a string because a session expires: the client
+ * reads the token per request and, on a 401, asks for a new one exactly once.
+ * `session/auth.ts` implements it against `POST /auth/challenge` and
+ * `POST /auth/session`; a spec can implement it in two lines.
+ */
+export type SessionAuth = {
+  /** The current token, or `null` when the user is not signed in. */
+  token(): string | null;
+  /** Signs in again. Resolves to the new token, or `null` if it could not. */
+  refresh(): Promise<string | null>;
+};
 
 export type Erc7579CallRequest = {
   to: Address;
@@ -116,20 +128,20 @@ export class WalletApiError extends Error {
 }
 
 export type WalletApiOptions = {
-  /** Placeholder identity. Defaults to the owner address — see MOV-251. */
-  userId: string;
+  /** The session token source. Every request carries its token. */
+  auth: SessionAuth;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 };
 
 export class WalletApi {
   private readonly baseUrl: string;
-  private readonly userId: string;
+  private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ userId, baseUrl = API_URL, fetchImpl = fetch }: WalletApiOptions) {
+  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: WalletApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.userId = userId;
+    this.auth = auth;
     this.fetchImpl = fetchImpl;
   }
 
@@ -171,16 +183,40 @@ export class WalletApi {
     return this.request<OperationStatusResponse>('GET', `/wallet/operations/${userOpHash}`);
   }
 
+  /**
+   * One request, and at most one silent re-authentication.
+   *
+   * A session outlives most screens but not every app launch, and the 401 that
+   * ends it arrives in the middle of whatever the user was doing. Retrying once
+   * with a fresh token turns that into a pause; retrying more would turn a
+   * genuinely unauthorised call into a loop of sign-in prompts.
+   */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    const first = await this.send(method, path, body, this.auth.token());
+    if (first.status !== 401) return this.read<T>(first);
+
+    const refreshed = await this.auth.refresh();
+    if (refreshed === null) return this.read<T>(first);
+    return this.read<T>(await this.send(method, path, body, refreshed));
+  }
+
+  private send(
+    method: string,
+    path: string,
+    body: unknown,
+    token: string | null,
+  ): Promise<Response> {
+    return this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
-        [USER_ID_HEADER]: this.userId,
+        ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
+  }
 
+  private async read<T>(response: Response): Promise<T> {
     const text = await response.text();
     const parsed: unknown = text ? safeParse(text) : undefined;
 

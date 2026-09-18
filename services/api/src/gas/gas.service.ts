@@ -15,7 +15,7 @@ import {
 } from './chain/monad-chain.providers';
 import { GAS_DRIP_CONFIG, type GasDripConfig } from './gas.config';
 import { GasDripRefusedError, type AgentDripRefusalReason } from './gas.errors';
-import type { GasDripPrincipal } from './auth/gas-drip-auth';
+import type { Principal } from '../auth/principal';
 import {
   DRIP_LEDGER,
   utcDay,
@@ -99,7 +99,7 @@ export interface FaucetStatus {
  * MOV-253 (gas-sponsored Kernel smart account) is the real answer; this is the
  * safety net that has no external dependencies.
  *
- * Identity is a parameter, never read from the body — see `auth/gas-drip-auth.ts`.
+ * Identity is a parameter, never read from the body — see `auth/principal.ts`.
  */
 @Injectable()
 export class GasDripService {
@@ -132,7 +132,7 @@ export class GasDripService {
    * already dripped must hear `user_already_dripped`, not the
    * `address_already_funded` they would trip over a step later.
    */
-  async drip(principal: GasDripPrincipal, command: DripCommand): Promise<DripReceipt> {
+  async drip(principal: Principal, command: DripCommand): Promise<DripReceipt> {
     const now = new Date();
 
     // 1. Per-IP rate limit. First because it is the only free check.

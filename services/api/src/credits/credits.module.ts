@@ -1,7 +1,7 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
-import { GasDripAuth, RequestContextGasDripAuth } from '../gas/auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { Auth, RequestContextAuth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import {
   CREDITS_CONFIG,
   describeCreditsConfig,
@@ -48,10 +48,10 @@ const storeProvider: Provider = {
   useClass: InMemoryCreditKeyStore,
 };
 
-/** AUTH: reuses `gas/`'s seam, exactly as `WalletModule` does. MOV-251 rebinds both. */
+/** AUTH: the shared seam, exactly as `WalletModule` binds it. */
 const authProvider: Provider = {
-  provide: GasDripAuth,
-  useClass: RequestContextGasDripAuth,
+  provide: Auth,
+  useClass: RequestContextAuth,
 };
 
 /**
@@ -67,7 +67,7 @@ const authProvider: Provider = {
     sharedKeyProvider,
     storeProvider,
     authProvider,
-    PlaceholderGasDripAuthGuard,
+    SessionAuthGuard,
     CreditsService,
   ],
   exports: [CreditsService],

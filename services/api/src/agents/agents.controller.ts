@@ -15,8 +15,8 @@ import {
 
 import { creditsRefusalToHttpException } from '../credits/credits.errors';
 import { ConsensusService } from '../chain/consensus.service';
-import { GasDripAuth } from '../gas/auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { Auth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { agentErrorStatus, agentErrorToHttpBody } from './agents.errors';
 import { AgentsService } from './agents.service';
 import {
@@ -39,19 +39,19 @@ import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
 
 /**
- * AUTH: the placeholder seam `wallet/` and `gas/` already use —
- * `PlaceholderGasDripAuthGuard` puts a principal on the request from
- * `x-sente-user-id` and refuses to run under NODE_ENV=production. MOV-251's
- * real session guard replaces it in the module.
+ * AUTH: the seam `wallet/` and `gas/` use — `SessionAuthGuard` (SEN-37) puts a
+ * principal on the request from a verified session token, whose `sub` is the
+ * caller's lowercase EOA address. That is the same string `AgentRecord.userId`
+ * has always held, so nothing an agent owns had to be migrated.
  *
  * Every route is scoped to that principal; no body or param names a user.
  */
 @Controller('agents')
-@UseGuards(PlaceholderGasDripAuthGuard)
+@UseGuards(SessionAuthGuard)
 export class AgentsController {
   constructor(
     private readonly agents: AgentsService,
-    private readonly auth: GasDripAuth,
+    private readonly auth: Auth,
     private readonly runner: AgentRunnerService,
     @Inject(AGENT_EVENTS) private readonly events: AgentEventLog,
     /**

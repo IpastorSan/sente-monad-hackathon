@@ -16,7 +16,7 @@ import { isAddressEqual } from 'viem';
 
 import { CreditsRefusedError } from '../../credits/credits.errors';
 import { CreditsService, type CreditsView } from '../../credits/credits.service';
-import type { GasDripPrincipal } from '../../gas/auth/gas-drip-auth';
+import type { Principal } from '../../auth/principal';
 import { AGENT_MODEL_REQUEST_EXTRAS, type OpenRouterRequestExtras } from '../agents.config';
 import { AgentRefusedError } from '../agents.errors';
 import { AgentsService } from '../agents.service';
@@ -133,11 +133,7 @@ export class AgentRunnerService {
    * `provision_failed`). Once the run starts it RETURNS, whatever happened;
    * the stop reason says how it went.
    */
-  async run(
-    principal: GasDripPrincipal,
-    agentId: string,
-    options: RunOptions = {},
-  ): Promise<RunResult> {
+  async run(principal: Principal, agentId: string, options: RunOptions = {}): Promise<RunResult> {
     const agent = await this.agents.get(principal, agentId);
     if (agent.status !== 'active') {
       throw new AgentRefusedError('agent_revoked', `agent ${agentId} is revoked and cannot run`);
@@ -158,7 +154,7 @@ export class AgentRunnerService {
   }
 
   private async execute(
-    principal: GasDripPrincipal,
+    principal: Principal,
     agent: AgentRecord,
     options: RunOptions,
   ): Promise<RunResult> {
@@ -323,7 +319,7 @@ export class AgentRunnerService {
   }
 
   /** The owner's key, provisioning it on first use. Never logged, never returned. */
-  private async userKey(principal: GasDripPrincipal): Promise<string> {
+  private async userKey(principal: Principal): Promise<string> {
     try {
       return await this.credits.keyFor(principal.userId);
     } catch (error) {
@@ -335,7 +331,7 @@ export class AgentRunnerService {
   }
 
   /** The key's limit and usage, or undefined when OpenRouter cannot say. Never fails a run. */
-  private async creditsView(principal: GasDripPrincipal): Promise<CreditsView | undefined> {
+  private async creditsView(principal: Principal): Promise<CreditsView | undefined> {
     try {
       return await this.credits.status(principal);
     } catch (error) {
@@ -344,7 +340,7 @@ export class AgentRunnerService {
     }
   }
 
-  private async exhausted(principal: GasDripPrincipal): Promise<boolean> {
+  private async exhausted(principal: Principal): Promise<boolean> {
     const view = await this.creditsView(principal);
     return view !== undefined && view.remainingUsd !== null && view.remainingUsd <= 0;
   }

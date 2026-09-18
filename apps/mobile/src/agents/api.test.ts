@@ -2,7 +2,7 @@
  * `AgentsApi` request shapes, against a recording `fetch`. Plain node, no API.
  *
  * What these pin is the contract with `services/api/src/agents` (SEN-5): the
- * route and method, the placeholder identity header and nothing else that
+ * route and method, the bearer session token (SEN-37) and nothing else that
  * names a user, and every atom amount crossing the wire as a decimal string
  * (never a JS number, which `parseMandate` refuses).
  */
@@ -19,9 +19,15 @@ import {
   type WireAgent,
   type WireMandate,
 } from './api.ts';
+import type { SessionAuth } from '../wallet/api.ts';
 
 const BASE = 'http://api.test';
-const OWNER = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+const TOKEN = 'v1.session-token';
+
+/** A session that never expires, for the cases that are not about expiry. */
+function fixedToken(token: string) {
+  return { token: () => token, refresh: () => Promise.resolve(token) };
+}
 const AGENT_ID = '5b0f8a62-3c1e-4d7a-9f0e-2a6b7c8d9e01';
 
 const MON_USDC = '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61';
@@ -62,6 +68,10 @@ type Reply = { status: number; body?: unknown; text?: string };
 type Recorded = { url: string; method: string; headers: Record<string, string>; body?: unknown };
 
 function recordingApi(...replies: Reply[]) {
+  return recordingApiWith(fixedToken(TOKEN), ...replies);
+}
+
+function recordingApiWith(auth: SessionAuth, ...replies: Reply[]) {
   const calls: Recorded[] = [];
   const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({
@@ -74,15 +84,15 @@ function recordingApi(...replies: Reply[]) {
     const text = reply.text ?? (reply.body === undefined ? '' : JSON.stringify(reply.body));
     return new Response(text === '' ? null : text, { status: reply.status });
   }) as typeof fetch;
-  return { api: new AgentsApi({ userId: OWNER, baseUrl: `${BASE}/`, fetchImpl }), calls };
+  return { api: new AgentsApi({ auth, baseUrl: `${BASE}/`, fetchImpl }), calls };
 }
 
-test('list is GET /agents with only the identity header, and returns bigint atoms', async () => {
+test('list is GET /agents with only the bearer token, and returns bigint atoms', async () => {
   const { api, calls } = recordingApi({ status: 200, body: { agents: [WIRE_AGENT] } });
   const agents = await api.list();
 
   assert.deepEqual(calls, [
-    { url: `${BASE}/agents`, method: 'GET', headers: { 'x-sente-user-id': OWNER } },
+    { url: `${BASE}/agents`, method: 'GET', headers: { authorization: `Bearer ${TOKEN}` } },
   ]);
   const mandate = agents[0]?.mandate;
   assert.equal(mandate?.kuru.maxDepositAtoms[USDC], 1_000_000_000n);
@@ -107,7 +117,7 @@ test('hire posts exactly the CreateAgentDto fields, atoms as decimal strings, no
   assert.equal(call?.url, `${BASE}/agents`);
   assert.equal(call?.method, 'POST');
   assert.deepEqual(call?.headers, {
-    'x-sente-user-id': OWNER,
+    authorization: `Bearer ${TOKEN}`,
     'content-type': 'application/json',
   });
   assert.deepEqual(Object.keys(call?.body as object).sort(), [
@@ -144,7 +154,7 @@ test('fork posts only the mandate (and the name) to /agents/:id/fork (SEN-28)', 
   assert.equal(call?.url, `${BASE}/agents/${AGENT_ID}/fork`);
   assert.equal(call?.method, 'POST');
   assert.deepEqual(call?.headers, {
-    'x-sente-user-id': OWNER,
+    authorization: `Bearer ${TOKEN}`,
     'content-type': 'application/json',
   });
   // The strategy and the prompt come from the source agent: a fork body that
@@ -233,7 +243,7 @@ test('get, amendMandate and revoke hit their routes; ids are URL-encoded', async
   assert.equal(calls[2]?.url, `${BASE}/agents/${AGENT_ID}/revoke`);
   assert.equal(calls[2]?.method, 'POST');
   assert.equal(calls[2]?.body, undefined, 'revoke sends no body');
-  assert.deepEqual(calls[2]?.headers, { 'x-sente-user-id': OWNER });
+  assert.deepEqual(calls[2]?.headers, { authorization: `Bearer ${TOKEN}` });
   assert.equal(revoked.status, 'revoked');
 });
 
@@ -346,7 +356,7 @@ test('leaderboard is GET /leaderboard, and keeps n beside the rate it belongs to
   const board = await api.leaderboard();
 
   assert.deepEqual(calls, [
-    { url: `${BASE}/leaderboard`, method: 'GET', headers: { 'x-sente-user-id': OWNER } },
+    { url: `${BASE}/leaderboard`, method: 'GET', headers: { authorization: `Bearer ${TOKEN}` } },
   ]);
   const row = board.ranked[0];
   // The denominator travels with the rate: no row can render one without it.
@@ -389,4 +399,35 @@ test('an unconfigured board says so, and carries no rows to misread', async () =
 
   assert.equal(board.source.kind, 'unconfigured');
   assert.equal(board.ranked.length, 0);
+});
+
+test('a 401 re-authenticates once, then replays the same request', async () => {
+  const { api, calls } = recordingApiWith(
+    { token: () => 'stale', refresh: () => Promise.resolve('fresh') },
+    { status: 401, body: { reason: 'session_expired' } },
+    { status: 200, body: { agents: [] } },
+  );
+
+  assert.deepEqual(await api.list(), []);
+  assert.deepEqual(
+    calls.map((call) => call.headers.authorization),
+    ['Bearer stale', 'Bearer fresh'],
+    'the retry carries the new token, and there is exactly one retry',
+  );
+});
+
+test('a 401 that re-authentication cannot fix surfaces as the original error', async () => {
+  const { api, calls } = recordingApiWith(
+    { token: () => null, refresh: () => Promise.resolve(null) },
+    { status: 401, body: { reason: 'unauthenticated', message: 'no session' } },
+  );
+
+  const error = await api.list().catch((caught: unknown) => caught);
+
+  assert.ok(error instanceof AgentsApiError);
+  assert.equal(error.status, 401);
+  assert.equal(error.reason, 'unauthenticated');
+  // Signed out: nothing to retry with, so the request is not sent twice.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.headers.authorization, undefined);
 });

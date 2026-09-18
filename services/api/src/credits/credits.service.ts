@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 
-import type { GasDripPrincipal } from '../gas/auth/gas-drip-auth';
+import type { Principal } from '../auth/principal';
 import { CREDITS_CONFIG, type CreditsConfig } from './credits.config';
 import { CreditsRefusedError } from './credits.errors';
 import {
@@ -95,7 +95,7 @@ export class CreditsService {
   ) {}
 
   /** Mints the caller's key on first call; returns the existing one's status after. */
-  provision(principal: GasDripPrincipal): Promise<ProvisionResult> {
+  provision(principal: Principal): Promise<ProvisionResult> {
     if (this.config.mode === 'shared') {
       // Dev mode: nothing to mint. Every user draws on the one shared key.
       return this.sharedView(new Date()).then((view) => ({ ...view, created: false }));
@@ -111,7 +111,7 @@ export class CreditsService {
     return run;
   }
 
-  async status(principal: GasDripPrincipal, now: Date = new Date()): Promise<CreditsView> {
+  async status(principal: Principal, now: Date = new Date()): Promise<CreditsView> {
     if (this.config.mode === 'shared') {
       return this.sharedView(now);
     }

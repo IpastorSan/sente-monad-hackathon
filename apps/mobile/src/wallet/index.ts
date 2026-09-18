@@ -1,6 +1,5 @@
 export {
   API_URL,
-  USER_ID_HEADER,
   WalletApi,
   WalletApiError,
   toUserOperation,
@@ -8,6 +7,7 @@ export {
   type ExecuteResponse,
   type OperationStatusResponse,
   type PrepareResponse,
+  type SessionAuth,
   type WalletAccount,
 } from './api';
 export {

@@ -20,7 +20,7 @@ const SIGNATURE = /^0x[0-9a-fA-F]{2,4000}$/;
 
 /**
  * NOTE on identity, in all three DTOs: there is deliberately no `userId` field.
- * Identity comes from the auth guard (`gas/auth/gas-drip-auth.ts`), and the
+ * Identity comes from the auth guard (`auth/principal.ts`), and the
  * global ValidationPipe runs with `forbidNonWhitelisted`, so a request that
  * smuggles one in is rejected with a 400 rather than silently ignored.
  */

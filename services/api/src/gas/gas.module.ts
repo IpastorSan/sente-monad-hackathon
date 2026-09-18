@@ -1,7 +1,7 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
-import { GasDripAuth, RequestContextGasDripAuth } from './auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from './auth/gas-drip-auth.guard';
+import { Auth, RequestContextAuth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { monadChainProviders } from './chain/monad-chain.providers';
 import { GasController } from './gas.controller';
 import {
@@ -43,12 +43,12 @@ const rateLimiterProvider: Provider = {
 };
 
 /**
- * AUTH: `GasDripAuth` is bound to the request-context reader fed by
- * `PlaceholderGasDripAuthGuard`. MOV-251 rebinds both to the real Mera session.
+ * AUTH: `Auth` is bound to the request-context reader fed by
+ * `SessionAuthGuard` (SEN-37), which verifies the caller's session token.
  */
 const authProvider: Provider = {
-  provide: GasDripAuth,
-  useClass: RequestContextGasDripAuth,
+  provide: Auth,
+  useClass: RequestContextAuth,
 };
 
 @Module({
@@ -59,7 +59,7 @@ const authProvider: Provider = {
     rateLimiterProvider,
     authProvider,
     ...monadChainProviders,
-    PlaceholderGasDripAuthGuard,
+    SessionAuthGuard,
     GasDripService,
   ],
   exports: [GasDripService],

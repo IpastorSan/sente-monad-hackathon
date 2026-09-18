@@ -4,7 +4,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { getAddress, isAddress, type Address, type Hash, type Hex } from 'viem';
 import { getUserOperationHash } from 'viem/account-abstraction';
 
-import type { GasDripPrincipal } from '../gas/auth/gas-drip-auth';
+import type { Principal } from '../auth/principal';
 import {
   authorizationPayload,
   executeBodyHash,
@@ -136,7 +136,7 @@ export class WalletService {
    * different owner for the same user is a different account — a bug or an
    * attack, never a re-registration.
    */
-  async register(principal: GasDripPrincipal, ownerInput: string): Promise<WalletAccountView> {
+  async register(principal: Principal, ownerInput: string): Promise<WalletAccountView> {
     if (!isAddress(ownerInput)) {
       throw new WalletRefusedError('owner_conflict', 'owner must be a 20-byte hex address');
     }
@@ -168,7 +168,7 @@ export class WalletService {
   }
 
   /** The caller's account, or `account_not_registered`. */
-  async account(principal: GasDripPrincipal): Promise<WalletAccountView> {
+  async account(principal: Principal): Promise<WalletAccountView> {
     return this.describe(await this.requireBinding(principal));
   }
 
@@ -176,7 +176,7 @@ export class WalletService {
    * Builds a fully-populated, sponsored UserOperation and the envelope the
    * client must sign. Nothing is broadcast here.
    */
-  async prepare(principal: GasDripPrincipal, command: PrepareCommand): Promise<PrepareResult> {
+  async prepare(principal: Principal, command: PrepareCommand): Promise<PrepareResult> {
     const binding = await this.requireBinding(principal);
     this.assertCanonicalSender(principal, binding, command.sender);
 
@@ -333,7 +333,7 @@ export class WalletService {
    * is no client-supplied operation that could differ from the one that was
    * hashed and approved.
    */
-  async execute(principal: GasDripPrincipal, command: ExecuteCommand): Promise<ExecuteResult> {
+  async execute(principal: Principal, command: ExecuteCommand): Promise<ExecuteResult> {
     const now = new Date();
     const record = await this.prepared.take(command.prepareId, now);
     if (!record) {
@@ -430,7 +430,7 @@ export class WalletService {
     };
   }
 
-  private async requireBinding(principal: GasDripPrincipal): Promise<SmartAccountBinding> {
+  private async requireBinding(principal: Principal): Promise<SmartAccountBinding> {
     const binding = await this.registry.find(principal.userId);
     if (!binding) {
       throw new WalletRefusedError(
@@ -450,7 +450,7 @@ export class WalletService {
    * both addresses and refused, rather than shrugged off.
    */
   private assertCanonicalSender(
-    principal: GasDripPrincipal,
+    principal: Principal,
     binding: SmartAccountBinding,
     supplied: string | undefined,
   ): void {

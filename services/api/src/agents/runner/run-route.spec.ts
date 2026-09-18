@@ -1,6 +1,6 @@
 import { BadRequestException, HttpException, Logger, ValidationPipe } from '@nestjs/common';
 
-import type { GasDripAuth } from '../../gas/auth/gas-drip-auth';
+import type { Auth } from '../../auth/principal';
 import { AgentsController } from '../agents.controller';
 import { RunAgentDto } from '../dto/agent.dto';
 import { apiError, assistant, text } from './testing/fake-messages';
@@ -11,7 +11,7 @@ beforeAll(() => Logger.overrideLogger(false));
 async function routeHarness(options: Parameters<typeof runnerHarness>[0] = {}) {
   const h = await runnerHarness(options);
   let userId = h.agent.userId;
-  const auth: GasDripAuth = { principal: () => ({ userId }) };
+  const auth: Auth = { principal: () => ({ userId }) };
   // The run route never reads consensus (SEN-21); the events route does, and
   // has its own spec.
   const controller = new AgentsController(h.agents, auth, h.runner, h.events, {} as never);
