@@ -23,7 +23,8 @@ apps/mobile/src/app/leaderboard.tsx     the screen
 | ------------------- | -------------------------------------------------------- |
 | `ENVIO_GRAPHQL_URL` | Envio HyperIndex's GraphQL (Hasura) endpoint from SEN-25 |
 
-It is **not in `.env.example` yet** — SEN-27 owns that file.
+It is in `.env.example` (SEN-36), next to `ENVIO_MONAD_RPC_URL`, which the
+indexer itself reads.
 
 Unset, the API boots and `GET /leaderboard` answers
 `source: { kind: 'unconfigured' }` with no rows and a note saying so, rather
