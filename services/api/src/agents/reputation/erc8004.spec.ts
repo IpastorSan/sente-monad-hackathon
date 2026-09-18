@@ -10,6 +10,7 @@ import { getAddress } from 'viem';
 
 import type { Verdict } from '../events/verdict';
 import { AgentsService } from '../agents.service';
+import { toAgentResponse } from '../dto/agent.dto';
 import { ServerMandateOwners } from '../mandate-owner';
 import { InMemoryAgentEventLog, type NewAgentEvent } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
@@ -508,6 +509,16 @@ describe('AgentsService.hire with ERC-8004', () => {
     expect(client.registrations).toHaveLength(1);
     // The registrar signs, never the agent's wallet: no policy rule was added.
     expect(await store.get(agent.id)).toMatchObject({ erc8004AgentId: '1874' });
+    // And it reaches the app, so the Ledger can show the on-chain id (SEN-36).
+    expect(toAgentResponse(agent)).toMatchObject({ erc8004AgentId: '1874' });
+  });
+
+  it('leaves erc8004AgentId off the wire entirely when there is no identity', () => {
+    const wire = toAgentResponse(testAgent());
+
+    // Absent, not null and not '': an unregistered agent has no id to show, and
+    // a falsy placeholder is something the app would have to special-case.
+    expect(wire).not.toHaveProperty('erc8004AgentId');
   });
 
   it('hires the agent anyway when the registration fails', async () => {

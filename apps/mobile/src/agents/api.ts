@@ -100,6 +100,13 @@ type AgentFields = {
   chainId: number;
   walletId: string;
   policyId: string;
+  /**
+   * The agent's id on the ERC-8004 Identity Registry (SEN-27), a uint256 as a
+   * decimal string. Absent is normal: the registry is optional server-side, and
+   * a hire whose registration failed keeps no id (it is never retried — a
+   * second `register` would mint a second agent). Show it when it is there.
+   */
+  erc8004AgentId?: string;
   status: AgentStatus;
   /**
    * WHO OWNS THIS AGENT'S MANDATE, and so whether changing it needs this
