@@ -5,3 +5,8 @@ build
 ios
 android
 pnpm-lock.yaml
+
+# Generated: `envio codegen` writes services/indexer/.envio, and `pnpm run
+# check:indexer` runs it — so without this line format:check passes on a clean
+# tree and fails right after the indexer has been checked.
+.envio

@@ -163,7 +163,10 @@ export type EthCall = (request: { to: string; data: string }) => Promise<string>
  * RPC that is down — throws, so Envio retries the effect instead of caching a
  * null address that would then never be re-read.
  */
-export function rpcEthCall(rpcUrl: string = DEFAULT_RPC_URL, fetchImpl: typeof fetch = fetch): EthCall {
+export function rpcEthCall(
+  rpcUrl: string = DEFAULT_RPC_URL,
+  fetchImpl: typeof fetch = fetch,
+): EthCall {
   return async ({ to, data }) => {
     const response = await fetchImpl(rpcUrl, {
       method: 'POST',

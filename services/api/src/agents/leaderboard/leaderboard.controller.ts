@@ -1,6 +1,6 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 
-import { PlaceholderGasDripAuthGuard } from '../../gas/auth/gas-drip-auth.guard';
+import { SessionAuthGuard } from '../../auth/session-auth.guard';
 import type { LeaderboardResponseDto } from './leaderboard.dto';
 import { LeaderboardService } from './leaderboard.service';
 
@@ -9,19 +9,22 @@ import { LeaderboardService } from './leaderboard.service';
  * lives beside the code that computes it rather than in `agents.controller.ts`
  * — which is about one owner's agents, while a board is about everyone's.
  *
- * AUTH: the same placeholder seam every other route uses —
- * `PlaceholderGasDripAuthGuard` puts a principal on the request from
- * `x-sente-user-id`, and MOV-251's real session guard replaces it in the
- * module. The leaderboard is the first route that will drop the guard
- * entirely: a ranking of agents is public information about agents, not about
- * the caller, and NOTHING in this module reads the principal. It is kept for
- * now so the whole API has one auth story until MOV-251 lands.
+ * AUTH: `SessionAuthGuard`, the same guard every other route carries (SEN-37).
+ * It was the last route left on the placeholder guard — SEN-37 could not edit
+ * this directory — so until SEN-36 the API had two auth stories and the weaker
+ * one was reachable here.
+ *
+ * The leaderboard is still the first route that will drop the guard entirely: a
+ * ranking of agents is public information about agents, not about the caller,
+ * and NOTHING in this module reads the principal. Dropping it is the intended
+ * change, not an oversight, which is why `leaderboard.controller.spec.ts` pins
+ * the guard: whoever makes the route public has to say so there.
  *
  * The ranking is global: every active agent, whichever owner hired it. A
  * per-user board would be a performance review, not a leaderboard.
  */
 @Controller('leaderboard')
-@UseGuards(PlaceholderGasDripAuthGuard)
+@UseGuards(SessionAuthGuard)
 export class LeaderboardController {
   constructor(private readonly leaderboard: LeaderboardService) {}
 

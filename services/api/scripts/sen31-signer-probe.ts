@@ -106,7 +106,11 @@ async function call(fn: () => Promise<unknown>) {
 
 async function readBack(walletId: string) {
   const w = (await getAgentWallet(client, walletId)) as Record<string, unknown>;
-  return { policy_ids: w.policy_ids, owner_id: w.owner_id, additional_signers: w.additional_signers };
+  return {
+    policy_ids: w.policy_ids,
+    owner_id: w.owner_id,
+    additional_signers: w.additional_signers,
+  };
 }
 
 const tx = (to: string) =>
@@ -229,7 +233,12 @@ remember('attackerQuorumId (fresh in-memory key)', attackerQuorum.id);
 // ---- (a)(b) the agent SIGNER trades within the mandate ----------------------
 const aAllowed = await signProbe(W, ALLOWED, [agentKey]);
 const bDenied = await signProbe(W, NOT_ALLOWED, [agentKey]);
-steps.push({ id: 'ab', title: 'agent signer sign-only', allowedTo: aAllowed, notAllowedTo: bDenied });
+steps.push({
+  id: 'ab',
+  title: 'agent signer sign-only',
+  allowedTo: aAllowed,
+  notAllowedTo: bDenied,
+});
 save();
 console.log(`\n[a] allowed=${JSON.stringify(aAllowed)}\n[b] notAllowed=${JSON.stringify(bDenied)}`);
 verdict.a = aAllowed.outcome === 'SIGNED';
@@ -256,7 +265,9 @@ const c3 = await step(
   'PATCH {additional_signers: [{attacker, override: permissive}]} signed by AGENT SIGNER key alone',
   patchWallet(
     W,
-    { additional_signers: [{ signer_id: attackerQuorum.id, override_policy_ids: [permissive.id] }] },
+    {
+      additional_signers: [{ signer_id: attackerQuorum.id, override_policy_ids: [permissive.id] }],
+    },
     [agentKey],
   ),
   W,
@@ -264,7 +275,8 @@ const c3 = await step(
 );
 // (c) holds only if EVERY signer PATCH was refused (not ok) AND the wallet still
 // refuses the not-allowed tx afterwards.
-const cRefused = (r: { ok: boolean; status: number }) => !r.ok && (r.status === 401 || r.status === 403);
+const cRefused = (r: { ok: boolean; status: number }) =>
+  !r.ok && (r.status === 401 || r.status === 403);
 verdict.c = cRefused(c1) && cRefused(c2) && cRefused(c3);
 verdict.c_detail = { c1: c1.status, c2: c2.status, c3: c3.status };
 

@@ -26,16 +26,13 @@ const KURU_CALLDATA_62 =
   '0x686067c5000000000000000000000000000000000000000000000000000000000000003e';
 
 /** `getAccountById(uint256)` → `0x05aca141`. */
-const PERPL_CALLDATA_1 =
-  '0x05aca141' + '1'.padStart(64, '0');
+const PERPL_CALLDATA_1 = '0x05aca141' + '1'.padStart(64, '0');
 
 /** The chain's answer for Kuru account 62 — the taker of the §proven fill. */
-const KURU_RESULT_62 =
-  '0x00000000000000000000000015bbc549326dd8d053233c3a546aa7fdabb57256';
+const KURU_RESULT_62 = '0x00000000000000000000000015bbc549326dd8d053233c3a546aa7fdabb57256';
 
 /** …and for account 47, the maker of the same fill. */
-const KURU_RESULT_47 =
-  '0x00000000000000000000000074443181214751970a785f5675bd372735245c9e';
+const KURU_RESULT_47 = '0x00000000000000000000000074443181214751970a785f5675bd372735245c9e';
 
 /**
  * The `AccountInfo` struct for Perpl account 1: accountId, balanceCNS,
@@ -86,10 +83,7 @@ test('the live Perpl answer decodes to accountAddr, not to another struct word',
 
 test('"no such account" is no address, never the zero address', () => {
   // Kuru answers an unknown id with the zero address rather than reverting…
-  assert.equal(
-    decodeAccountAddress('KURU', `0x${'0'.repeat(64)}`),
-    undefined,
-  );
+  assert.equal(decodeAccountAddress('KURU', `0x${'0'.repeat(64)}`), undefined);
   // …and a revert reaches the decoder as empty data.
   assert.equal(decodeAccountAddress('PERPL', '0x'), undefined);
 });

@@ -1,9 +1,11 @@
 /**
  * The header the placeholder auth mode trusts, and the one rule about it.
  *
- * It lives in its own file because two guards read it — `SessionAuthGuard` in
- * placeholder mode, and the deprecated `PlaceholderGasDripAuthGuard` that
- * `agents/leaderboard/` still binds — and neither should import the other.
+ * It lives in its own file because it was read by two guards: `SessionAuthGuard`
+ * in placeholder mode, and the deprecated `PlaceholderGasDripAuthGuard` that
+ * `agents/leaderboard/` bound until SEN-36 rebound the route and deleted it.
+ * `SessionAuthGuard` is now the only reader, and the file stays split so the
+ * header's one rule sits next to the pattern that enforces it.
  *
  * Anything that sets this header is authenticated as whoever it names, so it is
  * allowed only when `AUTH_PLACEHOLDER=1` outside production. It exists so the

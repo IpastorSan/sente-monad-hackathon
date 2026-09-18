@@ -1,6 +1,6 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
-import { PlaceholderGasDripAuthGuard } from '../../gas/auth/gas-drip-auth.guard';
+import { SessionAuthGuard } from '../../auth/session-auth.guard';
 import { AgentsModule } from '../agents.module';
 import {
   EnvioIndexerStats,
@@ -55,14 +55,15 @@ const indexerProvider: Provider = {
  * `AGENT_EVENTS` must be the same instances the rest of the app writes to, and
  * re-providing either here would leave the board reading an empty store.
  *
- * `PlaceholderGasDripAuthGuard` is provided rather than imported from
- * `GasModule`, which does not export it; it is stateless, so a second instance
- * costs nothing.
+ * `SessionAuthGuard` is provided rather than imported from `AuthModule`: every
+ * module that binds it constructs its own, which is why the guard takes no
+ * constructor dependency and reads its configuration from the memo in
+ * `auth.config.ts`. It is stateless, so a second instance costs nothing.
  */
 @Module({
   imports: [AgentsModule],
   controllers: [LeaderboardController],
-  providers: [configProvider, indexerProvider, PlaceholderGasDripAuthGuard, LeaderboardService],
+  providers: [configProvider, indexerProvider, SessionAuthGuard, LeaderboardService],
   exports: [LeaderboardService],
 })
 export class LeaderboardModule {}

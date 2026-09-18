@@ -273,6 +273,20 @@ export interface AgentResponseDto {
   chainId: number;
   walletId: string;
   policyId: string;
+  /**
+   * The agent's id on the ERC-8004 Identity Registry (SEN-27), as a decimal
+   * string — a uint256, so it is not a JS number. It is what a reputation
+   * aggregator keys this agent by, together with the registry handle
+   * `eip155:10143:0x8004A818…` (`agentRegistryId()` in
+   * `agents/reputation/erc8004.ts`).
+   *
+   * ABSENT IS NORMAL, and it is not an error: ERC-8004 is optional
+   * (`ERC8004_REGISTRAR_KEY` unset), and a registration that failed leaves the
+   * hire successful with no id — the registrar is never retried, because a
+   * second `register` would mint a second agent. So the Ledger shows the id
+   * when there is one and says nothing when there is not.
+   */
+  erc8004AgentId?: string;
   status: AgentStatus;
   /**
    * WHO CAN CHANGE THIS AGENT'S MANDATE (SEN-43), and therefore whether
@@ -473,6 +487,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     chainId: MANDATE_CHAIN_ID,
     walletId: agent.walletId,
     policyId: agent.policyId,
+    ...(agent.erc8004AgentId !== undefined ? { erc8004AgentId: agent.erc8004AgentId } : {}),
     status: agent.status,
     ownerKind: agent.ownerKind,
     ...(agent.status === 'revoked' ? { policyCleared: agent.policyCleared } : {}),

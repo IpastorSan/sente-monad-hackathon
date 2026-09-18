@@ -378,8 +378,6 @@ export function toPlacedOrder(input: PlacedOrderInput): Order {
     txHash: input.transactionHash,
     ...(input.blockNumber !== undefined ? { blockNumber: input.blockNumber } : {}),
     ...(takerFee !== undefined ? { fee: takerFee } : {}),
-    ...(takerFee !== undefined && input.feeAsset !== undefined
-      ? { feeAsset: input.feeAsset }
-      : {}),
+    ...(takerFee !== undefined && input.feeAsset !== undefined ? { feeAsset: input.feeAsset } : {}),
   };
 }

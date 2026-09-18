@@ -14,7 +14,14 @@
  * Why direct OrderBook calls and not Kuru's Relay: see `orders.ts`.
  */
 import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
-import { erc20Abi, isAddressEqual, zeroAddress, type Address, type Hex, type PublicClient } from 'viem';
+import {
+  erc20Abi,
+  isAddressEqual,
+  zeroAddress,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 
 import type {
   Balance,

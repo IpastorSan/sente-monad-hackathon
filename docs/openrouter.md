@@ -6,12 +6,12 @@ Each user gets their own OpenRouter API key, minted through the Management API w
 limit that resets monthly**. That is the whole credit system. OpenRouter meters usage and enforces
 the limit, so we build no metering of our own.
 
-| Piece                                                | What it does                                                                                                                                                                                                                   |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                                      |
-| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                                       |
-| `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                            |
-| `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision`, `GET /credits` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt}`. `provision` adds `created`. The routes sit behind `PlaceholderGasDripAuthGuard` and use the same principal seam as `wallet/`. |
+| Piece                                                | What it does                                                                                                                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                           |
+| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                            |
+| `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                 |
+| `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision`, `GET /credits` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt}`. `provision` adds `created`. The routes sit behind `SessionAuthGuard` and use the same principal seam as `wallet/`. |
 
 The plaintext key (`sk-or-v1-…`) comes back **only** in the create response. The store keeps it,
 and only `CreditsService.keyFor` hands it out, to the agent runner. No HTTP response and no log line
@@ -129,12 +129,12 @@ Run with an OpenRouter **inference** key (not a management key — see below), t
 `https://openrouter.ai/api` with `authToken` set and `apiKey: null`. One tool (`get_price`), two turns
 (tool_use → tool_result → final answer), `max_tokens: 1024`.
 
-| Model | Tool round trip | Final stop | Thinking blocks returned |
-| --- | --- | --- | --- |
-| `anthropic/claude-sonnet-5` | ✅ `get_price {"symbol":"MON-USDC"}` | `end_turn` | no |
-| `anthropic/claude-sonnet-5` + `thinking: {type:'adaptive'}` | ✅ | `end_turn` | **no** — the parameter is accepted but no thinking block came back, so pass-through is unproven; keep `AGENT_RUNNER_THINKING=off` |
-| `moonshotai/kimi-k2.6`, `provider: {order:['Moonshot AI'], allow_fallbacks:false}` | ✅ | `end_turn` | yes |
-| `moonshotai/kimi-k2.6`, any provider | ✅ | `end_turn` | yes |
+| Model                                                                              | Tool round trip                      | Final stop | Thinking blocks returned                                                                                                          |
+| ---------------------------------------------------------------------------------- | ------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic/claude-sonnet-5`                                                        | ✅ `get_price {"symbol":"MON-USDC"}` | `end_turn` | no                                                                                                                                |
+| `anthropic/claude-sonnet-5` + `thinking: {type:'adaptive'}`                        | ✅                                   | `end_turn` | **no** — the parameter is accepted but no thinking block came back, so pass-through is unproven; keep `AGENT_RUNNER_THINKING=off` |
+| `moonshotai/kimi-k2.6`, `provider: {order:['Moonshot AI'], allow_fallbacks:false}` | ✅                                   | `end_turn` | yes                                                                                                                               |
+| `moonshotai/kimi-k2.6`, any provider                                               | ✅                                   | `end_turn` | yes                                                                                                                               |
 
 **Kimi tool calls do round-trip through `/api/v1/messages`**, despite OpenRouter's blog saying non-Anthropic models
 "aren't supported through the native endpoint" for Claude Code. So the runner works with Kimi as-is, and no

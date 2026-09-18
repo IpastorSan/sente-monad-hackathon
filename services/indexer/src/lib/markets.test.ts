@@ -147,7 +147,10 @@ test('a second fill makes the VWAP a volume weighting, not an average of prices'
 test('a day with no base volume has no VWAP rather than a division by zero', async () => {
   const { context, days } = fakeContext();
 
-  await recordMarketDay(context, fill({ baseBd: new BigDecimal('0'), notionalBd: new BigDecimal('0') }));
+  await recordMarketDay(
+    context,
+    fill({ baseBd: new BigDecimal('0'), notionalBd: new BigDecimal('0') }),
+  );
 
   const [day] = [...days.values()];
   assert.equal(day?.vwapPrice, undefined);

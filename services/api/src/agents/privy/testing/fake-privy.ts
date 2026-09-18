@@ -50,7 +50,10 @@ export function requestSignedByAny(
   if (!header || publicKeys.length === 0) return false;
   const privyHeaders: Record<string, string> = {};
   for (const [k, v] of Object.entries(request.headers)) {
-    if (k.toLowerCase().startsWith('privy-') && k.toLowerCase() !== 'privy-authorization-signature') {
+    if (
+      k.toLowerCase().startsWith('privy-') &&
+      k.toLowerCase() !== 'privy-authorization-signature'
+    ) {
       privyHeaders[k] = v;
     }
   }
