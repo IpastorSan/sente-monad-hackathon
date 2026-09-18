@@ -2,8 +2,8 @@ import { Logger, Module, type Provider } from '@nestjs/common';
 import { createPublicClient, http } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
-import { GasDripAuth, RequestContextGasDripAuth } from '../gas/auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { Auth, RequestContextAuth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { BUNDLER, type Bundler } from './bundler/bundler';
 import { PimlicoBundler } from './bundler/pimlico-bundler';
 import {
@@ -119,14 +119,12 @@ const preparedStoreProvider: Provider = {
 };
 
 /**
- * AUTH: reuses `gas/`'s seam rather than inventing a second one. MOV-251 swaps
- * `PlaceholderGasDripAuthGuard` for the real Mera session guard and rebinds
- * `GasDripAuth`; this module and `GasModule` change in the same way at the same
- * time.
+ * AUTH: the shared seam rather than a second one of its own — `SessionAuthGuard`
+ * verifies the session token and `Auth` reads the principal back out.
  */
 const authProvider: Provider = {
-  provide: GasDripAuth,
-  useClass: RequestContextGasDripAuth,
+  provide: Auth,
+  useClass: RequestContextAuth,
 };
 
 /**
@@ -149,7 +147,7 @@ const authProvider: Provider = {
     registryProvider,
     preparedStoreProvider,
     authProvider,
-    PlaceholderGasDripAuthGuard,
+    SessionAuthGuard,
     WalletService,
   ],
   exports: [WalletService],

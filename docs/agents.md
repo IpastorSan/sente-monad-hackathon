@@ -196,7 +196,7 @@ salt, so that change is harmless.
 
 | Step                                     | Result                                                          | Transaction / id                                                     |
 | ---------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
-| policy recompiled + PATCHed (5 s settle) | ok                                                              | policy `<privy-agent-venues-policy-id>`                                    |
+| policy recompiled + PATCHed (5 s settle) | ok                                                              | policy `<privy-agent-venues-policy-id>`                              |
 | over-cap deposit again                   | `EnclaveRefusedError`, nonce 7 → 7, nothing sent                | —                                                                    |
 | Perpl onboard                            | no-op: account 505 exists                                       | —                                                                    |
 | Perpl enrollment via the agent's wallet  | enrolled; the second `credentials()` call reused it             | key held server-side, never printed                                  |
@@ -449,9 +449,9 @@ asynchronously. The summary event keeps `reportedCostUsd` and
 
 ### `POST /agents/:id/run {instruction?}`
 
-The endpoint uses the same placeholder auth as every agents route
-(`x-sente-user-id`), and it is refused under `NODE_ENV=production`. The body
-is `{instruction?: string}`, at most 2,000 characters, and nothing else is
+The endpoint uses the same session auth as every agents route (see
+[Authenticating](#authenticating) below). The body is
+`{instruction?: string}`, at most 2,000 characters, and nothing else is
 allowed.
 
 | Status | `reason`                           | When                                                              |
@@ -462,7 +462,7 @@ allowed.
 | 404    | `agent_not_found`                  | No such agent, or not yours.                                      |
 | 409    | `agent_revoked`, `run_in_progress` | Revoked, or already running.                                      |
 | 503    | `credits_unconfigured`             | `OPENROUTER_MANAGEMENT_KEY` unset.                                |
-| 401    | —                                  | No or malformed `x-sente-user-id`.                                |
+| 401    | —                                  | No session token, or one that is expired or forged.               |
 
 ### Write spacing
 
@@ -579,13 +579,43 @@ the Kuru wallet next to AccountCore.
 **Run 2 — passed** (run `run-2747e22a`, 6 iterations, 5 tool calls, 33 s, $0.114). Topped up with 0.12 MON
 (`0x7d90216d…64a2`) + 6 USDC (`0xa4d25874…1599`), so the wallet held 12 USDC.
 
-| Step | Result | Tx |
-| --- | --- | --- |
-| `record_thesis` MON-USDC | recorded | — |
-| `deposit` 11 USDC into AccountCore | ok | `0x484ab888f4ef1514e8058293ccce4cffc527903c0bb68dde13461ff86fd0f281` |
+| Step                                                                 | Result                      | Tx                                                                   |
+| -------------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------- |
+| `record_thesis` MON-USDC                                             | recorded                    | —                                                                    |
+| `deposit` 11 USDC into AccountCore                                   | ok                          | `0x484ab888f4ef1514e8058293ccce4cffc527903c0bb68dde13461ff86fd0f281` |
 | `place_limit` buy 727 MON @ 0.01445 (≈10.51 USDC, half the best bid) | ok — order `0:4209` resting | `0xcbb45e0255bdddba10dbc37d8169c43e770cb070ec8f3718f474b153b373813b` |
-| `cancel_order` `0:4209` | ok — cancelled | `0xf3a29c8f2d1bdc907ba0ff64de75a969c28a8fbe04dd5a7cf6956c4bc266a1e2` |
+| `cancel_order` `0:4209`                                              | ok — cancelled              | `0xf3a29c8f2d1bdc907ba0ff64de75a969c28a8fbe04dd5a7cf6956c4bc266a1e2` |
 
 After the run the agent holds 0.048 MON and 1 USDC in its wallet, with 11 USDC free in AccountCore. The four
 transactions (approve, deposit, place, cancel) cost about **0.10 MON** of gas — so the 0.15 MON agent gas drip
 (SEN-14) covers roughly one run of this shape.
+
+## Authenticating
+
+Every `/agents` route (and `/wallet`, `/credits`, `/chain`, `POST /gas/drip`)
+is behind `SessionAuthGuard` since SEN-37. The caller proves it holds the
+passkey-derived key for an address by signing a nonce the server chose, and
+gets a bearer token whose subject is that address lowercased — the same string
+`AgentRecord.userId` has always held.
+
+```bash
+ADDR=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+# 1. a challenge: {address, nonce, message, expiresAt}. Five minutes, single use.
+MSG=$(curl -sS localhost:3000/auth/challenge -H 'content-type: application/json' \
+  -d "{\"address\":\"$ADDR\"}" | jq -r .message)
+# 2. sign MSG with the EOA (EIP-191 personal_sign) — the app does this with the
+#    Mera viem account; `cast wallet sign "$MSG"` does it from a shell.
+# 3. the token: {address, token, expiresAt}
+TOKEN=$(curl -sS localhost:3000/auth/session -H 'content-type: application/json' \
+  -d "{\"address\":\"$ADDR\",\"signature\":\"$SIG\"}" | jq -r .token)
+curl -sS localhost:3000/agents -H "authorization: Bearer $TOKEN" | jq
+```
+
+`AUTH_SESSION_SECRET` (32 bytes of hex) signs the tokens and is required: the
+API refuses to boot without it. `AUTH_SESSION_TTL_S` sets their lifetime
+(default 86400).
+
+**Recipes in this repo that send `x-sente-user-id` still work under
+`AUTH_PLACEHOLDER=1`**, which keeps the old header alive for a request with no
+bearer token. It is refused under `NODE_ENV=production`: the header is not
+auth, it is a name anyone can claim.

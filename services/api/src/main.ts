@@ -11,8 +11,10 @@ async function bootstrap(): Promise<void> {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
-  // The mobile app is not same-origin with anything; CORS is opened here and
-  // tightened to the real origins when auth lands (MOV-251).
+  // The mobile app is not same-origin with anything, and a native client sends
+  // no Origin at all. CORS stays open because it protects browsers, and what
+  // protects these routes is the session token `SessionAuthGuard` verifies
+  // (SEN-37) — a cross-origin page cannot read a token it was never given.
   app.enableCors({ origin: true });
 
   const port = Number(process.env.PORT ?? 3000);

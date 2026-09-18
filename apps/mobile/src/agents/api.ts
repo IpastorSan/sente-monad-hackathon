@@ -2,9 +2,8 @@
  * HTTP client for `services/api`'s `/agents` routes (SEN-5), plus the run
  * route SEN-8 will add.
  *
- * Same shape as `WalletApi` on purpose: the placeholder `x-sente-user-id`
- * header, JSON in and out, and every bigint crossing the wire as a decimal
- * string. The difference is that this client converts in BOTH directions, so
+ * Same shape as `WalletApi` on purpose: the same session token, JSON in and
+ * out, and every bigint crossing the wire as a decimal string. The difference is that this client converts in BOTH directions, so
  * screens only ever hold bigint atoms and never a string they could mis-parse.
  *
  * No trust decisions live here. The mandate is validated by the API's
@@ -12,7 +11,7 @@
  */
 import type { Address } from 'viem';
 
-import { API_URL, USER_ID_HEADER } from '../wallet/api.ts';
+import { API_URL, type SessionAuth } from '../wallet/api.ts';
 
 /** Mirrors `AGENT_MODELS` in `services/api/src/agents/agents.config.ts`. */
 export const AGENT_MODELS = [
@@ -255,20 +254,20 @@ export class AgentsApiError extends Error {
 }
 
 export type AgentsApiOptions = {
-  /** Placeholder identity — the same value `WalletApi` sends (the owner address). */
-  userId: string;
+  /** The same session token source `WalletApi` sends. */
+  auth: SessionAuth;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 };
 
 export class AgentsApi {
   private readonly baseUrl: string;
-  private readonly userId: string;
+  private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ userId, baseUrl = API_URL, fetchImpl = fetch }: AgentsApiOptions) {
+  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: AgentsApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.userId = userId;
+    this.auth = auth;
     this.fetchImpl = fetchImpl;
   }
 
@@ -387,7 +386,7 @@ export class AgentsApi {
    * the response.
    *
    * The route is global, not per-user: it answers the same board whoever asks.
-   * It is behind the placeholder header for now, like every other route.
+   * It is behind the session token, like every other route.
    *
    * `source.kind` is not decoration. When it is `unconfigured` or
    * `unreachable` the lists are empty because there are no numbers to show —
@@ -406,16 +405,33 @@ export class AgentsApi {
     };
   }
 
+  /** One request, and at most one silent re-authentication — see `WalletApi`. */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    const first = await this.send(method, path, body, this.auth.token());
+    if (first.status !== 401) return this.read<T>(first);
+
+    const refreshed = await this.auth.refresh();
+    if (refreshed === null) return this.read<T>(first);
+    return this.read<T>(await this.send(method, path, body, refreshed));
+  }
+
+  private send(
+    method: string,
+    path: string,
+    body: unknown,
+    token: string | null,
+  ): Promise<Response> {
+    return this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
-        [USER_ID_HEADER]: this.userId,
+        ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
+  }
 
+  private async read<T>(response: Response): Promise<T> {
     const text = await response.text();
     const parsed: unknown = text ? safeParse(text) : undefined;
 

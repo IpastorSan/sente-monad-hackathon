@@ -6,21 +6,26 @@ import {
   type ExecutionContext,
 } from '@nestjs/common';
 
-import { attachPrincipal } from './gas-drip-auth';
+import { PLACEHOLDER_USER_ID_HEADER, readPlaceholderUserId } from '../../auth/placeholder-header';
+import { attachPrincipal } from '../../auth/principal';
+import { principalFromBearer } from '../../auth/session-auth.guard';
 
-/** Header the placeholder guard trusts. Replaced by a real session in MOV-251. */
-export const PLACEHOLDER_USER_ID_HEADER = 'x-sente-user-id';
-
-/** Conservative shape so a userId cannot smuggle separators into log lines or keys. */
-const USER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+export { PLACEHOLDER_USER_ID_HEADER };
 
 /**
- * PLACEHOLDER AUTH — see the seam docs in `gas-drip-auth.ts`.
+ * PLACEHOLDER AUTH — replaced by `SessionAuthGuard` (SEN-37) everywhere except
+ * `GET /leaderboard`, whose module SEN-37 was not allowed to edit.
  *
- * Trusts an `x-sente-user-id` header. That is obviously forgeable, which is
- * fine for local development against MOV-252 and not fine anywhere else, so the
- * guard hard-refuses under NODE_ENV=production rather than quietly authorising
- * whoever sets a header. MOV-251 deletes this file.
+ * It now accepts a real session token first, so the app and the judge-facing
+ * deployment reach the leaderboard with the same bearer token as every other
+ * route. Only when there is no token at all does it fall back to trusting the
+ * `x-sente-user-id` header, and only outside production — this guard keeps its
+ * original environment contract (rather than SEN-37's `AUTH_PLACEHOLDER` gate)
+ * because `leaderboard.controller.spec.ts` pins that contract and lives in the
+ * same untouchable directory.
+ *
+ * @deprecated Bind `SessionAuthGuard` instead; deleting this file is the last
+ * step of that move.
  */
 @Injectable()
 export class PlaceholderGasDripAuthGuard implements CanActivate {
@@ -28,23 +33,28 @@ export class PlaceholderGasDripAuthGuard implements CanActivate {
   private warned = false;
 
   canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest<{ headers?: Record<string, unknown> }>();
+
+    const fromSession = principalFromBearer(request);
+    if (fromSession) {
+      attachPrincipal(request, fromSession);
+      return true;
+    }
+
     if (process.env.NODE_ENV === 'production') {
       throw new UnauthorizedException(
-        'Gas drip auth is not configured for production (MOV-251 replaces the placeholder guard)',
+        'This route accepts only a session token in production (POST /auth/challenge)',
       );
     }
     if (!this.warned) {
       this.warned = true;
       this.logger.warn(
-        `PLACEHOLDER AUTH ACTIVE: trusting the ${PLACEHOLDER_USER_ID_HEADER} header. MOV-251 replaces this.`,
+        `PLACEHOLDER AUTH ACTIVE: trusting the ${PLACEHOLDER_USER_ID_HEADER} header. SessionAuthGuard replaces this.`,
       );
     }
 
-    const request = context.switchToHttp().getRequest<{ headers?: Record<string, unknown> }>();
-    const raw = request.headers?.[PLACEHOLDER_USER_ID_HEADER];
-    const userId = typeof raw === 'string' ? raw.trim() : '';
-
-    if (!USER_ID_PATTERN.test(userId)) {
+    const userId = readPlaceholderUserId(request);
+    if (userId === undefined) {
       throw new UnauthorizedException(`Missing or malformed ${PLACEHOLDER_USER_ID_HEADER} header`);
     }
 

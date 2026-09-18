@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ConsensusService, type CommitState, type CommitTimes } from './consensus.service';
 
 /** A block's consensus record on the wire. */
@@ -26,22 +26,20 @@ export interface ConsensusBlockResponseDto {
 }
 
 /**
- * AUTH: the same placeholder seam as `wallet/` and `agents/` —
- * `PlaceholderGasDripAuthGuard` populates the request principal from
- * `x-sente-user-id` and refuses to run under NODE_ENV=production. MOV-251's
- * real Mera session guard replaces it in the module.
+ * AUTH: the same seam as `wallet/` and `agents/` — `SessionAuthGuard` (SEN-37)
+ * populates the request principal from the caller's verified session token.
  *
  * Nothing on this route is user-scoped: consensus state is public chain data,
- * and there is no per-user view of it. The guard is here for consistency (and
- * so the route disappears behind real auth with the rest of the API), not
- * because the answer depends on who is asking.
+ * and there is no per-user view of it. The guard is here for consistency (the
+ * whole API is behind one auth story), not because the answer depends on who
+ * is asking.
  *
  * The height is parsed with Nest's own `ParseIntPipe` rather than a
  * class-validator DTO: there is one field, and a pipe that cannot silently
  * no-op is worth more here than the whitelist a DTO would bring.
  */
 @Controller('chain')
-@UseGuards(PlaceholderGasDripAuthGuard)
+@UseGuards(SessionAuthGuard)
 export class ChainController {
   private readonly consensus: ConsensusService;
 

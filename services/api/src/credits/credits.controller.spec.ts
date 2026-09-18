@@ -2,8 +2,8 @@ import { HttpException } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 
-import { GasDripAuth } from '../gas/auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { Auth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { loadCreditsConfig, type CreditsConfig } from './credits.config';
 import { CreditsController } from './credits.controller';
 import { CreditsModule } from './credits.module';
@@ -13,13 +13,18 @@ import { FAKE_MANAGEMENT_KEY, fakeOpenRouter } from './testing/fake-openrouter';
 
 const USER = { userId: 'user-1' };
 
-class FixedAuth extends GasDripAuth {
+class FixedAuth extends Auth {
   override principal() {
     return USER;
   }
 }
 
-const CONFIGURED: CreditsConfig = { managementKey: FAKE_MANAGEMENT_KEY, sharedKey: undefined, mode: 'per-user', defaultLimitUsd: 5 };
+const CONFIGURED: CreditsConfig = {
+  managementKey: FAKE_MANAGEMENT_KEY,
+  sharedKey: undefined,
+  mode: 'per-user',
+  defaultLimitUsd: 5,
+};
 
 function setup(config: CreditsConfig = CONFIGURED) {
   const fake = fakeOpenRouter();
@@ -75,10 +80,8 @@ describe('CreditsController', () => {
     expect(error.getResponse()).toMatchObject({ reason: 'not_provisioned' });
   });
 
-  it('sits behind the placeholder auth guard, like WalletController', () => {
-    expect(Reflect.getMetadata(GUARDS_METADATA, CreditsController)).toEqual([
-      PlaceholderGasDripAuthGuard,
-    ]);
+  it('sits behind the session auth guard, like WalletController', () => {
+    expect(Reflect.getMetadata(GUARDS_METADATA, CreditsController)).toEqual([SessionAuthGuard]);
   });
 });
 

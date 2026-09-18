@@ -49,7 +49,7 @@ import Animated, {
 import { groupThousands } from '@/agents/amounts';
 import { CONSENSUS_STOPS } from '@/agents/ledger';
 import { useSession } from '@/session';
-import { API_URL, USER_ID_HEADER } from '@/wallet/api';
+import { API_URL, type SessionAuth } from '@/wallet/api';
 
 import { color, font, text } from './theme';
 
@@ -152,13 +152,16 @@ type Phase =
  */
 async function readConsensus(
   blockNumber: number,
-  userId: string,
+  session: SessionAuth,
   signal: AbortSignal,
 ): Promise<ConsensusRecord | 'beyond'> {
-  const response = await fetch(`${API_URL}/chain/blocks/${blockNumber}/consensus`, {
-    headers: { [USER_ID_HEADER]: userId },
-    signal,
-  });
+  let response = await sendRead(blockNumber, session.token(), signal);
+  if (response.status === 401) {
+    // The session expired mid-ramp, or had not arrived when polling started:
+    // one silent sign-in, the same rule `WalletApi` and `AgentsApi` follow.
+    const refreshed = await session.refresh();
+    if (refreshed !== null) response = await sendRead(blockNumber, refreshed, signal);
+  }
   if (!response.ok) {
     if (response.status === 404) {
       const body = (await response.json().catch(() => null)) as { reason?: string } | null;
@@ -169,19 +172,30 @@ async function readConsensus(
   return (await response.json()) as ConsensusRecord;
 }
 
+function sendRead(
+  blockNumber: number,
+  token: string | null,
+  signal: AbortSignal,
+): Promise<Response> {
+  return fetch(`${API_URL}/chain/blocks/${blockNumber}/consensus`, {
+    headers: token !== null ? { authorization: `Bearer ${token}` } : {},
+    signal,
+  });
+}
+
 /**
  * Follow one block's consensus until it is final, or until we learn why we
  * cannot. It reports the record and whether the record is current; it never
  * invents a state the block has not been in.
  */
-function useConsensus(blockNumber: number, userId: string | null) {
+function useConsensus(blockNumber: number, session: SessionAuth | null) {
   const [phase, setPhase] = useState<Phase>('reading');
   const [record, setRecord] = useState<ConsensusRecord | null>(null);
   /** `null` until the first read decides it. See `isCurrent`. */
   const [live, setLive] = useState<boolean | null>(null);
 
   useEffect(() => {
-    if (userId === null) return;
+    if (session === null) return;
 
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -195,7 +209,7 @@ function useConsensus(blockNumber: number, userId: string | null) {
       const controller = new AbortController();
       const abort = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const read = await readConsensus(blockNumber, userId, controller.signal);
+        const read = await readConsensus(blockNumber, session, controller.signal);
         if (stopped) return;
         failures = 0;
 
@@ -242,7 +256,7 @@ function useConsensus(blockNumber: number, userId: string | null) {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [blockNumber, userId]);
+  }, [blockNumber, session]);
 
   // The stops the block's record actually contains, ascending. `at` is the whole
   // map the service holds, so this is the chain's sequence, not our polling's.
@@ -375,8 +389,8 @@ export function ConsensusRamp({ blockNumber }: { blockNumber: number }) {
   // The placeholder identity the API's guard wants, from the one place the app
   // keeps it. Consensus itself is public chain data; the route is only behind
   // the same guard as every other Sente route.
-  const { auth } = useSession();
-  const { phase, stops, at, live } = useConsensus(blockNumber, auth.address);
+  const { auth, api } = useSession();
+  const { phase, stops, at, live } = useConsensus(blockNumber, auth.address === null ? null : api);
 
   const [width, setWidth] = useState(0);
   /** The stop being shown. Walks up the record's own sequence, one beat apart. */
@@ -464,7 +478,10 @@ export function ConsensusRamp({ blockNumber }: { blockNumber: number }) {
 
       <View style={styles.stops}>
         {CONSENSUS_STOPS.map((label, index) => (
-          <Text key={label} style={[styles.stop, { color: stopColor(index, stop, phase, drained) }]}>
+          <Text
+            key={label}
+            style={[styles.stop, { color: stopColor(index, stop, phase, drained) }]}
+          >
             {label}
           </Text>
         ))}
@@ -477,12 +494,7 @@ export function ConsensusRamp({ blockNumber }: { blockNumber: number }) {
           </Animated.Text>
         ) : null}
         <Animated.Text
-          style={[
-            text.mono,
-            text.num,
-            caption === null && styles.stampPush,
-            stampIn,
-          ]}
+          style={[text.mono, text.num, caption === null && styles.stampPush, stampIn]}
           selectable
         >
           block {groupThousands(String(blockNumber))}

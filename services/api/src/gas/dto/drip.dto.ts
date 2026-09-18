@@ -2,7 +2,7 @@ import { IsEthereumAddress, IsString } from 'class-validator';
 
 /**
  * The ONLY field a caller may supply. There is deliberately no `userId` here:
- * identity comes from the auth context (see `auth/gas-drip-auth.ts`), and the
+ * identity comes from the auth context (see `auth/principal.ts`), and the
  * global ValidationPipe runs with `forbidNonWhitelisted`, so a request that
  * tries to smuggle one in is rejected with a 400 rather than ignored.
  */

@@ -1,6 +1,6 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ChainController } from './chain.controller';
 import {
   CONSENSUS_WINDOW_BLOCKS,
@@ -61,7 +61,7 @@ const consensusProvider: Provider = {
  */
 @Module({
   controllers: [ChainController],
-  providers: [consensusProvider, PlaceholderGasDripAuthGuard],
+  providers: [consensusProvider, SessionAuthGuard],
   exports: [ConsensusService],
 })
 export class ChainModule {}

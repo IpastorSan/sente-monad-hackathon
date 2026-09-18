@@ -1,8 +1,8 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Ip, Post, UseGuards } from '@nestjs/common';
 import { formatEther } from 'viem';
 
-import { GasDripAuth } from './auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from './auth/gas-drip-auth.guard';
+import { Auth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { DripRequestDto, type DripResponseDto } from './dto/drip.dto';
 import { refusalToHttpException } from './gas.errors';
 import { GasDripService, type DripReceipt, type FaucetStatus } from './gas.service';
@@ -11,7 +11,7 @@ import { GasDripService, type DripReceipt, type FaucetStatus } from './gas.servi
 export class GasController {
   constructor(
     private readonly gasDrip: GasDripService,
-    private readonly auth: GasDripAuth,
+    private readonly auth: Auth,
   ) {}
 
   /** Unauthenticated faucet status, so the app can hide the button when it is dry. */
@@ -27,7 +27,7 @@ export class GasController {
    * identity field and `forbidNonWhitelisted` rejects one if added.
    */
   @Post('drip')
-  @UseGuards(PlaceholderGasDripAuthGuard)
+  @UseGuards(SessionAuthGuard)
   @HttpCode(HttpStatus.OK)
   async drip(@Body() body: DripRequestDto, @Ip() ip: string): Promise<DripResponseDto> {
     const principal = this.auth.principal();

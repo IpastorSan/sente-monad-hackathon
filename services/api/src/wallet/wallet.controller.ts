@@ -10,8 +10,8 @@ import {
 } from '@nestjs/common';
 import type { Address, Hash } from 'viem';
 
-import { GasDripAuth } from '../gas/auth/gas-drip-auth';
-import { PlaceholderGasDripAuthGuard } from '../gas/auth/gas-drip-auth.guard';
+import { Auth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import {
   ExecuteWalletOperationDto,
   PrepareWalletOperationDto,
@@ -35,23 +35,21 @@ import {
 } from './wallet.service';
 
 /**
- * AUTH: this reuses the placeholder seam `gas/` already established rather than
- * inventing a second one — `PlaceholderGasDripAuthGuard` populates a
- * request-scoped principal from `x-sente-user-id` and refuses to run under
- * NODE_ENV=production. The names still say "gas drip" because the seam was
- * built there first; MOV-251's real Mera session guard replaces both bindings
- * in one place (see `wallet.module.ts`).
+ * AUTH: the shared seam rather than a second one of its own —
+ * `SessionAuthGuard` (SEN-37) populates a request-scoped principal from the
+ * caller's verified session token (see `wallet.module.ts`).
  *
- * Note that the guard being forgeable does NOT make these routes forgeable:
- * `POST /wallet/execute` additionally requires an EIP-712 signature by the
- * owner key bound to that user, which a header cannot produce.
+ * The envelope on `POST /wallet/execute` is not redundant now that the session
+ * is real: the token proves who is calling, and the EIP-712 signature proves
+ * the owner key approved THIS operation on THIS route. A stolen token still
+ * cannot move funds, which is the property worth keeping.
  */
 @Controller('wallet')
-@UseGuards(PlaceholderGasDripAuthGuard)
+@UseGuards(SessionAuthGuard)
 export class WalletController {
   constructor(
     private readonly wallet: WalletService,
-    private readonly auth: GasDripAuth,
+    private readonly auth: Auth,
   ) {}
 
   /** The caller's smart account. 404 until it has been registered. */

@@ -2,7 +2,7 @@ import { BadRequestException, HttpException, ValidationPipe } from '@nestjs/comm
 import { parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
-import type { GasDripAuth, GasDripPrincipal } from '../gas/auth/gas-drip-auth';
+import type { Auth, Principal } from '../auth/principal';
 import { ConsensusService, type PollTag, type TaggedBlock } from '../chain/consensus.service';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
@@ -46,8 +46,8 @@ function body(over: Record<string, unknown> = {}): Record<string, unknown> {
 
 /** The controller as a caller sees it: `as` switches the authenticated user. */
 function setup(wallets = new FakeAgentWalletProvider()) {
-  let principal: GasDripPrincipal = { userId: 'alice' };
-  const auth: GasDripAuth = { principal: () => principal };
+  let principal: Principal = { userId: 'alice' };
+  const auth: Auth = { principal: () => principal };
   const events = new InMemoryAgentEventLog();
   // SEN-21. A real ConsensusService, fed through its tag reader — the socket
   // path is consensus.service.spec.ts's. `settle(n)` is what a block that has

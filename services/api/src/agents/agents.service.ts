@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { compileMandate, MandateError, parseMandate, type Mandate } from '@sente/mandate';
 
-import type { GasDripPrincipal } from '../gas/auth/gas-drip-auth';
+import type { Principal } from '../auth/principal';
 import { GasDripService } from '../gas/gas.service';
 import { AGENT_WALLETS, type AgentWalletProvider } from './agent-wallet.provider';
 import { AGENT_MODELS, isAgentModel } from './agents.config';
@@ -129,7 +129,7 @@ export class AgentsService {
    * failed one can never lose track of a provisioned wallet, and their outcomes
    * are recorded on the agent rather than failing the hire.
    */
-  async hire(principal: GasDripPrincipal, input: HireAgentInput): Promise<HiredAgent> {
+  async hire(principal: Principal, input: HireAgentInput): Promise<HiredAgent> {
     if (!isAgentModel(input.model)) {
       throw new AgentRefusedError(
         'model_not_allowed',
@@ -199,11 +199,7 @@ export class AgentsService {
    * nothing else. A revocation is the one thing that stops it — a revoked
    * agent's strategy is no longer running, so it is refused rather than copied.
    */
-  async fork(
-    principal: GasDripPrincipal,
-    sourceId: string,
-    input: ForkAgentInput,
-  ): Promise<HiredAgent> {
+  async fork(principal: Principal, sourceId: string, input: ForkAgentInput): Promise<HiredAgent> {
     const source = await this.store.get(sourceId);
     if (!source) {
       throw new AgentRefusedError('agent_not_found', `no agent ${sourceId}`);
@@ -266,7 +262,7 @@ export class AgentsService {
    * the hire.
    */
   private async completeHire(
-    principal: GasDripPrincipal,
+    principal: Principal,
     agent: AgentRecord,
     mcpToken: string,
   ): Promise<HiredAgent> {
@@ -307,7 +303,7 @@ export class AgentsService {
   }
 
   /** Never throws: an unfunded agent is still hired, and says why. */
-  private async fundGas(principal: GasDripPrincipal, agent: AgentRecord): Promise<AgentGasFunding> {
+  private async fundGas(principal: Principal, agent: AgentRecord): Promise<AgentGasFunding> {
     if (!this.gas) return { funded: false, reason: 'gas_drip_unavailable' };
     try {
       const outcome = await this.gas.dripToAgent({
@@ -337,11 +333,11 @@ export class AgentsService {
     }
   }
 
-  list(principal: GasDripPrincipal): Promise<AgentRecord[]> {
+  list(principal: Principal): Promise<AgentRecord[]> {
     return this.store.listByUser(principal.userId);
   }
 
-  get(principal: GasDripPrincipal, id: string): Promise<AgentRecord> {
+  get(principal: Principal, id: string): Promise<AgentRecord> {
     return this.owned(principal, id);
   }
 
@@ -350,7 +346,7 @@ export class AgentsService {
    * If the provider fails, the stored mandate stays the old one — which is
    * still what the enclave enforces.
    */
-  amendMandate(principal: GasDripPrincipal, id: string, rawMandate: unknown): Promise<AgentRecord> {
+  amendMandate(principal: Principal, id: string, rawMandate: unknown): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {
       const agent = await this.owned(principal, id);
       if (agent.status === 'revoked') {
@@ -385,7 +381,7 @@ export class AgentsService {
    * agent stays revoked with `policyCleared: false`, and calling revoke again
    * retries it. Idempotent once cleared.
    */
-  revoke(principal: GasDripPrincipal, id: string): Promise<AgentRecord> {
+  revoke(principal: Principal, id: string): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {
       let agent = await this.owned(principal, id);
       if (agent.status === 'revoked' && agent.policyCleared) return agent;
@@ -419,7 +415,7 @@ export class AgentsService {
     return agent?.status === 'active' ? agent : undefined;
   }
 
-  private async owned(principal: GasDripPrincipal, id: string): Promise<AgentRecord> {
+  private async owned(principal: Principal, id: string): Promise<AgentRecord> {
     const agent = await this.store.get(id);
     if (!agent || agent.userId !== principal.userId) {
       throw new AgentRefusedError('agent_not_found', `no agent ${id}`);
