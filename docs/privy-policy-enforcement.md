@@ -701,6 +701,14 @@ Read straight back from Privy after (e):
 | agent policy                  | `xdk61x2eo9gapwey67rf4pmc`                                                |
 | agent wallet                  | `vlsk5jw7svt664vhzakk3x30` → `0xa9916b12194bC0d3b236F8E0339e828ACEFEACBF` |
 
+Re-run end to end after the follow-up cleanup commit, on a second throwaway key
+(device quorum `i4dy6ctfksj11z9o1pq9h21s`, policy `tvonjhteroqmapjok3sjc4xr`):
+(b) and (e) were 200 again and the policy read back `"rules": []`. A third
+policy, `sgeg7iqal193afjquy2jvi98`, produced (d) once more by accident — it is
+owned by a quorum whose key that run did not hold, and every attempt on it, both
+through the API and straight at Privy with our own client, was refused 401. It
+is unfunded and, its owner key being unknown to anyone, permanently unchangeable.
+
 ### The consequence gotcha 13 warns about
 
 `PERPL_ENROLL_TYPED_DATA` drifting means **every existing policy must be
