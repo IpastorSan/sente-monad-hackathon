@@ -3,10 +3,17 @@ import { getAddress, type Hex, type TypedDataDefinition } from 'viem';
 
 import type {
   AgentWalletProvider,
+  EnclaveApproval,
+  EnclaveRequest,
+  PreparedEnclaveRequest,
   ProvisionAgentWalletInput,
   ProvisionedAgentWallet,
 } from '../agent-wallet.provider.ts';
-import { EnclaveRefusedError, type EnclaveSignMethod } from '../agents.errors.ts';
+import {
+  EnclaveApprovalRefusedError,
+  EnclaveRefusedError,
+  type EnclaveSignMethod,
+} from '../agents.errors.ts';
 import {
   createAgentWallet,
   signTransaction,
@@ -15,7 +22,7 @@ import {
 } from './agent-wallet.ts';
 import type { AuthorizationKey } from './authorization-key.ts';
 import { createKeyQuorum } from './key-quorum.ts';
-import { createPolicy, updatePolicyRules } from './policies.ts';
+import { createPolicy, policyPath, policyRulesBody, updatePolicyRules } from './policies.ts';
 import { PrivyError, type PrivyClient } from './privy.client.ts';
 
 export interface PrivyAgentWalletProviderOptions {
@@ -115,6 +122,43 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
       rules,
       approvals: [this.#mandateOwnerKey],
     });
+  }
+
+  /**
+   * The PATCH a device-owned policy needs, and the payload its owner signs
+   * (SEN-44). No key of this server's is involved, and none would help: the
+   * quorum that owns the policy holds only the phone's key.
+   */
+  preparePolicyUpdate(
+    policyId: string,
+    rules: readonly PolicyRule[],
+  ): Promise<PreparedEnclaveRequest> {
+    const path = policyPath(policyId);
+    const body = policyRulesBody({ rules });
+    return Promise.resolve({
+      request: { method: 'PATCH', path, body },
+      payload: this.#client.authorizationPayload('PATCH', path, body),
+    });
+  }
+
+  async commitPrepared(request: EnclaveRequest, approval: EnclaveApproval): Promise<void> {
+    try {
+      await this.#client.request(request.method, request.path, request.body, {
+        signatures: [approval.signature],
+      });
+    } catch (error) {
+      // A signature over other bytes and a key outside the owner quorum look
+      // the same from here, and Privy answers both 401. Either way the owner
+      // did not approve THIS request, which is what the caller must be told.
+      if (error instanceof PrivyError && error.isMissingApproval) {
+        throw new EnclaveApprovalRefusedError({
+          policyId: request.path.split('/').pop() ?? request.path,
+          status: error.status,
+          detail: error.code,
+        });
+      }
+      throw error;
+    }
   }
 
   /** The agent (signer) and mandate (owner) quorums: pinned from config, or created once per process. */

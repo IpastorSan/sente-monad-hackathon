@@ -1,4 +1,4 @@
-import type { PolicyRule } from '@sente/mandate';
+import type { AuthorizationPayload, PolicyRule } from '@sente/mandate';
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 
 import { AgentWalletsUnconfiguredError } from './agents.errors.ts';
@@ -30,6 +30,34 @@ export interface ProvisionedAgentWallet {
   /** EIP-55 checksummed. */
   address: Address;
   policyId: string;
+}
+
+/**
+ * One mutation at the enclave, held still so somebody else can approve it
+ * (SEN-44).
+ *
+ * `path` and `body` are what goes on the wire, verbatim, at commit time — not a
+ * recipe for rebuilding them. An approval signature covers the method, the URL
+ * and the body byte for byte, so anything recomputed between the prepare and
+ * the commit is a signature that no longer verifies, and, worse, a place where
+ * the approved request and the sent request could differ.
+ */
+export interface EnclaveRequest {
+  readonly method: 'POST' | 'PATCH' | 'DELETE';
+  /** Path under the provider's API base, e.g. `/v1/policies/xyz`. */
+  readonly path: string;
+  readonly body: unknown;
+}
+
+/** An {@link EnclaveRequest} and the payload its owner must sign to authorise it. */
+export interface PreparedEnclaveRequest {
+  readonly request: EnclaveRequest;
+  readonly payload: AuthorizationPayload;
+}
+
+/** One approval made outside this process: base64 DER, as Privy's header carries it. */
+export interface EnclaveApproval {
+  readonly signature: string;
 }
 
 /**
@@ -69,6 +97,28 @@ export interface AgentWalletProvider {
 
   /** Replace the policy's rules. Signed by the mandate-owner key, not the agent key. */
   updatePolicy(policyId: string, rules: readonly PolicyRule[]): Promise<void>;
+
+  /**
+   * The same replacement, held still for an owner this process cannot sign
+   * for (SEN-44): the exact request, and the payload the owner's phone signs.
+   *
+   * Sends nothing. A prepare that reached the enclave would be a mandate change
+   * without an approval, which is the one thing this pair exists to prevent.
+   */
+  preparePolicyUpdate(
+    policyId: string,
+    rules: readonly PolicyRule[],
+  ): Promise<PreparedEnclaveRequest>;
+
+  /**
+   * Send a prepared request, carrying an approval made elsewhere.
+   *
+   * Throws {@link EnclaveApprovalRefusedError} when the enclave refuses the
+   * approval itself — a signature over other bytes, a key outside the owner
+   * quorum, a replay past a nonce — so a caller can tell "you did not approve
+   * this" from "the enclave is down".
+   */
+  commitPrepared(request: EnclaveRequest, approval: EnclaveApproval): Promise<void>;
 }
 
 /**
@@ -89,6 +139,12 @@ export class UnconfiguredAgentWalletProvider implements AgentWalletProvider {
     return Promise.reject(new AgentWalletsUnconfiguredError());
   }
   updatePolicy(): Promise<void> {
+    return Promise.reject(new AgentWalletsUnconfiguredError());
+  }
+  preparePolicyUpdate(): Promise<PreparedEnclaveRequest> {
+    return Promise.reject(new AgentWalletsUnconfiguredError());
+  }
+  commitPrepared(): Promise<void> {
     return Promise.reject(new AgentWalletsUnconfiguredError());
   }
 }

@@ -26,14 +26,19 @@ import {
   AmendMandateDto,
   CreateAgentDto,
   ForkAgentDto,
+  PrepareMandateDto,
+  readMandateApproval,
+  RevokeAgentDto,
   RunAgentDto,
   toAgentEventResponse,
   toAgentResponse,
+  toPreparedMandateChangeResponse,
   type AgentEventResponseDto,
   type AgentEventsResponseDto,
   type AgentListResponseDto,
   type AgentResponseDto,
   type HireAgentResponseDto,
+  type PreparedMandateChangeDto,
 } from './dto/agent.dto';
 import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
@@ -165,14 +170,60 @@ export class AgentsController {
     };
   }
 
+  /**
+   * Amend the mandate. Which body this takes depends on who owns the policy
+   * (`agent.ownerKind`, SEN-43):
+   *
+   * - `server`: `{ mandate }`, and this server signs the enclave PATCH.
+   * - `device`: `{ prepareId, signature }` from `/mandate/prepare` — this
+   *   server holds the Privy app secret but not the owner key, so it can ask
+   *   for the change and never make it. A `{ mandate }` body on such an agent
+   *   is refused with `mandate_approval_required`, and the reverse with
+   *   `mandate_approval_not_required`.
+   */
   @Patch(':id/mandate')
   async amendMandate(
     @Param() params: AgentIdParamDto,
     @Body() body: AmendMandateDto,
   ): Promise<AgentResponseDto> {
+    return this.guard(async () => {
+      const approval = this.approval(body);
+      const principal = this.auth.principal();
+      const agent = approval
+        ? await this.agents.commitMandateAmend(principal, params.id, approval)
+        : await this.agents.amendMandate(principal, params.id, this.requireMandate(body));
+      return toAgentResponse(agent);
+    });
+  }
+
+  /**
+   * The enclave PATCH that would install this mandate, and the payload its
+   * owner must sign (SEN-44). Changes nothing; only `PATCH /agents/:id/mandate`
+   * with the returned id and a signature does.
+   *
+   * Device-owned agents only. The mandate is validated here, so a mandate the
+   * API would refuse never costs a biometric prompt.
+   */
+  @Post(':id/mandate/prepare')
+  @HttpCode(HttpStatus.OK)
+  async prepareMandate(
+    @Param() params: AgentIdParamDto,
+    @Body() body: PrepareMandateDto,
+  ): Promise<PreparedMandateChangeDto> {
     return this.guard(async () =>
-      toAgentResponse(
-        await this.agents.amendMandate(this.auth.principal(), params.id, body.mandate),
+      toPreparedMandateChangeResponse(
+        await this.agents.prepareMandateAmend(this.auth.principal(), params.id, body.mandate),
+      ),
+    );
+  }
+
+  /** The same, for the PATCH that empties the policy. */
+  @Post(':id/revoke/prepare')
+  @HttpCode(HttpStatus.OK)
+  async prepareRevoke(@Param() params: AgentIdParamDto): Promise<PreparedMandateChangeDto> {
+    return this.guard(async () =>
+      toPreparedMandateChangeResponse(
+        await this.agents.prepareRevoke(this.auth.principal(), params.id),
       ),
     );
   }
@@ -209,13 +260,28 @@ export class AgentsController {
     });
   }
 
-  /** Permanent. Retrying is safe, and is how a failed policy clear is retried. */
+  /**
+   * Permanent. Retrying is safe, and is how a failed policy clear is retried.
+   *
+   * Empty body on a server-owned agent; `{ prepareId, signature }` from
+   * `/revoke/prepare` on a device-owned one. The agent stops either way the
+   * moment the request is accepted — emptying its policy is the part that needs
+   * the owner's signature.
+   */
   @Post(':id/revoke')
   @HttpCode(HttpStatus.OK)
-  async revoke(@Param() params: AgentIdParamDto): Promise<AgentResponseDto> {
-    return this.guard(async () =>
-      toAgentResponse(await this.agents.revoke(this.auth.principal(), params.id)),
-    );
+  async revoke(
+    @Param() params: AgentIdParamDto,
+    @Body() body: RevokeAgentDto,
+  ): Promise<AgentResponseDto> {
+    return this.guard(async () => {
+      const approval = this.approval(body);
+      const principal = this.auth.principal();
+      const agent = approval
+        ? await this.agents.commitRevoke(principal, params.id, approval)
+        : await this.agents.revoke(principal, params.id);
+      return toAgentResponse(agent);
+    });
   }
 
   /**
@@ -254,6 +320,37 @@ export class AgentsController {
       );
     }
     return result;
+  }
+
+  /** A half-given approval is a 400 here, not a confusing refusal deeper in. */
+  private approval(
+    body: Pick<AmendMandateDto, 'mandate' | 'prepareId' | 'signature'>,
+  ): { prepareId: string; signature: string } | undefined {
+    try {
+      return readMandateApproval(body);
+    } catch (error) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: error instanceof Error ? error.message : String(error),
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
+  /** The one-step amend body. Absent means the caller sent neither shape. */
+  private requireMandate(body: AmendMandateDto): Record<string, unknown> {
+    if (body.mandate) return body.mandate;
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.BAD_REQUEST,
+        message:
+          'send { mandate } to amend a server-owned agent, or { prepareId, signature } from ' +
+          'POST /agents/:id/mandate/prepare to amend a device-owned one',
+      },
+      HttpStatus.BAD_REQUEST,
+    );
   }
 
   /** Refusals become a clean 4xx/5xx with a stable `reason`; the rest fall through. */

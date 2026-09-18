@@ -10,6 +10,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { formatAtoms, parseAmount } from '@/agents/amounts';
 import { AgentsApiError, describeAgentsError, modelLabel, type Agent } from '@/agents/api';
+import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
 import { buildFundCall, FUNDING_TOKENS } from '@/agents/fund';
 import { MandateSummary } from '@/agents/MandateSummary';
@@ -448,16 +449,24 @@ function RevokeSheet({
   onClose: () => void;
   onDone: (notice: NoticeState) => void;
 }) {
-  const { agents: api } = useSession();
+  const { agents: api, auth } = useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<NoticeState | null>(null);
+  /**
+   * A device-owned agent's policy can only be emptied by a PATCH this phone
+   * signed (SEN-44): the API asks, the passkey approves. `revokeWithApproval`
+   * checks that the PATCH really leaves no rules before signing anything.
+   */
+  const signs = needsApproval(agent);
 
   const revoke = async () => {
     if (!api) return;
     setBusy(true);
     setError(null);
     try {
-      const revoked = await api.revoke(agent.id);
+      const revoked = signs
+        ? await revokeWithApproval(api, agent, auth.signPrivyAuthorization)
+        : await api.revoke(agent.id);
       onDone(
         revoked.policyCleared === false
           ? {
@@ -476,7 +485,7 @@ function RevokeSheet({
         // The agent IS revoked; only the enclave policy clear failed.
         onDone({ tone: 'error', ...describeAgentsError(caught) });
       } else {
-        setError({ tone: 'error', ...describeAgentsError(caught) });
+        setError({ tone: 'error', ...describeApprovalError(caught) });
       }
     } finally {
       setBusy(false);
@@ -492,12 +501,18 @@ function RevokeSheet({
       <Text style={[text.dim, styles.after]}>
         Funds already in its wallet stay there; revoking doesn’t send them back.
       </Text>
+      {signs ? (
+        <Text style={[text.dim, styles.after]}>
+          Your passkey signs this. Sente holds no key that can empty this agent’s policy, so the
+          phone checks that the change really leaves no rules and then approves it.
+        </Text>
+      ) : null}
       {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
       <View style={styles.sheetAction}>
         <ButtonRow>
           <Button label="Keep agent" onPress={onClose} style={styles.grow} />
           <Button
-            label="Revoke permanently"
+            label={signs ? 'Approve & revoke' : 'Revoke permanently'}
             kind="danger"
             busy={busy}
             onPress={() => void revoke()}

@@ -47,6 +47,26 @@ export const AUSD: Token = {
   decimals: 6,
 };
 
+/**
+ * The three other Perpl constants a compiled policy names, mirrored for the
+ * same reason as {@link AUSD} and pinned equal by `mandate.test.ts`.
+ *
+ * `approval.ts` needs them to say what a mandate's rules must look like: the
+ * Exchange is the `to` of the Perpl transaction rules and the spender of its
+ * approval, and the enrollment rule is pinned to a domain with no contract and
+ * to this exact statement. Without them the app could only check that a Perpl
+ * rule is *a* rule, which is no check at all — a typed-data rule the app cannot
+ * read is a signature the agent could be asked for on anything.
+ */
+export const PERPL_EXCHANGE: Address = '0x1964C32f0bE608E7D29302AFF5E61268E72080cc';
+
+/** Perpl's API-key domain names no contract; the statement is what pins the rule. */
+export const PERPL_ENROLL_VERIFYING_CONTRACT: Address =
+  '0x0000000000000000000000000000000000000000';
+
+export const PERPL_ENROLL_STATEMENT =
+  'I authorize the creation of Perpl API key with the specified scope and parameters';
+
 export const KURU_MARKETS: readonly KuruMarketConfig[] = KURU_TESTNET_MARKETS;
 export const KURU_TOKENS: readonly Token[] = Object.values(KURU_TESTNET_TOKENS);
 

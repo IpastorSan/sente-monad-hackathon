@@ -4,7 +4,7 @@ import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { UnconfiguredAgentWalletProvider } from '../agent-wallet.provider';
 import { AgentWalletsUnconfiguredError, EnclaveRefusedError } from '../agents.errors';
 import { createAgentWallet, privyTransaction } from './agent-wallet';
-import { generateAuthorizationKey } from './authorization-key';
+import { generateAuthorizationKey, signAuthorizationPayload } from './authorization-key';
 import { createKeyQuorum } from './key-quorum';
 import { createPolicy } from './policies';
 import { PrivyAgentWalletProvider } from './privy-agent-wallet.provider';
@@ -175,7 +175,11 @@ describe('PrivyAgentWalletProvider', () => {
 
     // The mandate-owner key can.
     await expect(
-      client.patch(`/v1/wallets/${wallet.id}`, { policy_ids: [] }, { approvals: [mandateOwnerKey] }),
+      client.patch(
+        `/v1/wallets/${wallet.id}`,
+        { policy_ids: [] },
+        { approvals: [mandateOwnerKey] },
+      ),
     ).resolves.toMatchObject({ policy_ids: [] });
   });
 
@@ -212,6 +216,65 @@ describe('PrivyAgentWalletProvider', () => {
     await expect(
       client.patch(`/v1/policies/${wallet.policyId}`, { rules: [] }, { approvals: [deviceKey] }),
     ).resolves.toMatchObject({ rules: [] });
+  });
+
+  it('prepare then commit changes a device-owned policy, and only the device key can', async () => {
+    // The SEN-44 round trip, with node's crypto standing in for the phone: the
+    // server composes the PATCH, the device key signs the payload, the server
+    // sends it. No key this provider holds is in the owner quorum.
+    const deviceKey = generateAuthorizationKey();
+    const strangerKey = generateAuthorizationKey();
+    const fake = fakePrivy();
+    const client = new PrivyClient({
+      appId: FAKE_APP_ID,
+      appSecret: FAKE_APP_SECRET,
+      fetch: fake.fetch,
+    });
+    const device = await createKeyQuorum(client, {
+      displayName: 'device',
+      threshold: 1,
+      publicKeys: [deviceKey.publicKey],
+    });
+    const provider = new PrivyAgentWalletProvider({
+      client,
+      agentKey,
+      mandateOwnerKey,
+      agentQuorumId: 'kq-agent',
+      mandateQuorumId: 'kq-server',
+    });
+    const wallet = await provider.provision({
+      rules: RULES,
+      displayName: 'agent-1',
+      ownerQuorumId: device.id,
+    });
+
+    const { request, payload } = await provider.preparePolicyUpdate(wallet.policyId, []);
+    expect(request).toEqual({
+      method: 'PATCH',
+      path: `/v1/policies/${wallet.policyId}`,
+      body: { rules: [] },
+    });
+    expect(payload.url).toBe(`https://api.privy.io/v1/policies/${wallet.policyId}`);
+
+    // Someone else's signature over the very same payload is refused: the
+    // quorum is the check, not the bytes.
+    await expect(
+      provider.commitPrepared(request, {
+        signature: signAuthorizationPayload(strangerKey.privateKey, payload),
+      }),
+    ).rejects.toMatchObject({ reason: 'mandate_approval_refused', status: 401 });
+
+    const signature = signAuthorizationPayload(deviceKey.privateKey, payload);
+    await provider.commitPrepared(request, { signature });
+
+    // Accepted, and what went on the wire is the prepared request verbatim,
+    // carrying the phone's signature and no key of this server's.
+    const sent = fake.calls.at(-1)!;
+    expect(sent.method).toBe('PATCH');
+    expect(sent.url).toBe(payload.url);
+    expect(sent.body).toEqual({ rules: [] });
+    expect(sent.headers['privy-authorization-signature']).toBe(signature);
+    expect(signatureVerifies(deviceKey.publicKey, payload, signature)).toBe(true);
   });
 
   it('creates the quorums once, and reuses pinned ones without creating any', async () => {

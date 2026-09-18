@@ -69,6 +69,8 @@ function harness(options: { reverted?: number[]; refuseAt?: number; laggingNonce
     name: 'fake',
     provision: () => Promise.reject(new Error('unused')),
     updatePolicy: () => Promise.reject(new Error('unused')),
+    preparePolicyUpdate: () => Promise.reject(new Error('unused')),
+    commitPrepared: () => Promise.reject(new Error('unused')),
     signTypedData: () => Promise.reject(new Error('unused')),
     signTransaction: async (walletId, tx) => {
       bump(walletId, 1);

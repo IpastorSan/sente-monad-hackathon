@@ -3,9 +3,13 @@ import { getAddress, type Hex } from 'viem';
 
 import type {
   AgentWalletProvider,
+  EnclaveApproval,
+  EnclaveRequest,
+  PreparedEnclaveRequest,
   ProvisionAgentWalletInput,
   ProvisionedAgentWallet,
 } from '../agent-wallet.provider';
+import { EnclaveApprovalRefusedError } from '../agents.errors';
 
 /**
  * An in-memory `AgentWalletProvider` for specs: no network, no Privy, no .env.
@@ -18,6 +22,13 @@ export class FakeAgentWalletProvider implements AgentWalletProvider {
   readonly policyUpdates: { policyId: string; rules: readonly PolicyRule[] }[] = [];
   /** policyId -> the rules currently in force. */
   readonly policies = new Map<string, readonly PolicyRule[]>();
+
+  /**
+   * The signature every `commitPrepared` must carry to be accepted, standing
+   * in for the owner quorum Privy checks. A spec sets it to whatever its fake
+   * phone produces; anything else is refused the way Privy refuses it.
+   */
+  acceptedSignature = 'device-signature';
 
   /** Set to make the next calls fail. */
   provisionError: Error | undefined;
@@ -51,6 +62,43 @@ export class FakeAgentWalletProvider implements AgentWalletProvider {
   async updatePolicy(policyId: string, rules: readonly PolicyRule[]): Promise<void> {
     await this.beforeUpdatePolicy?.();
     if (this.updatePolicyError) throw this.updatePolicyError;
+    this.applyRules(policyId, rules);
+  }
+
+  /**
+   * The same request the real provider would send, down to the URL and body,
+   * so a spec can assert on the exact bytes the phone is asked to sign.
+   */
+  preparePolicyUpdate(
+    policyId: string,
+    rules: readonly PolicyRule[],
+  ): Promise<PreparedEnclaveRequest> {
+    const path = `/v1/policies/${policyId}`;
+    const body = { rules };
+    return Promise.resolve({
+      request: { method: 'PATCH', path, body },
+      payload: {
+        version: 1,
+        method: 'PATCH',
+        url: `https://api.privy.io${path}`,
+        body,
+        headers: { 'privy-app-id': 'fake-app' },
+      },
+    });
+  }
+
+  async commitPrepared(request: EnclaveRequest, approval: EnclaveApproval): Promise<void> {
+    await this.beforeUpdatePolicy?.();
+    if (this.updatePolicyError) throw this.updatePolicyError;
+    const policyId = request.path.slice('/v1/policies/'.length);
+    if (approval.signature !== this.acceptedSignature) {
+      throw new EnclaveApprovalRefusedError({ policyId, status: 401 });
+    }
+    const { rules } = request.body as { rules: readonly PolicyRule[] };
+    this.applyRules(policyId, rules);
+  }
+
+  private applyRules(policyId: string, rules: readonly PolicyRule[]): void {
     if (!this.policies.has(policyId)) throw new Error(`unknown policy ${policyId}`);
     this.policyUpdates.push({ policyId, rules });
     this.policies.set(policyId, rules);

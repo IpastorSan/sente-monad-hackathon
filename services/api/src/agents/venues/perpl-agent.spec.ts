@@ -95,6 +95,8 @@ function harness(
     name: 'fake',
     provision: () => Promise.reject(new Error('unused')),
     updatePolicy: () => Promise.reject(new Error('unused')),
+    preparePolicyUpdate: () => Promise.reject(new Error('unused')),
+    commitPrepared: () => Promise.reject(new Error('unused')),
     signTransaction: (_walletId, tx) => {
       signedTxs.push(tx);
       return Promise.resolve(`0x02${signedTxs.length}` as Hex);

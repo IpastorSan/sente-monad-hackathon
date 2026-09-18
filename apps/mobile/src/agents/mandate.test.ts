@@ -12,12 +12,19 @@ import { test } from 'node:test';
 
 import { parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
-import { PERPL_COLLATERAL_DECIMALS, PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
+import {
+  PERPL_API_KEY_TYPED_DATA,
+  PERPL_COLLATERAL_DECIMALS,
+  PERPL_TESTNET_CONTRACTS,
+} from '@sente/venues/perpl';
 import type { Address } from 'viem';
 
 import { toWireMandate, type AgentMandate } from './api.ts';
 import {
   AUSD,
+  PERPL_ENROLL_STATEMENT,
+  PERPL_ENROLL_VERIFYING_CONTRACT,
+  PERPL_EXCHANGE,
   buildMandate,
   defaultMandateForm,
   describeMandate,
@@ -73,6 +80,14 @@ function serverParse(mandate: AgentMandate) {
 test('AUSD mirrors the Perpl collateral token in @sente/venues/perpl', () => {
   assert.equal(AUSD.address, PERPL_TESTNET_CONTRACTS.collateral);
   assert.equal(AUSD.decimals, PERPL_COLLATERAL_DECIMALS);
+});
+
+test('the mirrored Perpl policy constants still match @sente/venues/perpl', () => {
+  // If one of these drifts, the app refuses to approve a Perpl mandate it in
+  // fact typed — fail closed, but only this test says why.
+  assert.equal(PERPL_EXCHANGE, PERPL_TESTNET_CONTRACTS.exchange);
+  assert.equal(PERPL_ENROLL_VERIFYING_CONTRACT, PERPL_API_KEY_TYPED_DATA.domain.verifyingContract);
+  assert.equal(PERPL_ENROLL_STATEMENT, PERPL_API_KEY_TYPED_DATA.statement);
 });
 
 test('the default form builds a mandate the API accepts', () => {
