@@ -552,23 +552,34 @@ Run with the real handlers over real blocks, in memory, via Envio's
 `createTestIndexer()` — no Postgres, no account:
 
 ```bash
-# scripts/local/live-range.ts <startBlock> [endBlock]
-ENVIO_API_TOKEN=placeholder mise exec -- node --experimental-strip-types \
-  --no-warnings scripts/local/live-range.ts 61406913 61406913
+# services/indexer/scripts/local/live-range.ts <startBlock> [endBlock]
+mise exec -- node --experimental-strip-types \
+  --no-warnings scripts/local/live-range.ts 61406913
 ```
 
+The script is **committed** (the rest of `scripts/local/` is gitignored scratch,
+and `.gitignore` names this one file back in), because a documented run nobody
+can re-run is a claim rather than evidence. It fills `ENVIO_API_TOKEN` in itself
+— see §hypersync for why a placeholder is enough — and `endBlock` defaults to
+`startBlock`, which is the useful case: one block, a few seconds, diffable
+against the explorer by hand.
+
 **Kuru** — block 61406913, tx `0x9d7fbce1…`, the fill documented in
-`docs/kuru.md` ("placeMarket 388 MON → 317.737 filled"):
+`docs/kuru.md` ("placeMarket 388 MON → 317.737 filled"). Verbatim, re-run
+2026-09-18:
 
 ```
 Trade=1 AccountMarketStats=2 Account=3 Market=4 MarketDay=1 MakerOrderUpdate=0
+AccountBalance=5 PerplOrderContext=0 PerplMakerFill=0
   trade 10143-61406913-9-0 KURU kuru-0xfdbe…ef61 BUY rawPrice=30974
         rawSize=31773742494 price=0.030974 notional=9.841599 taker=kuru-62 maker=kuru-47
-  stats kuru-62-… n=1 takerN=1 vol=9.841599 open=31773742494/9841599
-  stats kuru-47-… n=1 makerN=1 vol=9.841599 open=-31773742494/-9841599
+  stats kuru-62-kuru-0xfdbe…ef61 n=1 takerN=1 makerN=0 vol=9.841599
+        open=31773742494/9841599
+  stats kuru-47-kuru-0xfdbe…ef61 n=1 takerN=0 makerN=1 vol=9.841599
+        open=-31773742494/-9841599
   account kuru-47 KURU address=0x74443181214751970a785f5675bd372735245c9e
   account kuru-62 KURU address=0x15bbc549326dd8d053233c3a546aa7fdabb57256
-  account kuru-1  KURU address=0xfba882999b0210a2eb80cc066e4d54529239e71d
+  account kuru-1 KURU address=0xfba882999b0210a2eb80cc066e4d54529239e71d
   day kuru-0xfdbe…ef61-20260910 trades=1 volumeUsd=9.841599
         baseVolume=317.73742494 vwap=0.030973999999711838
 ```
@@ -593,12 +604,12 @@ Two numbers in that output are the SEN-34 fixes, re-run on the same block:
 **Perpl** — block 63311165, tx `0xd58c92ad…`:
 
 ```
-Trade=1 AccountMarketStats=2 Account=2 Market=7 MarketDay=1
-PerplOrderContext=33 PerplMakerFill=1
+Trade=1 AccountMarketStats=2 Account=2 Market=7 MarketDay=1 MakerOrderUpdate=0
+AccountBalance=0 PerplOrderContext=33 PerplMakerFill=1
   trade 10143-63311165-72-0 PERPL perpl-16 SELL rawPrice=768109 rawSize=588
         price=76810.9 notional=451.648092 taker=perpl-2 maker=perpl-1
-  stats perpl-1-perpl-16 n=1 makerN=1 open=588/451648092
-  stats perpl-2-perpl-16 n=1 takerN=1 open=-588/-451648092
+  stats perpl-1-perpl-16 n=1 takerN=0 makerN=1 vol=451.648092 open=588/451648092
+  stats perpl-2-perpl-16 n=1 takerN=1 makerN=0 vol=451.648092 open=-588/-451648092
   account perpl-1 PERPL address=0xa91f9339e65d6d0ded8861aa91de9e6ae9910cab
   account perpl-2 PERPL address=0x306e1912f314af6fca9832c13875e734172b4d46
   day perpl-16-20260917 trades=1 volumeUsd=451.648092

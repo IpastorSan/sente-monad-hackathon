@@ -5,6 +5,10 @@ build/
 node_modules/
 .env
 *.log
-# Local scratch probes. `scripts/verify-config-topics.ts` is the one script
-# that is committed and checked; anything dropped here is throwaway.
-scripts/local/
+# Local scratch probes: anything dropped here is throwaway. The exception is
+# live-range.ts, which docs/indexer.md cites by name as the thing that produced
+# its "Proven live runs" — a documented run nobody can re-run is a claim, not
+# evidence. Note the `*`: git will not look inside a directory it has ignored,
+# so `scripts/local/` with a trailing slash would make the negation below dead.
+scripts/local/*
+!scripts/local/live-range.ts
