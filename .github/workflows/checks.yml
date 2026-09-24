@@ -1,0 +1,94 @@
+# Every check that has to pass before main is believable.
+#
+# Four things here are not arbitrary, and each is a gotcha CLAUDE.md explains:
+#
+#   mise          the toolchain (node 26, pnpm 12, JDK 21) is pinned in
+#                 mise.toml, so CI reads it from there rather than keeping a
+#                 second copy of the versions that can drift from yours.
+#   hoisted       the install layout comes from pnpm-workspace.yaml
+#                 (nodeLinker: hoisted). Metro cannot resolve pnpm's isolated
+#                 layout, so a "faster" install here would break the bundle job
+#                 only, and confusingly.
+#   the indexer   services/indexer is deliberately NOT a workspace member: it
+#                 vendors its own toolchain. It needs its own npm install and
+#                 an `envio codegen` before its types exist at all.
+#   the bundle    `expo export` is the only automated guard on the Metro alias
+#                 for @category-labs/mera and the packages' `source` condition.
+#                 A green tsc says nothing about what Metro can resolve.
+#
+# No secrets are needed: every test is fake-backed. The live probes
+# (probe:privy, demo:refusal, erc8004:live, probe:privy-sponsor …) are scripts,
+# never tests, and never run here.
+
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    name: typecheck, lint, test, build, bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Install (hoisted, exactly as the lockfile says)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint (ends with prettier --check)
+        run: pnpm run lint
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build (venues and mandate before the API that imports them)
+        run: pnpm run build
+
+      - name: Android bundle
+        run: pnpm --filter @sente/mobile exec expo export --platform android --output-dir "${RUNNER_TEMP}/expo-export"
+        env:
+          EXPO_NO_TELEMETRY: '1'
+
+  indexer:
+    name: indexer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/indexer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Install
+        run: npm ci
+
+      - name: Codegen (its types do not exist until this runs)
+        run: npx envio codegen
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
