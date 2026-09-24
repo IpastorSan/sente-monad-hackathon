@@ -18,10 +18,11 @@ import {
 } from '@/agents/api';
 import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
-import { buildFundCall, FUNDING_TOKENS } from '@/agents/fund';
+import { FUNDING_TOKENS } from '@/agents/fund';
 import { MandateSummary } from '@/agents/MandateSummary';
 import type { Token } from '@/agents/mandate';
 import { useSession } from '@/session';
+import { describeSendError, sendSponsored } from '@/wallet/send';
 import { isoDate, shortAddress } from '@/ui/format';
 import {
   Button,
@@ -238,6 +239,14 @@ export default function AgentScreen() {
   );
 }
 
+/**
+ * Funding an agent from the user's own Privy wallet (SEN-42).
+ *
+ * Nothing about this is a server transfer: the API composes the Privy request,
+ * this phone rebuilds it from what is on screen and refuses to sign anything
+ * else (`wallet/send.ts`), and Privy pays the gas — so the user needs no MON.
+ * It replaces the Kernel UserOperation batch this sheet used to send.
+ */
 function FundSheet({
   agent,
   visible,
@@ -249,17 +258,20 @@ function FundSheet({
   onClose: () => void;
   onSent: (notice: NoticeState) => void;
 }) {
-  const { smart } = useSession();
+  const { wallet, walletApi, auth } = useSession();
   const [token, setToken] = useState<Token>(FUNDING_TOKENS[0] as Token);
   const [amount, setAmount] = useState('');
   const [available, setAvailable] = useState<bigint | null>(null);
   const [error, setError] = useState<NoticeState | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const from = smart.address;
+  const from = wallet.address;
   useEffect(() => {
     if (!visible || !from) return;
     let cancelled = false;
     setAvailable(null);
+    // Read from the chain rather than from `wallet.wallet.balances`: the API
+    // reports MON, USDC and AUSD, and this sheet offers every Kuru asset.
     readBalance(token, from).then(
       (balance) => {
         if (!cancelled) setAvailable(balance);
@@ -274,18 +286,27 @@ function FundSheet({
   const atoms = parseAmount(amount, token.decimals);
   const tooMuch = atoms !== null && available !== null && atoms > available;
   const invalid = amount.trim() !== '' && atoms === null;
-  const ready = smart.status === 'ready';
+  const walletId = wallet.wallet?.walletId;
+  const ready = wallet.status === 'ready' && walletId !== undefined;
 
   const send = async () => {
-    if (atoms === null || atoms === 0n) return;
+    if (atoms === null || atoms === 0n || walletId === undefined) return;
     setError(null);
+    setBusy(true);
     const label = `${formatAtoms(atoms, token.decimals)} ${token.symbol}`;
     try {
-      const result = await smart.sendCalls([buildFundCall(token, agent.address, atoms)]);
-      if (result.status === 'included') {
+      const sent = await sendSponsored(
+        walletApi,
+        { walletId, token, to: agent.address, atoms },
+        auth.signPrivyAuthorization,
+      );
+      const status = sent.confirmation?.status ?? sent.status;
+      if (status === 'included') {
         setAmount('');
         onSent({ tone: 'ok', title: `Sent ${label} to ${agent.name}` });
-      } else if (result.status === 'reverted') {
+      } else if (status === 'reverted') {
+        // Gotcha 8: the operation reverted inside a transaction that may well
+        // have succeeded. Nothing moved, and saying otherwise would be a lie.
         setError({
           tone: 'error',
           title: 'The transfer reverted',
@@ -296,15 +317,13 @@ function FundSheet({
         onSent({
           tone: 'info',
           title: `Sending ${label}`,
-          detail: `Submitted, not confirmed yet (${result.status}). The balance updates once it lands.`,
+          detail: `Submitted, not confirmed yet (${status}). The balance updates once it lands.`,
         });
       }
     } catch (caught) {
-      setError({
-        tone: 'error',
-        title: 'The transfer didn’t go through',
-        detail: caught instanceof Error ? caught.message : String(caught),
-      });
+      setError({ tone: 'error', ...describeSendError(caught) });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -343,25 +362,28 @@ function FundSheet({
       <Row label="From" value={from ? shortAddress(from) : '—'} mono />
       <Row label="To" value={shortAddress(agent.address)} mono />
       <Text style={[text.caption, styles.after]}>
-        One transfer from your smart account, gas sponsored. Sente can’t move funds back out of an
-        agent’s wallet yet, so send what you’re prepared to leave with it.
+        Your passkey signs this transfer and Sente pays the gas, so you need no MON. Sente holds no
+        key that can move your funds — and it can’t move funds back out of an agent’s wallet yet, so
+        send what you’re prepared to leave with it.
       </Text>
       {!ready ? (
         <Notice
           tone="error"
-          title="Your smart account isn’t ready"
-          detail={smart.error?.message ?? 'Sign in on the home screen and wait for it to register.'}
+          title="Your wallet isn’t ready"
+          detail={
+            wallet.error?.message ?? 'Sign in on the home screen and wait for it to register.'
+          }
         />
       ) : null}
       {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
       <Button
         label={
           atoms && atoms > 0n
-            ? `Send ${formatAtoms(atoms, token.decimals)} ${token.symbol}`
-            : 'Send'
+            ? `Approve & send ${formatAtoms(atoms, token.decimals)} ${token.symbol}`
+            : 'Approve & send'
         }
         kind="primary"
-        busy={smart.sending}
+        busy={busy}
         disabled={!ready || atoms === null || atoms === 0n || tooMuch}
         onPress={() => void send()}
         style={styles.sheetAction}

@@ -38,6 +38,24 @@ export const WALLET_REFUSAL_REASONS = [
   'user_wallets_unconfigured',
   /** Privy itself refused or was unreachable. */
   'user_wallet_provider_failed',
+  /**
+   * SEN-42, the send allowlist: `to` is neither the caller's own wallet nor one
+   * of the caller's agents. The prepare route composes a request the phone will
+   * sign, so it refuses anything it cannot name a reason for.
+   */
+  'send_recipient_not_allowed',
+  /** The token is not one of `send/sponsored-send.ts#SENDABLE_TOKENS`. */
+  'send_token_not_supported',
+  /** The amount is not a positive integer number of atoms. */
+  'send_amount_invalid',
+  /** Unknown, expired, already-spent, or another user's send prepare. */
+  'send_prepare_not_found',
+  /**
+   * Privy accepted the signature and the chain refused the send
+   * (`transaction_broadcast_failure`). Nothing moved, and a retry is the answer
+   * — see the spacing note in `send/sponsored-send.ts`.
+   */
+  'send_broadcast_failed',
 ] as const;
 
 export type WalletRefusalReason = (typeof WALLET_REFUSAL_REASONS)[number];
@@ -73,6 +91,15 @@ const REFUSAL_STATUS: Record<WalletRefusalReason, HttpStatus> = {
   device_key_mismatch: HttpStatus.CONFLICT,
   user_wallets_unconfigured: HttpStatus.SERVICE_UNAVAILABLE,
   user_wallet_provider_failed: HttpStatus.BAD_GATEWAY,
+  // 403 for the same reason `sender_mismatch` is: the request is well-formed,
+  // the caller just may not send there.
+  send_recipient_not_allowed: HttpStatus.FORBIDDEN,
+  send_token_not_supported: HttpStatus.BAD_REQUEST,
+  send_amount_invalid: HttpStatus.BAD_REQUEST,
+  // 410, like `prepare_expired`: it existed, or would have, and does not now.
+  send_prepare_not_found: HttpStatus.GONE,
+  // 502: we asked correctly and the far side could not carry it out.
+  send_broadcast_failed: HttpStatus.BAD_GATEWAY,
 };
 
 export function walletRefusalStatus(reason: WalletRefusalReason): HttpStatus {

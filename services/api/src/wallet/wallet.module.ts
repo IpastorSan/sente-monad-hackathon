@@ -3,6 +3,7 @@ import { createPublicClient, http } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
 import { PrivyClient } from '../agents/privy/privy.client';
+import { AgentStoreModule } from '../agents/store/agent-store.module';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { statePath } from '../state/json-file';
@@ -23,8 +24,10 @@ import {
   PollingOperationTracker,
   type OperationTracker,
 } from './confirmation/operation-tracker';
+import { userOperationOutcome } from './confirmation/user-operation-logs';
 import { Erc7677Sponsorship, UnconfiguredSponsorship } from './paymaster/erc7677-sponsorship';
 import { SPONSORSHIP, type Sponsorship } from './paymaster/sponsorship';
+import { WriteSpacer } from '../spacing/write-spacer';
 import {
   InMemoryPreparedOperationStore,
   PREPARED_OPERATION_STORE,
@@ -45,7 +48,7 @@ import {
   USER_WALLETS,
   type UserWalletProvider,
 } from './user-wallet.provider';
-import { UserWalletService } from './user-wallet.service';
+import { SEND_SPACER, UserWalletService } from './user-wallet.service';
 import {
   describeWalletConfig,
   loadWalletConfig,
@@ -115,11 +118,18 @@ const sponsorshipProvider: Provider = {
 
 const trackerProvider: Provider = {
   provide: OPERATION_TRACKER,
-  inject: [BUNDLER, WALLET_CONFIG],
-  useFactory: (bundler: Bundler, config: WalletConfig): OperationTracker =>
+  inject: [BUNDLER, WALLET_CONFIG, MONAD_PUBLIC_CLIENT],
+  useFactory: (
+    bundler: Bundler,
+    config: WalletConfig,
+    client: MonadPublicClient,
+  ): OperationTracker =>
     new PollingOperationTracker(bundler, {
       pollMs: config.confirmationPollMs,
       timeoutMs: config.confirmationTimeoutMs,
+      // The EntryPoint's own event, asked only when the bundler has nothing: a
+      // Privy-sponsored send (SEN-42) is bundled by somebody else's bundler.
+      chainReceipts: (userOpHash) => userOperationOutcome(client, userOpHash),
     }),
 };
 
@@ -176,6 +186,19 @@ const userWalletsProvider: Provider = {
       : new UnconfiguredUserWalletProvider(),
 };
 
+/**
+ * SEND_SPACER: one sponsored send at a time per user wallet, with the measured
+ * floor between them (SEN-42) — the same `WriteSpacer` the agent runner uses.
+ * Process-local, like the gas dispatcher's spacing: it is what stops the demo's
+ * second action from being refused by the EntryPoint.
+ */
+const sendSpacerProvider: Provider = {
+  provide: SEND_SPACER,
+  inject: [WALLET_CONFIG],
+  useFactory: ({ sendSpacingMs }: WalletConfig): WriteSpacer =>
+    new WriteSpacer({ spacingMs: sendSpacingMs }),
+};
+
 /** Balances for `GET /wallet`, over the same Monad client the rest of the module uses. */
 const tokenBalancesProvider: Provider = {
   provide: TOKEN_BALANCES,
@@ -209,6 +232,11 @@ const authProvider: Provider = {
  * still drive it and SEN-45 retires them.
  */
 @Module({
+  // AgentStoreModule: the SEN-42 send allowlist asks one question of the agent
+  // records — is this address an agent of the caller's? The store lives below
+  // both modules precisely so this is not an import of `AgentsModule`, which
+  // imports this one.
+  imports: [AgentStoreModule],
   controllers: [WalletController],
   providers: [
     configProvider,
@@ -221,6 +249,7 @@ const authProvider: Provider = {
     preparedStoreProvider,
     userWalletRegistryProvider,
     userWalletsProvider,
+    sendSpacerProvider,
     tokenBalancesProvider,
     authProvider,
     SessionAuthGuard,

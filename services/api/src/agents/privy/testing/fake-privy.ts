@@ -199,6 +199,26 @@ export function fakePrivy(handle: Handler = () => undefined) {
           body: { method: 'eth_signTypedData_v4', data: { signature: '0xsig', encoding: 'hex' } },
         };
       }
+      if (body['method'] === 'eth_sendTransaction') {
+        // The shape measured live on 2026-09-24 (SEN-39 run 2): a SPONSORED send
+        // answers with an empty `hash` and a USER OPERATION hash, because Privy
+        // bundles it. Unsponsored, it answers with a transaction hash. Faking
+        // the first as a plain `hash` would hide gotcha 8 from every spec.
+        const filler = String(seq).padStart(4, '0');
+        const opHash = `0x${filler.repeat(16)}`;
+        return body['sponsor'] === true
+          ? {
+              status: 200,
+              body: {
+                method: 'eth_sendTransaction',
+                data: { hash: '', user_operation_hash: opHash, transaction_id: `tx_${filler}` },
+              },
+            }
+          : {
+              status: 200,
+              body: { method: 'eth_sendTransaction', data: { hash: opHash } },
+            };
+      }
       return {
         status: 200,
         body: { method: 'eth_signTransaction', data: { signed_transaction: '0x02f8signed' } },

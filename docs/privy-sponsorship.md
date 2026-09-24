@@ -1,4 +1,4 @@
-# Privy-sponsored sends from a user-owned wallet (SEN-39)
+# Privy-sponsored sends from a user-owned wallet (SEN-39, SEN-42)
 
 Phase 3's user wallet is **a Privy server wallet + an owner key on the user's
 device + Privy-paid gas**. That third part is the one nothing depended on yet,
@@ -18,11 +18,24 @@ reuses the wallets it made last time — which is the point: the delegation
 question was answered by running it **again** against the same address once the
 dashboard step below was done — see "Run 2" below.
 
+And the SEN-42 probe, which asks the same questions **through the code the API
+ships** rather than through a hand-rolled request:
+
+```bash
+mise exec -- pnpm --filter @sente/api run probe:user-send
+#   -- --fresh    make a NEW wallet, the only way to see a first send delegate one
+#   -- --out report.json
+```
+
+That one (`services/api/scripts/user-send-probe.ts`) is "Run 3".
+
 ## Status: verified end to end, sponsored send included
 
-**2026-09-24: gas sponsorship is ON and a sponsored send from a 0-MON wallet
-lands.** Run 1 below is kept because it is the evidence of what a refusal looks
-like; Run 2 is the current state.
+**2026-09-24: gas sponsorship is ON, a sponsored send from a 0-MON wallet lands,
+and the whole SEN-42 path — prepare on the server, sign with the device key,
+execute, confirm the user operation — works live.** Run 1 below is kept because
+it is the evidence of what a refusal looks like; Run 2 is the first landed send;
+**Run 3 is the product path and the current state**.
 
 ### Run 1 — 2026-09-18, before the dashboard step
 
@@ -62,7 +75,7 @@ probe rather than the chain.
 | 7   | the same send with `sponsor` omitted  | `400`, "Insufficient funds for gas \* price + value" — the control still fails, so sponsorship did the work |
 | 8   | address and code afterwards           | address **unchanged**; `eth_getCode` `0x` → `0xef0100d6cedde84be40893d153be9d467cd6ad37875b28`              |
 
-Three consequences, each already written onto SEN-42:
+Three consequences, all three settled by run 3 below:
 
 1. **A sponsored send returns a user-operation hash, not a transaction hash.**
    The response carries `hash: ""`, `user_operation_hash: 0xfb1cab9d…a059c6` and
@@ -75,6 +88,64 @@ Three consequences, each already written onto SEN-42:
    so it does not answer this.
 3. **Two sponsored sends back to back do not work yet.** Spacing must be
    measured before the demo, or the second action on stage fails.
+
+### Run 3 — 2026-09-24, the product path (SEN-42)
+
+A different probe, and the difference is the point:
+`services/api/scripts/user-send-probe.ts`
+(`pnpm --filter @sente/api run probe:user-send`) sends through the modules the
+API ships — `wallet/send/sponsored-send.ts` composes the body and the payload,
+`agents/privy/user-wallet.ts` creates the wallet — with a throwaway P-256 key
+standing in for the phone's device key. Fresh wallet
+`0xcC3c006d4654CBCE0F4Fbc89FBC5f1EAD49Ec29D`
+(`<privy-probe-send-wallet-id>`), 1 USDC and **0 MON**.
+
+| #   | Check                                                | Result                                                                                              |
+| --- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 3   | the payload rebuilt from the intent vs the API's     | **identical** — URL, method, `caip2`, `sponsor`, `to`/`data`/`value`                                |
+| 4   | a send signed by an UNRELATED P-256 key              | **401** — the owner check is real                                                                   |
+| 5   | the device-signed sponsored send                     | **landed in 750 ms**; `hash: ""`, `user_operation_hash`, `sponsorship_provider: "alchemy"`          |
+| 5r  | its USER OPERATION receipt, off `UserOperationEvent` | `success=true` in block 65392922, **256 ms** after the response                                     |
+| 5b  | does OUR Pimlico endpoint answer for it?             | **yes** — full receipt, EntryPoint `0x0000000071727De22E5E9d8BAf0edAc6f37da032`, `actualGasCost: 0` |
+| 6   | a second send **1 ms** after the first               | **400** `transaction_broadcast_failure` — "**EIP-7702 nonce mismatch. Expected: 1, Actual: 0**"     |
+| 6   | the same send **1,524 ms** after the first           | **landed in 609 ms**                                                                                |
+| 6r  | the second send's user-operation receipt             | `success=true` in block 65392929                                                                    |
+| 7   | address and code afterwards                          | address **unchanged**; code `0x` → `0xef0100d6cedde84be40893d153be9d467cd6ad37875b28`               |
+| 8   | `eth_signTypedData_v4` from the **delegated** wallet | 65 bytes `r‖s‖v`, `recoverTypedDataAddress` → **the wallet's own address**                          |
+
+Re-run immediately afterwards against the **same, now delegated** wallet: 12
+checks, 0 failures, and the one that had failed passed — **two sponsored sends
+1 ms apart both landed** (blocks 65393054 and 65393055, both
+`success=true`).
+
+Four answers, and the fourth is the one that changes the design:
+
+1. **The user-operation hash is followable by our own bundler.** Pimlico's public
+   Monad endpoint answers `eth_getUserOperationReceipt` for an operation
+   Privy/Alchemy bundled, so `PollingOperationTracker` needs nothing new — it
+   just has to be pointed at `user_operation_hash` instead of `hash`. The probe
+   also reads the receipt straight off `UserOperationEvent`
+   (`services/api/src/wallet/confirmation/user-operation-logs.ts`), which is what
+   makes it independent of any bundler's indexer.
+2. **Gas is free at the EntryPoint's own accounting**: `actualGasCost: 0`,
+   `actualGasUsed: 133,989`, `paymaster: 0x0`. Alchemy settles it off chain, out
+   of the prepaid credits — so the MON figure to watch is the credit balance in
+   the dashboard, not anything on chain.
+3. **The back-to-back failure is DELEGATION, not a rate limit and not Monad's
+   reserve rule.** The first sponsored send also performs the EIP-7702 upgrade,
+   which bumps the account's nonce; a second send composed before that has landed
+   is built against nonce 0 and the EntryPoint refuses it. Once the wallet has
+   code, sends 1 ms apart are fine. `WALLET_SEND_SPACING_MS` (default **4 s**,
+   `send/sponsored-send.ts#SponsoredSendPacer`) makes the second send WAIT rather
+   than fail; it is a floor, not a delay, and it is applied to every send because
+   "has this wallet been delegated yet" would be a chain read on the spending
+   path.
+4. **Gotcha 9 survives delegation.** `eth_signTypedData_v4` from an account with
+   `0xef0100…` code still returns a 65-byte `r‖s‖v` that `ecrecover`s to the
+   wallet's address — so Perpl's `ecrecover`-only enrollment can still work from
+   a delegated Privy wallet. The signature is
+   `0xcb295a2f…1c` over the probe's own typed data; gotcha 13 still applies to
+   Perpl's live struct, which this does not test.
 
 ## The human step, and its exact wording
 
@@ -146,14 +217,16 @@ check 4.) CLAUDE.md gotcha 9's assumption — that Perpl's
 `ecrecover`-only enrollment can work from one of our wallets — therefore still
 holds **for an undelegated wallet**.
 
-It is deliberately not proof for a delegated one. The external research says
-that after the 7702 upgrade `signature_options.type` may be `erc1271` instead of
-`ecdsa`, and an ERC-1271 signature does not `ecrecover`. **Re-run check 5 after
-sponsorship works and the wallet has code**, and test Perpl enrollment live
-before Phase 3 depends on it. The probe signs its own typed-data payload rather
-than Perpl's constant on purpose: gotcha 13 — signing a constant that has
-drifted proves nothing about Perpl's live shape, so that test belongs in the
-Perpl path, not here.
+**And for a delegated one too, measured in run 3.** The external research warned
+that after the 7702 upgrade `signature_options.type` might become `erc1271`, and
+an ERC-1271 signature does not `ecrecover`. It does not: an account holding
+`0xef0100d6cedde84be40893d153be9d467cd6ad37875b28` still answered with 65 bytes
+of `r‖s‖v` that recovered to its own address. Perpl enrollment from a user
+wallet is therefore not blocked by delegation.
+
+What is still untested is Perpl's LIVE enrollment struct from such a wallet —
+gotcha 13: signing a constant that has drifted proves nothing, so that test
+belongs in the Perpl path, with the payload Perpl actually serves, not here.
 
 ### Privy does reach the chain — the unsponsored send proves it
 
@@ -179,18 +252,29 @@ cannot be misread as a malformed request. Note the `code` is `invalid_data`, the
 same code a genuinely malformed body gets: **do not branch on the code, branch
 on the message** if any product code ever has to detect this.
 
-### Delegation: measured in Run 2, and the address survives
+### Delegation: the first sponsored send upgrades the account, and the address survives
 
-`eth_getCode` at the wallet is `0x` before and after, and Privy reports the same
-address. That is the expected outcome of a sponsored send never happening — the
-EIP-7702 upgrade to Kernel is part of the sponsored path. **The address-under-
-delegation question is unanswered** and is the second thing the re-run settles.
+`eth_getCode` at the wallet is `0x` before the first sponsored send and
+`0xef0100d6cedde84be40893d153be9d467cd6ad37875b28` after it — an EIP-7702
+delegation to Kernel, performed as part of the sponsored path. Privy reports the
+**same address** throughout, so nothing downstream has to migrate.
 
-When it is answered, CLAUDE.md gotcha 8 applies to whatever comes back: if the
-response carries a **user-operation** hash rather than a transaction hash, a
-successful carrying transaction says nothing about whether the operation
-succeeded — read `eth_getUserOperationReceipt` and branch on its `success`. The
-probe prints the whole response body for exactly this reason.
+Two things follow, and both are load-bearing:
+
+- **"No code" no longer means "not our wallet".** Anything that inferred EOA-ness
+  from an empty `eth_getCode` has to be re-read. Nothing in `wallet/` or
+  `agents/` does today (the Kernel account's `deployed` flag is about a different
+  address entirely), but gotcha 12's reserve-balance note is written for
+  delegated EOAs for exactly this reason.
+- **The delegation is what makes two immediate sends fail.** See run 3's third
+  answer: the upgrade bumps the nonce, so the send composed before it lands is
+  built against a stale one. It is not a rate limit.
+
+CLAUDE.md gotcha 8 applies to what comes back: the response carries a
+**user-operation** hash, so a successful carrying transaction says nothing about
+whether the operation succeeded. Read the user-operation receipt and branch on
+its `success` — `eth_getUserOperationReceipt` at the bundler, or
+`UserOperationEvent` off the chain.
 
 ## Costs and caps
 
@@ -240,6 +324,15 @@ only this probe does.
 | `PRIVY_PROBE_SPONSOR_QUORUM_WALLET_ID`      | The wallet owned by that quorum — the comparison case for "raw owner vs quorum".                                                                                    |
 | `PRIVY_PROBE_SPONSOR_QUORUM_WALLET_ADDRESS` | Its EVM address.                                                                                                                                                    |
 
+The SEN-42 probe keeps its own two, for the same reason and with the same
+warning — lose the key and that wallet is unreachable:
+
+| Variable                          | What it holds                                                            |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `PRIVY_PROBE_SEND_DEVICE_KEY`     | The throwaway P-256 key standing in for a phone's `device` key.          |
+| `PRIVY_PROBE_SEND_WALLET_ID`      | The user wallet it owns. Delegated after its first sponsored send.       |
+| `PRIVY_PROBE_SEND_WALLET_ADDRESS` | Its EVM address, recorded so a change under delegation would be visible. |
+
 Ids from the 2026-09-18 run, for reference: wallet `<privy-probe-sponsor-wallet-id>`
 (`0xab91d510F02c5A4191Db61121904f208E31A7Af8`), its implicit owner quorum
 `<privy-probe-sponsor-implicit-quorum-id>`, explicit quorum `<privy-probe-sponsor-quorum-id>`, quorum
@@ -247,24 +340,28 @@ wallet `<privy-probe-sponsor-quorum-wallet-id>`
 (`0x01F17Fab5a47F859966a45109866469447a2Db64`), funding tx
 `0x2ade69ff5d3a7432f890901e1c6c01b01b2ae99c016d60fe453306baa0f91071`.
 
-## Still to measure — and the probe already asks all of it
+## Measured, and what is left
 
-Every one of these is a branch the script takes as soon as check 6 stops being
-refused. None of it needs new code; it needs the dashboard.
+Everything the two probes set out to ask is answered:
 
-1. Does `sponsor: true` land, and what does the response body carry — a
-   transaction hash or a user-operation hash (gotcha 8)? The probe prints every
-   32-byte hash in `data` under its own key and follows one to a receipt,
-   labelling it as a user-operation hash when the key says so.
-2. Does the wallet keep its address after the 7702 delegation, and what code
-   sits at it? Check 8 compares `eth_getCode` and the Privy address across the
-   whole run.
-3. Does `eth_signTypedData_v4` still return an `ecdsa` signature once the
-   address has code, or does `signature_options.type` become `erc1271`? Check 5
-   re-runs against the delegated wallet and recovers the signer.
-4. Does a **second** sponsored send from the same 0-MON wallet work, or does
-   Monad's reserve-balance rule (gotcha 12) refuse it? Check 6b fires it
-   immediately after the first — the worst case for that rule.
-5. Who is charged, and how long does it take from request to receipt? Both sends
-   are timed, and the receipt records the submitting address and the wallet's
-   MON and USDC afterwards.
+| Question                                          | Answer                                                            |
+| ------------------------------------------------- | ----------------------------------------------------------------- |
+| Does `sponsor: true` land from a 0-MON wallet?    | yes, in 0.5–0.8 s                                                 |
+| A transaction hash or a user-operation hash?      | a **user-operation** hash; `hash` is `""` (gotcha 8)              |
+| Can we follow it?                                 | yes — our own Pimlico endpoint, and `UserOperationEvent` on chain |
+| Does the address survive delegation?              | yes; the account gains `0xef0100…` code                           |
+| Does typed data still `ecrecover` once delegated? | yes, 65 bytes `r‖s‖v` (gotcha 9 holds)                            |
+| Does a second sponsored send work?                | not within ~1.5 s of the DELEGATING one; freely afterwards        |
+| Who pays?                                         | Privy's prepaid credits; `actualGasCost` at the EntryPoint is 0   |
+
+What is still open, and neither is this document's to close:
+
+1. **Perpl enrollment from a delegated user wallet**, against the struct Perpl
+   actually serves (gotcha 13). The signature shape is no longer the risk; the
+   `types` still are.
+2. **The user gas drip is now unnecessary for Privy users.** `POST /gas/drip`
+   (SEN-16) exists so a user's own account can pay for its own transactions; a
+   Privy user never needs MON for a transfer, because sponsorship pays. It is
+   deliberately **left in place** — the Kernel path still uses it until SEN-45,
+   and agents still get their own drip (SEN-14, and an agent's wallet is NOT
+   sponsored) — but nothing on the Phase 3 path calls it, and the demo should not.

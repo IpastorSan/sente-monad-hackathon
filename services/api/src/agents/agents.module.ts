@@ -35,10 +35,8 @@ import {
   agentRunnerImports,
   agentRunnerProviders,
 } from './runner/agent-runner.providers';
-import { statePath } from '../state/json-file';
 import { AlchemyModule } from '../webhooks/alchemy.module';
-import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './store/agent-store';
-import { FileAgentStore } from './store/file-agent-store';
+import { AgentStoreModule } from './store/agent-store.module';
 import {
   agentToolsControllers,
   agentToolsExports,
@@ -102,23 +100,6 @@ const mandateOwnersProvider: Provider = {
 };
 
 /**
- * PERSISTENCE: in memory until the repo has a database (see `store/agent-store.ts`),
- * EXCEPT when `STATE_DIR` is set — then a JSON file, so a restart between hiring
- * an agent and showing it off does not orphan the agent's funded wallet, its
- * policy id and its ERC-8004 identity (SEN-48).
- */
-const agentStoreProvider: Provider = {
-  provide: AGENT_STORE,
-  useFactory: (): AgentStore => {
-    const path = statePath('agents');
-    if (!path) return new InMemoryAgentStore();
-    const store = new FileAgentStore(path);
-    Logger.log(`${store.size} agent(s) loaded from ${store.path}`, 'AgentStore');
-    return store;
-  },
-};
-
-/**
  * AUTH: the same seam `wallet/` and `gas/` use — `Auth` reads back the
  * principal `SessionAuthGuard` verified for this request.
  */
@@ -143,14 +124,23 @@ const authProvider: Provider = {
   // AlchemyModule: ALCHEMY_NOTIFY, the webhook address list a hire adds the new
   // agent's wallet to (SEN-30). Imported, not provided, so `WebhooksModule` can
   // import the same config without importing this module back.
-  imports: [GasModule, ChainModule, WalletModule, AlchemyModule, ...agentRunnerImports],
+  // AgentStoreModule: the agent records, shared with WalletModule rather than
+  // provided here, so the SEN-42 send allowlist reads the SAME agents hiring
+  // writes. See that module for why it sits below both.
+  imports: [
+    GasModule,
+    ChainModule,
+    WalletModule,
+    AgentStoreModule,
+    AlchemyModule,
+    ...agentRunnerImports,
+  ],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   controllers: [AgentsController, ...agentToolsControllers],
   providers: [
     configProvider,
     agentWalletsProvider,
     mandateOwnersProvider,
-    agentStoreProvider,
     authProvider,
     SessionAuthGuard,
     AgentsService,
@@ -162,7 +152,9 @@ const authProvider: Provider = {
   exports: [
     AgentsService,
     AGENT_WALLETS,
-    AGENT_STORE,
+    // Re-exported as the MODULE, so `leaderboard/` and `webhooks/` keep
+    // resolving AGENT_STORE through this one import and get the same instance.
+    AgentStoreModule,
     ...agentVenuesExports,
     ...agentToolsExports,
     ...agentRunnerExports,

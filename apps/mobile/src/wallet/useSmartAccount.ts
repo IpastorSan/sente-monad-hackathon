@@ -37,14 +37,13 @@ import {
   asError,
   SIGNED_OUT,
   WalletApi,
-  WalletApiError,
   toUserOperation,
   type Erc7579CallRequest,
   type SessionAuth,
   type WalletAccount,
 } from './api';
 import { assertCallDataMatches } from './batch';
-import { waitForUserOperation, type ConfirmationResult } from './confirmation';
+import { readApiStatus, waitForUserOperation, type ConfirmationResult } from './confirmation';
 import { ENTRY_POINT, toSenteKernelAccount, type SenteKernelAccount } from './kernel';
 
 /**
@@ -300,27 +299,6 @@ export function useSmartAccount(
     sendCalls,
     refresh,
   };
-}
-
-async function readApiStatus(api: WalletApi, userOpHash: Hash) {
-  try {
-    const status = await api.status(userOpHash);
-    return {
-      status: status.status,
-      ...(status.transactionHash ? { transactionHash: status.transactionHash } : {}),
-      ...(status.blockNumber !== undefined ? { blockNumber: BigInt(status.blockNumber) } : {}),
-      ...(status.actualGasCost !== undefined
-        ? { actualGasCost: BigInt(status.actualGasCost) }
-        : {}),
-    };
-  } catch (error) {
-    // A 404 is a real answer ("we have no record"), but everything else is
-    // transient and must not settle the race.
-    if (error instanceof WalletApiError && error.status === 404) {
-      return { status: 'unknown' as const };
-    }
-    return null;
-  }
 }
 
 async function readBundlerReceipt(

@@ -29,6 +29,7 @@ import {
   SponsorshipUnavailableError,
   type Sponsorship,
 } from './paymaster/sponsorship';
+import { SEND_CHAIN_ID } from './send/sponsored-send';
 import {
   PREPARED_OPERATION_STORE,
   type PreparedOperation,
@@ -43,7 +44,13 @@ import { WALLET_CONFIG, type WalletConfig } from './wallet.config';
 import { WalletRefusedError } from './wallet.errors';
 
 /** The chain every wallet in this service lives on. Matches `gas/`. */
-export const WALLET_CHAIN_ID = 10143;
+/**
+ * Monad testnet, defined once for the whole module: `send/sponsored-send.ts`
+ * needs it without importing this file (it is loaded by the live probes under
+ * node's type stripping, and this one carries Nest decorators), so the constant
+ * lives there and this is the alias every older caller already uses.
+ */
+export const WALLET_CHAIN_ID = SEND_CHAIN_ID;
 
 /** The endpoint the authorization envelope is bound to. */
 export const EXECUTE_ROUTE = { method: 'POST', path: '/wallet/execute' } as const;

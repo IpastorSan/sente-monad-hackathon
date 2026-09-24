@@ -1,3 +1,4 @@
+import type { AuthorizationPayload } from '@sente/mandate';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -106,6 +107,56 @@ export class ExecuteWalletOperationDto {
   authorizationSignature!: string;
 }
 
+/**
+ * `POST /wallet/send/prepare` (SEN-42).
+ *
+ * Three fields, each checked again in the service against something real: the
+ * recipient against the caller's own agents, the token against the sendable
+ * list, the amount for being a positive whole number of atoms. What is here is
+ * only shape — a 400 before any of that is cheaper for everyone.
+ */
+export class PrepareSendDto {
+  /** The recipient: the caller's own wallet, or one of the caller's agents. */
+  @IsString()
+  @IsEthereumAddress()
+  to!: string;
+
+  /** The token's contract, or the zero address for native MON. */
+  @IsString()
+  @IsEthereumAddress()
+  token!: string;
+
+  /**
+   * ATOMS, as a decimal string — `1000000` is one USDC, not one million. A
+   * decimal-shifted figure would need this server to guess a token's decimals
+   * from a string, and a wrong guess is a transfer of the wrong size.
+   */
+  @IsNumberString({ no_symbols: true })
+  @MaxLength(78)
+  amount!: string;
+}
+
+/** `POST /wallet/send/execute` (SEN-42): the prepare id and the phone's signature. */
+export class ExecuteSendDto {
+  @IsString()
+  @MaxLength(128)
+  prepareId!: string;
+
+  /**
+   * The device key's signature over the payload `prepare` returned. Forwarded to
+   * Privy verbatim — this server cannot produce one and does not check it: a
+   * signature over other bytes is refused by Privy with a 401, which is the
+   * check that matters. Ours would be a second opinion about a key we do not
+   * hold.
+   */
+  @IsString()
+  @MaxLength(512)
+  // The same base64 as a device PUBLIC key above; a DER ECDSA P-256 signature
+  // is ~96 bytes of it.
+  @Matches(BASE64, { message: 'signature must be base64 (DER ECDSA P-256)' })
+  signature!: string;
+}
+
 export class UserOpHashParamDto {
   @IsHexadecimal()
   @Matches(HEX_32_BYTES, { message: 'userOpHash must be a 32-byte hex hash' })
@@ -212,6 +263,53 @@ export interface PrepareWalletOperationResponseDto {
 export interface ExecuteWalletOperationResponseDto {
   userOpHash: string;
   status: UserOperationStatusDto['status'];
+  sponsored: boolean;
+}
+
+/** What a prepared or submitted transfer is, in the API's words (SEN-42). */
+export interface SendSummaryDto {
+  from: string;
+  to: string;
+  /** `{ kind: 'self' }`, or the agent this funds. */
+  recipient: { kind: 'self' } | { kind: 'agent'; agentId: string; agentName: string };
+  symbol: string;
+  tokenAddress: string;
+  decimals: number;
+  /** Atoms, as a decimal string. */
+  atoms: string;
+  /** The same amount decimal-shifted, for reading. */
+  amount: string;
+  chainId: number;
+  sponsored: boolean;
+}
+
+export interface PrepareSendResponseDto {
+  prepareId: string;
+  /**
+   * The exact Privy authorization payload to sign.
+   *
+   * REBUILD IT FROM THE INTENT BEFORE SIGNING. It is composed by this server,
+   * and signing it unread would hand the server the authority the device key
+   * exists to withhold — `apps/mobile/src/wallet/send.ts` is that check.
+   */
+  payload: AuthorizationPayload;
+  /** ISO-8601. After this the prepare id is dead and must be prepared again. */
+  expiresAt: string;
+  summary: SendSummaryDto;
+}
+
+export interface SendResponseDto {
+  /**
+   * The USER OPERATION hash (gotcha 8), which is what a sponsored send returns.
+   * Poll `GET /wallet/operations/:userOpHash` for it — that reads the
+   * operation's own success flag, not the carrying transaction's status.
+   */
+  userOpHash?: string;
+  /** Only when Privy broadcast a plain transaction instead of sponsoring one. */
+  transactionHash?: string;
+  /** Privy's own id for the attempt. Not a chain hash. */
+  transactionId?: string;
+  status: 'pending' | 'unknown';
   sponsored: boolean;
 }
 

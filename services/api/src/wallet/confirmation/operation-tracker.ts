@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import type { Address, Hash } from 'viem';
 
 import type { Bundler } from '../bundler/bundler';
+import type { UserOperationOutcome } from './user-operation-logs';
 
 /** DI token for the confirmation tracker. */
 export const OPERATION_TRACKER = Symbol('OPERATION_TRACKER');
@@ -37,6 +38,19 @@ export type OperationTrackerOptions = {
   pollMs: number;
   /** Give up chasing after this. The operation may still land later. */
   timeoutMs: number;
+  /**
+   * A SECOND source for the same question, asked only when the bundler has
+   * nothing (SEN-42).
+   *
+   * `eth_getUserOperationReceipt` is a bundler method, and a Privy-sponsored
+   * send is bundled by Privy's provider rather than by ours. Pimlico's public
+   * endpoint does answer for those (measured — docs/privy-sponsorship.md, run 3,
+   * check 5b), so this is a fallback and not the primary; but "our confirmation
+   * view depends on another vendor's indexer" is a bad thing to be one outage
+   * away from, and the EntryPoint's own event is on chain regardless.
+   * `confirmation/user-operation-logs.ts` reads it.
+   */
+  chainReceipts?: (userOpHash: Hash) => Promise<UserOperationOutcome | null>;
 };
 
 /**
@@ -92,6 +106,43 @@ export class PollingOperationTracker implements OperationTracker, OnModuleDestro
     this.timers.clear();
   }
 
+  /**
+   * The operation's outcome from whichever source has it, or `null` for "not
+   * yet".
+   *
+   * The bundler first, because its receipt is richer and it is usually first.
+   * The chain second, and only when the bundler has nothing: the EntryPoint's
+   * event is the same verdict from a source that cannot be missing it.
+   */
+  private async read(userOpHash: Hash): Promise<
+    | (Pick<TrackedOperation, 'status' | 'transactionHash' | 'blockNumber' | 'actualGasCost'> & {
+        source: 'bundler' | 'chain';
+      })
+    | undefined
+  > {
+    const receipt = await this.bundler.receipt(userOpHash);
+    if (receipt) {
+      return {
+        status: receipt.success ? 'included' : 'reverted',
+        transactionHash: receipt.receipt.transactionHash,
+        blockNumber: receipt.receipt.blockNumber,
+        actualGasCost: receipt.actualGasCost,
+        source: 'bundler',
+      };
+    }
+    const onChain = await this.options.chainReceipts?.(userOpHash);
+    if (onChain) {
+      return {
+        status: onChain.success ? 'included' : 'reverted',
+        transactionHash: onChain.transactionHash,
+        blockNumber: onChain.blockNumber,
+        actualGasCost: onChain.actualGasCost,
+        source: 'chain',
+      };
+    }
+    return undefined;
+  }
+
   private schedule(key: string, deadline: number): void {
     if (this.destroyed) {
       return;
@@ -112,26 +163,21 @@ export class PollingOperationTracker implements OperationTracker, OnModuleDestro
     }
 
     try {
-      const receipt = await this.bundler.receipt(tracked.userOpHash);
-      if (receipt) {
-        // `receipt.success` is the UserOperationEvent's own flag, NOT the bundle
+      const settled = await this.read(tracked.userOpHash);
+      if (settled) {
+        const { source, ...outcome } = settled;
+        // `status` is the UserOperationEvent's own `success` flag, NOT the bundle
         // transaction's status. See the class comment.
-        this.operations.set(key, {
-          ...tracked,
-          status: receipt.success ? 'included' : 'reverted',
-          transactionHash: receipt.receipt.transactionHash,
-          blockNumber: receipt.receipt.blockNumber,
-          actualGasCost: receipt.actualGasCost,
-        });
+        this.operations.set(key, { ...tracked, ...outcome });
         this.logger.log(
-          `userOp ${tracked.userOpHash} ${receipt.success ? 'included' : 'REVERTED'} ` +
-            `tx=${receipt.receipt.transactionHash} block=${receipt.receipt.blockNumber} ` +
-            `gasCost=${receipt.actualGasCost} sponsored=${tracked.sponsored}`,
+          `userOp ${tracked.userOpHash} ${outcome.status === 'included' ? 'included' : 'REVERTED'} ` +
+            `tx=${outcome.transactionHash} block=${outcome.blockNumber} ` +
+            `gasCost=${outcome.actualGasCost} sponsored=${tracked.sponsored} via=${source}`,
         );
         return;
       }
     } catch (error) {
-      // Keep polling: a transient bundler error is not a verdict.
+      // Keep polling: a transient error at either source is not a verdict.
       this.logger.debug(`receipt poll failed for ${tracked.userOpHash}: ${describe(error)}`);
     }
 

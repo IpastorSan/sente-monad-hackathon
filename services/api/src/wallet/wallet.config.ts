@@ -58,6 +58,16 @@ export interface WalletConfig {
   confirmationTimeoutMs: number;
   /** How long a prepared operation stays signable. Short: fees go stale. */
   prepareTtlMs: number;
+  /**
+   * The floor between two Privy-sponsored sends from ONE user wallet (SEN-42).
+   *
+   * Measured, not guessed: a send fired 1 ms after the one that EIP-7702
+   * delegates the wallet is refused with an "EIP-7702 nonce mismatch", and the
+   * same send lands 1.5 s later (docs/privy-sponsorship.md, run 3). The second
+   * send waits instead of failing, because the demo's second action must not
+   * depend on a human pausing. See `send/sponsored-send.ts#SponsoredSendPacer`.
+   */
+  sendSpacingMs: number;
 }
 
 export const WALLET_DEFAULTS = {
@@ -79,6 +89,15 @@ export const WALLET_DEFAULTS = {
   confirmationPollMs: 300,
   confirmationTimeoutMs: 90_000,
   prepareTtlMs: 120_000,
+  /**
+   * 4 s between sponsored sends from one wallet.
+   *
+   * Measured on 2026-09-24 (docs/privy-sponsorship.md, run 3): 1 ms after the
+   * delegating send is refused, 1.5 s after it is accepted. 4 s is that with
+   * room for a slower block, and it is a FLOOR — a wallet that last sent a
+   * minute ago waits not at all.
+   */
+  sendSpacingMs: 4_000,
 } as const;
 
 function parsePositiveInt(raw: string | undefined, fallback: number, name: string): number {
@@ -196,6 +215,11 @@ export function loadWalletConfig(env: NodeJS.ProcessEnv = process.env): WalletCo
       WALLET_DEFAULTS.prepareTtlMs,
       'WALLET_PREPARE_TTL_MS',
     ),
+    sendSpacingMs: parsePositiveInt(
+      env.WALLET_SEND_SPACING_MS,
+      WALLET_DEFAULTS.sendSpacingMs,
+      'WALLET_SEND_SPACING_MS',
+    ),
   };
 }
 
@@ -206,7 +230,7 @@ export function describeWalletConfig(config: WalletConfig, logger: Logger): void
     `bundler=${host} paymaster=${config.paymaster.provider}` +
       `${config.paymaster.policyId ? ' (policy set)' : ''} ` +
       `poll=${config.confirmationPollMs}ms timeout=${config.confirmationTimeoutMs}ms ` +
-      `prepareTtl=${config.prepareTtlMs}ms ` +
+      `prepareTtl=${config.prepareTtlMs}ms sendSpacing=${config.sendSpacingMs}ms ` +
       `userWallets=${config.privy ? `privy app=${config.privy.appId}` : 'unconfigured'}`,
   );
   if (!config.privy) {

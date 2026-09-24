@@ -37,6 +37,7 @@ export {
 export {
   confirmationDelay,
   MONAD_BLOCK_MS,
+  readApiStatus,
   waitForUserOperation,
   type ConfirmationResult,
   type ConfirmationStatus,

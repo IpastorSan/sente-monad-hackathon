@@ -13,14 +13,18 @@ import type { Address, Hash } from 'viem';
 import { Auth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import {
+  ExecuteSendDto,
   ExecuteWalletOperationDto,
+  PrepareSendDto,
   PrepareWalletOperationDto,
   RegisterUserWalletDto,
   RegisterWalletDto,
   UserOpHashParamDto,
   type AuthorizationPayloadDto,
   type ExecuteWalletOperationResponseDto,
+  type PrepareSendResponseDto,
   type PrepareWalletOperationResponseDto,
+  type SendResponseDto,
   type TokenBalanceDto,
   type UserOperationDto,
   type UserOperationStatusDto,
@@ -29,7 +33,12 @@ import {
 } from './dto/wallet.dto';
 import { ENTRY_POINT_ADDRESS } from './chain/kernel-account.factory';
 import type { TrackedOperation } from './confirmation/operation-tracker';
-import { UserWalletService, type UserWalletView } from './user-wallet.service';
+import {
+  UserWalletService,
+  type PreparedSend,
+  type SentTransfer,
+  type UserWalletView,
+} from './user-wallet.service';
 import { walletRefusalToHttpException } from './wallet.errors';
 import {
   WALLET_CHAIN_ID,
@@ -80,6 +89,56 @@ export class WalletController {
       toUserWalletResponse(
         await this.userWallet.register(this.principal(), {
           devicePublicKey: body.devicePublicKey,
+        }),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // SENDING FROM THE PRIVY WALLET (SEN-42)
+  //
+  // Two routes, and the split is the point. `prepare` composes the exact Privy
+  // request and answers with the payload the phone must sign; `execute` forwards
+  // the STORED request with that signature attached. The server never signs, and
+  // never rebuilds the body from client input at execute time — the signature
+  // covers those bytes.
+  // -------------------------------------------------------------------------
+
+  /**
+   * PHASE 1: the transfer, held for the device key to approve. Moves nothing.
+   *
+   * Refuses a recipient that is neither the caller's wallet nor one of their
+   * agents (`send_recipient_not_allowed`), an unknown token, and an amount that
+   * is not a positive whole number of atoms.
+   */
+  @Post('send/prepare')
+  @HttpCode(HttpStatus.OK)
+  async prepareSend(@Body() body: PrepareSendDto): Promise<PrepareSendResponseDto> {
+    return this.guard(async () =>
+      toPreparedSendResponse(
+        await this.userWallet.prepareSend(this.principal(), {
+          to: body.to,
+          token: body.token,
+          amount: body.amount,
+        }),
+      ),
+    );
+  }
+
+  /**
+   * PHASE 2: forwards the prepared request with the phone's signature.
+   *
+   * Answers with a USER OPERATION hash, because a sponsored send is bundled
+   * (gotcha 8). Follow it with `GET /wallet/operations/:userOpHash`.
+   */
+  @Post('send/execute')
+  @HttpCode(HttpStatus.OK)
+  async executeSend(@Body() body: ExecuteSendDto): Promise<SendResponseDto> {
+    return this.guard(async () =>
+      toSendResponse(
+        await this.userWallet.executeSend(this.principal(), {
+          prepareId: body.prepareId,
+          signature: body.signature,
         }),
       ),
     );
@@ -201,6 +260,29 @@ function toUserWalletResponse(view: UserWalletView): UserWalletResponseDto {
       raw: balance.raw.toString(),
       amount: balance.amount,
     })),
+  };
+}
+
+function toPreparedSendResponse(prepared: PreparedSend): PrepareSendResponseDto {
+  return {
+    prepareId: prepared.prepareId,
+    // The payload crosses as it is: it is the signed object, and reshaping any
+    // part of it here would change the bytes the phone has to reproduce.
+    payload: prepared.payload,
+    expiresAt: prepared.expiresAt.toISOString(),
+    // The summary is already the wire shape (strings and numbers, no bigint),
+    // so there is nothing to map — only something to keep in step.
+    summary: prepared.summary,
+  };
+}
+
+function toSendResponse(sent: SentTransfer): SendResponseDto {
+  return {
+    ...(sent.userOpHash ? { userOpHash: sent.userOpHash } : {}),
+    ...(sent.transactionHash ? { transactionHash: sent.transactionHash } : {}),
+    ...(sent.transactionId ? { transactionId: sent.transactionId } : {}),
+    status: sent.status,
+    sponsored: sent.sponsored,
   };
 }
 
