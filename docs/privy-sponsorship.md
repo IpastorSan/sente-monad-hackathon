@@ -15,12 +15,18 @@ mise exec -- pnpm --filter @sente/api run probe:privy-sponsor
 
 It is `services/api/scripts/privy-sponsor-probe.ts`, it is re-runnable, and it
 reuses the wallets it made last time — which is the point: the delegation
-question can only be answered by running it **again** once the dashboard step
-below is done, against the same address.
+question was answered by running it **again** against the same address once the
+dashboard step below was done — see "Run 2" below.
 
-## Status: everything but the sponsored send is verified live
+## Status: verified end to end, sponsored send included
 
-Run 2026-09-18 against app `<privy-app-id>` on Monad testnet
+**2026-09-24: gas sponsorship is ON and a sponsored send from a 0-MON wallet
+lands.** Run 1 below is kept because it is the evidence of what a refusal looks
+like; Run 2 is the current state.
+
+### Run 1 — 2026-09-18, before the dashboard step
+
+Run against app `<privy-app-id>` on Monad testnet
 (10143). Probe wallet `0xab91d510F02c5A4191Db61121904f208E31A7Af8`, holding
 **1 USDC and 0 MON** by design.
 
@@ -39,8 +45,36 @@ Run 2026-09-18 against app `<privy-app-id>` on Monad testnet
 | 7   | the same send with `sponsor` omitted                    | `400 transaction_broadcast_failure`, `"… Signer had insufficient balance"` |
 | 8   | address and code after the attempts                     | address unchanged, `eth_getCode` still `0x` — **no delegation happened**   |
 
-Check 6 is the acceptance criterion and it is the one thing still outstanding.
-Everything it depends on is in place.
+Check 6 was the acceptance criterion, and at Run 1 it was the one thing
+outstanding.
+
+### Run 2 — 2026-09-24, after the credits were bought
+
+Same app, same probe wallet `0xab91d510F02c5A4191Db61121904f208E31A7Af8`, still
+holding 1 USDC and 0 MON. 13 checks, one failure, and that failure is in the
+probe rather than the chain.
+
+| #   | Check                                 | Result                                                                                                      |
+| --- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| 6   | `eth_sendTransaction` `sponsor: true` | **LANDS** in 587 ms. `sponsorship_provider: "alchemy"`                                                      |
+| 6r  | receipt for that send                 | **probe bug**: it waits for a _transaction_ receipt using a _user operation_ hash, which never appears      |
+| 6b  | a second sponsored send, immediately  | `400 transaction_broadcast_failure`, "Execution reverted for an unknown reason" — **unresolved**            |
+| 7   | the same send with `sponsor` omitted  | `400`, "Insufficient funds for gas \* price + value" — the control still fails, so sponsorship did the work |
+| 8   | address and code afterwards           | address **unchanged**; `eth_getCode` `0x` → `0xef0100d6cedde84be40893d153be9d467cd6ad37875b28`              |
+
+Three consequences, each already written onto SEN-42:
+
+1. **A sponsored send returns a user-operation hash, not a transaction hash.**
+   The response carries `hash: ""`, `user_operation_hash: 0xfb1cab9d…a059c6` and
+   a `transaction_id`. CLAUDE.md gotcha 8 applies exactly: read the user
+   operation receipt and branch on **its** success flag.
+2. **The wallet is EIP-7702 delegated by the first sponsored send.** The address
+   survives, but the account now has code. Anything assuming "no code means EOA"
+   must be re-checked, and Perpl enrollment (`ecrecover`-only, gotcha 9) must be
+   re-tested **from a delegated wallet** — check 5 below ran before delegation,
+   so it does not answer this.
+3. **Two sponsored sends back to back do not work yet.** Spacing must be
+   measured before the demo, or the second action on stage fails.
 
 ## The human step, and its exact wording
 
@@ -55,8 +89,9 @@ Nothing in the API can turn this on. In the **Privy dashboard**, for app
    no credits is the same as sponsorship off.
 5. Confirm **TEE execution** is enabled (it already is for this app).
 
-Then re-run the probe. It will reuse `PRIVY_PROBE_SPONSOR_*` and hit the same
+Then re-run the probe. It reuses `PRIVY_PROBE_SPONSOR_*` and hits the same
 0-MON wallet, so the result is directly comparable to the table above.
+**Done on 2026-09-24; Run 2 is that result.**
 
 If the dashboard turns out not to offer "App pays" for this app or for Monad
 Testnet, **stop and say so**: SEN-40 and SEN-42 then have to fall back to the
@@ -144,7 +179,7 @@ cannot be misread as a malformed request. Note the `code` is `invalid_data`, the
 same code a genuinely malformed body gets: **do not branch on the code, branch
 on the message** if any product code ever has to detect this.
 
-### No delegation, so the address question is still open
+### Delegation: measured in Run 2, and the address survives
 
 `eth_getCode` at the wallet is `0x` before and after, and Privy reports the same
 address. That is the expected outcome of a sponsored send never happening — the

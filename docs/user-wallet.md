@@ -163,12 +163,13 @@ reads `MON=0 USDC=1 AUSD=0`, matching what that doc recorded.
 
 ## Open, and deliberately so
 
-- **Gas sponsorship is still off** for this app (SEN-39, check 6:
-  `"Gas sponsorship is not enabled."`). Creating and reading a wallet does not
-  need it; SEN-42's sends do.
-- **The address under EIP-7702 delegation is unmeasured.** If Privy's sponsored
-  path upgrades the EOA, re-check that the address `GET /wallet` reports still
-  matches, and that `eth_signTypedData_v4` still returns an `ecrecover`-able
-  signature (CLAUDE.md gotcha 9 depends on it for Perpl).
+- **Gas sponsorship is ON as of 2026-09-24** and a sponsored send from a 0-MON
+  wallet lands (SEN-39 Run 2). Creating and reading a wallet never needed it;
+  SEN-42's sends do, and they must read the **user-operation** receipt, because
+  that is what a sponsored send returns.
+- **EIP-7702 delegation now measured: the address survives**, but the account
+  gains code (`0xef0100…`) on its first sponsored send. Still unanswered, and it
+  matters: whether `eth_signTypedData_v4` stays `ecrecover`-able once the
+  address has code (CLAUDE.md gotcha 9 depends on it for Perpl enrollment).
 - **Recovery**: adding a second device key to the owner quorum, authorized by
   the first. Not implemented; `device_key_mismatch` is the current answer.
