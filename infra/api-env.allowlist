@@ -1,0 +1,113 @@
+# Which variables `push-secrets.sh` is allowed to copy from your local `.env`
+# into `/opt/sente/api.env` on the box. One name per line; `#` comments and
+# blank lines ignored.
+#
+# THIS FILE IS AN ALLOWLIST, NOT DOCUMENTATION. It exists so the transfer is
+# reviewable: what leaves this laptop is the intersection of your `.env` and
+# this list, and nothing else. `push-secrets.sh` prints every key in your `.env`
+# that is on neither this list nor the DENY list at the bottom — so a variable
+# added to `.env.example` later gets noticed instead of silently not deployed.
+#
+# `.env.example` is the reference for what each one means and which are secret.
+
+# --- auth (services/api/src/auth) ---
+# AUTH_SESSION_SECRET is the one variable the API cannot boot without.
+AUTH_SESSION_SECRET
+AUTH_SESSION_TTL_S
+
+# --- smart accounts / bundler / paymaster (services/api/src/wallet) ---
+# PIMLICO_BUNDLER_URL and ALCHEMY_RPC_URL carry their API key IN THE PATH, so
+# the whole URL is a secret.
+PIMLICO_BUNDLER_URL
+PIMLICO_SPONSORSHIP_POLICY_ID
+WALLET_BUNDLER_URL
+WALLET_PAYMASTER_PROVIDER
+ALCHEMY_RPC_URL
+ALCHEMY_GAS_POLICY_ID
+WALLET_CONFIRMATION_POLL_MS
+WALLET_CONFIRMATION_TIMEOUT_MS
+WALLET_PREPARE_TTL_MS
+
+# --- Privy (agent wallets, the user's wallet, the mandate policies) ---
+# The two P-256 keys are the most dangerous values in the file: replacing one
+# orphans every wallet or policy it owns.
+PRIVY_APP_ID
+PRIVY_APP_SECRET
+PRIVY_AGENT_AUTH_KEY
+PRIVY_MANDATE_OWNER_KEY
+PRIVY_AGENT_QUORUM_ID
+PRIVY_MANDATE_QUORUM_ID
+
+# --- Monad ---
+# MONAD_WS_URL must be reachable from the box for the consensus service to
+# report anything past `proposed`; it falls back to HTTP polling when it is not.
+MONAD_TESTNET_RPC_URL
+MONAD_WS_URL
+
+# --- gas drip (real testnet money; losing these keys loses the funds) ---
+GAS_DRIP_PRIVATE_KEYS
+GAS_DRIP_AMOUNT_MON
+GAS_DRIP_DAILY_CAP_MON
+GAS_DRIP_GAS_LIMIT
+GAS_DRIP_GAS_LIMIT_CONTRACT
+GAS_DRIP_AGENT_AMOUNT_MON
+GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY
+GAS_DRIP_SENDER_SPACING_MS
+GAS_DRIP_AGENT_RECEIPT_TIMEOUT_MS
+GAS_DRIP_RATE_LIMIT_MAX
+GAS_DRIP_RATE_LIMIT_WINDOW_MS
+
+# --- model credits ---
+OPENROUTER_MANAGEMENT_KEY
+OPENROUTER_DEFAULT_LIMIT_USD
+
+# --- agent runner ---
+# AGENT_TICK_SECONDS unset = no scheduler. Leave it unset on the box unless you
+# mean to spend judges' credits unprompted.
+AGENT_TICK_SECONDS
+AGENT_RUN_TIMEOUT_MS
+AGENT_RUN_MAX_ITERATIONS
+AGENT_RUN_MAX_TOKENS
+AGENT_WRITE_SPACING_MS
+AGENT_RUNNER_THINKING
+AGENT_PRECHECK
+AGENT_MANDATE_OWNER
+
+# --- signals ---
+NANSEN_API_KEY
+
+# --- ERC-8004 identity and reputation ---
+ERC8004_REGISTRAR_KEY
+ERC8004_REVIEWER_KEY
+ERC8004_AGENT_BASE_URL
+ERC8004_MCP_ENDPOINT
+ERC8004_IMAGE_URL
+ERC8004_REGISTER_GAS
+ERC8004_FEEDBACK_GAS
+
+# --- Alchemy Notify webhook (SEN-30) ---
+# The signing key proves a delivery came FROM Alchemy; the auth token
+# authenticates US calling Alchemy. Different secrets, opposite directions.
+ALCHEMY_WEBHOOK_SIGNING_KEY
+ALCHEMY_NOTIFY_AUTH_TOKEN
+ALCHEMY_NOTIFY_WEBHOOK_ID
+ALCHEMY_NOTIFY_TIMEOUT_MS
+
+# --- leaderboard ---
+ENVIO_GRAPHQL_URL
+
+# ---------------------------------------------------------------------------
+# DENY — never leaves this laptop, and push-secrets.sh says why if it finds one.
+# A `DENY ` prefix, a name (or a name ending in `*` to match a whole prefix),
+# then the reason, which is printed verbatim if the key turns up.
+# ---------------------------------------------------------------------------
+DENY AUTH_PLACEHOLDER          the API refuses to boot with it under NODE_ENV=production; it trusts a forgeable header
+DENY OPENROUTER_API_KEY        the shared dev inference key; refused under NODE_ENV=production
+DENY GAS_DRIP_DRY_RUN          refused true under NODE_ENV=production, and a deploy that never broadcasts is not a deploy
+DENY NODE_ENV                  docker-compose.yml pins it to production and outranks this file
+DENY PORT                      docker-compose.yml pins it to 3000, the port Caddy proxies to
+DENY STATE_DIR                 docker-compose.yml pins it to the bind-mounted /var/lib/sente/state
+DENY EXPO_PUBLIC_*             compiled into the app bundle, so public by construction; the server never reads them
+DENY PERPL_DEV_*               a dev account for local live scripts, not something the API reads
+DENY PRIVY_PROBE_*             bookkeeping written by probe:privy; nothing reads it
+DENY ENVIO_MONAD_RPC_URL       read by services/indexer, not by the API

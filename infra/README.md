@@ -1,7 +1,12 @@
 # infra — the sente.lol host
 
 A single GCE box running Caddy in Docker. Its first job is the two WebAuthn
-association files; later it is where `apps/web` and `services/api` land.
+association files; since SEN-51 it also runs `services/api` behind Caddy on
+`api.sente.lol`.
+
+**The runbook is `../docs/deploy.md`.** This file is about the host and the
+association files; that one is about deploying the API, the secrets, the release
+APK, and rolling back. Read it before running anything here.
 
 ## Why a VM rather than static hosting
 
@@ -16,20 +21,27 @@ Caddy obtains certificates via ACME, which validates by reaching the domain
 over the public internet. **It cannot get a certificate until DNS resolves.**
 
 1. `PROJECT=… ZONE=… ./provision.sh` — static IP, firewall, instance
-2. Point DNS at the printed IP (`A @` and `A www`)
-3. `dig +short sente.lol` until it answers
+2. Point DNS at the printed IP — `A @`, `A www` **and `A api`** (SEN-51)
+3. `dig +short sente.lol` and `dig +short api.sente.lol` until both answer
 4. Fill in the placeholders in `site/.well-known/` (see below)
-5. `PROJECT=… ZONE=… ./deploy.sh`
+5. `PROJECT=… ZONE=… ./push-secrets.sh` — the API's `.env`, out of band
+6. `PROJECT=… ZONE=… ./deploy.sh`
 
 Let's Encrypt rate-limits failed authorisations — five per domain per week.
-Do not loop `deploy.sh` while DNS is still propagating.
+Do not loop `deploy.sh` while DNS is still propagating. `deploy.sh` now refuses
+to run at all while `api.sente.lol` does not resolve to the box, for exactly this
+reason (`ALLOW_NO_DNS=1` overrides it).
+
+`SKIP_API=1 ./deploy.sh` is the pre-SEN-51 behaviour: Caddy and the site only,
+for getting certificates issued before the API has secrets.
 
 ## The placeholders are deliberate — and are now filled in
 
-**Status: both fingerprints are in `site/.well-known/assetlinks.json` (MOV-251).
-The live host still serves the placeholder version — it needs one
-`PROJECT=… ./deploy.sh` to pick them up.** Check with
-`curl -sS https://sente.lol/.well-known/assetlinks.json`.
+**Status: both fingerprints are in `site/.well-known/assetlinks.json` (MOV-251),
+and the live host is serving them** — verified 2026-09-24 with
+`curl -sS https://sente.lol/.well-known/assetlinks.json`, which returns 200 with
+no redirect and contains the release fingerprint `15:FA:4B:…:36:55`. (An earlier
+version of this file said the host still served the placeholders; it does not.)
 
 The keys behind them: the debug keystore is the stock one `expo prebuild` writes
 to `apps/mobile/android/app/debug.keystore`; the release keystore was generated

@@ -1,0 +1,41 @@
+# Build context for `services/api/Dockerfile`, whose context is this directory
+# (see the header there). Two jobs:
+#
+#   1. keep the context small — a full `node_modules` plus `apps/mobile/android`
+#      is well over a gigabyte and none of it is used by the image;
+#   2. keep secrets out of the context ENTIRELY, so no future `COPY` can put one
+#      in a layer even by accident. `.env` and the release keystore are the two
+#      that would matter, and losing the keystore is unrecoverable
+#      (apps/mobile/keystores/README.md).
+
+# Never in an image. Secrets reach the box through infra/push-secrets.sh.
+.env
+.env.*
+*.keystore
+*.jks
+apps/mobile/keystores/
+credentials.json
+
+# STATE_DIR — live wallet and agent ids from whoever ran this checkout.
+.state/
+
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+*.tsbuildinfo
+
+.git/
+.github/
+.claude/
+.worktrees/
+
+# Nothing the API image needs.
+apps/
+services/indexer/
+infra/
+docs/
+*.md
+*.log

@@ -335,6 +335,15 @@ The webhook is Alchemy calling _us_, so `localhost` will not do. Either deploy, 
 tunnel — `ssh -R`, `cloudflared tunnel`, `ngrok http 3000`, whatever is at hand. The
 public URL plus `/webhooks/alchemy` is what goes in the dashboard.
 
+**Deploying is now the intended answer** (SEN-51): `docs/deploy.md` puts the API on
+`https://api.sente.lol`, so the dashboard URL is
+`https://api.sente.lol/webhooks/alchemy` and it stays the same between demos — a
+tunnel's URL does not, and every change means re-editing the webhook. Note the
+ordering that follows: the webhook cannot be created until the API is public, and
+its signing key cannot reach the API until the next `push-secrets.sh` +
+`deploy.sh`, so the first deploy necessarily runs with this route answering
+`503 webhook_unconfigured`.
+
 ### 4. Create the webhook → `ALCHEMY_NOTIFY_WEBHOOK_ID`, `ALCHEMY_WEBHOOK_SIGNING_KEY`
 
 Dashboard → **Data → Webhooks** → **Create Webhook** → **Address Activity**:
