@@ -93,6 +93,7 @@ import {
 } from '../src/agents/privy/authorization-key.ts';
 import { createKeyQuorum } from '../src/agents/privy/key-quorum.ts';
 import { PrivyClient, PrivyError } from '../src/agents/privy/privy.client.ts';
+import { awaitUserOperation } from '../src/wallet/confirmation/user-operation-logs.ts';
 import { envFileFromArgs, upsertEnv } from './env-file.ts';
 
 const CHAIN_ID = 10143;
@@ -505,12 +506,18 @@ async function main(): Promise<number> {
   /**
    * What did a successful sponsored send actually return, and did it land?
    *
-   * The response shape is the unknown this probe exists to record, so nothing
-   * is assumed: every 32-byte hash in `data` is reported, and the one Privy
-   * names as a transaction is followed to a receipt. **A user-operation hash
-   * is not a transaction hash** (CLAUDE.md gotcha 8): the carrying transaction
-   * can succeed while the operation inside it reverted, so a receipt found for
-   * one of those proves nothing on its own and is labelled as such.
+   * The response shape is the unknown this probe exists to record, so nothing is
+   * assumed: every 32-byte hash in `data` is reported, and then the RIGHT kind of
+   * receipt is read for the kind of hash that came back.
+   *
+   * **A user-operation hash is not a transaction hash** (CLAUDE.md gotcha 8).
+   * Until SEN-42 this function waited for a TRANSACTION receipt whatever it was
+   * handed, which for a sponsored send is a hash no transaction will ever have:
+   * check 6r timed out on every run and read as "the send did not land" when the
+   * send had landed. A user-operation hash is now followed to its
+   * `UserOperationEvent` and judged on ITS `success` flag, which is the only
+   * field that answers the question — the carrying transaction can succeed while
+   * the operation inside it reverted.
    */
   async function settle(id: string, value: unknown): Promise<void> {
     const data = (value as { data?: Record<string, unknown> }).data ?? {};
@@ -518,15 +525,47 @@ async function main(): Promise<number> {
       ([, v]) => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v),
     ) as [string, Hex][];
     shapes[`settle_${id}_hashes`] = Object.fromEntries(hashes);
-    const userOp = hashes.find(([k]) => /user_?op/i.test(k));
-    const txHash = hashes.find(([k]) => !/user_?op/i.test(k))?.[1] ?? userOp?.[1];
-    if (!txHash) {
+    const userOpHash = hashes.find(([k]) => /user_?op/i.test(k))?.[1];
+    const txHash = hashes.find(([k]) => !/user_?op/i.test(k))?.[1];
+    if (!userOpHash && !txHash) {
       report(`${id}r`, 'receipt for the sponsored send', 'no 32-byte hash in the response', false);
       return;
     }
     const started = Date.now();
+
+    if (userOpHash) {
+      // Sponsored: the operation's own receipt, off the EntryPoint's event.
+      const { outcome } = await awaitUserOperation(rpc, userOpHash, { timeoutMs: 60_000 });
+      const held = await balances();
+      shapes[`settle_${id}_userOperation`] = outcome
+        ? {
+            success: outcome.success,
+            transactionHash: outcome.transactionHash,
+            blockNumber: `${outcome.blockNumber}`,
+            paymaster: outcome.paymaster,
+            actualGasCost: `${outcome.actualGasCost}`,
+            elapsedMs: Date.now() - started,
+            walletMonAfter: formatEther(held.mon),
+            walletUsdcAfter: formatUnits(held.usdc, USDC.decimals),
+          }
+        : null;
+      report(
+        `${id}r`,
+        `USER OPERATION receipt for ${userOpHash}`,
+        outcome
+          ? `success=${outcome.success} in block ${outcome.blockNumber} (tx ` +
+              `${outcome.transactionHash}, paymaster ${outcome.paymaster}) after ` +
+              `${Date.now() - started} ms; wallet now MON ${formatEther(held.mon)} ` +
+              `USDC ${formatUnits(held.usdc, USDC.decimals)}`
+          : `no UserOperationEvent within ${Date.now() - started} ms`,
+        outcome?.success === true,
+        'gotcha 8: judged on the OPERATION’s success flag, not the carrying transaction’s status',
+      );
+      return;
+    }
+
     const receipt = await rpc
-      .waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
+      .waitForTransactionReceipt({ hash: txHash!, timeout: 60_000 })
       .catch((error: unknown) => error as Error);
     if (receipt instanceof Error) {
       report(`${id}r`, `receipt for ${txHash}`, `not found: ${receipt.message}`, false);
@@ -550,9 +589,6 @@ async function main(): Promise<number> {
         `submitted by ${receipt.from}; wallet now MON ${formatEther(held.mon)} ` +
         `USDC ${formatUnits(held.usdc, USDC.decimals)}`,
       receipt.status === 'success',
-      userOp
-        ? 'response carries a USER-OPERATION hash: gotcha 8 — read eth_getUserOperationReceipt and branch on ITS success'
-        : undefined,
     );
   }
 

@@ -24,8 +24,8 @@
  * Restarting the API loses prepared changes, which costs a user one extra
  * prepare and can never lose a committed one.
  *
- * Erasable syntax only and no Nest import (CLAUDE.md gotcha 10): the SEN-44
- * live probe loads this file under node's type stripping. It is constructed by
+ * Erasable syntax only and no Nest import (CLAUDE.md gotcha 10): the SEN-44 and
+ * SEN-42 live probes load this file under node's type stripping. It is constructed by
  * `AgentsService` rather than injected for the same reason a lock map is —
  * it is process-local state, not a collaborator a caller would swap.
  */
@@ -38,16 +38,21 @@ import type { EnclaveRequest } from './agent-wallet.provider.ts';
  * What a prepared request is FOR. The phone shows it, and the commit route
  * checks it, so a prepare made for a revoke can never be committed as an amend.
  *
- * SEN-42 adds its own member here when transfers land.
+ * `wallet_send` is SEN-42's: one transfer out of the user's own device-owned
+ * wallet, prepared and committed through this same store.
  */
-export type PreparedApprovalKind = 'mandate_amend' | 'mandate_revoke';
+export type PreparedApprovalKind = 'mandate_amend' | 'mandate_revoke' | 'wallet_send';
 
 /**
  * How long a prepared change stays committable.
  *
  * Five minutes: long enough for a biometric prompt and a moment's reading, short
- * enough that an approval is about the mandate on screen now. There is no
- * refresh — a stale prepare is prepared again, over the current state.
+ * enough that an approval is about what is on screen now. There is no refresh —
+ * a stale prepare is prepared again, over the current state.
+ *
+ * SEN-42's transfers use this rather than `WALLET_PREPARE_TTL_MS`: that one is
+ * short because a Kernel prepare carries a GAS QUOTE that goes stale, and a
+ * device-signed send carries none. What expires here is consent, not a price.
  */
 export const PREPARED_APPROVAL_TTL_MS = 5 * 60 * 1000;
 
@@ -63,8 +68,13 @@ export interface PreparedApproval<TContext> {
   readonly kind: PreparedApprovalKind;
   /** The principal that prepared it. Another user's prepare id is not found. */
   readonly userId: string;
-  /** The agent whose policy this changes: the commit route's `:id` must match. */
-  readonly agentId: string;
+  /**
+   * WHAT this prepare is about, and the second half of its identity: the agent
+   * whose policy a mandate change would replace, or the wallet a `wallet_send`
+   * would spend from. The commit route checks it, so a signature prepared for
+   * one subject can never be committed against another.
+   */
+  readonly subject: string;
   /** Sent verbatim at commit. */
   readonly request: EnclaveRequest;
   /** Exactly what the owner signs. The phone rebuilds it and compares. */
@@ -83,22 +93,22 @@ export interface PreparedApproval<TContext> {
  */
 export class PreparedApprovals<TContext> {
   readonly #byId = new Map<string, PreparedApproval<TContext>>();
-  /** `userId:agentId` -> the one live prepare for it. See {@link put}. */
+  /** `userId:subject` -> the one live prepare for it. See {@link put}. */
   readonly #bySubject = new Map<string, string>();
 
   /**
    * Stores a prepared request, replacing whatever was pending for the same user
-   * and agent.
+   * and subject.
    *
-   * One live prepare per agent per user, on purpose. It is all any screen uses
-   * — you approve the change in front of you — and without it every abandoned
-   * prepare (a cancelled sheet, an edited mandate, a retried tap) would hold a
-   * compiled policy body for the whole TTL, on a route that does no network
-   * I/O and can therefore be called in a loop.
+   * One live prepare per subject per user, on purpose. It is all any screen
+   * uses — you approve the change in front of you — and without it every
+   * abandoned prepare (a cancelled sheet, an edited mandate, a retyped amount,
+   * a retried tap) would hold a request body for the whole TTL, on a route that
+   * does no network I/O and can therefore be called in a loop.
    */
   put(approval: PreparedApproval<TContext>): void {
     this.sweep(approval.createdAt);
-    const subject = `${approval.userId}:${approval.agentId}`;
+    const subject = subjectKey(approval);
     const superseded = this.#bySubject.get(subject);
     if (superseded !== undefined) this.#byId.delete(superseded);
     this.#byId.set(approval.id, approval);
@@ -132,7 +142,12 @@ export class PreparedApprovals<TContext> {
 
   private forget(approval: PreparedApproval<TContext>): void {
     this.#byId.delete(approval.id);
-    const subject = `${approval.userId}:${approval.agentId}`;
+    const subject = subjectKey(approval);
     if (this.#bySubject.get(subject) === approval.id) this.#bySubject.delete(subject);
   }
+}
+
+/** The key `#bySubject` is indexed by: one live prepare per user per subject. */
+function subjectKey(approval: Pick<PreparedApproval<unknown>, 'userId' | 'subject'>): string {
+  return `${approval.userId}:${approval.subject}`;
 }

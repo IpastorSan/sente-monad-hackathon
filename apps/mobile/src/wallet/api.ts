@@ -25,6 +25,8 @@
  */
 import type { Address, Hash, Hex } from 'viem';
 
+import type { AuthorizationPayload } from '../auth/deviceKey';
+
 /** Set to the machine's LAN IP on a physical device — the phone's localhost is the phone. */
 const DEFAULT_API_URL = 'http://localhost:3000';
 
@@ -166,6 +168,47 @@ export type ExecuteResponse = {
   sponsored: boolean;
 };
 
+/** What a transfer is, in the API's words. Rendered, never decided from. */
+export type SendSummary = {
+  from: Address;
+  to: Address;
+  recipient: { kind: 'self' } | { kind: 'agent'; agentId: string; agentName: string };
+  symbol: string;
+  tokenAddress: Address;
+  decimals: number;
+  /** Atoms, as a decimal string. */
+  atoms: string;
+  /** The same amount decimal-shifted, for reading. */
+  amount: string;
+  chainId: number;
+  sponsored: boolean;
+};
+
+export type PrepareSendResponse = {
+  prepareId: string;
+  /**
+   * The exact object the device key signs — `body` typed as `unknown` inside it,
+   * because nothing may assume its shape: `send.ts` rebuilds it from the intent
+   * and compares, which is the only reading of it that counts.
+   */
+  payload: AuthorizationPayload;
+  /** ISO 8601. Single-use, and dead after this. */
+  expiresAt: string;
+  summary: SendSummary;
+};
+
+export type SendResponse = {
+  /**
+   * The USER OPERATION hash — a sponsored send is bundled, so this is not a
+   * transaction hash (CLAUDE.md gotcha 8). `status(userOpHash)` follows it.
+   */
+  userOpHash?: Hash;
+  transactionHash?: Hash;
+  transactionId?: string;
+  status: 'pending' | 'unknown';
+  sponsored: boolean;
+};
+
 export type OperationStatusResponse = {
   userOpHash: Hash;
   status: 'pending' | 'included' | 'reverted' | 'unknown';
@@ -225,6 +268,31 @@ export class WalletApi {
     return toUserWallet(
       await this.request<WireUserWallet>('POST', '/wallet/register', { devicePublicKey }),
     );
+  }
+
+  /**
+   * The transfer the API would make, and the payload this phone must sign for
+   * it (SEN-42). Moves nothing.
+   *
+   * VERIFY WHAT COMES BACK BEFORE SIGNING. The payload is composed by the
+   * server, and signing it unread would hand the server the authority the device
+   * key exists to withhold: it could propose a transfer to an address the user
+   * never typed and Privy would accept it, because Privy checks the signature,
+   * not our intent. `verifySendPayload` in `send.ts` is the check, and
+   * `sendSponsored` is the flow that runs it.
+   */
+  prepareSend(command: {
+    to: Address;
+    token: Address;
+    /** ATOMS, as a decimal string. */
+    amount: string;
+  }): Promise<PrepareSendResponse> {
+    return this.request<PrepareSendResponse>('POST', '/wallet/send/prepare', command);
+  }
+
+  /** Sends the signature for a prepared transfer. The body is not resent: the server holds it. */
+  executeSend(prepareId: string, signature: string): Promise<SendResponse> {
+    return this.request<SendResponse>('POST', '/wallet/send/execute', { prepareId, signature });
   }
 
   /** The Kernel smart account. Kept reachable until SEN-45 retires it. */

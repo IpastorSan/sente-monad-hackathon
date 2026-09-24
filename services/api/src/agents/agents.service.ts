@@ -735,7 +735,8 @@ export class AgentsService {
       id,
       kind,
       userId: principal.userId,
-      agentId: agent.id,
+      // The subject of a mandate change is the agent it bounds.
+      subject: agent.id,
       request: prepared.request,
       payload: prepared.payload,
       context,
@@ -772,7 +773,7 @@ export class AgentsService {
   ) {
     this.requireDeviceOwned(agent, kind === 'mandate_amend' ? 'amended' : 'revoked');
     const prepared = this.prepared.take(prepareId, principal.userId, new Date());
-    if (!prepared || prepared.kind !== kind || prepared.agentId !== agent.id) {
+    if (!prepared || prepared.kind !== kind || prepared.subject !== agent.id) {
       throw new AgentRefusedError(
         'mandate_prepare_not_found',
         `no pending change ${prepareId} for agent ${agent.id}; prepared changes are single-use ` +

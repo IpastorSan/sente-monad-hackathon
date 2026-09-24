@@ -10,7 +10,8 @@
  * tool calls with `Promise.all`) would hit exactly that gap.
  *
  * What: per agent, process-wide, one signing write at a time, and the next one
- * starts no sooner than `spacingMs` after the previous one FINISHED. Counted
+ * starts no sooner than `spacingMs` after the previous one FINISHED — the
+ * shared `WriteSpacer` (`spacing/write-spacer.ts`), keyed by agent id. Counted
  * from the end, like `GAS_DRIP_SENDER_SPACING_MS`, because the enclave records
  * a signature when it is made, not when it was requested.
  *
@@ -21,82 +22,17 @@
  * `record_thesis` signs nothing and is never spaced. The MCP surface is not
  * spaced either: it has its own client, and SEN-8 only owns the runner.
  */
+import { WriteSpacer, type WriteSpacerOptions } from '../../spacing/write-spacer.ts';
 import type { ToolContext } from '../tools/context';
 import type { GatedTool, ToolOutcome } from '../tools/gate';
 
+// The spacer itself is shared with the user's sponsored sends (SEN-42), so it
+// lives in `spacing/`. Re-exported here because this is where the runner's
+// reason for it is written down, and where every caller already looks for it.
+export { WriteSpacer, type WriteSpacerOptions };
+
 /** Writes that never reach the enclave. */
 const UNSIGNED_WRITES = new Set(['record_thesis']);
-
-export interface WriteSpacerOptions {
-  readonly spacingMs: number;
-  readonly now?: () => number;
-  /** Resolves after `ms`, or rejects when `signal` aborts. */
-  readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-}
-
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error('aborted'));
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new Error('aborted'));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-export class WriteSpacer {
-  readonly spacingMs: number;
-  readonly #now: () => number;
-  readonly #sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
-  /** Per agent: when its last signing write finished (epoch ms). */
-  readonly #lastEnd = new Map<string, number>();
-  /** Per agent: the tail of its queue of signing writes. */
-  readonly #tails = new Map<string, Promise<void>>();
-
-  constructor(options: WriteSpacerOptions) {
-    this.spacingMs = options.spacingMs;
-    this.#now = options.now ?? Date.now;
-    this.#sleep = options.sleep ?? abortableSleep;
-  }
-
-  /**
-   * Runs `task` once every earlier write of `agentId` has finished and
-   * `spacingMs` has passed since the last one ended. Rejects, without running
-   * `task`, if `signal` aborts while it waits.
-   */
-  async run<T>(agentId: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const previous = this.#tails.get(agentId) ?? Promise.resolve();
-    const result = previous.then(async () => {
-      const last = this.#lastEnd.get(agentId);
-      const wait = last === undefined ? 0 : last + this.spacingMs - this.#now();
-      if (wait > 0) await this.#sleep(wait, signal);
-      if (signal?.aborted) throw new Error('aborted');
-      try {
-        return await task();
-      } finally {
-        this.#lastEnd.set(agentId, this.#now());
-      }
-    });
-    const tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#tails.set(agentId, tail);
-    try {
-      return await result;
-    } finally {
-      if (this.#tails.get(agentId) === tail) this.#tails.delete(agentId);
-    }
-  }
-}
 
 export const SPACING_ABORTED_MESSAGE =
   'Not sent: the run ended (timeout) while this write waited for its turn. Nothing was signed.';

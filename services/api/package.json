@@ -19,6 +19,7 @@
     "probe:privy": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-probe.ts",
     "probe:privy-sponsor": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-sponsor-probe.ts",
     "probe:device-owner": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/sen43-device-owner-probe.ts",
+    "probe:user-send": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/user-send-probe.ts",
     "privy:recover": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-wallets-recover.ts",
     "agent:fund": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/fund-agent.ts",
     "agent:venues-live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-venues-live.ts",

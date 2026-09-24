@@ -60,6 +60,14 @@ import { getAddress, isAddressEqual, type Address } from 'viem';
 
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 import {
+  ALLOWED_HEADERS,
+  NoDeviceKeyError,
+  PRIVY_API_BASE,
+  refuse,
+  type Approver,
+  type VerifyResult,
+} from '../auth/privyApproval.ts';
+import {
   describeAgentsError,
   type Agent,
   type AgentMandate,
@@ -72,12 +80,6 @@ import {
   PERPL_ENROLL_VERIFYING_CONTRACT,
   PERPL_EXCHANGE,
 } from './mandate.ts';
-
-/** Privy's own API. The URL is part of the signed bytes, so it is pinned here. */
-const PRIVY_API_BASE = 'https://api.privy.io';
-
-/** Headers a payload may carry. Anything else is unsigned by us, so unsignable. */
-const ALLOWED_HEADERS = ['privy-app-id', 'privy-idempotency-key'];
 
 /**
  * The addresses a compiled policy names, checksummed once at module load.
@@ -201,11 +203,6 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
 export type MandateChangeIntent =
   { kind: 'amend'; policyId: string; mandate: AgentMandate } | { kind: 'revoke'; policyId: string };
 
-/** `ok` or a sentence a person can act on. Never "invalid". */
-export type VerifyResult = { ok: true } | { ok: false; problem: string };
-
-const refuse = (problem: string): VerifyResult => ({ ok: false, problem });
-
 /**
  * Does `payload` do exactly what `intent` says, and nothing else?
  *
@@ -323,8 +320,10 @@ function readRule(value: unknown): ReadRule {
   return { ok: true, fingerprint: fingerprint({ method: rule.method, conditions }), label };
 }
 
-/** Signs one Privy authorization payload with the device key, or is `null` when signed out. */
-export type Approver = (payload: AuthorizationPayload) => string;
+// The envelope rules, the refusal shape and the "no key" error are shared with
+// the send flow (`wallet/send.ts`): one hardening, both paths. Re-exported so
+// this module's callers keep importing them from here.
+export { NoDeviceKeyError, type Approver, type VerifyResult };
 
 /** A change the phone refused to sign, with the reason in the message. */
 export class MandateApprovalRefusedError extends Error {
@@ -337,14 +336,6 @@ export class MandateApprovalRefusedError extends Error {
     );
     this.name = 'MandateApprovalRefusedError';
     this.problem = problem;
-  }
-}
-
-/** No device key in this session — sign in again before approving anything. */
-export class NoDeviceKeyError extends Error {
-  constructor() {
-    super('Sign in with your passkey before changing this agent’s mandate.');
-    this.name = 'NoDeviceKeyError';
   }
 }
 
@@ -396,7 +387,7 @@ async function approveChange(
   sign: Approver | null,
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
-  if (!sign) throw new NoDeviceKeyError();
+  if (!sign) throw new NoDeviceKeyError('changing this agent’s mandate');
   const amending = intent.kind === 'amend';
   const change =
     prepared ??

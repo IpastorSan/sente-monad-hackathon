@@ -27,6 +27,8 @@
  */
 import type { Hash } from 'viem';
 
+import { WalletApiError, type WalletApi } from './api.ts';
+
 /** Monad's block time. Not Base's 200ms flash-block cadence. */
 export const MONAD_BLOCK_MS = 300;
 
@@ -107,4 +109,35 @@ export async function waitForUserOperation(
 
 function isSettled(status: ConfirmationStatus): boolean {
   return status === 'included' || status === 'reverted';
+}
+
+/**
+ * Our own status view as a confirmation source (`GET /wallet/operations/:hash`).
+ *
+ * A 404 is a real answer — "we have no record of this hash" — and settles the
+ * race as `unknown`; every other failure is transient and must NOT settle it,
+ * which is the difference between a network blip and a verdict. Shared by the
+ * Kernel path (`useSmartAccount.ts`) and the sponsored send (`send.ts`) so both
+ * read the same answer the same way.
+ */
+export async function readApiStatus(
+  api: WalletApi,
+  userOpHash: Hash,
+): Promise<Omit<ConfirmationResult, 'source' | 'userOpHash'> | null> {
+  try {
+    const status = await api.status(userOpHash);
+    return {
+      status: status.status,
+      ...(status.transactionHash ? { transactionHash: status.transactionHash } : {}),
+      ...(status.blockNumber !== undefined ? { blockNumber: BigInt(status.blockNumber) } : {}),
+      ...(status.actualGasCost !== undefined
+        ? { actualGasCost: BigInt(status.actualGasCost) }
+        : {}),
+    };
+  } catch (error) {
+    if (error instanceof WalletApiError && error.status === 404) {
+      return { status: 'unknown' };
+    }
+    return null;
+  }
 }

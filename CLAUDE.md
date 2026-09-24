@@ -333,7 +333,13 @@ half-applies is worse than no batching, and only a real transaction proves which
 
 **Perpl's API-key enrollment is `ecrecover`-only.** An ERC-1271 signature from the Kernel smart
 account — valid on chain, its own `isValidSignature` returns `0x1626ba7e` — gets the same `400` as
-garbage. A Perpl account owned by a smart account can never obtain an API key, so **the passkey EOA
+garbage.
+
+A **Privy user wallet still passes that bar after its EIP-7702 delegation**, measured in SEN-42
+(docs/privy-sponsorship.md, run 3): an account holding `0xef0100…` code answered
+`eth_signTypedData_v4` with 65 bytes of `r‖s‖v` that `recoverTypedDataAddress` resolved to the
+wallet's own address. So delegation is not what would break Perpl enrollment from a user wallet;
+gotcha 13's drifting `types` still is. A Perpl account owned by a smart account can never obtain an API key, so **the passkey EOA
 owns the Perpl account**, onboarding with three plain transactions (~0.035 MON, covered by the gas
 drip). **Kuru Spot V2 accepts a contract caller**, so there **the Kernel account is the AccountCore
 root** and deposit → order is one atomic ERC-7579 batch. Do not "unify" these: each is the only
@@ -419,6 +425,14 @@ Every gas drip, the user `drip()` (SEN-16) and the agent drips (SEN-14) alike, g
 Monad's `eth_call` accepts a single below-reserve transfer; whether it flags the second one inside
 the window is unmeasured. EIP-7702-delegated EOAs get no exception at all: their balance cannot
 drop below 10 MON.
+
+**Do not blame this rule for a refused second sponsored send.** SEN-42 measured the one that looks
+like it and is not: a Privy-sponsored send fired 1 ms after the previous one is refused with
+`400 transaction_broadcast_failure`, and the message says **"EIP-7702 nonce mismatch. Expected: 1,
+Actual: 0"**. The FIRST sponsored send delegates the wallet, which bumps the account's nonce; a send
+composed before that lands is built against the old one. From an already-delegated wallet, two
+sends 1 ms apart both landed. `WALLET_SEND_SPACING_MS` (4 s, `wallet/send/sponsored-send.ts`) makes
+the second one wait instead of fail.
 
 ### 13. Perpl's enrollment struct drifts, and the Privy policy pins it exactly
 

@@ -10,7 +10,13 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import { AgentsApi } from '@/agents/api';
 import { useAccount, type UseAccount } from '@/auth';
-import { useSmartAccount, useUserWallet, type UseSmartAccount, type UseUserWallet } from '@/wallet';
+import {
+  useSmartAccount,
+  useUserWallet,
+  WalletApi,
+  type UseSmartAccount,
+  type UseUserWallet,
+} from '@/wallet';
 import type { SessionAuth } from '@/wallet/api';
 
 import { useSessionAuth } from './auth';
@@ -22,6 +28,12 @@ export type Session = {
    * (SEN-40). Registered on sign-in, and the one the home screen shows.
    */
   readonly wallet: UseUserWallet;
+  /**
+   * The `/wallet` client, shared with the hook above rather than built per
+   * screen: a send (SEN-42) and the balance read that follows it must be the
+   * same session, and two clients would be two token sources.
+   */
+  readonly walletApi: WalletApi;
   /** The older Kernel smart account, until SEN-45 retires it. */
   readonly smart: UseSmartAccount;
   /**
@@ -41,18 +53,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // One token source for the whole app: `useSessionAuth` signs in as soon as
   // there is a key to sign with, and re-signs in when a request comes back 401.
   const api = useSessionAuth(auth.account);
+  const walletApi = useMemo(() => new WalletApi({ auth: api }), [api]);
   // Present the device key as soon as there is one: registration is idempotent
   // and answers with the wallet's address and balances, so the home screen has
   // something to show one round trip after sign-in.
-  const wallet = useUserWallet(auth.devicePublicKey, { auth: api });
+  const wallet = useUserWallet(auth.devicePublicKey, { auth: api, api: walletApi });
   const smart = useSmartAccount(auth.account, { auth: api });
   const agents = useMemo(
     () => (auth.address ? new AgentsApi({ auth: api }) : null),
     [auth.address, api],
   );
   const session = useMemo(
-    () => ({ auth, wallet, smart, api, agents }),
-    [auth, wallet, smart, api, agents],
+    () => ({ auth, wallet, walletApi, smart, api, agents }),
+    [auth, wallet, walletApi, smart, api, agents],
   );
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }

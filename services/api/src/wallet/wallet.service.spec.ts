@@ -55,6 +55,8 @@ const config = (over: Partial<WalletConfig> = {}): WalletConfig => ({
   confirmationPollMs: 300,
   confirmationTimeoutMs: 5_000,
   prepareTtlMs: 120_000,
+  // Kernel sends do not go through Privy, so this never bites here.
+  sendSpacingMs: WALLET_DEFAULTS.sendSpacingMs,
   ...over,
 });
 
