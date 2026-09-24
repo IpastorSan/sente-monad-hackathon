@@ -28,6 +28,68 @@ services:
       # Used for the ACME account and expiry warnings.
       - ACME_EMAIL=${ACME_EMAIL:-ignacio@moveseventyeight.com}
 
+  # services/api (SEN-51). Not published on the host — only Caddy reaches it,
+  # over the compose network, which is why there is no `ports:` here.
+  api:
+    # Built by ../services/api/Dockerfile and shipped to the box as a tarball by
+    # ../infra/deploy.sh (`docker save | docker load` over SSH). No registry, so
+    # nothing to authenticate and nothing to leave a private image lying in.
+    # SENTE_API_TAG is the git short SHA of the deploy; `latest` is a moving
+    # alias deploy.sh also tags, so a rollback is a re-`up` with the old tag.
+    image: sente-api:${SENTE_API_TAG:-latest}
+    container_name: sente-api
+    # Restart on crash AND on boot, but never fight a deliberate `docker stop`.
+    restart: unless-stopped
+    # The dozen-odd secrets, delivered out of band by ../infra/push-secrets.sh:
+    # root-owned, 0600, never committed, never in an image layer, never a build
+    # arg. docker-compose reads it at `up` time on the box, so the values live
+    # in one file on one disk and in the container's environment. See
+    # ../docs/deploy.md.
+    env_file:
+      - /opt/sente/api.env
+    # `environment` OUTRANKS `env_file` in compose, which is the point: these
+    # three cannot be turned off by editing the secrets file. NODE_ENV=production
+    # is what arms every boot refusal the API has (AUTH_PLACEHOLDER,
+    # GAS_DRIP_DRY_RUN, AGENT_PRECHECK=off, AGENT_MANDATE_OWNER=server,
+    # OPENROUTER_API_KEY without a management key).
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - STATE_DIR=/var/lib/sente/state
+    volumes:
+      # SEN-48's file-backed stores: the user-wallet registry and the agent
+      # store. A HOST BIND MOUNT, not a named volume, and not inside the
+      # container: losing this directory is not "register again" — the next
+      # POST /wallet/register mints a SECOND Privy wallet and whatever the first
+      # one holds becomes unreachable from the product. On the host it survives
+      # `docker compose down`, an image replacement and a rollback, and it is a
+      # plain directory you can tar up before touching anything.
+      # deploy.sh creates it 0700 owned by uid 1000 (the image's `node` user).
+      - /var/lib/sente/state:/var/lib/sente/state
+    healthcheck:
+      # GET /health answers {"status":"ok"} and touches nothing (health.service.ts).
+      # No curl in node:*-slim, so this uses node itself rather than adding a
+      # package to the image for one probe.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # A cold boot resolves Privy quorums and opens the MONAD_WS_URL socket
+      # before it listens; 20 s is generous for an e2-micro and costs nothing.
+      start_period: 20s
+    logging:
+      # e2-micro has a 30 GB disk shared with Caddy and the image tarballs. The
+      # default json-file driver grows without bound, and a full disk on this box
+      # takes the certificates' host down with the API.
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
 volumes:
   caddy_data:
   caddy_config:

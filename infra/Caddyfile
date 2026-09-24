@@ -26,3 +26,43 @@ sente.lol {
 www.sente.lol {
 	redir https://sente.lol{uri} permanent
 }
+
+# services/api (SEN-51). Its own hostname rather than a path prefix under the
+# apex, for one reason that is not taste: the apex serves `/.well-known/*` and
+# those files must keep returning 200 with no redirect (../CLAUDE.md, "Permanent,
+# unchangeable values"). A `handle_path /api/*` on the apex puts a reverse proxy
+# and a file server in the same site block, one ordering mistake away from the
+# apex answering a passkey association request out of Nest. A separate host
+# cannot make that mistake.
+#
+# THE RPID IS UNAFFECTED. A passkey scoped to `sente.lol` works from every name
+# below it, so `api.sente.lol` needs no association file of its own and must
+# never be given one.
+#
+# DNS FIRST: `A api.sente.lol -> <the box's IP>` must resolve before this block
+# is deployed, or Caddy burns a Let's Encrypt failed-authorisation against the
+# account (five per hostname per hour). `deploy.sh` checks it and refuses.
+api.sente.lol {
+	# Compose puts both containers on the same network, so `api` is the service
+	# name from docker-compose.yml. Nothing publishes port 3000 on the host: the
+	# API is reachable only through this proxy, over TLS.
+	reverse_proxy api:3000 {
+		# Caddy already sends X-Forwarded-For/-Proto/-Host. NOTE, and it is a
+		# real behaviour change on deploy: Express only believes those with
+		# `trust proxy` set, which `services/api/src/main.ts` does not set, so
+		# `@Ip()` sees this proxy's container address. The per-IP backstop on
+		# POST /gas/drip therefore becomes one shared bucket
+		# (GAS_DRIP_RATE_LIMIT_MAX per window for everyone). It fails closed,
+		# not open — the per-address and per-user caps in the drip ledger are
+		# untouched — but it can refuse a judge mid-demo. See docs/deploy.md,
+		# "Decisions still open".
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	# Responses only; the request body Caddy forwards is byte-for-byte what it
+	# received, which is what POST /webhooks/alchemy's HMAC is computed over
+	# (services/api/src/webhooks/raw-body.ts).
+	encode zstd gzip
+}
