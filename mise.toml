@@ -1,7 +1,11 @@
+# Pinned to the patch, not the major. A floating major means CI and this
+# machine can install different npm versions, and they then disagree about how
+# to resolve a floating peer dependency — which is exactly how the indexer
+# lockfile became uninstallable in CI while passing here.
 [tools]
 java = "temurin-21"
-node = "26"
-pnpm = "12"
+node = "26.10.0"
+pnpm = "12.3.4"
 
 [env]
 # Android SDK. Set ANDROID_HOME yourself (in your shell, or in a gitignored
