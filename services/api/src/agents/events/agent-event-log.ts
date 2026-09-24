@@ -15,6 +15,10 @@ export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
  * `verdict`: a settled thesis (SEN-22) — its realised PnL and whether it held — appended
  * when a fill completes one (any filling tool, not just the Perpl-only `close_position`:
  * SEN-47), so the Ledger reads it through the events route like the rest.
+ * `deposit`: funds ARRIVING at the agent's wallet (SEN-30) — the only kind no tool
+ * produces. It is appended by `POST /webhooks/alchemy` from an Alchemy Notify
+ * Address Activity delivery, so it has no `runId` and no `tool`: nothing the agent
+ * did caused it. Its `detail` is `webhooks/alchemy.ts#AgentDepositDetail`.
  */
 export const AGENT_EVENT_KINDS = [
   'thesis',
@@ -24,6 +28,7 @@ export const AGENT_EVENT_KINDS = [
   'verdict',
   'refusal',
   'run',
+  'deposit',
 ] as const;
 export type AgentEventKind = (typeof AGENT_EVENT_KINDS)[number];
 

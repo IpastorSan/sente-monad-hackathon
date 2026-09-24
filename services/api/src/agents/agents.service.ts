@@ -39,6 +39,7 @@ import {
 } from './store/agent-store';
 import { generateMcpToken, hashMcpToken, MCP_TOKEN_PREFIX } from './store/mcp-token';
 import { ERC8004_WRITER, type Erc8004Reputation } from './reputation/erc8004';
+import { ALCHEMY_NOTIFY, type AlchemyNotifyAddresses } from '../webhooks/alchemy-notify';
 
 export interface HireAgentInput {
   name: string;
@@ -200,6 +201,14 @@ export class AgentsService {
     @Optional()
     @Inject(ERC8004_WRITER)
     private readonly reputation?: Erc8004Reputation,
+    /**
+     * The Alchemy Notify address list (SEN-30). Optional for the same reason
+     * again: without it a hired agent's deposits are simply not delivered to
+     * `POST /webhooks/alchemy`, and the hire is untouched.
+     */
+    @Optional()
+    @Inject(ALCHEMY_NOTIFY)
+    private readonly deposits?: AlchemyNotifyAddresses,
   ) {}
 
   /**
@@ -399,6 +408,9 @@ export class AgentsService {
   ): Promise<HiredAgent> {
     const registration = await this.registerIdentity(agent);
     const gasFunding = await this.fundGas(principal, agent);
+    // AFTER the drip, deliberately: the drip is our own MON and is normally
+    // already mined by now, so it does not show up as a user deposit.
+    await this.watchForDeposits(agent);
     return {
       agent: await this.store.update(agent.id, {
         gasFunding,
@@ -430,6 +442,31 @@ export class AgentsService {
           `${error instanceof Error ? error.message : String(error)}`,
       );
       return {};
+    }
+  }
+
+  /**
+   * Asks Alchemy Notify to watch the new agent's wallet, so a deposit to it
+   * appends a `deposit` event to its Ledger (SEN-30). Never throws and returns
+   * nothing: a webhook that cannot be updated must not fail a hire, and unlike
+   * the ERC-8004 id there is nothing worth recording on the agent — the address
+   * list is Alchemy's state, not ours, and `docs/alchemy.md` says how to check it.
+   */
+  private async watchForDeposits(agent: AgentRecord): Promise<void> {
+    if (!this.deposits) return;
+    try {
+      const outcome = await this.deposits.watchAddress(agent.address);
+      if (outcome.ok) return;
+      this.logger.warn(
+        `agent ${agent.id} wallet ${agent.address} not watched for deposits: ` +
+          `${outcome.reason} (${outcome.message}) — deposits to it will not reach its Ledger`,
+      );
+    } catch (error) {
+      // watchAddress does not throw; this only keeps a bug there from failing a hire.
+      this.logger.error(
+        `agent ${agent.id} Alchemy Notify registration threw: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

@@ -42,6 +42,30 @@ describe.each([
     expect(await store.listByUser('alice')).toEqual([agent]);
     expect(await store.listActive()).toEqual([agent]);
     expect(await store.findByMcpTokenHash(agent.mcpTokenHash)).toEqual(agent);
+    expect(await store.findByAddress(agent.address)).toEqual(agent);
+  });
+
+  it('finds an agent by wallet address whatever the case, and answers nothing for a stranger', async () => {
+    // `POST /webhooks/alchemy` looks an agent up from an address Alchemy sent in
+    // lower case, while `AgentRecord.address` is EIP-55 (SEN-30).
+    const store = create();
+    const agent = testAgent();
+    await store.insert(agent);
+
+    expect(await store.findByAddress(agent.address.toLowerCase())).toEqual(agent);
+    expect(await store.findByAddress(agent.address.toUpperCase())).toEqual(agent);
+    expect(await store.findByAddress(`  ${agent.address}  `)).toEqual(agent);
+    expect(await store.findByAddress(`0x${'ff'.repeat(20)}`)).toBeUndefined();
+    expect(await store.findByAddress('')).toBeUndefined();
+  });
+
+  it('still finds a revoked agent by address — the caller decides what that means', async () => {
+    const store = create();
+    const agent = testAgent();
+    await store.insert(agent);
+    await store.update(agent.id, { status: 'revoked' });
+
+    expect(await store.findByAddress(agent.address)).toMatchObject({ status: 'revoked' });
   });
 
   it('rejects a duplicate id and a duplicate token hash', async () => {

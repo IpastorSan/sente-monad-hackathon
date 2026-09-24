@@ -10,6 +10,7 @@ import { GasModule } from './gas/gas.module';
 import { HealthModule } from './health/health.module';
 import { VenuesModule } from './venues/venues.module';
 import { WalletModule } from './wallet/wallet.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -30,6 +31,10 @@ import { WalletModule } from './wallet/wallet.module';
     ChainModule,
     CreditsModule,
     GasModule,
+    // POST /webhooks/alchemy (SEN-30): Alchemy Notify appending `deposit` events.
+    // The ONLY unguarded route that writes anything — its HMAC is what stands in
+    // for a session. See webhooks/webhooks.controller.ts.
+    WebhooksModule,
   ],
 })
 export class AppModule {}
