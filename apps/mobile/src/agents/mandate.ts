@@ -97,6 +97,18 @@ export type MandateForm = {
   maxOrderNotional: string;
   /** Unix seconds. */
   expiresAt: number;
+  /**
+   * WHERE THE MONEY GOES HOME TO (SEN-17): the user's own wallet address.
+   *
+   * Not typed by anyone — the screens fill it from `GET /wallet` — but it is part
+   * of the form because it is part of the mandate that gets compiled, and the
+   * phone has to send the same address the API resolves or the two disagree and
+   * the amend is refused (`approval.ts` fails closed by design).
+   *
+   * Absent when the wallet has not registered yet: the mandate then compiles with
+   * no exit rule, which is what agents hired before SEN-17 have.
+   */
+  returnTo?: Address;
 };
 
 export type MandateField =
@@ -114,8 +126,13 @@ export type MandateErrors = Partial<Record<MandateField, string>>;
 export type BuildResult =
   { ok: true; mandate: AgentMandate } | { ok: false; errors: MandateErrors };
 
-/** A deliberately small starting mandate: one market, one cap, a week. */
-export function defaultMandateForm(now: number): MandateForm {
+/**
+ * A deliberately small starting mandate: one market, one cap, a week.
+ *
+ * `returnTo` is the caller's own wallet when the screen knows it — the way out
+ * is not a choice the user makes, it is the account they signed in with.
+ */
+export function defaultMandateForm(now: number, returnTo?: Address): MandateForm {
   const monUsdc = KURU_MARKETS.find((market) => market.symbol === 'MON-USDC');
   return {
     kuru: true,
@@ -127,6 +144,7 @@ export function defaultMandateForm(now: number): MandateForm {
     maxLeverage: '2',
     maxOrderNotional: '50',
     expiresAt: now + 7 * DAY_SECONDS,
+    ...(returnTo ? { returnTo: getAddress(returnTo) } : {}),
   };
 }
 
@@ -227,11 +245,20 @@ export function buildMandate(form: MandateForm, now: number): BuildResult {
       kuru,
       perpl,
       maxOrderNotional: notional,
+      // The API resolves this from the account anyway and refuses a mandate
+      // naming anything else; sending it is what lets the phone know which rules
+      // to expect back (SEN-17).
+      ...(form.returnTo ? { returnTo: getAddress(form.returnTo) } : {}),
     },
   };
 }
 
-/** The inverse of `buildMandate`, for amending an agent's current mandate. */
+/**
+ * The inverse of `buildMandate`, for amending an agent's current mandate.
+ *
+ * `returnTo` comes across unchanged, so an amend keeps the exit the agent already
+ * has; the screen overrides it with the live wallet address when it has one.
+ */
 export function formFromMandate(mandate: AgentMandate): MandateForm {
   const depositCaps: Record<string, string> = {};
   for (const [address, atoms] of Object.entries(mandate.kuru.maxDepositAtoms)) {
@@ -251,6 +278,7 @@ export function formFromMandate(mandate: AgentMandate): MandateForm {
     maxLeverage: perpl ? String(mandate.perpl.maxLeverage) : '2',
     maxOrderNotional: mandate.maxOrderNotional,
     expiresAt: mandate.expiresAt,
+    ...(mandate.returnTo ? { returnTo: mandate.returnTo } : {}),
   };
 }
 
@@ -361,6 +389,19 @@ export function describeMandate(mandate: AgentMandate): MandateLimit[] {
     id: 'expiresAt',
     label: 'Expires',
     value: formatExpiry(mandate.expiresAt),
+    enforcer: 'enclave',
+  });
+
+  // The way out (SEN-17), and it belongs beside the limits rather than in some
+  // footnote: it is the answer to "how do I get my money back", and it is
+  // enforced the same way the caps are — the agent's key can sign a transfer to
+  // this address and to nowhere else, revoked or expired.
+  limits.push({
+    id: 'returnTo',
+    label: 'Funds can only return to',
+    // The whole address, never shortened: this row is read before granting an
+    // agent authority, and a truncated destination is not something to trust.
+    value: mandate.returnTo ?? 'Nowhere — this agent has no way out',
     enforcer: 'enclave',
   });
 

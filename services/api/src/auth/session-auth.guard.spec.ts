@@ -141,6 +141,8 @@ describe('challenge -> signature -> token -> GET /agents', () => {
       new InMemoryAgentEventLog(),
       // Only `GET /agents/:id/events` reads consensus, and this is `GET /agents`.
       {} as never,
+      // Only `POST /agents/:id/return` returns funds, and this is `GET /agents`.
+      {} as never,
     );
     await expect(agents.list()).resolves.toEqual({ agents: [] });
 

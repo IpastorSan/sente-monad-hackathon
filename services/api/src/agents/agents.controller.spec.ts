@@ -69,6 +69,8 @@ function setup(wallets = new FakeAgentWalletProvider()) {
     {} as never,
     events,
     consensus,
+    // POST /agents/:id/return has its own spec (recovery/return-funds.service.spec.ts).
+    {} as never,
   );
   return {
     controller,
@@ -430,6 +432,7 @@ describe('AgentsController', () => {
         { principal: () => ({ userId: 'alice' }) },
         {} as never,
         base.events,
+        {} as never,
         {} as never,
       );
       return { controller, wallets };

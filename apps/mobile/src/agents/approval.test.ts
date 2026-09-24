@@ -11,13 +11,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { compileMandate, parseMandate, type PolicyRule } from '@sente/mandate';
+import {
+  compileMandate,
+  compileRevocationRules,
+  parseMandate,
+  type PolicyRule,
+} from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
-import type { Address } from 'viem';
+import { getAddress, type Address } from 'viem';
 
 import { toWireMandate, type AgentMandate } from './api.ts';
 import {
   expectedPolicyRules,
+  expectedRevocationRules,
   verifyPolicyPatch,
   type ExpectedRule,
   type MandateChangeIntent,
@@ -29,6 +35,8 @@ const MARKET_B = KURU_TESTNET_MARKETS[1]!.address;
 const USDC = KURU_TESTNET_TOKENS.USDC.address as Address;
 const MON = KURU_TESTNET_TOKENS.MON.address as Address;
 const POLICY_ID = 'policy00000000000000test';
+/** The owner's own wallet: the only address a compiled mandate lets funds reach. */
+const OWNER = getAddress(`0x${'c'.repeat(40)}`);
 
 function mandate(over: Partial<AgentMandate> = {}): AgentMandate {
   return {
@@ -59,9 +67,22 @@ function normalise(rules: ExpectedRule[]): string[] {
   return rules.map((rule) => `${rule.method}::${[...rule.conditions].sort().join('&&')}`).sort();
 }
 
-/** What the API sends back from `/prepare`, built from the real compiler. */
-function payloadFor(m: AgentMandate | null, over: Record<string, unknown> = {}) {
-  const rules = m === null ? [] : compileMandate(parseMandate(toWireMandate(m)));
+/**
+ * What the API sends back from `/prepare`, built from the real compiler.
+ *
+ * `null` is the empty policy a revoke used to leave; `{ revoke: m }` is what one
+ * leaves since SEN-17 — that mandate's own way out.
+ */
+function payloadFor(
+  m: AgentMandate | null | { revoke: AgentMandate },
+  over: Record<string, unknown> = {},
+) {
+  const rules =
+    m === null
+      ? []
+      : 'revoke' in m
+        ? compileRevocationRules(parseMandate(toWireMandate(m.revoke)))
+        : compileMandate(parseMandate(toWireMandate(m)));
   return {
     version: 1 as const,
     method: 'PATCH' as const,
@@ -92,6 +113,10 @@ test('the mirrored compiler still agrees with @sente/mandate, mandate by mandate
       perpl: { maxCollateralAtoms: 0n, maxLeverage: 1, markets: [] },
     }),
     mandate({ expiresAt: 1_900_000_000 }),
+    // The way out (SEN-17): one transfer rule per token, and none of them expires.
+    mandate({ returnTo: OWNER }),
+    mandate({ venues: ['kuru'], returnTo: OWNER }),
+    mandate({ venues: [], returnTo: OWNER }),
   ];
   for (const m of cases) {
     assert.deepEqual(
@@ -107,12 +132,59 @@ test('a payload that is exactly the mandate’s own rules is approved', () => {
   assert.deepEqual(verifyPolicyPatch(payloadFor(m), amend(m)), { ok: true });
 });
 
-test('a revoke is approved only when it leaves no rules at all', () => {
-  const intent: MandateChangeIntent = { kind: 'revoke', policyId: POLICY_ID };
-  assert.deepEqual(verifyPolicyPatch(payloadFor(null), intent), { ok: true });
+test('a revoke is approved only when it leaves exactly the way out', () => {
+  const m = mandate({ returnTo: OWNER });
+  const intent: MandateChangeIntent = { kind: 'revoke', policyId: POLICY_ID, mandate: m };
 
-  const sneaky = verifyPolicyPatch(payloadFor(mandate()), intent);
-  assert.equal(sneaky.ok, false);
+  // The recovery rules, and nothing else: an exit stays open (SEN-17).
+  assert.deepEqual(verifyPolicyPatch(payloadFor({ revoke: m }), intent), { ok: true });
+
+  // A revoke that leaves the whole live policy in place is not a revoke.
+  assert.equal(verifyPolicyPatch(payloadFor(m), intent).ok, false);
+
+  // Neither is one that keeps a single rule the agent could take risk with: the
+  // deposit rule, smuggled in beside the legitimate exit.
+  const smuggled = payloadFor({ revoke: m });
+  const withDeposit = [
+    ...(smuggled.body.rules as PolicyRule[]),
+    compileMandate(parseMandate(toWireMandate(m))).find((rule) =>
+      rule.name.startsWith('Kuru: deposit'),
+    )!,
+  ];
+  assert.equal(verifyPolicyPatch({ ...smuggled, body: { rules: withDeposit } }, intent).ok, false);
+
+  // And an empty policy no longer matches a mandate that HAS an exit: the phone
+  // refuses to sign away the way out just as it refuses to widen the mandate.
+  assert.equal(verifyPolicyPatch(payloadFor(null), intent).ok, false);
+
+  // A mandate with no exit still revokes to nothing at all — every agent hired
+  // before SEN-17 is in that state.
+  const noExit = mandate({ venues: ['perpl'] });
+  assert.deepEqual(
+    verifyPolicyPatch(payloadFor(null), {
+      kind: 'revoke',
+      policyId: POLICY_ID,
+      mandate: noExit,
+    }),
+    { ok: true },
+  );
+});
+
+test('the mirrored revocation rules still agree with @sente/mandate', () => {
+  for (const m of [
+    mandate({ returnTo: OWNER }),
+    mandate({ venues: ['kuru'], returnTo: OWNER }),
+    mandate({ venues: ['perpl'], returnTo: OWNER }),
+    mandate({ venues: [], returnTo: OWNER }),
+    mandate(),
+    mandate({ venues: ['perpl'] }),
+  ]) {
+    assert.deepEqual(
+      normalise(expectedRevocationRules(m)),
+      normalise(compileRevocationRules(parseMandate(toWireMandate(m))).map(toExpected)),
+      `drifted for ${JSON.stringify(toWireMandate(m))}`,
+    );
+  }
 });
 
 test('a raised cap the user did not type is refused', () => {

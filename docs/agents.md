@@ -243,7 +243,7 @@ When the agent is short, the script prints the exact `agent:fund` command and
 stops. Each run enrolls one new Perpl key, because the secret store is in
 memory.
 
-## Getting the money back: withdraw and return to owner (SEN-15)
+## Getting the money back: withdraw and return to owner (SEN-15, SEN-17)
 
 An agent funds its own Kuru account, so its mandate must also let that money
 come back out, and only ever toward the owner. Until SEN-15 the compiled
@@ -266,19 +266,29 @@ The choices, and why:
   function pins the recipient to the signer. It also means the rule needs no
   agent address, which matters because hire compiles the policy before the
   wallet exists. An address pin would cost a second PATCH after every hire.
-- **`returnTo` is a new, optional mandate field**: the owner's smart-account
-  address, EIP-55 checked, never the zero address. Without it no transfer rule
-  exists and the wallet can send nothing (fail closed). Nothing sets it yet:
-  the mobile app and hire don't send it, so a client has to put it in the
-  mandate. Revoke-then-owner-key stays the fallback for agents without it.
+- **`returnTo` is an optional mandate field, and the SERVER writes it**
+  (SEN-17): the address of the caller's own Privy user wallet, out of the
+  registry `POST /wallet/register` fills (SEN-40), EIP-55 checked, never the
+  zero address. It is the user's wallet and not the old Kernel smart account,
+  because Phase 3 made that the user's account and SEN-45 retires the other one.
+  Resolution happens in `AgentsService.parseFor`, on every hire, fork and amend:
+  - a client value equal to it (in any case) is accepted, a different one is
+    refused `return_address_mismatch`, and one sent by a caller with no
+    registered wallet is refused `return_address_unavailable`. A client that
+    could name the exit could name its own;
+  - without it — a caller with no wallet — the mandate compiles with no transfer
+    rule and the wallet can send nothing (fail closed). Every agent hired before
+    SEN-17 is in that state, and an amend gives it a way out.
 - **Native MON is not covered.** A `to = returnTo` value rule would also let
   the agent call the owner's account with any calldata. Leftover gas stays
   with the agent.
-- **Both survive mandate expiry.** They carry `chain_id` and no
-  `current_unix_timestamp`, unlike every risk-taking rule. Each can only move
-  money toward the owner. If they expired, an expired agent's collateral
-  would be stranded until the owner re-PATCHed the policy. Revocation still
-  stops them, because it replaces the policy with `[]`. Layer 1 agrees:
+- **Both survive mandate expiry, AND revocation** (SEN-17). They carry
+  `chain_id` and no `current_unix_timestamp`, unlike every risk-taking rule,
+  because each can only move money toward the owner. If they expired, an expired
+  agent's collateral would be stranded until the owner re-PATCHed the policy —
+  and a revoke used to do exactly that stranding, by replacing the policy with
+  `[]`. It now replaces it with `compileRevocationRules(mandate)`: these two
+  rules and nothing else. See "What a revoke leaves behind" below. Layer 1 agrees:
   `checkIntent` passes `withdraw` like cancel and close, after expiry too. A
   Kuru cancel still expires in the enclave, because a cancel `batch` cannot
   be told apart from a placing one.
@@ -286,9 +296,63 @@ The choices, and why:
   notional cap, allowed on Kuru even after expiry. It calls
   `KuruVenue.withdraw` (`withdrawCall`, fixed gas 150,407). Only free balance
   can leave; resting orders keep their reserve until cancelled.
-- **The user-side path is the rule plus `erc20TransferCall`.** No API route
-  triggers a return yet; the live script sends it through
-  `AgentTransactionSender`. A `POST /agents/:id/return` is a follow-up.
+- **The user-side path is a route, not a script** (SEN-17):
+  `POST /agents/:id/return {asset?, amount?}` →
+  `ReturnFundsService` (`services/api/src/agents/recovery/`). Per asset it reads
+  the free Kuru collateral (`AccountCore.getBalance`, one call per token rather
+  than `getBalances`' ten — the public RPC allows 15 a second), withdraws it to
+  the agent's own wallet, re-reads the wallet balance and transfers it to
+  `returnTo`, through the same per-wallet `AgentTransactionSender` queue. No body
+  sweeps every returnable asset; `{asset}` picks one, `{asset, amount}` part of
+  one.
+  - **Agent-signed, so no owner signature is involved.** Both legs are rules the
+    policy already carries, so the route stays one call even for a device-owned
+    agent — there is nothing here a prepare/commit pair could add that the policy
+    does not already pin.
+  - **It works on a revoked or expired agent**, which is the whole point.
+  - Refusals, all before anything is signed: `return_address_missing` (409, the
+    mandate names no exit), `return_asset_not_supported` / `return_amount_invalid`
+    (400), `return_gas_insufficient` (409, with the shortfall and the
+    `agent:fund` command — Monad charges the gas limit), `agent_not_found` (404).
+    Each leg reports its own hash and its own `success`: an agent wallet is an
+    EOA, so a withdraw that landed stays landed even if the transfer after it
+    reverts, and the response never averages the two into one verdict.
+  - **Native MON is never swept.** An agent's leftover gas stays with it.
+  - On the phone: a "Return funds" button on the agent screen, on an active agent
+    and on a revoked one, confirmed in an in-app sheet (`app/agents/[id].tsx`).
+
+### What a revoke leaves behind (SEN-17)
+
+Revoking used to PATCH the policy to `[]`. That stops the agent — and also
+strands whatever it is holding, because a wallet whose policy has no rules can
+sign nothing at all, and a revoked agent cannot be amended either
+(`agent_revoked`). The owner's money then depended on someone re-PATCHing the
+policy with the owner key, which in `device` mode is a phone ceremony and in the
+worst case a lost key.
+
+So a revoke now leaves the way out open: `compileRevocationRules(mandate)` — the
+Kuru withdraw and the per-token returns, and nothing else.
+
+| After a revoke                                  | Before SEN-17 | Now          |
+| ----------------------------------------------- | ------------- | ------------ |
+| `approve`, `deposit`, `batch`, Perpl enrollment | refused       | refused      |
+| `AccountCore.withdraw` to its own wallet        | refused       | **signed**   |
+| ERC-20 `transfer` to `returnTo`                 | refused       | **signed**   |
+| ERC-20 `transfer` anywhere else                 | refused       | refused      |
+| `POST /agents/:id/return`                       | impossible    | **the exit** |
+
+Nothing in that list is new authority: every surviving rule was already in the
+live policy, so a revoke can still only take rules away. A mandate with no
+`returnTo` and no Kuru venue still revokes to `[]`, which is the fail-closed
+case rather than the intended one.
+
+`policyCleared` keeps its name and means what it always did — the revocation
+PATCH landed — but "cleared" now means "cleared of everything that takes risk",
+not "empty". A device-owned revoke goes through the same prepare/commit pair as
+before (SEN-44), and the phone checks the payload against its own mirror of
+`compileRevocationRules` (`apps/mobile/src/agents/approval.ts`), so it refuses to
+sign a revoke that would leave the agent able to trade — and equally refuses one
+that would sign the exit away.
 
 ### Live check — 2026-09-11, all 21 checks passed
 
@@ -340,6 +404,50 @@ and about 0.0078 MON. Its policy `<privy-agent-venues-policy-id>` is left on the
 treasury. `agent:venues-live`, `agent:run-live` and `demo:refusal` re-PATCH it
 as before. Only this wallet's own `sente-` policy was touched: two owner
 PATCHes and 23 sign-only probes, and nothing else in the shared Privy app.
+
+### Live check — 2026-09-25, the whole path from the product, all 8 checks passed
+
+`pnpm --filter @sente/api run build && pnpm --filter @sente/api run agent:return-live`
+(`services/api/scripts/agent-return-live.ts`). Unlike `agent:withdraw-live`, which
+re-arms the SEN-6 probe wallet, this hires a REAL agent through
+`AgentsService.hire` and takes its money back through `ReturnFundsService`, so
+what it proves is the product's own path. The dev treasury
+`0x93e6…33b8` stands in for the owner's Privy wallet — it is bound in the user
+wallet registry as this run's owner, so `hire` resolves `returnTo` exactly as it
+does for a real user, and the money goes back where it came from.
+
+| Step                                               | Result                                                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| hire (agent `0x2E4A89c5…64Ea`, policy `hhwpau0e…`) | `mandate.returnTo` = the treasury, resolved server-side with no client value; 9 rules, 5 of them `Return <TOKEN> to the owner` |
+| treasury → agent                                   | 0.06113176 MON `0x90af259e…94b5` (the drip was unconfigured), then 1.5 USDC `0x09df6aa5…a317`                                  |
+| the AGENT deposits into Kuru                       | 0.5 USDC `0x62f824f6…0310`; free collateral 0.5 USDC, wallet 1 USDC                                                            |
+| revoke                                             | policy left with **6 rules**: the Kuru withdraw and the five returns. No approve, no deposit, no market                        |
+| `returnFunds` on the REVOKED agent                 | withdraw 0.5 USDC `0x17995a4f…278d`, then transfer **1.5 USDC** to the treasury `0x47aa7e8c…ada1`, both `success`              |
+| balances                                           | agent 1 USDC + 0.5 in Kuru → **0 and 0**; treasury 9,981.3 → **9,982.8 USDC**, exactly the 1.5 it funded                       |
+
+**Spend.** The agent paid 0.020087064 MON of gas for the two return legs (MON
+0.027261742 → 0.007174678), the same figure SEN-15 measured for the same pair of
+transactions. The treasury is whole in USDC and spent 0.0611 MON on the top-up
+plus two transfers' gas.
+
+**State left behind.** Agent `0x2E4A89c5…64Ea` is revoked, holds no tokens and
+about 0.0072 MON, and its policy holds the six recovery rules — the honest
+end state, and the one a user's revoked agent will be in. Its leftover MON is
+not recoverable: no rule lets an agent move native MON.
+
+**An accidental second proof.** An earlier attempt on this branch left 1 USDC
+(plus 0.5 in Kuru) in agent `0x2928b02f880fd9Ed0486ffB99179448a75aF2f25`: it
+failed between the revoke and the return, on Monad's public-RPC 15-a-second
+limit, which is what moved the collateral read off `getBalances`. Its agent
+record only ever lived in that process's memory, so the product could not reach
+it — but its POLICY still carried the recovery rules, which is the property this
+issue is about, so a throwaway script signing through the same
+`AgentTransactionSender` emptied it: withdraw
+`0xdc9a149b91415a6cd4230a30ea44aac951ba1118443e5f2f339beaf3e5d6b2c6`, transfer
+`0x2d085f0298b7add89c2e5ee5a81a391ef962e6a0c033d67a75a4839c89f72dea`, 1.5 USDC
+back to the treasury for 0.0201 MON of that agent's own gas. A revoked agent's
+money is reachable as long as anything can address its wallet — which is the
+argument for SEN-48's persistence, not against the exit rules.
 
 ## The runner (SEN-8)
 

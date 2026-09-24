@@ -239,6 +239,21 @@ export const KURU_ACCOUNT_CORE_WITHDRAW_ABI: Abi = abiFunctions(
 );
 
 /**
+ * `AccountCore.getBalance(user, token)` — the FREE collateral of one holder in
+ * one token, which is exactly what `KuruVenue.getBalances` reports as
+ * `available` (the reserved part is `getSpotReservedBalance`).
+ *
+ * Cut out on its own because `getBalances` reads two functions for every token
+ * Kuru lists, in parallel: about ten calls, where a caller that knows which
+ * token it is asking about needs one. `POST /agents/:id/return` (SEN-17) plans
+ * from this, and Monad's public RPC refuses more than 15 requests a second.
+ */
+export const KURU_ACCOUNT_CORE_BALANCE_ABI: Abi = abiFunctions(
+  kuruAbi.accountCoreAbi as Abi,
+  (fn) => fn.name === 'getBalance',
+);
+
+/**
  * ERC-20 `transfer(to, amount)`. `@sente/mandate` pins `transfer.to` to the
  * owner's return address, so the policy field names are these parameter names.
  */

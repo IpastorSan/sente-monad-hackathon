@@ -14,7 +14,14 @@ async function routeHarness(options: Parameters<typeof runnerHarness>[0] = {}) {
   const auth: Auth = { principal: () => ({ userId }) };
   // The run route never reads consensus (SEN-21); the events route does, and
   // has its own spec.
-  const controller = new AgentsController(h.agents, auth, h.runner, h.events, {} as never);
+  const controller = new AgentsController(
+    h.agents,
+    auth,
+    h.runner,
+    h.events,
+    {} as never,
+    {} as never,
+  );
   return {
     ...h,
     controller,

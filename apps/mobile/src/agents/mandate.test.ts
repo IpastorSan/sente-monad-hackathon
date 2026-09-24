@@ -17,7 +17,7 @@ import {
   PERPL_COLLATERAL_DECIMALS,
   PERPL_TESTNET_CONTRACTS,
 } from '@sente/venues/perpl';
-import type { Address } from 'viem';
+import { getAddress, type Address } from 'viem';
 
 import { toWireMandate, type AgentMandate } from './api.ts';
 import {
@@ -187,7 +187,34 @@ test('the review labels Kuru deposits, markets, Perpl collateral and expiry as e
     'perpl.leverage': 'sente',
     maxOrderNotional: 'sente',
     expiresAt: 'enclave',
+    // The way out (SEN-17): enforced by the enclave, like the caps — the agent's
+    // key can sign a transfer to this address and to no other.
+    returnTo: 'enclave',
   });
+});
+
+test('the review names the one address funds can return to, in full', () => {
+  const owner = getAddress(`0x${'c'.repeat(40)}`);
+  const withExit = describeMandate(built(form({ ...BOTH, returnTo: owner })));
+  const row = withExit.find((limit) => limit.id === 'returnTo');
+  // Never shortened: this row is read before granting an agent authority.
+  assert.equal(row?.value, owner);
+
+  // An agent hired before SEN-17 has no exit, and the review says so rather than
+  // leaving the row out — "nowhere" is the fact the owner needs.
+  const row2 = describeMandate(built(form(BOTH))).find((limit) => limit.id === 'returnTo');
+  assert.match(row2?.value ?? '', /^Nowhere/);
+});
+
+test('returnTo survives the form round trip and the API’s own parser', () => {
+  const owner = getAddress(`0x${'c'.repeat(40)}`);
+  const mandate = built(form({ ...BOTH, returnTo: owner }));
+  assert.equal(mandate.returnTo, owner);
+  assert.equal(serverParse(mandate).returnTo, owner);
+  assert.equal(formFromMandate(mandate).returnTo, owner);
+  // And a mandate without one stays without one: the field is absent, not empty.
+  assert.equal(built(form(BOTH)).returnTo, undefined);
+  assert.equal(formFromMandate(built(form(BOTH))).returnTo, undefined);
 });
 
 test('the review states each limit in units a person reads', () => {

@@ -28,8 +28,10 @@
  *   `mandate.returnTo`, one rule per token the wallet can hold.
  *
  * Were they to expire, an expired agent's collateral would be stranded until
- * the owner re-PATCHed the policy. Revocation still stops them: it replaces the
- * whole policy with `[]`, recovery rules included.
+ * the owner re-PATCHed the policy. Revocation does not stop them either, since
+ * SEN-17: it replaces the policy with {@link compileRevocationRules}, which is
+ * these two and nothing else, so a revoked agent can be emptied but can no
+ * longer take any risk.
  *
  * Raw `eth_signTransaction` only, never Privy's Transfer API: Transfer
  * policies are evaluated at the API level, outside the enclave
@@ -179,8 +181,15 @@ function perplRules(mandate: Mandate, tx: TxRule, expiry: PolicyCondition): Allo
 /** The recovery rule's name, so a reader can tell it from the risk-taking Kuru rules. */
 export const KURU_WITHDRAW_RULE = 'Kuru: withdraw to its own wallet';
 
-/** Every ERC-20 an agent's wallet can come to hold on testnet: Kuru's tokens and Perpl's AUSD. */
-function returnableTokens(): { symbol: string; address: Address }[] {
+/**
+ * Every ERC-20 an agent's wallet can come to hold on testnet: Kuru's tokens and
+ * Perpl's AUSD.
+ *
+ * Exported because `POST /agents/:id/return` walks exactly this list (SEN-17).
+ * A token the policy has no rule for is a transfer the enclave would refuse, so
+ * the route and the rules must read from one place, not two.
+ */
+export function returnableTokens(): { symbol: string; address: Address }[] {
   const kuru = Object.values(KURU_TESTNET_TOKENS).filter(
     (t) => !isAddressEqual(t.address, NATIVE_TOKEN),
   );
@@ -202,6 +211,20 @@ function returnRules(returnTo: Address, recovery: TxRule): AllowRule[] {
   );
 }
 
+/** `AccountCore.withdraw` and nothing else; the contract pins the recipient. */
+function kuruWithdrawRule(recovery: TxRule): AllowRule {
+  return recovery(KURU_WITHDRAW_RULE, [
+    txToEq(KURU_TESTNET_CONTRACTS.accountCore),
+    calldataFunctionEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw'),
+  ]);
+}
+
+/** A rule builder with the chain pinned and no expiry — see the module comment. */
+function recoveryRuleBuilder(mandate: Mandate): TxRule {
+  const chain = txChainIdEq(mandate.chainId);
+  return (name, conditions) => rule(name, 'eth_signTransaction', [chain, ...conditions]);
+}
+
 /**
  * The mandate as Privy rules. A venue not in `mandate.venues` contributes
  * nothing, so an empty `venues` and no `returnTo` compile to `[]` — a policy
@@ -212,21 +235,46 @@ export function compileMandate(mandate: Mandate): AllowRule[] {
   const expiry = unixTimestampLte(mandate.expiresAt);
   const tx: TxRule = (name, conditions) =>
     rule(name, 'eth_signTransaction', [chain, expiry, ...conditions]);
-  // No expiry: see the module comment.
-  const recovery: TxRule = (name, conditions) =>
-    rule(name, 'eth_signTransaction', [chain, ...conditions]);
+  const recovery = recoveryRuleBuilder(mandate);
 
   const rules: AllowRule[] = [];
   if (mandate.venues.includes('kuru')) {
     rules.push(...kuruRules(mandate, tx));
-    rules.push(
-      recovery(KURU_WITHDRAW_RULE, [
-        txToEq(KURU_TESTNET_CONTRACTS.accountCore),
-        calldataFunctionEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw'),
-      ]),
-    );
+    rules.push(kuruWithdrawRule(recovery));
   }
   if (mandate.venues.includes('perpl')) rules.push(...perplRules(mandate, tx, expiry));
+  if (mandate.returnTo) rules.push(...returnRules(mandate.returnTo, recovery));
+  return rules;
+}
+
+/**
+ * THE POLICY A REVOKED AGENT IS LEFT WITH (SEN-17): the recovery rules of
+ * {@link compileMandate} and nothing else — a subset of what the agent could
+ * already sign, never a widening.
+ *
+ * Revocation used to replace the policy with `[]`, which stops the agent dead
+ * and also strands whatever it is holding: an ERC-20 balance in a wallet whose
+ * key may sign nothing cannot be moved by anyone, ever, and a revoked agent
+ * cannot be amended to re-arm the rules. The owner's money would then depend on
+ * somebody re-PATCHing the policy with the owner key, which in `device` mode is
+ * a phone ceremony and in the worst case a lost key.
+ *
+ * So a revoke leaves the exit open. What survives can only move money toward
+ * the owner — `AccountCore.withdraw`, which pays the caller, and an ERC-20
+ * `transfer` pinned to `mandate.returnTo` — and every rule that lets the agent
+ * take risk is gone, so a revoked agent still cannot approve, deposit, trade or
+ * enroll anything. It is also why these rules carry no expiry: see the module
+ * comment.
+ *
+ * A mandate with no `returnTo` and no Kuru venue compiles to `[]` here, exactly
+ * as before. That is the fail-closed case, not the intended one: hire sets
+ * `returnTo` from the owner's registered wallet, so an agent hired through the
+ * product always has a way out.
+ */
+export function compileRevocationRules(mandate: Mandate): AllowRule[] {
+  const recovery = recoveryRuleBuilder(mandate);
+  const rules: AllowRule[] = [];
+  if (mandate.venues.includes('kuru')) rules.push(kuruWithdrawRule(recovery));
   if (mandate.returnTo) rules.push(...returnRules(mandate.returnTo, recovery));
   return rules;
 }

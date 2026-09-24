@@ -1,8 +1,12 @@
 /**
- * One agent: its wallet and balances, its mandate, and the four things you can
- * do to it — fund, run, amend, revoke. Fund, run and revoke confirm in an
- * in-app sheet (never `Alert`); amend reuses the hire form's mandate and
- * review steps.
+ * One agent: its wallet and balances, its mandate, and the five things you can
+ * do to it — fund, run, amend, return the funds, revoke. Fund, run, return and
+ * revoke confirm in an in-app sheet (never `Alert`); amend reuses the hire
+ * form's mandate and review steps.
+ *
+ * Return is available on a REVOKED agent too, and deliberately so (SEN-17): a
+ * revoke leaves the way out open, so "how do I get my money back" has the same
+ * one-tap answer after the agent has stopped as before.
  */
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -42,7 +46,7 @@ import {
 import { color, text } from '@/ui/theme';
 
 type NoticeState = { tone: NoticeTone; title: string; detail?: string };
-type SheetId = 'fund' | 'run' | 'revoke';
+type SheetId = 'fund' | 'run' | 'return' | 'revoke';
 
 export default function AgentScreen() {
   const router = useRouter();
@@ -139,13 +143,9 @@ export default function AgentScreen() {
               onPress={() => router.push({ pathname: '/agents/new', params: { amend: agent.id } })}
               style={styles.grow}
             />
-            <Button
-              label="Revoke"
-              kind="danger"
-              onPress={() => setSheet('revoke')}
-              style={styles.grow}
-            />
+            <Button label="Return funds" onPress={() => setSheet('return')} style={styles.grow} />
           </ButtonRow>
+          <Button label="Revoke" kind="danger" onPress={() => setSheet('revoke')} />
         </View>
       ) : (
         <>
@@ -154,17 +154,17 @@ export default function AgentScreen() {
             detail={
               agent.policyCleared === false
                 ? 'The agent won’t run again, but its wallet policy still holds the old rules. Revoke again to clear it.'
-                : 'Its wallet policy is empty, so it can’t sign anything. Revoking is permanent.'
+                : 'It can’t trade, deposit or approve anything again — revoking is permanent. Its ' +
+                  'policy keeps only the way out, so you can still send its funds back to your wallet.'
             }
           />
-          {agent.policyCleared === false ? (
-            <Button
-              label="Revoke again"
-              kind="danger"
-              onPress={() => setSheet('revoke')}
-              style={styles.actionsTop}
-            />
-          ) : null}
+          <View style={styles.actions}>
+            {/* The whole point of a revoke that keeps the exit (SEN-17). */}
+            <Button label="Return funds" kind="primary" onPress={() => setSheet('return')} />
+            {agent.policyCleared === false ? (
+              <Button label="Revoke again" kind="danger" onPress={() => setSheet('revoke')} />
+            ) : null}
+          </View>
         </>
       )}
 
@@ -234,6 +234,7 @@ export default function AgentScreen() {
 
       <FundSheet agent={agent} visible={sheet === 'fund'} onClose={close} onSent={finish} />
       <RunSheet agent={agent} visible={sheet === 'run'} onClose={close} />
+      <ReturnSheet agent={agent} visible={sheet === 'return'} onClose={close} onDone={finish} />
       <RevokeSheet agent={agent} visible={sheet === 'revoke'} onClose={close} onDone={finish} />
     </Screen>
   );
@@ -363,8 +364,8 @@ function FundSheet({
       <Row label="To" value={shortAddress(agent.address)} mono />
       <Text style={[text.caption, styles.after]}>
         Your passkey signs this transfer and Sente pays the gas, so you need no MON. Sente holds no
-        key that can move your funds — and it can’t move funds back out of an agent’s wallet yet, so
-        send what you’re prepared to leave with it.
+        key that can move your funds — and the agent’s key can only ever send them back to you, with
+        the “Return funds” button, whether or not it is still running.
       </Text>
       {!ready ? (
         <Notice
@@ -466,6 +467,106 @@ function RunSheet({
   );
 }
 
+/**
+ * RETURNING AN AGENT'S FUNDS TO ITS OWNER (SEN-17).
+ *
+ * One tap, no signature, no address to type: the destination is the `returnTo`
+ * compiled into the agent's enclave policy — this account's own wallet — and the
+ * agent's key can sign a transfer to it and to nowhere else. So there is nothing
+ * here for the passkey to approve that the policy does not already pin, which is
+ * why this sheet is a confirmation and not an approval.
+ *
+ * It works on a revoked agent, because a revoke leaves those rules in place.
+ */
+function ReturnSheet({
+  agent,
+  visible,
+  onClose,
+  onDone,
+}: {
+  agent: Agent;
+  visible: boolean;
+  onClose: () => void;
+  onDone: (notice: NoticeState) => void;
+}) {
+  const { agents: api } = useSession();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<NoticeState | null>(null);
+  const exit = agent.mandate.returnTo;
+
+  const send = async () => {
+    if (!api) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.returnFunds(agent.id);
+      const moved = result.assets.filter((asset) => asset.returned?.success);
+      const failed = result.assets.filter((asset) => asset.returned && !asset.returned.success);
+      const summary = moved.map((asset) => `${asset.returned!.amount} ${asset.asset}`).join(', ');
+      if (failed.length > 0) {
+        // Gotcha 8's corollary: each leg is its own transaction, so some can land
+        // while others revert. Saying "sent" here would be a lie about money.
+        setError({
+          tone: 'error',
+          title: 'Part of it didn’t go through',
+          detail:
+            `${failed.map((asset) => asset.asset).join(', ')} reverted on chain, so that part ` +
+            `didn’t move${summary ? `. ${summary} did` : ''}. Try again.`,
+        });
+        return;
+      }
+      onDone(
+        moved.length > 0
+          ? {
+              tone: 'ok',
+              title: `Sent ${summary} back to your wallet`,
+              detail: `Gas cost the agent ${result.monSpent} MON. Balances update once the chain catches up.`,
+            }
+          : {
+              tone: 'info',
+              title: 'There was nothing to send back',
+              detail:
+                'This agent holds no tokens. Its leftover MON stays with it: no rule lets an ' +
+                'agent move native MON, so gas cannot be swept.',
+            },
+      );
+    } catch (caught) {
+      setError({ tone: 'error', ...describeAgentsError(caught) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet visible={visible} title={`Return ${agent.name}’s funds`} onClose={onClose}>
+      <Text style={text.body}>
+        Everything this agent holds — in its wallet and as free Kuru collateral — goes back to your
+        own wallet. Collateral reserved by a resting order stays until that order is cancelled.
+      </Text>
+      <Row label="To your wallet" value={exit ? shortAddress(exit) : '—'} mono />
+      <Text style={[text.caption, styles.after]}>
+        {exit
+          ? 'This address is written into the agent’s signing policy, so its key can send funds ' +
+            'here and nowhere else — even after the mandate expires or you revoke it.'
+          : 'This agent was hired before return-to-owner existed, so its policy has no transfer ' +
+            'rule. Amend its mandate and it will carry your wallet.'}
+      </Text>
+      <Text style={[text.caption, styles.after]}>
+        Its leftover MON stays with it: no rule lets an agent move native MON.
+      </Text>
+      {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
+      <Button
+        label="Return everything"
+        kind="primary"
+        busy={busy}
+        disabled={!exit}
+        onPress={() => void send()}
+        style={styles.sheetAction}
+      />
+    </Sheet>
+  );
+}
+
 function RevokeSheet({
   agent,
   visible,
@@ -481,15 +582,16 @@ function RevokeSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<NoticeState | null>(null);
   /**
-   * A device-owned agent's policy can only be emptied by a PATCH this phone
+   * A device-owned agent's policy can only be changed by a PATCH this phone
    * signed (SEN-44): the API asks, the passkey approves. `revokeWithApproval`
-   * checks that the PATCH really leaves no rules before signing anything.
+   * checks that the PATCH leaves exactly this mandate's way out and nothing the
+   * agent could take risk with, before signing anything (SEN-17).
    */
   const signs = needsApproval(agent);
   const [prepared, setPrepared] = useState<PreparedMandateChange | null>(null);
 
   // Asked for as the sheet opens, not when the button is pressed: the change is
-  // then on screen to read (it leaves `rules: 0`), and the passkey prompt is
+  // then on screen to read (how many rules it leaves), and the passkey prompt is
   // not sitting behind a round trip. Preparing again supersedes this one
   // server-side, so an abandoned sheet leaves nothing committable behind.
   useEffect(() => {
@@ -527,7 +629,8 @@ function RevokeSheet({
           : {
               tone: 'ok',
               title: `${agent.name} is revoked`,
-              detail: 'Its wallet can’t sign anything now.',
+              detail:
+                'It can’t trade or deposit again. You can still send its funds back to your wallet.',
             },
       );
     } catch (caught) {
@@ -545,21 +648,22 @@ function RevokeSheet({
   return (
     <Sheet visible={visible} title={`Revoke ${agent.name}?`} onClose={onClose}>
       <Text style={text.body}>
-        The agent stops for good, and its wallet’s signing policy is emptied so it can’t sign
-        anything again. This can’t be undone.
+        The agent stops for good, and its signing policy loses every rule it could trade, deposit or
+        approve with. This can’t be undone.
       </Text>
       <Text style={[text.dim, styles.after]}>
-        Funds already in its wallet stay there; revoking doesn’t send them back.
+        What it keeps is the way out: funds stay in its wallet until you send them back with “Return
+        funds”, which still works afterwards. Its leftover MON stays with it.
       </Text>
       {signs ? (
         <>
           <Text style={[text.dim, styles.after]}>
-            Your passkey signs this. Sente holds no key that can empty this agent’s policy, so the
-            phone checks that the change really leaves no rules and then approves it.
+            Your passkey signs this. Sente holds no key that can change this agent’s policy, so the
+            phone checks that the change leaves nothing but the way home and then approves it.
           </Text>
           <Row
             label="Enclave rules after"
-            value={prepared ? String(prepared.summary.ruleCount) : '…'}
+            value={prepared ? `${String(prepared.summary.ruleCount)} — the way out only` : '…'}
           />
         </>
       ) : null}

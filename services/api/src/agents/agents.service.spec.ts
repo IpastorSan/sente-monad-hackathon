@@ -1,4 +1,4 @@
-import { compileMandate, parseMandate } from '@sente/mandate';
+import { compileMandate, compileRevocationRules, parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { getAddress, type Address, type Hash } from 'viem';
 
@@ -22,6 +22,7 @@ import {
 } from './agents.service';
 import { toAgentResponse } from './dto/agent.dto';
 import { DeviceMandateOwners, ServerMandateOwners } from './mandate-owner';
+import { RegistryReturnAddresses } from './return-address';
 import { InMemoryAgentStore, type AgentRecord } from './store/agent-store';
 import { hashMcpToken } from './store/mcp-token';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
@@ -58,10 +59,21 @@ function hireInput(over: Partial<HireAgentInput> = {}): HireAgentInput {
   };
 }
 
-function setup() {
+/** The owner's registered wallet, when a test wants agents that have a way out. */
+const OWNER_WALLET = getAddress(`0x${'c'.repeat(40)}`);
+
+function setup(returnTo?: Address) {
   const store = new InMemoryAgentStore();
   const wallets = new FakeAgentWalletProvider();
-  const service = new AgentsService(store, wallets, new ServerMandateOwners());
+  const service = new AgentsService(
+    store,
+    wallets,
+    new ServerMandateOwners(),
+    undefined,
+    undefined,
+    undefined,
+    returnTo ? { addressFor: () => Promise.resolve(returnTo) } : undefined,
+  );
   return { store, wallets, service };
 }
 
@@ -169,6 +181,16 @@ describe('AgentsService', () => {
    */
   describe('device-owned mandates (SEN-43)', () => {
     const DEVICE_KEY = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE-fake-device-key';
+    /** The wallet every `deviceSetup` user is registered with: their exit (SEN-17). */
+    const DEVICE_WALLET = getAddress(`0x${'b'.repeat(40)}`);
+
+    /**
+     * A mandate as the server will compile it: with `returnTo` resolved from the
+     * caller's registered wallet. The client does not have to send it, and a
+     * client that sends a DIFFERENT one is refused — see the SEN-17 block below.
+     */
+    const asCompiled = (input: Record<string, unknown>) =>
+      parseMandate({ ...input, returnTo: DEVICE_WALLET });
 
     async function deviceSetup(registered: string[] = ['alice']) {
       const registry = new InMemoryUserWalletRegistry();
@@ -176,14 +198,25 @@ describe('AgentsService', () => {
         await registry.bind({
           userId,
           walletId: `user-wallet-${userId}`,
-          address: getAddress(`0x${'b'.repeat(40)}`),
+          address: DEVICE_WALLET,
           ownerQuorumId: `kq-device-${userId}`,
           devicePublicKey: DEVICE_KEY,
         });
       }
       const store = new InMemoryAgentStore();
       const wallets = new FakeAgentWalletProvider();
-      const service = new AgentsService(store, wallets, new DeviceMandateOwners(registry));
+      // The SAME registry behind both seams, exactly as `agents.module.ts` wires
+      // them: the quorum that owns the mandate and the address its funds go home
+      // to come from one binding (SEN-17).
+      const service = new AgentsService(
+        store,
+        wallets,
+        new DeviceMandateOwners(registry),
+        undefined,
+        undefined,
+        undefined,
+        new RegistryReturnAddresses(registry),
+      );
       return { store, wallets, service, registry };
     }
 
@@ -261,7 +294,7 @@ describe('AgentsService', () => {
 
         const prepared = await service.prepareMandateAmend(ALICE, agent.id, next);
 
-        const rules = compileMandate(parseMandate(next));
+        const rules = compileMandate(asCompiled(next));
         expect(prepared.payload).toMatchObject({
           version: 1,
           method: 'PATCH',
@@ -297,9 +330,9 @@ describe('AgentsService', () => {
         });
 
         expect(wallets.policyUpdates).toEqual([
-          { policyId: agent.policyId, rules: compileMandate(parseMandate(next)) },
+          { policyId: agent.policyId, rules: compileMandate(asCompiled(next)) },
         ]);
-        expect(amended.mandate).toEqual(parseMandate(next));
+        expect(amended.mandate).toEqual(asCompiled(next));
         // The enclave holds exactly the rules that were on screen, not a rebuild.
         expect(wallets.policies.get(agent.policyId)).toEqual(
           (prepared.payload.body as { rules: unknown }).rules,
@@ -395,12 +428,17 @@ describe('AgentsService', () => {
         ).resolves.toMatchObject({ id: agent.id });
       });
 
-      it('empties the policy on a signed revoke, and stops the agent first', async () => {
+      it('leaves only the way out on a signed revoke, and stops the agent first', async () => {
         const { service, wallets } = await deviceSetup();
         const { agent } = await service.hire(ALICE, hireInput());
+        const exit = compileRevocationRules(agent.mandate);
         const prepared = await service.prepareRevoke(ALICE, agent.id);
-        expect(prepared.payload.body).toEqual({ rules: [] });
-        expect(prepared.summary).toMatchObject({ kind: 'revoke', ruleCount: 0 });
+        // The phone recompiles these from the mandate it holds and refuses to
+        // sign anything else, so the payload has to be the revocation rules and
+        // not an empty list (SEN-17).
+        expect(prepared.payload.body).toEqual({ rules: exit });
+        expect(prepared.summary).toMatchObject({ kind: 'revoke', ruleCount: exit.length });
+        expect(exit.some((rule) => rule.name.startsWith('Return '))).toBe(true);
 
         const revoked = await service.commitRevoke(ALICE, agent.id, {
           prepareId: prepared.prepareId,
@@ -408,7 +446,7 @@ describe('AgentsService', () => {
         });
 
         expect(revoked).toMatchObject({ status: 'revoked', policyCleared: true });
-        expect(wallets.policies.get(agent.policyId)).toEqual([]);
+        expect(wallets.policies.get(agent.policyId)).toEqual(exit);
       });
 
       it('leaves a bad revoke commit’s agent running: a malformed request is not a revocation', async () => {
@@ -444,6 +482,70 @@ describe('AgentsService', () => {
         );
         expect(error.reason).toBe('mandate_invalid');
       });
+    });
+  });
+
+  /**
+   * SEN-17. `returnTo` is the one mandate field a client does not write: it is
+   * the address the enclave will let the agent's wallet pay, and a client that
+   * could name it could name its own.
+   */
+  describe('the exit address (SEN-17)', () => {
+    it('sets returnTo from the caller’s own wallet on hire, fork and amend', async () => {
+      const { service, wallets } = setup(OWNER_WALLET);
+
+      const { agent } = await service.hire(ALICE, hireInput());
+      expect(agent.mandate.returnTo).toBe(OWNER_WALLET);
+      expect(wallets.provisioned[0]!.rules).toEqual(compileMandate(agent.mandate));
+      expect(wallets.provisioned[0]!.rules.some((r) => r.name === 'Return USDC to the owner')).toBe(
+        true,
+      );
+
+      const { agent: copy } = await service.fork(ALICE, agent.id, { mandate: mandateInput() });
+      expect(copy.mandate.returnTo).toBe(OWNER_WALLET);
+
+      const amended = await service.amendMandate(
+        ALICE,
+        agent.id,
+        mandateInput({ venues: ['kuru'] }),
+      );
+      expect(amended.mandate.returnTo).toBe(OWNER_WALLET);
+    });
+
+    it('accepts a matching client value in any case, and refuses a different one', async () => {
+      const { service, wallets } = setup(OWNER_WALLET);
+      // Lowercase is what a mandate that went through JSON and back looks like.
+      const echoed = await service.hire(
+        ALICE,
+        hireInput({ mandate: mandateInput({ returnTo: OWNER_WALLET.toLowerCase() }) }),
+      );
+      expect(echoed.agent.mandate.returnTo).toBe(OWNER_WALLET);
+
+      const stranger = getAddress(`0x${'d'.repeat(40)}`);
+      const error = await refusal(
+        service.hire(ALICE, hireInput({ mandate: mandateInput({ returnTo: stranger }) })),
+      );
+      expect(error.reason).toBe('return_address_mismatch');
+      expect(error.message).toContain(OWNER_WALLET);
+      expect(wallets.provisioned).toHaveLength(1);
+
+      const amend = await refusal(
+        service.amendMandate(ALICE, echoed.agent.id, mandateInput({ returnTo: stranger })),
+      );
+      expect(amend.reason).toBe('return_address_mismatch');
+    });
+
+    it('refuses a client returnTo with no wallet, and otherwise compiles no exit', async () => {
+      const { service } = setup();
+      const error = await refusal(
+        service.hire(ALICE, hireInput({ mandate: mandateInput({ returnTo: OWNER_WALLET }) })),
+      );
+      expect(error.reason).toBe('return_address_unavailable');
+
+      // Without one, a hire still works and simply has no way out — every agent
+      // hired before SEN-17 is in this state.
+      const { agent } = await service.hire(ALICE, hireInput());
+      expect(agent.mandate.returnTo).toBeUndefined();
     });
   });
 
@@ -880,13 +982,19 @@ describe('AgentsService', () => {
   });
 
   describe('revoke', () => {
-    it('sends [] and refuses every later amend', async () => {
-      const { service, wallets } = setup();
+    it('leaves only the way out, and refuses every later amend', async () => {
+      const { service, wallets } = setup(OWNER_WALLET);
       const { agent } = await service.hire(ALICE, hireInput());
+      const exit = compileRevocationRules(agent.mandate);
 
       const revoked = await service.revoke(ALICE, agent.id);
-      expect(wallets.policyUpdates).toEqual([{ policyId: agent.policyId, rules: [] }]);
-      expect(wallets.policies.get(agent.policyId)).toEqual([]);
+      // Not `[]` since SEN-17: what survives is the withdraw and the returns, so
+      // a revoked agent can still be emptied. Every one of them was already in
+      // the live policy — a revoke can only ever take rules away.
+      expect(wallets.policyUpdates).toEqual([{ policyId: agent.policyId, rules: exit }]);
+      expect(wallets.policies.get(agent.policyId)).toEqual(exit);
+      expect(exit.length).toBeGreaterThan(0);
+      expect(compileMandate(agent.mandate)).toEqual(expect.arrayContaining(exit));
       expect(revoked).toMatchObject({ status: 'revoked', policyCleared: true });
       // Not toBeInstanceOf(Date): the store's structuredClone builds its Dates
       // in node's realm, which jest's VM-realm `Date` does not recognise.
@@ -895,6 +1003,18 @@ describe('AgentsService', () => {
       const error = await refusal(service.amendMandate(ALICE, agent.id, mandateInput()));
       expect(error.reason).toBe('agent_revoked');
       expect(wallets.policyUpdates).toHaveLength(1);
+      expect(wallets.policies.get(agent.policyId)).toEqual(exit);
+    });
+
+    it('empties the policy outright when the mandate names no way out', async () => {
+      // No registered owner wallet, so no returnTo, so no transfer rule: the old
+      // behaviour, and the reason hire resolves the address itself.
+      const { service, wallets } = setup();
+      const { agent } = await service.hire(
+        ALICE,
+        hireInput({ mandate: mandateInput({ venues: ['perpl'] }) }),
+      );
+      await service.revoke(ALICE, agent.id);
       expect(wallets.policies.get(agent.policyId)).toEqual([]);
     });
 
@@ -926,11 +1046,11 @@ describe('AgentsService', () => {
       const cleared = await service.revoke(ALICE, agent.id);
       expect(cleared).toMatchObject({ status: 'revoked', policyCleared: true });
       expect(cleared.revokedAt).toEqual(stuck.revokedAt);
-      expect(wallets.policies.get(agent.policyId)).toEqual([]);
+      expect(wallets.policies.get(agent.policyId)).toEqual(compileRevocationRules(agent.mandate));
     });
 
-    it('still ends with an empty policy when it races an amend already in flight', async () => {
-      const { service, wallets } = setup();
+    it('still ends on the revocation rules when it races an amend already in flight', async () => {
+      const { service, wallets } = setup(OWNER_WALLET);
       const { agent } = await service.hire(ALICE, hireInput());
 
       let release!: () => void;
@@ -942,11 +1062,17 @@ describe('AgentsService', () => {
       release();
       await Promise.all([amend, revoke]);
 
+      const amended = parseMandate({
+        ...mandateInput({ venues: ['kuru'] }),
+        returnTo: OWNER_WALLET,
+      });
       expect(wallets.policyUpdates.map((u) => u.rules.length)).toEqual([
-        compileMandate(parseMandate(mandateInput({ venues: ['kuru'] }))).length,
-        0,
+        compileMandate(amended).length,
+        compileRevocationRules(agent.mandate).length,
       ]);
-      expect(wallets.policies.get(agent.policyId)).toEqual([]);
+      // The revoke wins the race whatever order the two were queued in: it is
+      // compiled from the mandate as it stood, and the amend cannot re-widen it.
+      expect(wallets.policies.get(agent.policyId)).toEqual(compileRevocationRules(agent.mandate));
       expect((await service.get(ALICE, agent.id)).status).toBe('revoked');
     });
   });

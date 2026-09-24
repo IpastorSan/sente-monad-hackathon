@@ -82,7 +82,7 @@ export default function HireAgentScreen() {
     fork?: string;
     from?: string;
   }>();
-  const { agents: api, auth } = useSession();
+  const { agents: api, auth, wallet } = useSession();
 
   /** The agent being forked, named for the copy. Falls back to the raw id. */
   const source = fork ? from?.trim() || fork : undefined;
@@ -119,6 +119,23 @@ export default function HireAgentScreen() {
     mandate: AgentMandate;
   } | null>(null);
 
+  /**
+   * THE WAY OUT (SEN-17). `returnTo` is not a field anyone types: it is the
+   * user's own wallet, and the API resolves it from the signed-in account and
+   * refuses a mandate naming anything else.
+   *
+   * The form carries it anyway, because the phone has to SEND the same address
+   * the API will resolve: a device-owned amend is checked rule by rule against
+   * the mandate this screen sent (`approval.ts`), and a mandate missing the exit
+   * would be refused rather than signed. It is read from the live wallet rather
+   * than kept from the agent's stored mandate for the same reason — the live one
+   * is what the API will compare against.
+   *
+   * Until the wallet has registered there is no address to send, and the mandate
+   * compiles with no exit at all; the review step says so in as many words.
+   */
+  const returnTo = wallet.address;
+
   useEffect(() => {
     if (!amend || !api) return;
     let cancelled = false;
@@ -126,7 +143,7 @@ export default function HireAgentScreen() {
       (agent) => {
         if (cancelled) return;
         setTarget(agent);
-        setForm(formFromMandate(agent.mandate));
+        setForm({ ...formFromMandate(agent.mandate), ...(returnTo ? { returnTo } : {}) });
         setExpiryDays(null);
       },
       (error: unknown) => {
@@ -136,7 +153,12 @@ export default function HireAgentScreen() {
     return () => {
       cancelled = true;
     };
-  }, [amend, api]);
+  }, [amend, api, returnTo]);
+
+  useEffect(() => {
+    if (!returnTo) return;
+    setForm((current) => (current.returnTo === returnTo ? current : { ...current, returnTo }));
+  }, [returnTo]);
 
   const patch = (change: Partial<MandateForm>) => setForm((current) => ({ ...current, ...change }));
 
