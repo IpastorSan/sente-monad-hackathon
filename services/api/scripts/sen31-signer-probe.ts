@@ -21,28 +21,32 @@
 // Run from services/api:
 //   mise exec -- node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/sen31-signer-probe.ts
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const REPO = '/home/ignacio/Work/moveseventyeight/sente/.claude/worktrees/agent-a24177e394663495a';
-const ENV_FILE = process.env['SEN31_ENV_FILE'] ?? '/home/ignacio/Work/moveseventyeight/sente/.env';
-const OUT =
-  '/tmp/claude-1000/-home-ignacio-Work-moveseventyeight/73a9164f-9fcb-45c1-8915-866e663ab58b/scratchpad/sen31-probe';
+import { getAddress, parseTransaction } from 'viem';
 
-const { parseTransaction, getAddress } = await import(`${REPO}/node_modules/viem/_esm/index.js`);
-const { txChainIdEq, txToEq } = await import(`${REPO}/packages/mandate/src/index.ts`);
-const { loadAgentsConfig } = await import(`${REPO}/services/api/src/agents/agents.config.ts`);
-const { PrivyClient, PrivyError } = await import(
-  `${REPO}/services/api/src/agents/privy/privy.client.ts`
-);
-const { createPolicy } = await import(`${REPO}/services/api/src/agents/privy/policies.ts`);
-const { createKeyQuorum } = await import(`${REPO}/services/api/src/agents/privy/key-quorum.ts`);
-const { generateAuthorizationKey } = await import(
-  `${REPO}/services/api/src/agents/privy/authorization-key.ts`
-);
-const { getAgentWallet, privyTransaction, signTransaction } = await import(
-  `${REPO}/services/api/src/agents/privy/agent-wallet.ts`
-);
+import { txChainIdEq, txToEq } from '@sente/mandate';
+import { loadAgentsConfig } from '../src/agents/agents.config.ts';
+import { generateAuthorizationKey } from '../src/agents/privy/authorization-key.ts';
+import {
+  getAgentWallet,
+  privyTransaction,
+  signTransaction,
+} from '../src/agents/privy/agent-wallet.ts';
+import { createKeyQuorum } from '../src/agents/privy/key-quorum.ts';
+import { createPolicy } from '../src/agents/privy/policies.ts';
+import { PrivyClient, PrivyError } from '../src/agents/privy/privy.client.ts';
+
+// Paths resolve from this file, never from whoever's machine wrote it: the repo
+// root is three levels up (services/api/scripts). Override either with an env
+// var. `SEN31_OUT` defaults under the system temp dir and is created if absent.
+const ENV_FILE =
+  process.env['SEN31_ENV_FILE'] ?? new URL('../../../.env', import.meta.url).pathname;
+const OUT = process.env['SEN31_OUT'] ?? join(tmpdir(), 'sente-sen31-probe');
+mkdirSync(OUT, { recursive: true });
 
 const CHAIN_ID = 10143;
 const ALLOWED = getAddress('0x1111111111111111111111111111111111111111');

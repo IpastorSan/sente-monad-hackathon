@@ -4,8 +4,16 @@ node = "26"
 pnpm = "12"
 
 [env]
-# Android SDK installed locally under $HOME/Android/Sdk (no root, no AUR).
-# Scoped to this project so it does not leak into the rest of ~/Work.
-ANDROID_HOME = "/home/ignacio/Android/Sdk"
-ANDROID_SDK_ROOT = "/home/ignacio/Android/Sdk"
-_.path = ["/home/ignacio/Android/Sdk/platform-tools", "/home/ignacio/Android/Sdk/cmdline-tools/latest/bin"]
+# Android SDK. Set ANDROID_HOME yourself (in your shell, or in a gitignored
+# `mise.local.toml`) and that wins; otherwise this assumes the no-root, no-AUR
+# install location, $HOME/Android/Sdk. Scoped to this project either way, so it
+# never leaks into the rest of ~/Work.
+#
+# JDK 21 above is load-bearing and not a preference: Java 26's JNI restriction
+# breaks the CMake configure step of the dev-client build (CLAUDE.md, gotcha 5).
+ANDROID_HOME = "{{ env.ANDROID_HOME | default(value = env.HOME ~ '/Android/Sdk') }}"
+ANDROID_SDK_ROOT = "{{ env.ANDROID_HOME | default(value = env.HOME ~ '/Android/Sdk') }}"
+_.path = [
+  "{{ env.ANDROID_HOME | default(value = env.HOME ~ '/Android/Sdk') }}/platform-tools",
+  "{{ env.ANDROID_HOME | default(value = env.HOME ~ '/Android/Sdk') }}/cmdline-tools/latest/bin",
+]
