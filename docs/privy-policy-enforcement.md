@@ -342,10 +342,10 @@ skipped). Run 2026-09-13, both moved and then verified sign-only that the agent
 key can no longer detach the policy (`PATCH {policy_ids: []}` by the agent key →
 401, policy still attached):
 
-| `.env` var                     | wallet id                  | owner before → after              | result   | detach by agent key |
-| ------------------------------ | -------------------------- | --------------------------------- | -------- | ------------------- |
-| `PRIVY_AGENT_VENUES_WALLET_ID` | `qqhg4rxobx0qnjg398tjzgi9` | agent quorum → **mandate quorum** | migrated | **401, refused**    |
-| `PRIVY_PROBE_WALLET_ID`        | `j1vvfuszwb4vzw2z3gb613oh` | agent quorum → **mandate quorum** | migrated | **401, refused**    |
+| `.env` var                     | wallet id                        | owner before → after              | result   | detach by agent key |
+| ------------------------------ | -------------------------------- | --------------------------------- | -------- | ------------------- |
+| `PRIVY_AGENT_VENUES_WALLET_ID` | `<privy-agent-venues-wallet-id>` | agent quorum → **mandate quorum** | migrated | **401, refused**    |
+| `PRIVY_PROBE_WALLET_ID`        | `<privy-probe-wallet-id>`        | agent quorum → **mandate quorum** | migrated | **401, refused**    |
 
 The agent quorum is now an `additional_signers` entry on each, its
 `override_policy_ids` the wallet's own mandate policy
@@ -580,15 +580,15 @@ The 401 body, verbatim, for both (b) and (c):
 Ids from the run (none is secret; the device private key was never written down
 and is gone):
 
-| Object                        | Id                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------- |
-| device quorum (throwaway key) | `z9w2gf6fb9nawmaq0ev7saja`                                                |
-| mandate policy                | `thjdyllm10poub07iytapyp1`                                                |
-| agent wallet                  | `cpaccgin5vhoawuf7wb6hrdf` → `0xcdB9A20a351c79E07FB7E72695d697890060ffdd` |
-| signer quorum (unchanged)     | `v4akc7n2q006kndzefpksv0j` (`PRIVY_AGENT_QUORUM_ID`)                      |
+| Object                        | Id                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| device quorum (throwaway key) | `<sen43-device-quorum-id>`                                               |
+| mandate policy                | `<sen43-mandate-policy-id>`                                              |
+| agent wallet                  | `<sen43-agent-wallet-id>` → `0xcdB9A20a351c79E07FB7E72695d697890060ffdd` |
+| signer quorum (unchanged)     | `<privy-probe-agent-quorum-id>` (`PRIVY_AGENT_QUORUM_ID`)                |
 
-(An earlier run of the same probe left `ch6ztohyh4unb9fw15tmdenz` /
-`m0ctrk5xecxts00lt3d4ollb` / `tr76ph1noho0w3d421k0q1cb` behind, same verdict.
+(An earlier run of the same probe left `<sen43-earlier-device-quorum-id>` /
+`<sen43-earlier-mandate-policy-id>` / `<sen43-earlier-agent-wallet-id>` behind, same verdict.
 Both sets are unfunded and their device keys no longer exist anywhere, so those
 wallets can never sign and their policies can never be changed by anyone.)
 
@@ -691,20 +691,20 @@ policy are unfunded and unusable by anyone.
 Read straight back from Privy after (e):
 
 ```json
-{ "id": "xdk61x2eo9gapwey67rf4pmc", "owner_id": "fq8yb9uqtkzb26y7u87sxo1t", "rules": [] }
+{ "id": "<sen44-agent-policy-id>", "owner_id": "<sen44-device-quorum-id>", "rules": [] }
 ```
 
-| Object                        | Id                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------- |
-| device quorum (throwaway key) | `fq8yb9uqtkzb26y7u87sxo1t`                                                |
-| user wallet                   | `pdb1p9ga7pw0bfr21x0kh03o` → `0xEc2cB68AE11D36403BC4b457Df62A778E234a06b` |
-| agent policy                  | `xdk61x2eo9gapwey67rf4pmc`                                                |
-| agent wallet                  | `vlsk5jw7svt664vhzakk3x30` → `0xa9916b12194bC0d3b236F8E0339e828ACEFEACBF` |
+| Object                        | Id                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| device quorum (throwaway key) | `<sen44-device-quorum-id>`                                               |
+| user wallet                   | `<sen44-user-wallet-id>` → `0xEc2cB68AE11D36403BC4b457Df62A778E234a06b`  |
+| agent policy                  | `<sen44-agent-policy-id>`                                                |
+| agent wallet                  | `<sen44-agent-wallet-id>` → `0xa9916b12194bC0d3b236F8E0339e828ACEFEACBF` |
 
 Re-run end to end after the follow-up cleanup commit, on a second throwaway key
-(device quorum `i4dy6ctfksj11z9o1pq9h21s`, policy `tvonjhteroqmapjok3sjc4xr`):
+(device quorum `<sen44-second-device-quorum-id>`, policy `<sen44-second-mandate-policy-id>`):
 (b) and (e) were 200 again and the policy read back `"rules": []`. A third
-policy, `sgeg7iqal193afjquy2jvi98`, produced (d) once more by accident — it is
+policy, `<sen44-third-mandate-policy-id>`, produced (d) once more by accident — it is
 owned by a quorum whose key that run did not hold, and every attempt on it, both
 through the API and straight at Privy with our own client, was refused 401. It
 is unfunded and, its owner key being unknown to anyone, permanently unchangeable.

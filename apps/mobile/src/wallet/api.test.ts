@@ -28,9 +28,9 @@ const DEVICE_KEY = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdGVzdA==';
 
 const WIRE_WALLET: WireUserWallet = {
   userId: OWNER,
-  walletId: 'ofb6vgthwm2cdyw6ike6ykv9',
+  walletId: 'wallet00000000000000test',
   address: '0x95206CCBE0735bf436b39226DCaA5DF536FA6d5e',
-  ownerQuorumId: 'f56rsy1pg8tnl5l4evqj3ajo',
+  ownerQuorumId: 'quorum00000000000000test',
   devicePublicKey: DEVICE_KEY,
   chainId: 10143,
   createdAt: '2026-09-18T11:55:17.869Z',

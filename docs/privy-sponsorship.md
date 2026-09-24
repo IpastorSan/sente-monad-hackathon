@@ -20,15 +20,15 @@ below is done, against the same address.
 
 ## Status: everything but the sponsored send is verified live
 
-Run 2026-09-18 against app `cmtr2xx7101zp0cl1qxy3m9zc` on Monad testnet
+Run 2026-09-18 against app `<privy-app-id>` on Monad testnet
 (10143). Probe wallet `0xab91d510F02c5A4191Db61121904f208E31A7Af8`, holding
 **1 USDC and 0 MON** by design.
 
 | #   | Check                                                   | Result                                                                     |
 | --- | ------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | wallet created with a raw `owner: {public_key}`         | **accepted** — `vonehewmt7szp8j8jqi2z2g5`                                  |
+| 1   | wallet created with a raw `owner: {public_key}`         | **accepted** — `<privy-probe-sponsor-wallet-id>`                           |
 | 1b  | what that owner actually is                             | an **auto-created 1-key quorum**, threshold 1, holding our key             |
-| 2   | wallet created with `owner_id` = a 1-key quorum we made | **accepted** — `a0krlq6gsu6shohyh5x3izh9`                                  |
+| 2   | wallet created with `owner_id` = a 1-key quorum we made | **accepted** — `<privy-probe-sponsor-quorum-wallet-id>`                    |
 | 3   | funded 1 USDC from the treasury, left at 0 MON          | landed, block 63580274                                                     |
 | 4a  | `eth_signTransaction` with no authorization signature   | **401**                                                                    |
 | 4b  | `eth_signTransaction` signed by an unrelated P-256 key  | **401**                                                                    |
@@ -45,7 +45,7 @@ Everything it depends on is in place.
 ## The human step, and its exact wording
 
 Nothing in the API can turn this on. In the **Privy dashboard**, for app
-`cmtr2xx7101zp0cl1qxy3m9zc`:
+`<privy-app-id>`:
 
 1. Open **Wallet infrastructure → Gas sponsorship** (Privy also labels this
    "Gas policies" / "Paymaster").
@@ -73,8 +73,8 @@ that id back and it is an ordinary key quorum with `authorization_threshold: 1`
 whose single `authorization_keys[].public_key` is the key we sent:
 
 ```
-POST /v1/wallets  {chain_type, owner:{public_key}}  →  {id, address, owner_id: "x4f6…", policy_ids: [], …}
-GET  /v1/key_quorums/x4f6…                          →  {authorization_threshold: 1, authorization_keys:[{public_key: ours}]}
+POST /v1/wallets  {chain_type, owner:{public_key}}  →  {id, address, owner_id: "<quorum-id>", policy_ids: [], …}
+GET  /v1/key_quorums/<quorum-id>                    →  {authorization_threshold: 1, authorization_keys:[{public_key: ours}]}
 ```
 
 So the two forms are the same object, reached two ways, and the choice is only
@@ -205,10 +205,10 @@ only this probe does.
 | `PRIVY_PROBE_SPONSOR_QUORUM_WALLET_ID`      | The wallet owned by that quorum — the comparison case for "raw owner vs quorum".                                                                                    |
 | `PRIVY_PROBE_SPONSOR_QUORUM_WALLET_ADDRESS` | Its EVM address.                                                                                                                                                    |
 
-Ids from the 2026-09-18 run, for reference: wallet `vonehewmt7szp8j8jqi2z2g5`
+Ids from the 2026-09-18 run, for reference: wallet `<privy-probe-sponsor-wallet-id>`
 (`0xab91d510F02c5A4191Db61121904f208E31A7Af8`), its implicit owner quorum
-`x4f6nvd73puraf97ahtq99eg`, explicit quorum `bf8qe3f10u54ewj3aavezr7j`, quorum
-wallet `a0krlq6gsu6shohyh5x3izh9`
+`<privy-probe-sponsor-implicit-quorum-id>`, explicit quorum `<privy-probe-sponsor-quorum-id>`, quorum
+wallet `<privy-probe-sponsor-quorum-wallet-id>`
 (`0x01F17Fab5a47F859966a45109866469447a2Db64`), funding tx
 `0x2ade69ff5d3a7432f890901e1c6c01b01b2ae99c016d60fe453306baa0f91071`.
 

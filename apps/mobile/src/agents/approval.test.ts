@@ -28,7 +28,7 @@ const MARKET_A = KURU_TESTNET_MARKETS[0]!.address;
 const MARKET_B = KURU_TESTNET_MARKETS[1]!.address;
 const USDC = KURU_TESTNET_TOKENS.USDC.address as Address;
 const MON = KURU_TESTNET_TOKENS.MON.address as Address;
-const POLICY_ID = 'ejqvcrtn5kb0q7o1rsyhbcqz';
+const POLICY_ID = 'policy00000000000000test';
 
 function mandate(over: Partial<AgentMandate> = {}): AgentMandate {
   return {

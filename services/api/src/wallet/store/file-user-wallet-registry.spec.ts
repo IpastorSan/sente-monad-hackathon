@@ -17,9 +17,9 @@ const OTHER_DEVICE_KEY = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE' + 'B'.repeat(52)
 function binding(patch: Partial<Omit<UserWalletBinding, 'createdAt'>> = {}) {
   return {
     userId: 'alice',
-    walletId: 'ofb6vgthwm2cdyw6ike6ykv9',
+    walletId: 'wallet00000000000000test',
     address: getAddress(`0x${'9'.repeat(40)}`),
-    ownerQuorumId: 'f56rsy1pg8tnl5l4evqj3ajo',
+    ownerQuorumId: 'quorum00000000000000test',
     devicePublicKey: DEVICE_KEY,
     ...patch,
   };
@@ -66,7 +66,7 @@ describe.each([
       binding({ walletId: 'other-wallet', devicePublicKey: OTHER_DEVICE_KEY }),
     );
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.existing.walletId).toBe('ofb6vgthwm2cdyw6ike6ykv9');
+    expect(!result.ok && result.existing.walletId).toBe('wallet00000000000000test');
   });
 
   it('keeps one binding per user', async () => {
@@ -75,7 +75,7 @@ describe.each([
     await registry.bind(binding({ userId: 'bob', walletId: 'w2' }));
 
     expect((await registry.find('bob'))?.walletId).toBe('w2');
-    expect((await registry.find('alice'))?.walletId).toBe('ofb6vgthwm2cdyw6ike6ykv9');
+    expect((await registry.find('alice'))?.walletId).toBe('wallet00000000000000test');
   });
 });
 
