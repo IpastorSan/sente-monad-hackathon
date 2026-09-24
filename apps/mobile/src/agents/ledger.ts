@@ -6,19 +6,27 @@
  * it under plain `node --test`, so the shape of an entry is pinned without a
  * device and without an API.
  *
- * Four kinds and only four. A `run` summary is not an entry: it is a header
+ * Five kinds and only five. A `run` summary is not an entry: it is a header
  * over events that already say more. Anything the Ledger cannot show is
  * dropped rather than half-shown.
+ *
+ * `deposit` is the odd one and the reason SEN-50 exists: it is the only kind no
+ * tool produces (the Alchemy Notify webhook appends it — SEN-30), and it was
+ * dropped here for a while, so funding an agent reached the phone and rendered
+ * as nothing. An event the API appends and serves but this file does not map is
+ * invisible end to end, which is the failure mode to watch for when a kind is
+ * added on the server.
  *
  * READ THIS BEFORE NARROWING `kind`: `LedgerEvent['kind']` is a plain string on
  * purpose. `verdict` is SEN-22's and is not in the API's `AGENT_EVENT_KINDS`
  * union on this HEAD, so typing the input as that union would make this file
  * stop compiling the day verdicts land.
  */
-import { groupThousands } from './amounts.ts';
+import { formatAtoms, formatFixedAtoms, groupThousands, normalizeDecimal } from './amounts.ts';
+import { BALANCE_PLACES } from '../ui/format.ts';
 
-/** The four things the Ledger shows. */
-export type LedgerEntryKind = 'thesis' | 'trade' | 'refusal' | 'verdict';
+/** The five things the Ledger shows. */
+export type LedgerEntryKind = 'thesis' | 'trade' | 'refusal' | 'verdict' | 'deposit';
 
 /** Which way the agent is positioned. */
 export type Direction = 'long' | 'short';
@@ -31,9 +39,12 @@ export type CommitTimes = Partial<Record<'proposed' | 'voted' | 'finalized' | 'v
 
 /**
  * Where Monad has taken the block a trade landed in, exactly as the event
- * carries it (SEN-21, SEN-35). The API attaches this to every `order`, `fill`
- * and `close` that names a block, so the ramp is seeded from the row it is
- * drawn under rather than from a request per row.
+ * carries it (SEN-21, SEN-35). The API attaches this to EVERY event that names a
+ * block — it gates on the data, not on a list of kinds — so the ramp is seeded
+ * from the row it is drawn under rather than from a request per row, and a new
+ * block-bearing kind gets the ramp with no server change. A `deposit` is exactly
+ * that case: it carries `blockNumber`, so it arrives with `consensus` already
+ * attached (SEN-50 verified it against `agents.controller.ts`'s `withConsensus`).
  */
 export type EventConsensus = {
   /** `Proposed` | `Voted` | `Finalized` | `Verified`, or `unknown` past the API's window. */
@@ -149,7 +160,35 @@ export type VerdictEntry = Base & {
   consensus: EventConsensus | null;
 };
 
-export type LedgerEntry = ThesisEntry | TradeEntry | RefusalEntry | VerdictEntry;
+/**
+ * Funds ARRIVING at the agent's wallet (SEN-30) — the one row nothing the agent
+ * did produced, so it names the sender rather than a venue and carries no
+ * `runId` and no tool. Its `detail` is the API's `AgentDepositDetail`.
+ *
+ * Two amounts, on purpose. `amount` is Alchemy's already-scaled figure, which
+ * is a float it stringified; `rawAmount` (with `decimals`) is the exact integer
+ * from the log. `depositAmount` prefers the exact pair and falls back to the
+ * float, so the row never rounds a quantity it could have read exactly.
+ */
+export type DepositEntry = Base & {
+  kind: 'deposit';
+  /** The token symbol, or `null` when the delivery named none. Never invented. */
+  asset: string | null;
+  /** Alchemy's scaled figure, exactly as the event carried it. */
+  amount: string;
+  /** The exact integer from the log — hex or decimal — when the delivery had one. */
+  rawAmount: string | null;
+  /** The token's precision. `rawAmount` means nothing without it. */
+  decimals: number | null;
+  /** Who funded the agent. */
+  from: string | null;
+  txHash: string | null;
+  /** A transfer lands in a block like a trade does, so the row gets the ramp. */
+  blockNumber: number | null;
+  consensus: EventConsensus | null;
+};
+
+export type LedgerEntry = ThesisEntry | TradeEntry | RefusalEntry | VerdictEntry | DepositEntry;
 
 /**
  * The event trail -> the Ledger, oldest first.
@@ -182,6 +221,9 @@ function toLedgerEntry(event: LedgerEvent): LedgerEntry | null {
       return verdictEntry(event);
     case 'refusal':
       return refusalEntry(event);
+    // Funds arriving, from the Alchemy webhook rather than from a tool (SEN-30).
+    case 'deposit':
+      return depositEntry(event);
     default:
       // `run` is a summary, and the Ledger shows what happened, not that the
       // runner woke up.
@@ -256,6 +298,33 @@ function verdictEntry(event: LedgerEvent): VerdictEntry {
     pnl: text(detail, 'pnl') ?? text(detail, 'realizedPnl'),
     held: booleanAt(detail, 'held') ?? booleanAt(detail, 'thesisHeld'),
     market: text(detail, 'symbol') ?? text(detail, 'market'),
+    blockNumber: numberAt(detail, 'blockNumber'),
+    consensus: event.consensus ?? null,
+  };
+}
+
+/**
+ * What the API writes when Alchemy named no asset
+ * (`UNKNOWN_ASSET` in `services/api/src/webhooks/alchemy.ts`). It is a
+ * placeholder, not a symbol, so it becomes `null` here and the row shows the
+ * figure alone rather than "250.00 unknown".
+ */
+const UNKNOWN_ASSET = 'unknown';
+
+function depositEntry(event: LedgerEvent): DepositEntry {
+  const detail = event.detail;
+  const asset = text(detail, 'asset');
+  return {
+    kind: 'deposit',
+    seq: event.seq,
+    at: event.at,
+    ...runOf(event),
+    asset: asset === UNKNOWN_ASSET ? null : asset,
+    amount: text(detail, 'amount') ?? '',
+    rawAmount: text(detail, 'rawAmount'),
+    decimals: numberAt(detail, 'decimals'),
+    from: text(detail, 'from'),
+    txHash: text(detail, 'txHash'),
     blockNumber: numberAt(detail, 'blockNumber'),
     consensus: event.consensus ?? null,
   };
@@ -348,6 +417,56 @@ export function signedPnl(pnl: string | null): string {
 }
 
 /**
+ * A deposit as a figure: `+250.00`, `+1,204.5`, and a real `+` because funds
+ * arriving is the whole point of the row.
+ *
+ * The precision policy is `BALANCE_PLACES` — the same one every balance in the
+ * app shows (`ui/format.ts`), because a deposit is money in that same wallet and
+ * two screens quoting it at different precisions reads as a bug in the number.
+ *
+ * Read from `rawAmount` + `decimals` when the delivery carried them, so the
+ * exact integer from the log decides the figure and Alchemy's float is never
+ * trusted to reconstruct it.
+ */
+export function depositAmount(entry: DepositEntry): string {
+  const exact = exactAtoms(entry);
+  if (exact !== null) {
+    const { atoms, decimals } = exact;
+    const places = (entry.asset !== null ? BALANCE_PLACES[entry.asset] : undefined) ?? 2;
+    const fixed = formatFixedAtoms(atoms, decimals, { places });
+    // `formatFixedAtoms` truncates, which is right for a balance and wrong for
+    // an arrival: `+0.00` for a deposit that did happen says nothing happened.
+    // A figure that truncates away is shown at the token's own precision.
+    const dust = atoms > 0n && /^0(\.0*)?$/.test(fixed);
+    return `+${dust ? formatAtoms(atoms, decimals) : fixed}`;
+  }
+  // No exact integer in the delivery: Alchemy's own scaled figure. Grouped when
+  // it reads as a plain decimal, handed back untouched when it does not — an
+  // exponential float (`1e-7`) or a field that was never a number is shown as it
+  // came rather than rewritten into something the chain did not say.
+  const normal = normalizeDecimal(entry.amount);
+  if (normal === null) return entry.amount === '' ? '—' : entry.amount;
+  const [whole = '0', fraction = ''] = normal.split('.');
+  return `+${groupThousands(whole)}${fraction ? `.${fraction}` : ''}`;
+}
+
+/** `rawAmount` (hex or decimal) read as atoms, or `null` when it cannot be. */
+function exactAtoms(entry: DepositEntry): { atoms: bigint; decimals: number } | null {
+  const { rawAmount, decimals } = entry;
+  if (rawAmount === null || decimals === null) return null;
+  if (!Number.isSafeInteger(decimals) || decimals < 0 || decimals > 36) return null;
+  let atoms: bigint;
+  try {
+    // `BigInt` takes `0x…` and a decimal string and throws on anything else,
+    // which is exactly the acceptance this needs.
+    atoms = BigInt(rawAmount);
+  } catch {
+    return null;
+  }
+  return atoms < 0n ? null : { atoms, decimals };
+}
+
+/**
  * Whether the thesis held. A mere close cannot say — the venue reports the
  * number, not the judgement — so "not recorded" is a real answer here.
  */
@@ -370,8 +489,28 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
   const at = (minutesAgo: number) => now - minutesAgo * 60_000;
   return [
     {
-      kind: 'thesis',
+      // Funding comes first because it has to: an agent trades what it was
+      // given. Its consensus is already `Finalized` and minutes old, so the
+      // sample's ramp draws as a settled record and asks the API for nothing —
+      // a made-up block height is not worth a request burst.
+      kind: 'deposit',
       seq: 1,
+      at: at(18),
+      asset: 'USDC',
+      amount: '500',
+      rawAmount: '500000000',
+      decimals: 6,
+      from: '0x8f1d7a30586c2e4f9b1d7a30586c2e4f9b1d7a30',
+      txHash: '0x9c1e7b3d5086a2f4e9c1b7d3058a6c2e4f9b1d7a30586c2e4f9b1d7a30584f2a',
+      blockNumber: 12_345_601,
+      consensus: {
+        state: 'Finalized',
+        at: { proposed: at(18), voted: at(18) + 216, finalized: at(18) + 498 },
+      },
+    },
+    {
+      kind: 'thesis',
+      seq: 2,
       at: at(14),
       market: 'MON-USDC',
       direction: 'long',
@@ -383,7 +522,7 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
     },
     {
       kind: 'trade',
-      seq: 2,
+      seq: 3,
       at: at(13),
       venue: 'kuru',
       market: 'MON-USDC',
@@ -399,7 +538,7 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
     },
     {
       kind: 'refusal',
-      seq: 3,
+      seq: 4,
       at: at(9),
       layer: 'enclave',
       code: 'policy_violation',
@@ -410,7 +549,7 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
     },
     {
       kind: 'thesis',
-      seq: 4,
+      seq: 5,
       at: at(6),
       market: 'BTC-PERP',
       direction: 'short',
@@ -419,7 +558,7 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
     },
     {
       kind: 'verdict',
-      seq: 5,
+      seq: 6,
       at: at(1),
       pnl: '12.4',
       held: true,
