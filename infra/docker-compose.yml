@@ -56,6 +56,11 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - STATE_DIR=/var/lib/sente/state
+      # Caddy is the single hop in front of this container, and the container is
+      # not reachable from anywhere else, so X-Forwarded-For can be believed for
+      # exactly one hop. Without it the drip's per-IP limiter sees one address
+      # for every caller and several judges in a minute refuse each other.
+      - TRUST_PROXY_HOPS=1
     volumes:
       # SEN-48's file-backed stores: the user-wallet registry and the agent
       # store. A HOST BIND MOUNT, not a named volume, and not inside the
