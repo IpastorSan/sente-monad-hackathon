@@ -475,13 +475,11 @@ describes. Only step 6 does that.
 
 ## Left open
 
-- **The mobile Ledger drops a `deposit`.** `apps/mobile/src/agents/ledger.ts`'s
-  `toLedgerEntry` maps four kinds and returns `null` for anything else, so the event
-  reaches the app over `GET /agents/:id/events` and renders as nothing. The server
-  half of SEN-30 is complete; **end to end the deposit is currently invisible**,
-  which is the one thing this feature exists to show. A `deposit` case in that file
-  is the remaining work, deliberately not in this change: SEN-30's "Files to Modify"
-  is the API, and what a deposit row looks like next to a fill is a design decision.
+- ~~**The mobile Ledger drops a `deposit`.**~~ **Closed by SEN-50** (2026-09-24):
+  `toLedgerEntry` now maps a fifth kind and the Ledger draws the row, reading the
+  exact integer from `rawContract.rawValue` rather than Alchemy's scaled float. The
+  consensus ramp works for it with no API change, because since SEN-35 the
+  controller gates on whether an event names a block, not on a list of kinds.
 - **Whether Monad emits anything for a contract-made deposit.** See the `category`
   note above; step 6.4 of the runbook is the measurement.
 - **Idempotency is per process.** Two API replicas would each keep their own `Set`
