@@ -11,12 +11,17 @@ import {
 
 /**
  * The only routes in the API that are not behind `SessionAuthGuard` besides
- * `GET /health`, `GET /venues` and `GET /gas` — they are how a caller gets a
- * session in the first place, so guarding them would be a closed loop.
+ * `GET /health`, `GET /venues`, `GET /gas` and `POST /webhooks/alchemy` — they
+ * are how a caller gets a session in the first place, so guarding them would be
+ * a closed loop.
  *
  * Neither route is a secret: a challenge is public random bytes, and issuing
  * one to an address the caller does not control produces a nonce nobody can
  * sign. What they do cost is memory, one outstanding challenge per address.
+ *
+ * `POST /webhooks/alchemy` (SEN-30) is the odd one out and the only unguarded
+ * route that WRITES: Alchemy is its caller and carries no session, so an HMAC
+ * over the raw body stands in for one. See `webhooks/webhooks.controller.ts`.
  */
 @Controller('auth')
 export class AuthController {

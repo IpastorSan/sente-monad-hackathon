@@ -36,6 +36,7 @@ import {
   agentRunnerProviders,
 } from './runner/agent-runner.providers';
 import { statePath } from '../state/json-file';
+import { AlchemyModule } from '../webhooks/alchemy.module';
 import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './store/agent-store';
 import { FileAgentStore } from './store/file-agent-store';
 import {
@@ -139,7 +140,10 @@ const authProvider: Provider = {
   // its order and fill events with (SEN-21).
   // WalletModule: for USER_WALLET_REGISTRY, the device-key quorum that owns a
   // hired agent's mandate (SEN-43). One-way — `wallet/` does not import this.
-  imports: [GasModule, ChainModule, WalletModule, ...agentRunnerImports],
+  // AlchemyModule: ALCHEMY_NOTIFY, the webhook address list a hire adds the new
+  // agent's wallet to (SEN-30). Imported, not provided, so `WebhooksModule` can
+  // import the same config without importing this module back.
+  imports: [GasModule, ChainModule, WalletModule, AlchemyModule, ...agentRunnerImports],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   controllers: [AgentsController, ...agentToolsControllers],
   providers: [

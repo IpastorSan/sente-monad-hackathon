@@ -4,9 +4,17 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 
 import { AppModule } from './app.module';
+import { alchemyRawBody, ALCHEMY_WEBHOOK_PATH } from './webhooks/raw-body';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+
+  // SEN-30. Registered BEFORE `listen()`, which is what makes it narrow: Nest
+  // mounts its own body parsers inside `app.init()`, so this reaches Express
+  // first and only for this one path, while every other route keeps the parsed
+  // JSON it has today. Alchemy signs the bytes it sent, and a re-serialised body
+  // is not those bytes — see `webhooks/raw-body.ts`.
+  app.use(ALCHEMY_WEBHOOK_PATH, alchemyRawBody);
 
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),

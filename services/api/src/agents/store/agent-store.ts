@@ -143,8 +143,23 @@ export interface AgentStore {
    * answers only for active agents.
    */
   findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined>;
+  /**
+   * The agent whose wallet is `address`, WHATEVER its status — a point lookup,
+   * case-insensitive because the callers' addresses come from elsewhere
+   * (`POST /webhooks/alchemy` gets lower case from Alchemy; this record holds
+   * EIP-55). A method rather than a `listActive()` scan at the call site for the
+   * reason `gas/ledger/drip-ledger.ts#findByAddress` is one: the interface is the
+   * seam, and a SQL store expresses this as an indexed lookup rather than a
+   * table scan per credited transfer.
+   */
+  findByAddress(address: string): Promise<AgentRecord | undefined>;
   /** Rejects an unknown id. Returns the updated record. */
   update(id: string, patch: AgentPatch): Promise<AgentRecord>;
+}
+
+/** The key both stores index wallet addresses under. */
+export function addressKey(address: string): string {
+  return address.trim().toLowerCase();
 }
 
 /**
@@ -162,6 +177,7 @@ export interface AgentStore {
 export class InMemoryAgentStore implements AgentStore {
   private readonly byId = new Map<string, AgentRecord>();
   private readonly idByTokenHash = new Map<string, string>();
+  private readonly idByAddress = new Map<string, string>();
 
   insert(record: AgentRecord): Promise<void> {
     if (this.byId.has(record.id)) {
@@ -172,6 +188,7 @@ export class InMemoryAgentStore implements AgentStore {
     }
     this.byId.set(record.id, structuredClone(record));
     this.idByTokenHash.set(record.mcpTokenHash, record.id);
+    this.idByAddress.set(addressKey(record.address), record.id);
     return Promise.resolve();
   }
 
@@ -198,6 +215,11 @@ export class InMemoryAgentStore implements AgentStore {
 
   findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined> {
     const id = this.idByTokenHash.get(hash);
+    return id === undefined ? Promise.resolve(undefined) : this.get(id);
+  }
+
+  findByAddress(address: string): Promise<AgentRecord | undefined> {
+    const id = this.idByAddress.get(addressKey(address));
     return id === undefined ? Promise.resolve(undefined) : this.get(id);
   }
 

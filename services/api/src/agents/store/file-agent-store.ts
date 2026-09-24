@@ -16,12 +16,13 @@
 // a script can load it under node's type stripping (CLAUDE.md gotcha 10).
 
 import { JsonRecordFile } from '../../state/json-file.ts';
-import type { AgentPatch, AgentRecord, AgentStore } from './agent-store.ts';
+import { addressKey, type AgentPatch, type AgentRecord, type AgentStore } from './agent-store.ts';
 
 export class FileAgentStore implements AgentStore {
   readonly #file: JsonRecordFile<AgentRecord>;
   readonly #byId = new Map<string, AgentRecord>();
   readonly #idByTokenHash = new Map<string, string>();
+  readonly #idByAddress = new Map<string, string>();
 
   /** Loads the file eagerly, so a boot on an unreadable state file fails at boot. */
   constructor(path: string) {
@@ -29,6 +30,7 @@ export class FileAgentStore implements AgentStore {
     for (const record of this.#file.load()) {
       this.#byId.set(record.id, record);
       this.#idByTokenHash.set(record.mcpTokenHash, record.id);
+      this.#idByAddress.set(addressKey(record.address), record.id);
     }
   }
 
@@ -52,6 +54,7 @@ export class FileAgentStore implements AgentStore {
     const stored = structuredClone(record);
     this.#byId.set(record.id, stored);
     this.#idByTokenHash.set(record.mcpTokenHash, record.id);
+    this.#idByAddress.set(addressKey(record.address), record.id);
     try {
       this.#persist();
     } catch (error) {
@@ -59,6 +62,7 @@ export class FileAgentStore implements AgentStore {
       // next restart with its wallet already funded. Undo and let `hire` fail.
       this.#byId.delete(record.id);
       this.#idByTokenHash.delete(record.mcpTokenHash);
+      this.#idByAddress.delete(addressKey(record.address));
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
     return Promise.resolve();
@@ -79,6 +83,11 @@ export class FileAgentStore implements AgentStore {
 
   findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined> {
     const id = this.#idByTokenHash.get(hash);
+    return id === undefined ? Promise.resolve(undefined) : this.get(id);
+  }
+
+  findByAddress(address: string): Promise<AgentRecord | undefined> {
+    const id = this.#idByAddress.get(addressKey(address));
     return id === undefined ? Promise.resolve(undefined) : this.get(id);
   }
 
