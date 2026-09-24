@@ -3,8 +3,10 @@
  *
  * A live trail of what one agent did: every thesis it wrote before executing,
  * every trade (and every order that did not land), every refusal, and the
- * verdict when a position closes. Each entry builds itself in over ~600ms, so
- * the ledger reads as a stream arriving rather than a list appearing.
+ * verdict when a position closes — plus the deposits that funded it, the one
+ * row nothing the agent did produced (SEN-30/SEN-50). Each entry builds itself
+ * in over ~600ms, so the ledger reads as a stream arriving rather than a list
+ * appearing.
  *
  * Two rules hold this screen together, and both are deliberate:
  *
@@ -35,12 +37,14 @@ import type { Agent } from '@/agents/api';
 import {
   clockTime,
   demoLedger,
+  depositAmount,
   directionLabel,
   heldLabel,
   refusalLayerLabel,
   shortHash,
   signedPnl,
   venueLabel,
+  type DepositEntry,
   type LedgerEntry,
   type RefusalEntry,
   type ThesisEntry,
@@ -50,6 +54,7 @@ import {
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { useSession } from '@/session';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
+import { shortAddress } from '@/ui/format';
 import { Button, Loading, Notice, Screen, Tag, TopBar } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
 
@@ -71,6 +76,7 @@ const ENTRY_LABEL: Record<LedgerEntry['kind'], string> = {
   trade: 'Trade',
   refusal: 'Refusal',
   verdict: 'Verdict',
+  deposit: 'Deposit',
 };
 
 export default function LedgerScreen() {
@@ -261,6 +267,8 @@ function bodyFor(entry: LedgerEntry): ReactNode {
       return <RefusalBody entry={entry} />;
     case 'verdict':
       return <VerdictBody entry={entry} />;
+    case 'deposit':
+      return <DepositBody entry={entry} />;
   }
 }
 
@@ -323,12 +331,50 @@ function TradeBody({ entry }: { entry: TradeEntry }) {
  * Any row that landed in a block gets the ramp, and the ramp owns the height:
  * it is what the ramp is about, and it prints it in the same mono a chain fact
  * gets anywhere else. A close settles on chain like a trade does, so it draws
- * one too (SEN-35); SEN-22's own verdict is a judgement rather than a
- * transaction and has no block to draw.
+ * one too (SEN-35), and so does a deposit (SEN-50) — the API attaches consensus
+ * to any event that names a block, so this needed nothing on the server.
+ * SEN-22's own verdict is a judgement rather than a transaction and has no
+ * block to draw.
  */
-function Ramp({ entry }: { entry: TradeEntry | VerdictEntry }) {
+function Ramp({ entry }: { entry: TradeEntry | VerdictEntry | DepositEntry }) {
   if (entry.blockNumber === null) return null;
   return <ConsensusRamp blockNumber={entry.blockNumber} consensus={entry.consensus} />;
+}
+
+/**
+ * Funds arriving — the one row the agent did not cause (SEN-30). It names the
+ * sender instead of a venue, and it draws the ramp because a transfer lands in a
+ * block exactly like a trade does.
+ */
+function DepositBody({ entry }: { entry: DepositEntry }) {
+  return (
+    <>
+      <Text style={[text.strong, text.num, styles.trade]}>
+        {depositAmount(entry)}
+        {entry.asset !== null ? ` ${entry.asset}` : ''}
+      </Text>
+      {/* The sender is the fact this row adds over a balance going up, so it is
+          the line under the figure. Mono on the address alone: the label is
+          ours, the address is the chain's. */}
+      <Text style={[text.caption, styles.after]} selectable>
+        {entry.from !== null ? (
+          <>
+            Funded from <Text style={text.mono}>{shortAddress(entry.from)}</Text>
+          </>
+        ) : (
+          'Arrived in this agent’s wallet'
+        )}
+      </Text>
+      {entry.txHash !== null ? (
+        <View style={styles.chain}>
+          <Text style={text.mono} selectable>
+            {shortHash(entry.txHash)}
+          </Text>
+        </View>
+      ) : null}
+      <Ramp entry={entry} />
+    </>
+  );
 }
 
 /** The layer that refused, plainly. Pride, not an error. */
