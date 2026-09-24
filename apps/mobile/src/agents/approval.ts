@@ -25,7 +25,15 @@
  * 3. `headers` carries only `privy-app-id` (and, if present, an idempotency
  *    key), because the headers are signed too.
  * 4. `body` has exactly one key, `rules`.
- * 5. For a revoke, `rules` is `[]` — a policy with no rules signs nothing.
+ * 5. For a revoke, `rules` is exactly the mandate's RECOVERY rules and nothing
+ *    else (SEN-17): the Kuru withdraw, which pays the agent's own wallet, and one
+ *    ERC-20 transfer per token pinned to `returnTo`, which is the owner's wallet.
+ *    A revoke used to be checked as `rules: []`, and the policy it leaves is no
+ *    longer empty — because an empty policy also strands whatever the agent is
+ *    holding. What must still be true is that nothing which lets the agent TAKE
+ *    risk survives, and rule-set equality against the mirrored compiler says
+ *    exactly that: an approve, a deposit, a trade or an enrollment rule in that
+ *    payload is one rule too many, and this refuses to sign it.
  * 6. For an amend, the rules are EXACTLY the rules the mandate compiles to:
  *    same set of rules, each with the same method and the same set of
  *    conditions, compared as `field_source|field|operator|value`. Not a subset,
@@ -47,15 +55,17 @@
  * canonicalizer. If that test fails, the two have drifted and this file would
  * refuse mandate changes the API composed correctly.
  *
- * KNOWN LIMIT: `mandate.returnTo` (the recovery rules) has no field in this
- * app's mandate, so it never sends one and never expects its rules. An agent
- * whose mandate carries one cannot be amended from the phone until the form
- * carries it too — the check would refuse the extra rules, which is the right
- * way round to be wrong.
+ * `mandate.returnTo` is part of that mirror (SEN-17). The app does not let a
+ * user type it — the API resolves the owner's own wallet and refuses a mandate
+ * naming anything else — but the app must still SEND it and EXPECT its rules,
+ * because they are rules the compiled policy carries. Before SEN-17 it did
+ * neither, and a mandate with an exit could not be amended from the phone at all:
+ * the check refused the extra rules. That was the right way round to be wrong,
+ * and it is the reason this file changed in the same commit as the API.
  *
  * Plain TS, no React Native: `approval.test.ts` runs under plain node.
  */
-import { KURU_TESTNET_CONTRACTS, NATIVE_TOKEN } from '@sente/venues/kuru';
+import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
 import { getAddress, isAddressEqual, type Address } from 'viem';
 
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
@@ -92,6 +102,19 @@ const ACCOUNT_CORE = getAddress(KURU_TESTNET_CONTRACTS.accountCore);
 const EXCHANGE = getAddress(PERPL_EXCHANGE);
 const COLLATERAL = getAddress(AUSD.address);
 const ENROLL_VERIFYING_CONTRACT = getAddress(PERPL_ENROLL_VERIFYING_CONTRACT);
+
+/**
+ * Every ERC-20 a compiled mandate has a return rule for, in the compiler's own
+ * order: Kuru's tokens except native MON, then Perpl's AUSD (`returnableTokens`
+ * in `@sente/mandate`). Order does not matter to the comparison, which is a
+ * multiset, but keeping it makes the two readable side by side.
+ */
+const RETURNABLE = [
+  ...Object.values(KURU_TESTNET_TOKENS)
+    .filter((token) => !isAddressEqual(token.address, NATIVE_TOKEN))
+    .map((token) => getAddress(token.address)),
+  getAddress(AUSD.address),
+];
 
 /** A non-negative integer as Privy compares it: `0x`, lowercase, unpadded. */
 function hexUint(value: bigint | number): string {
@@ -196,12 +219,67 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
       ],
     });
   }
+
+  // The way out, last, exactly as the compiler appends it: one transfer rule per
+  // token, pinned to `returnTo`, with no expiry — an expired mandate must not
+  // strand the money. Without a `returnTo` there is no transfer rule at all, and
+  // the agent can send nothing anywhere (fail closed).
+  rules.push(...expectedRecoveryRules(mandate, { withdraw: false }));
   return rules;
 }
 
-/** What this phone believes it is approving. */
+/**
+ * The rules that can only move money TOWARD the owner, with the chain pinned and
+ * no expiry: `AccountCore.withdraw`, which pays the agent's own wallet, and one
+ * ERC-20 transfer per token pinned to `returnTo`.
+ *
+ * `withdraw` is a flag rather than always on because `expectedPolicyRules` emits
+ * the withdraw rule in its own Kuru block, where the compiler does.
+ */
+function expectedRecoveryRules(
+  mandate: AgentMandate,
+  options: { withdraw: boolean },
+): ExpectedRule[] {
+  const chain = condition('ethereum_transaction', 'chain_id', 'eq', hexUint(mandate.chainId));
+  const recovery = (conditions: string[]): ExpectedRule => ({
+    method: 'eth_signTransaction',
+    conditions: [chain, ...conditions],
+  });
+  const rules: ExpectedRule[] = [];
+  if (options.withdraw && mandate.venues.includes('kuru')) {
+    rules.push(recovery([txTo(ACCOUNT_CORE), calldataEq('function_name', 'withdraw')]));
+  }
+  if (!mandate.returnTo) return rules;
+  const owner = getAddress(mandate.returnTo);
+  for (const token of RETURNABLE) {
+    rules.push(recovery([txTo(token), calldataEq('transfer.to', owner)]));
+  }
+  return rules;
+}
+
+/**
+ * What a REVOKE must leave behind (SEN-17): the mandate's recovery rules, and
+ * nothing else.
+ *
+ * Mirrors `compileRevocationRules`, and `approval.test.ts` pins the two equal the
+ * same way it pins the amend compiler. Note what it does NOT include — no
+ * approve, no deposit, no market, no enrollment — which is the property a revoke
+ * has to keep: the agent stops, and only the exit stays open.
+ */
+export function expectedRevocationRules(mandate: AgentMandate): ExpectedRule[] {
+  return expectedRecoveryRules(mandate, { withdraw: true });
+}
+
+/**
+ * What this phone believes it is approving.
+ *
+ * A revoke carries the mandate too, since SEN-17: what it leaves behind is that
+ * mandate's own way out, so the phone needs the mandate to know which rules to
+ * expect — the same copy it would check an amend against.
+ */
 export type MandateChangeIntent =
-  { kind: 'amend'; policyId: string; mandate: AgentMandate } | { kind: 'revoke'; policyId: string };
+  | { kind: 'amend'; policyId: string; mandate: AgentMandate }
+  | { kind: 'revoke'; policyId: string; mandate: AgentMandate };
 
 /**
  * Does `payload` do exactly what `intent` says, and nothing else?
@@ -238,12 +316,12 @@ export function verifyPolicyPatch(
   const rules = (body as { rules?: unknown }).rules;
   if (!Array.isArray(rules)) return refuse('its body sets no rules');
 
-  if (intent.kind === 'revoke') {
-    return rules.length === 0
-      ? { ok: true }
-      : refuse(`a revoke must leave no rules, and this leaves ${rules.length}`);
-  }
-  return compareRules(rules, expectedPolicyRules(intent.mandate));
+  return compareRules(
+    rules,
+    intent.kind === 'revoke'
+      ? expectedRevocationRules(intent.mandate)
+      : expectedPolicyRules(intent.mandate),
+  );
 }
 
 /** Rule-set equality, as multisets: order is Privy's business, content is ours. */
@@ -362,14 +440,26 @@ export function amendMandateWithApproval(
   );
 }
 
-/** The same for a revoke: the policy must be left with no rules at all. */
+/**
+ * The same for a revoke: the policy must be left with this agent's way out and
+ * nothing else (SEN-17).
+ *
+ * The mandate the check compares against is the STORED one, `agent.mandate` — the
+ * revoke is not a change to it, so there is no other copy that could be meant.
+ */
 export function revokeWithApproval(
   api: AgentsApi,
   agent: Agent,
   sign: Approver | null,
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
-  return approveChange(api, agent, { kind: 'revoke', policyId: agent.policyId }, sign, prepared);
+  return approveChange(
+    api,
+    agent,
+    { kind: 'revoke', policyId: agent.policyId, mandate: agent.mandate },
+    sign,
+    prepared,
+  );
 }
 
 /**

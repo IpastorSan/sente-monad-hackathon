@@ -35,7 +35,13 @@ import {
   type Hex,
 } from 'viem';
 
-import { compileMandate, compileRollingCap, KURU_WITHDRAW_RULE, readBackCaps } from './policy.ts';
+import {
+  compileMandate,
+  compileRevocationRules,
+  compileRollingCap,
+  KURU_WITHDRAW_RULE,
+  readBackCaps,
+} from './policy.ts';
 import { canonicalize } from './privy/canonicalize.ts';
 import type { PolicyCondition, PolicyRule } from './privy/policy-types.ts';
 import {
@@ -218,6 +224,53 @@ test('return to owner: one transfer rule per token, transfer.to pinned to return
   const none = compileMandate(demoMandate({ venues: [], returnTo: OWNER }));
   assert.equal(none.length, tokens.length);
   assert.ok(none.every((r) => r.name.startsWith('Return ')));
+});
+
+test('revocation keeps the exit: the recovery rules, and nothing that takes risk', () => {
+  const mandate = demoMandate({ venues: ['kuru', 'perpl'], returnTo: OWNER });
+  const revoked = compileRevocationRules(mandate);
+  const full = compileMandate(mandate);
+
+  // Every surviving rule is one the live policy already had, verbatim.
+  for (const rule of revoked) {
+    assert.ok(
+      full.some((r) => canonicalize(r) === canonicalize(rule)),
+      `${rule.name} is not a rule the live mandate compiled to`,
+    );
+  }
+  // Exactly the recovery rules: the Kuru withdraw plus one return per token.
+  assert.deepEqual(
+    revoked.map((r) => r.name),
+    full
+      .filter((r) => r.name === KURU_WITHDRAW_RULE || r.name.startsWith('Return '))
+      .map((r) => r.name),
+  );
+  // None of them expires, and none of them can move money outward.
+  for (const rule of revoked) {
+    assert.equal(find(rule, 'system', 'current_unix_timestamp'), undefined, rule.name);
+  }
+  assert.ok(!revoked.some((r) => find(r, 'ethereum_calldata', 'approve.spender')));
+  assert.ok(!revoked.some((r) => find(r, 'ethereum_calldata', 'deposit.amount')));
+  assert.ok(!revoked.some((r) => find(r, 'ethereum_calldata', 'function_name')?.value === 'batch'));
+  assert.ok(!revoked.some((r) => r.method === 'eth_signTypedData_v4'));
+
+  const caps = readBackCaps(revoked);
+  assert.equal(caps.kuruWithdraw, true);
+  assert.equal(caps.returnTo, OWNER);
+  assert.deepEqual(caps.kuruMarkets, []);
+  assert.deepEqual(caps.kuruDepositAtoms, {});
+  assert.equal(caps.perplCollateralAtoms, null);
+  assert.equal(caps.expiresAt, null);
+});
+
+test('revocation of a mandate with no way out empties the policy, as it always did', () => {
+  assert.deepEqual(compileRevocationRules(demoMandate({ venues: [] })), []);
+  // No returnTo: the agent can still take its Kuru collateral back to its own
+  // wallet, and nothing else. It is a poorer exit, not a wider policy.
+  assert.deepEqual(
+    compileRevocationRules(demoMandate()).map((r) => r.name),
+    [KURU_WITHDRAW_RULE],
+  );
 });
 
 test('one batch rule per allowlisted market, addressed to that market', () => {

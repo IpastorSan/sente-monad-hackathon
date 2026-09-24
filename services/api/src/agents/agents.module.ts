@@ -28,6 +28,8 @@ import {
   ServerMandateOwners,
   type MandateOwners,
 } from './mandate-owner';
+import { returnFundsProviders, ReturnFundsService } from './recovery/return-funds.service';
+import { RegistryReturnAddresses, RETURN_ADDRESSES, type ReturnAddresses } from './return-address';
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
 import {
@@ -100,6 +102,22 @@ const mandateOwnersProvider: Provider = {
 };
 
 /**
+ * RETURN_ADDRESSES: where each user's agents send funds home to (SEN-17) — the
+ * address of the user's own Privy wallet, out of the SAME registry
+ * `POST /wallet/register` writes, whoever owns the mandate.
+ *
+ * Not gated on `AGENT_MANDATE_OWNER`, unlike the owner quorum above: who may
+ * CHANGE a mandate and where its money goes home to are different questions, and
+ * a server-owned agent's owner has a wallet to be paid just the same.
+ */
+const returnAddressesProvider: Provider = {
+  provide: RETURN_ADDRESSES,
+  inject: [USER_WALLET_REGISTRY],
+  useFactory: (registry: UserWalletRegistry): ReturnAddresses =>
+    new RegistryReturnAddresses(registry),
+};
+
+/**
  * AUTH: the same seam `wallet/` and `gas/` use — `Auth` reads back the
  * principal `SessionAuthGuard` verified for this request.
  */
@@ -141,16 +159,21 @@ const authProvider: Provider = {
     configProvider,
     agentWalletsProvider,
     mandateOwnersProvider,
+    returnAddressesProvider,
     authProvider,
     SessionAuthGuard,
     AgentsService,
     ...agentVenuesProviders,
+    // POST /agents/:id/return (SEN-17): after the venue providers, whose
+    // AgentVenues and AgentTransactionSender it borrows.
+    ...returnFundsProviders,
     ...agentToolsProviders,
     // The Tool Runner loop, POST /agents/:id/run and AGENT_TICK_SECONDS (SEN-8).
     ...agentRunnerProviders,
   ],
   exports: [
     AgentsService,
+    ReturnFundsService,
     AGENT_WALLETS,
     // Re-exported as the MODULE, so `leaderboard/` and `webhooks/` keep
     // resolving AGENT_STORE through this one import and get the same instance.

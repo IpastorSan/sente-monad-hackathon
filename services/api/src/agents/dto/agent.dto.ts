@@ -23,6 +23,7 @@ import {
 } from 'class-validator';
 
 import type { PreparedMandateChange } from '../agents.service';
+import type { ReturnOutcome } from '../recovery/return-funds.service';
 import type { CommitTimes, ConsensusState } from '../../chain/consensus.service';
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
@@ -184,6 +185,34 @@ export class ForkAgentDto {
   @MaxLength(AGENT_NAME_MAX_LENGTH)
   @Matches(/\S/, { message: 'name must not be blank' })
   name?: string;
+}
+
+/**
+ * `POST /agents/:id/return` (SEN-17) — send an agent's funds back to its owner.
+ *
+ * There is deliberately no recipient field. The destination is
+ * `mandate.returnTo`, which this server resolved from the caller's own wallet at
+ * hire and compiled into the enclave policy, so the only address this route can
+ * pay is one the enclave would sign for anyway.
+ */
+export class ReturnFundsDto {
+  /** A token symbol, e.g. `USDC`. Omitted: every asset the wallet holds. */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(16)
+  asset?: string;
+
+  /**
+   * Human units, e.g. `1.5` — not atoms, because this is the figure a person
+   * typed. Only meaningful beside `asset`; omitted means all of it.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  @Matches(/^\d+(\.\d+)?$/, { message: 'amount must be a positive decimal' })
+  amount?: string;
 }
 
 export class AgentIdParamDto {
@@ -380,6 +409,44 @@ export function toPreparedMandateChangeResponse(
     // The summary is already wire-shaped — it carries no bigints and no
     // mandate — so it crosses as it stands.
     summary: { ...prepared.summary },
+  };
+}
+
+/**
+ * What `POST /agents/:id/return` did (SEN-17): one entry per asset, each with
+ * the transaction that moved it.
+ *
+ * `success` is read from each transaction's own receipt. An agent wallet is a
+ * plain EOA, so the two legs are two transactions and one can land while the
+ * other does not — which is why neither leg is summarised into a single verdict.
+ */
+export interface ReturnedAssetDto {
+  asset: string;
+  /** The Kuru collateral leg, when there was free collateral to take back. */
+  withdrawn?: { amount: string; transactionHash: string; success: boolean };
+  /** The transfer leg: what left for the owner's wallet. */
+  returned?: { amount: string; transactionHash: string; success: boolean };
+  /** Why nothing moved for this asset. Present exactly when both legs are absent. */
+  skipped?: string;
+}
+
+export interface ReturnFundsResponseDto {
+  agentId: string;
+  /** Where the funds went: the owner's wallet, as the policy pins it. */
+  returnTo: string;
+  assets: ReturnedAssetDto[];
+  /** MON of the agent's own gas the whole return cost, as a decimal string. */
+  monSpent: string;
+}
+
+export function toReturnFundsResponse(outcome: ReturnOutcome): ReturnFundsResponseDto {
+  return {
+    agentId: outcome.agentId,
+    returnTo: outcome.returnTo,
+    // Amounts are already decimal strings, and hashes are hex: nothing here is a
+    // bigint, so the outcome crosses as it stands.
+    assets: outcome.assets.map((asset) => ({ ...asset })),
+    monSpent: outcome.monSpent,
   };
 }
 

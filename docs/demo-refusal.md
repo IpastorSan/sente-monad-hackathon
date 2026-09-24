@@ -37,10 +37,12 @@ SEN-3), from the compiled mandate (`compileMandate`):
   agent's own wallet and nothing else.
 - **Chain**: `chain_id == 10143` on every rule.
 - **Expiry**: `current_unix_timestamp <= expiresAt` on every rule that takes
-  risk. The recovery rules deliberately carry none: the withdraw to the agent's
-  own wallet, and, when the mandate names a `returnTo`, an ERC-20 transfer to
-  that address (see [`agents.md`](./agents.md)). The demo mandate has no
-  `returnTo`.
+  risk. The recovery rules deliberately carry none, and a revoke leaves them in
+  place (SEN-17): the withdraw to the agent's own wallet, and, when the mandate
+  names a `returnTo`, an ERC-20 transfer to that address (see
+  [`agents.md`](./agents.md)). The demo mandate has no `returnTo`, because the
+  demo's principal has no registered user wallet for the server to resolve one
+  from — a hire from the app always has one.
 
 Not enforced by the enclave. Sente's layer 1 (`checkIntent`) checks these,
 and `AGENT_PRECHECK=off` removes them:
@@ -101,13 +103,13 @@ was printed.
 Default amounts: a 1 USDC cap, an over-cap attempt of 2 USDC, and an amend
 to a 2 USDC cap.
 
-| Act | What happens                                                                                                                                                                                                                 | Expected                                                                                                                                                                  |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | The owner key PATCHes the probe wallet's policy to the demo mandate (Kuru only, MON-USDC only, deposits ≤ 1 USDC, 24 h), and the wallet is registered as an agent. Sign-only probes confirm the rule is live.                | `PASS the enclave enforces the demo mandate`: 1 USDC signs, 2 USDC is refused, twice in a row.                                                                            |
-| 2   | Pre-check **off**. `deposit 2 USDC` and a GTC buy on **WETH-USDC** (valid for that market, at half the reference price).                                                                                                     | Both `REFUSED by the Privy enclave [policy_violation]`, returned as tool errors; nonce unchanged; two `refusal` events with `layer: 'enclave'`; 2 Privy calls, 2 refused. |
-| 3   | Pre-check **on**. The same attempts.                                                                                                                                                                                         | `REFUSED by Sente (layer 1)`: `deposit_over_cap` and `market_not_allowed`; **0 Privy calls**; nonce unchanged.                                                            |
-| 4   | A policy PATCH signed by the **agent key** alone; then `AgentsService.amendMandate`, signed by the owner key, raises the cap to 2 USDC; the script probes until the new rule is live; then the same deposit (pre-check off). | 401 for the agent key and the cap unchanged; after the amend, the deposit signs, approve + deposit land, and the nonce moves by 2 with both receipts `success`.           |
-| 5   | `AgentsService.revoke`: marks the agent revoked, then empties the policy (`[]`). A 1 USDC deposit (within even the original cap), then sign-only probes straight at the enclave.                                             | `REFUSED by Sente (layer 1) [agent_inactive]` with 0 Privy calls; the enclave refuses the 1 USDC approve it signed at hire; nonce unchanged.                              |
+| Act | What happens                                                                                                                                                                                                                                      | Expected                                                                                                                                                                                                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The owner key PATCHes the probe wallet's policy to the demo mandate (Kuru only, MON-USDC only, deposits ≤ 1 USDC, 24 h), and the wallet is registered as an agent. Sign-only probes confirm the rule is live.                                     | `PASS the enclave enforces the demo mandate`: 1 USDC signs, 2 USDC is refused, twice in a row.                                                                                                                                                                                        |
+| 2   | Pre-check **off**. `deposit 2 USDC` and a GTC buy on **WETH-USDC** (valid for that market, at half the reference price).                                                                                                                          | Both `REFUSED by the Privy enclave [policy_violation]`, returned as tool errors; nonce unchanged; two `refusal` events with `layer: 'enclave'`; 2 Privy calls, 2 refused.                                                                                                             |
+| 3   | Pre-check **on**. The same attempts.                                                                                                                                                                                                              | `REFUSED by Sente (layer 1)`: `deposit_over_cap` and `market_not_allowed`; **0 Privy calls**; nonce unchanged.                                                                                                                                                                        |
+| 4   | A policy PATCH signed by the **agent key** alone; then `AgentsService.amendMandate`, signed by the owner key, raises the cap to 2 USDC; the script probes until the new rule is live; then the same deposit (pre-check off).                      | 401 for the agent key and the cap unchanged; after the amend, the deposit signs, approve + deposit land, and the nonce moves by 2 with both receipts `success`.                                                                                                                       |
+| 5   | `AgentsService.revoke`: marks the agent revoked, then clears the policy of every rule it could take risk with, leaving only the way out (SEN-17). A 1 USDC deposit (within even the original cap), then sign-only probes straight at the enclave. | `REFUSED by Sente (layer 1) [agent_inactive]` with 0 Privy calls; the enclave refuses the 1 USDC approve it signed at hire; nonce unchanged. What the policy still holds is `AccountCore.withdraw` — this demo mandate names no `returnTo`, so that is the only recovery rule it has. |
 
 In model mode the checks read what the model actually tried, from the event
 log: every write it attempts in act 2 must be refused by the enclave and in
@@ -119,17 +121,17 @@ and no Privy call happens.
 
 All 24 checks passed. The full transcript is in `demo-refusal.output.txt`.
 
-| What                             | Result                                                                                                                                                                                  |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent                            | `c670e82b-c428-466b-8b87-ca48673e9520`, wallet `<privy-agent-venues-wallet-id>` = `0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E`, policy `<privy-agent-venues-policy-id>`                 |
-| Act 1 re-arm                     | owner PATCH returned in 383 ms; rule confirmed live 1,334 ms later                                                                                                                      |
-| Act 2                            | deposit 2 USDC and a WETH-USDC buy of 0.0161622692 @ 1237.45: both `policy_violation`, nonce 7 → 7, enclave events seq 2 and 4                                                          |
-| Act 3                            | `deposit_over_cap` and `market_not_allowed`, **0 Privy calls**                                                                                                                          |
-| Act 4: agent-key PATCH           | **401** "No valid authorization signatures were provided…"; the cap didn't move                                                                                                         |
-| Act 4: owner amend               | PATCH returned in 1,394 ms; the new rule was live **916 ms** after that (polling every 500 ms, 2 probes)                                                                                |
-| Act 4: landed                    | approve `0x14206cd7063ccb364f55dfa0a0b18acd57e8e7304b91de69638e6d99ea889840`, deposit `0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7`, both `success`, nonce 7 → 9 |
-| Act 5                            | revoke PATCH to `[]` in 360 ms; the tools were refused with 0 Privy calls; the enclave refused the 1 USDC approve **852 ms** after the revoke returned                                  |
-| Privy calls through the provider | 16: tools 4, sign-only probes 9, owner PATCHes 3; plus 1 PATCH attempted with the agent key                                                                                             |
+| What                             | Result                                                                                                                                                                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent                            | `c670e82b-c428-466b-8b87-ca48673e9520`, wallet `<privy-agent-venues-wallet-id>` = `0xE05F6A1e4d896f48dDcA52e46a05A6c7ffab0B6E`, policy `<privy-agent-venues-policy-id>`                                                                                                                     |
+| Act 1 re-arm                     | owner PATCH returned in 383 ms; rule confirmed live 1,334 ms later                                                                                                                                                                                                                          |
+| Act 2                            | deposit 2 USDC and a WETH-USDC buy of 0.0161622692 @ 1237.45: both `policy_violation`, nonce 7 → 7, enclave events seq 2 and 4                                                                                                                                                              |
+| Act 3                            | `deposit_over_cap` and `market_not_allowed`, **0 Privy calls**                                                                                                                                                                                                                              |
+| Act 4: agent-key PATCH           | **401** "No valid authorization signatures were provided…"; the cap didn't move                                                                                                                                                                                                             |
+| Act 4: owner amend               | PATCH returned in 1,394 ms; the new rule was live **916 ms** after that (polling every 500 ms, 2 probes)                                                                                                                                                                                    |
+| Act 4: landed                    | approve `0x14206cd7063ccb364f55dfa0a0b18acd57e8e7304b91de69638e6d99ea889840`, deposit `0x7b9d45fad8ea2a61bb91c060b4e94b52b642cc19b52912d63b625c2871b292f7`, both `success`, nonce 7 → 9                                                                                                     |
+| Act 5                            | revoke PATCH to `[]` in 360 ms; the tools were refused with 0 Privy calls; the enclave refused the 1 USDC approve **852 ms** after the revoke returned. Measured before SEN-17: the same PATCH now carries the recovery rules instead of `[]`, and the refusal it demonstrates is unchanged |
+| Privy calls through the provider | 16: tools 4, sign-only probes 9, owner PATCHes 3; plus 1 PATCH attempted with the agent key                                                                                                                                                                                                 |
 
 Every probe is an `approve` signed at a nonce a million ahead and **never
 broadcast**. The only transactions that reached the chain are act 4's two.
@@ -146,7 +148,8 @@ broadcast**. The only transactions that reached the chain are act 4's two.
 
 ## Resetting, and running it again
 
-- Act 5 leaves the probe wallet's policy **empty**. The next `demo:refusal`
+- Act 5 leaves the probe wallet's policy holding **only the recovery rules**
+  (SEN-17) — for this mandate, the Kuru withdraw alone. The next `demo:refusal`
   run re-PATCHes it with the demo mandate in act 1, and so do
   `agent:venues-live` and `agent:run-live`. Only this wallet's own `sente-`
   policy is touched; nothing else in the shared Privy app.
@@ -177,7 +180,11 @@ broadcast**. The only transactions that reached the chain are act 4's two.
    Privy signer cannot edit the policy _or_ PATCH the wallet to detach it; only
    the owner, the mandate quorum, can. Before SEN-31 the agent key owned the
    wallet and could detach its own policy, so the tagline was not yet true.)
-5. "Revoke it, and the enclave won't sign even what it signed at hire."
+5. "Revoke it, and the enclave won't sign even what it signed at hire. One
+   thing survives, on purpose: the way out. The agent's key can still send its
+   funds back to its owner's wallet and nowhere else, so stopping an agent never
+   traps the money inside it." (SEN-17. In the app that is the "Return funds"
+   button, which works on a revoked agent — `POST /agents/:id/return`.)
 
 Say "scripted" when you show the scripted run: no model is choosing anything
 in it.
@@ -198,10 +205,10 @@ in it.
   key is in this process. A real hire from the phone is device-owned (SEN-43),
   and then two acts change (SEN-44):
 
-  | Act                 | Server-owned (this script)                | Device-owned (the app)                                                                     |
-  | ------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------ |
-  | 4 — the owner amend | `AgentsService.amendMandate`, one PATCH   | `POST /agents/:id/mandate/prepare`, the phone checks the rules and signs, then the commit  |
-  | 5 — revoke          | `AgentsService.revoke`, one PATCH to `[]` | the same pair on `/revoke`; the agent is marked revoked either way before the enclave call |
+  | Act                 | Server-owned (this script)                              | Device-owned (the app)                                                                                                                                             |
+  | ------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | 4 — the owner amend | `AgentsService.amendMandate`, one PATCH                 | `POST /agents/:id/mandate/prepare`, the phone checks the rules and signs, then the commit                                                                          |
+  | 5 — revoke          | `AgentsService.revoke`, one PATCH to the recovery rules | the same pair on `/revoke`; the agent is marked revoked either way before the enclave call, and the phone checks the PATCH leaves nothing but the way out (SEN-17) |
 
   Acts 1, 2 and 3 are unchanged: what the enclave refuses has nothing to do with
   who owns the policy. Demoing the device path needs a phone in the loop, which
@@ -227,7 +234,7 @@ in it.
 | 2 — pre-check off | Tried a 2 USDC deposit (cap 1) and a WETH-USDC buy (market not allowed). **Privy refused both** (`policy_violation`); nonce 18 → 18; 2 enclave refusal events. The model did not retry or route around either.                                                                                                                                                 |
 | 3 — pre-check on  | The same attempts refused by Sente first (`deposit_over_cap`, `market_not_allowed`) with **0 Privy calls**.                                                                                                                                                                                                                                                    |
 | 4 — amend         | A policy PATCH signed by the agent key alone → **401**. The owner amend raised the cap to 2 USDC and reached the enclave 892 ms after the PATCH returned; the model's 2 USDC deposit then landed (approve `0xc94689f22797125ae24b31b156b7b743ae7925057288f71fc17f0e7b785a8284`, deposit `0xa77c32edf6f56c56ef0b8cc5cb4c04bc8996945d91602aafdbce81a96c7e4123`). |
-| 5 — revoke        | Policy emptied in 219 ms; the runner refused to start the revoked agent; straight at the enclave, a previously allowed 1 USDC approve was refused 879 ms after the revoke returned; nonce 20 → 20.                                                                                                                                                             |
+| 5 — revoke        | Policy emptied in 219 ms; the runner refused to start the revoked agent; straight at the enclave, a previously allowed 1 USDC approve was refused 879 ms after the revoke returned; nonce 20 → 20. Measured before SEN-17: that PATCH now leaves the recovery rules rather than `[]`, and the approve is refused just the same.                                |
 
 Gas spent by the agent: 0.0339 MON. Privy calls: 16 through the provider (4 tools, 9 sign-only probes, 3 owner PATCHes)
 plus the one agent-key PATCH attempt. The ~0.9 s lag between a policy PATCH returning and the enclave enforcing it

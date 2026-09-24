@@ -120,6 +120,37 @@ export const AGENT_REFUSAL_REASONS = [
    * are single-use and short-lived: prepare again and sign the new payload.
    */
   'mandate_prepare_not_found',
+  /**
+   * A hire, fork or amend carried a `returnTo` that is not the caller's own
+   * wallet (SEN-17). The exit address is resolved server-side from the user
+   * wallet registry, and a client value is only ever compared with it — never
+   * trusted — so the honest answer to a different one is "no".
+   */
+  'return_address_mismatch',
+  /**
+   * The same, when the caller has no registered wallet at all: there is nothing
+   * to compare the client's `returnTo` with, so it is refused rather than
+   * honoured. `POST /wallet/register` first. Omitting `returnTo` is fine and
+   * compiles an agent with no exit rule.
+   */
+  'return_address_unavailable',
+  /**
+   * `POST /agents/:id/return` on an agent whose mandate names no `returnTo`, so
+   * its policy has no transfer rule and the enclave would refuse the transfer.
+   * Amend the mandate (an active agent) — a revoked one can only be emptied
+   * with the owner key, by hand.
+   */
+  'return_address_missing',
+  /** `POST /agents/:id/return` named an asset no agent wallet can hold. */
+  'return_asset_not_supported',
+  /** `POST /agents/:id/return`'s `amount` is not a positive decimal, or names no asset. */
+  'return_amount_invalid',
+  /**
+   * The agent has too little MON to pay for the withdraw and transfer it would
+   * take to send its funds home. Monad charges the gas LIMIT (gotcha 4), so the
+   * message names the exact shortfall and the `agent:fund` command for it.
+   */
+  'return_gas_insufficient',
   /** `POST /agents/:id/run` while a run of the same agent is still going (SEN-8). One at a time. */
   'run_in_progress',
   /**
@@ -174,6 +205,16 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   // 404: the prepared change is gone — unknown id, already committed, or
   // expired. Nothing to commit against.
   mandate_prepare_not_found: 404,
+  // 400: the body said something about the exit address that cannot be true.
+  return_address_mismatch: 400,
+  return_asset_not_supported: 400,
+  return_amount_invalid: 400,
+  // 409: well-formed, and the account's or agent's state forbids it for now.
+  // Registering a wallet, or amending the mandate, makes the same call work.
+  return_address_unavailable: 409,
+  return_address_missing: 409,
+  // 409: the agent is simply out of gas. Funding it makes the same call work.
+  return_gas_insufficient: 409,
   run_in_progress: 409,
   // 402 Payment Required: exactly what OpenRouter itself answered.
   credits_exhausted: 402,

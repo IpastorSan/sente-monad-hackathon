@@ -24,7 +24,12 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { compileMandate, parseMandate, type PolicyRule } from '@sente/mandate';
+import {
+  compileMandate,
+  compileRevocationRules,
+  parseMandate,
+  type PolicyRule,
+} from '@sente/mandate';
 import {
   fromUnits,
   KURU_TESTNET_CONTRACTS,
@@ -804,18 +809,21 @@ export async function runRefusalDemo(
   }
 
   // --- Act 5 -----------------------------------------------------------------
-  heading(5, 'REVOKE: every write is refused');
+  heading(5, 'REVOKE: every write is refused, and only the way out is left');
   {
     const revokeStart = clock();
     const revoked = await counter.tagged('owner', () =>
       deps.agents.revoke(deps.principal, agent.id),
     );
     const revokeMs = clock() - revokeStart;
+    const exit = compileRevocationRules(revoked.mandate);
     check(
       5,
-      'revoked, and the policy emptied',
+      'revoked, and the policy cleared of everything but the way out',
       revoked.status === 'revoked' && revoked.policyCleared,
-      `status ${revoked.status}, policyCleared ${String(revoked.policyCleared)} (PATCH to [] in ${revokeMs} ms)`,
+      `status ${revoked.status}, policyCleared ${String(revoked.policyCleared)} ` +
+        `(PATCH to ${exit.length} recovery rule(s) in ${revokeMs} ms: ` +
+        `${exit.map((rule) => rule.name).join(', ') || 'none — this mandate names no returnTo'})`,
     );
 
     const mark = counter.mark;
@@ -844,16 +852,17 @@ export async function runRefusalDemo(
 
     log('  Directly at the enclave, with Sente out of the way (sign-only, never broadcast):');
     const cleared = await settle(
-      'emptied policy',
+      'cleared policy',
       async () => (await deps.probe(plan.capUsdc)) === 'refused',
       clock(),
     );
     report.settle['act5'] = { ...cleared, patchMs: revokeMs };
     check(
       5,
-      'the enclave refuses the wallet everything',
+      'the enclave refuses the wallet every write it allowed at hire',
       cleared.ok,
-      `a ${plan.capUsdc} USDC approve, allowed at hire, refused ${settleOptions.consecutive} in a row ${cleared.afterMs} ms after the revoke returned (${cleared.probes} probe(s))`,
+      `a ${plan.capUsdc} USDC approve, allowed at hire, refused ${settleOptions.consecutive} in a row ${cleared.afterMs} ms after the revoke returned (${cleared.probes} probe(s)); ` +
+        'only the recovery rules survive, and they can move money nowhere but to the owner',
     );
     const after = await deps.nonce();
     check(5, 'nothing was broadcast', after === before, `nonce ${before} → ${after}`);

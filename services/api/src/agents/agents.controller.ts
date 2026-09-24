@@ -29,19 +29,23 @@ import {
   ForkAgentDto,
   PrepareMandateDto,
   readMandateApproval,
+  ReturnFundsDto,
   RevokeAgentDto,
   RunAgentDto,
   toAgentEventResponse,
   toAgentResponse,
   toPreparedMandateChangeResponse,
+  toReturnFundsResponse,
   type AgentEventResponseDto,
   type AgentEventsResponseDto,
   type AgentListResponseDto,
   type AgentResponseDto,
   type HireAgentResponseDto,
   type PreparedMandateChangeDto,
+  type ReturnFundsResponseDto,
 } from './dto/agent.dto';
 import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
+import { ReturnFundsService } from './recovery/return-funds.service';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
 
 /**
@@ -66,6 +70,8 @@ export class AgentsController {
      * see `agents.module.ts`.
      */
     private readonly consensus: ConsensusService,
+    /** SEN-17: `POST /agents/:id/return`, the way an owner takes their money back. */
+    private readonly returns: ReturnFundsService,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -291,6 +297,42 @@ export class AgentsController {
         : await this.agents.revoke(principal, params.id);
       return toAgentResponse(agent);
     });
+  }
+
+  /**
+   * Sends the agent's funds back to its owner (SEN-17).
+   *
+   * The destination is not in the body and cannot be: it is `mandate.returnTo`,
+   * resolved from the caller's own registered wallet at hire and compiled into
+   * the enclave policy, so the enclave would refuse a transfer anywhere else
+   * whatever this server asked for.
+   *
+   * `{}` sweeps every asset the wallet can hold; `{ asset }` one of them;
+   * `{ asset, amount }` part of one. Per asset it takes free Kuru collateral back
+   * to the agent's own wallet first, then transfers the wallet balance home, and
+   * reports each leg's own transaction and receipt.
+   *
+   * IT WORKS ON A REVOKED AGENT, and that is the point: the recovery rules carry
+   * no expiry and a revoke leaves them in place. Refusals: 404
+   * `agent_not_found`, 409 `return_address_missing` (a mandate with no exit),
+   * 400 `return_asset_not_supported` / `return_amount_invalid`, 409
+   * `return_gas_insufficient`, and 403 `policy_violation` if the enclave refuses
+   * the transfer after all.
+   */
+  @Post(':id/return')
+  @HttpCode(HttpStatus.OK)
+  async returnFunds(
+    @Param() params: AgentIdParamDto,
+    @Body() body: ReturnFundsDto,
+  ): Promise<ReturnFundsResponseDto> {
+    return this.guard(async () =>
+      toReturnFundsResponse(
+        await this.returns.returnFunds(this.auth.principal(), params.id, {
+          ...(body.asset !== undefined ? { asset: body.asset } : {}),
+          ...(body.amount !== undefined ? { amount: body.amount } : {}),
+        }),
+      ),
+    );
   }
 
   /**

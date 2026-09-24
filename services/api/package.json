@@ -24,6 +24,7 @@
     "agent:fund": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/fund-agent.ts",
     "agent:venues-live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-venues-live.ts",
     "agent:withdraw-live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-withdraw-live.ts",
+    "agent:return-live": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-return-live.ts",
     "agent:run-live": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/agent-run-live.ts",
     "demo:refusal": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/demo-refusal.ts",
     "consensus:watch": "node --env-file-if-exists=../../.env --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/consensus-watch.ts",

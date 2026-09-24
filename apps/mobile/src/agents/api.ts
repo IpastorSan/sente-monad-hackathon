@@ -66,6 +66,17 @@ export type AgentMandate = {
   /** A decimal string in quote units, e.g. "250.5". Never a float. */
   maxOrderNotional: string;
   rollingCap?: { windowSeconds: number; capAtoms: bigint; token: Address };
+  /**
+   * THE WAY OUT (SEN-17): the one address the agent's wallet may send ERC-20s
+   * to, which is the user's own Privy wallet.
+   *
+   * The API resolves it from the signed-in account and refuses a mandate naming
+   * anything else (`return_address_mismatch`), so this is never a free field: it
+   * is here because the compiled policy carries a transfer rule per token for it,
+   * and `approval.ts` has to expect those rules or amending from the phone fails
+   * closed. The hire and amend screens fill it from `GET /wallet`.
+   */
+  returnTo?: Address;
 };
 
 /** A mandate on the wire: exactly the shape the API's `parseMandate` accepts. */
@@ -78,6 +89,7 @@ export type WireMandate = {
   perpl: { maxCollateralAtoms: string; maxLeverage: number; markets: string[] };
   maxOrderNotional: string;
   rollingCap?: { windowSeconds: number; capAtoms: string; token: string };
+  returnTo?: string;
 };
 
 export type AgentStatus = 'active' | 'revoked';
@@ -171,7 +183,13 @@ export type MandateChangeSummary = {
   agentId: string;
   agentName: string;
   policyId: string;
-  /** Rules the policy holds afterwards. Zero on a revoke: the wallet signs nothing. */
+  /**
+   * Rules the policy holds afterwards.
+   *
+   * On a revoke this is NOT zero since SEN-17: what is left is the way out —
+   * `AccountCore.withdraw` and the per-token returns to your own wallet — so a
+   * revoked agent can still be emptied. Zero means the mandate named no exit.
+   */
   ruleCount: number;
 };
 
@@ -194,6 +212,33 @@ export type PreparedMandateChange = {
 export type MandateApproval = {
   prepareId: string;
   signature: string;
+};
+
+/**
+ * What `POST /agents/:id/return` moved (SEN-17). Amounts are human units, as
+ * decimal strings — the API formats them, so no screen has to shift decimals.
+ *
+ * Each leg carries its own transaction and its own `success`: an agent wallet is
+ * a plain EOA, so the withdraw and the transfer are two transactions and one can
+ * land while the other does not.
+ */
+export type ReturnedAsset = {
+  asset: string;
+  /** Kuru collateral taken back to the agent's own wallet first, when it had any. */
+  withdrawn?: { amount: string; transactionHash: string; success: boolean };
+  /** What left for your wallet. */
+  returned?: { amount: string; transactionHash: string; success: boolean };
+  /** Why nothing moved for this asset. Present exactly when both legs are absent. */
+  skipped?: string;
+};
+
+export type ReturnFundsResult = {
+  agentId: string;
+  /** Where it went: your own wallet, as the enclave policy pins it. */
+  returnTo: Address;
+  assets: ReturnedAsset[];
+  /** MON of the agent's own gas the return cost. */
+  monSpent: string;
 };
 
 /** SEN-8's `RunResult`. Loose on purpose: the route does not exist yet. */
@@ -456,6 +501,29 @@ export class AgentsApi {
   }
 
   /**
+   * `POST /agents/:id/return` (SEN-17) — send the agent's funds back to your
+   * own wallet.
+   *
+   * There is no recipient to pass and there must not be: the destination is the
+   * `returnTo` compiled into the agent's enclave policy, which is your wallet,
+   * and the enclave would refuse a transfer anywhere else. So this needs no
+   * signature from this phone either — the agent's own key signs, inside the
+   * limits its policy already carries.
+   *
+   * No argument sweeps every asset. It works on a revoked agent, which is the
+   * point of revoke keeping the exit open.
+   */
+  returnFunds(
+    id: string,
+    request: { asset?: string; amount?: string } = {},
+  ): Promise<ReturnFundsResult> {
+    return this.request<ReturnFundsResult>('POST', `/agents/${encodeURIComponent(id)}/return`, {
+      ...(request.asset !== undefined ? { asset: request.asset } : {}),
+      ...(request.amount !== undefined ? { amount: request.amount } : {}),
+    });
+  }
+
+  /**
    * `GET /agents/:id/events` (SEN-20) — the agent's trail.
    *
    * `afterSeq` is the cursor: only events with a higher `seq` come back, which
@@ -605,6 +673,7 @@ export function toWireMandate(mandate: AgentMandate): WireMandate {
           },
         }
       : {}),
+    ...(mandate.returnTo ? { returnTo: mandate.returnTo } : {}),
   };
 }
 
@@ -636,6 +705,7 @@ export function fromWireMandate(wire: WireMandate): AgentMandate {
           },
         }
       : {}),
+    ...(wire.returnTo ? { returnTo: wire.returnTo as Address } : {}),
   };
 }
 
@@ -694,6 +764,31 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
           title: 'The enclave refused your signature',
           detail:
             'It must come from the key that owns this agent’s mandate — the passkey that hired it, on this device.',
+        };
+      case 'return_address_missing':
+        return {
+          title: 'This agent has no way to send funds back',
+          detail:
+            'It was hired before return-to-owner existed. Amend its mandate and it will carry ' +
+            'your wallet; a revoked one can only be emptied by hand.',
+        };
+      case 'return_address_mismatch':
+      case 'return_address_unavailable':
+        return {
+          title: 'That isn’t your wallet',
+          detail:
+            'The address an agent may send funds to is set by Sente from your own account, never ' +
+            'from this app. Sign in and let your wallet register, then try again.',
+        };
+      case 'return_asset_not_supported':
+      case 'return_amount_invalid':
+        return { title: 'Sente refused that amount', detail: error.message };
+      case 'return_gas_insufficient':
+        return {
+          title: 'The agent can’t pay for the transfer',
+          detail:
+            'Its wallet is out of MON, and moving funds costs gas. Send it a little MON and try ' +
+            'again — the message says how much.',
         };
       case 'agent_wallets_unconfigured':
         return {

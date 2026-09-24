@@ -10,9 +10,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { compileMandate, parseMandate } from '@sente/mandate';
+import { compileMandate, compileRevocationRules, parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
-import type { Address } from 'viem';
+import { getAddress, type Address } from 'viem';
 
 import type { SessionAuth } from '../wallet/api.ts';
 import { AgentsApi, toWireMandate, type Agent, type AgentMandate, type WireAgent } from './api.ts';
@@ -29,6 +29,8 @@ const AGENT_ID = '5b0f8a62-3c1e-4d7a-9f0e-2a6b7c8d9e01';
 const POLICY_ID = 'policy-1';
 const PREPARE_ID = '0d2b0f6a-1f2b-4a8c-9d10-3e4f5a6b7c8d';
 const USDC = KURU_TESTNET_TOKENS.USDC.address as Address;
+/** The owner's own wallet: where this agent's funds may go, and nowhere else. */
+const OWNER = getAddress(`0x${'c'.repeat(40)}`);
 
 const MANDATE: AgentMandate = {
   version: 1,
@@ -38,6 +40,9 @@ const MANDATE: AgentMandate = {
   kuru: { markets: [KURU_TESTNET_MARKETS[0]!.address], maxDepositAtoms: { [USDC]: 250_000_000n } },
   perpl: { maxCollateralAtoms: 0n, maxLeverage: 1, markets: [] },
   maxOrderNotional: '50',
+  // Set by the API from the signed-in account (SEN-17), so every mandate the app
+  // holds in practice carries one.
+  returnTo: OWNER,
 };
 
 const WIRE_AGENT: WireAgent = {
@@ -60,12 +65,22 @@ const WIRE_AGENT: WireAgent = {
 
 const AGENT: Agent = { ...WIRE_AGENT, mandate: MANDATE };
 
-function rulesFor(mandate: AgentMandate | null) {
-  return mandate === null ? [] : compileMandate(parseMandate(toWireMandate(mandate)));
+/**
+ * `null` is an empty policy; `{ revoke: m }` is what a revoke leaves — that
+ * mandate's own way out (SEN-17).
+ */
+function rulesFor(mandate: AgentMandate | null | { revoke: AgentMandate }) {
+  if (mandate === null) return [];
+  return 'revoke' in mandate
+    ? compileRevocationRules(parseMandate(toWireMandate(mandate.revoke)))
+    : compileMandate(parseMandate(toWireMandate(mandate)));
 }
 
 /** What `/prepare` answers, built from the API's own compiler. */
-function prepared(mandate: AgentMandate | null, over: Record<string, unknown> = {}) {
+function prepared(
+  mandate: AgentMandate | null | { revoke: AgentMandate },
+  over: Record<string, unknown> = {},
+) {
   return {
     prepareId: PREPARE_ID,
     payload: {
@@ -149,9 +164,9 @@ test('an amend is prepare, verify, sign, commit — and the mandate is not resen
   assert.equal(updated.mandate.kuru.maxDepositAtoms[USDC], 900_000_000n);
 });
 
-test('a revoke signs a PATCH that leaves no rules', async () => {
+test('a revoke signs a PATCH that leaves only the way out', async () => {
   const { api, calls } = recordingApi(
-    { status: 200, body: prepared(null) },
+    { status: 200, body: prepared({ revoke: MANDATE }) },
     { status: 200, body: { ...WIRE_AGENT, status: 'revoked', policyCleared: true } },
   );
   const signer = recordingSigner();
@@ -164,7 +179,11 @@ test('a revoke signs a PATCH that leaves no rules', async () => {
     prepareId: PREPARE_ID,
     signature: 'MEUCIQ-device-signature',
   });
-  assert.deepEqual((signer.signed[0] as { body: unknown }).body, { rules: [] });
+  // Not `rules: []`: what is signed leaves the withdraw and the returns in place,
+  // so the owner can still empty the agent afterwards.
+  const signedRules = (signer.signed[0] as { body: { rules: { name: string }[] } }).body.rules;
+  assert.deepEqual(signedRules, rulesFor({ revoke: MANDATE }));
+  assert.ok(signedRules.some((rule) => rule.name.startsWith('Return ')));
   assert.equal(revoked.status, 'revoked');
 });
 
@@ -186,7 +205,7 @@ test('a prepared change that does not match is never signed and never committed'
   assert.equal(calls.length, 1, 'no commit was sent');
 });
 
-test('a revoke that would leave rules behind is refused before signing', async () => {
+test('a revoke that would leave the agent able to trade is refused before signing', async () => {
   const { api, calls } = recordingApi({ status: 200, body: prepared(MANDATE) });
   const signer = recordingSigner();
 

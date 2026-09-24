@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   compileMandate,
+  compileRevocationRules,
   MandateError,
   parseMandate,
   type AuthorizationPayload,
   type Mandate,
   type PolicyRule,
 } from '@sente/mandate';
+import { isAddressEqual, type Address } from 'viem';
 
 import type { Principal } from '../auth/principal';
 import { GasDripService } from '../gas/gas.service';
@@ -31,6 +33,7 @@ import {
   PREPARED_APPROVAL_TTL_MS,
   type PreparedApprovalKind,
 } from './prepared-approval';
+import { RETURN_ADDRESSES, type ReturnAddresses } from './return-address';
 import {
   AGENT_STORE,
   type AgentGasFunding,
@@ -113,7 +116,14 @@ export interface MandateChangeSummary {
   agentId: string;
   agentName: string;
   policyId: string;
-  /** How many rules the policy holds afterwards. Zero for a revoke: it signs nothing. */
+  /**
+   * How many rules the policy holds afterwards.
+   *
+   * On a revoke that is NOT zero since SEN-17: what is left is the way out —
+   * `AccountCore.withdraw` and the return transfers — and nothing that lets the
+   * agent take risk. Zero means the mandate named no `returnTo` and no venue,
+   * so there was no exit to keep.
+   */
   ruleCount: number;
 }
 
@@ -209,6 +219,17 @@ export class AgentsService {
     @Optional()
     @Inject(ALCHEMY_NOTIFY)
     private readonly deposits?: AlchemyNotifyAddresses,
+    /**
+     * Where each user's agents send funds home to (SEN-17). Optional like the
+     * three above, and it degrades the same way: without it a hire compiles no
+     * exit rule, which is what every agent hired before SEN-17 has. It is not a
+     * guarantee that goes missing — nothing widens, and no money moves anywhere
+     * it could not before — but it IS a hire whose funds can only be recovered
+     * with an amend, so `hire` says so in the log rather than staying quiet.
+     */
+    @Optional()
+    @Inject(RETURN_ADDRESSES)
+    private readonly returnAddresses?: ReturnAddresses,
   ) {}
 
   /**
@@ -228,7 +249,7 @@ export class AgentsService {
         `model is not offered; choose one of ${AGENT_MODELS.join(', ')}`,
       );
     }
-    const mandate = this.parse(input.mandate);
+    const mandate = await this.parseFor(principal, input.mandate);
     const rules = compileMandate(mandate);
     const id = randomUUID();
     const { wallet, ownerQuorumId } = await this.provisionWallet(principal, id, rules);
@@ -260,7 +281,7 @@ export class AgentsService {
     this.logger.log(
       `hired agent ${id} for ${principal.userId}: wallet ${wallet.address} ` +
         `policy ${wallet.policyId} (${rules.length} rules, ${this.wallets.name}, ` +
-        `owner ${this.describeOwner(ownerQuorumId)})`,
+        `owner ${this.describeOwner(ownerQuorumId)}); ${this.describeExit(mandate)}`,
     );
     return this.completeHire(principal, agent, mcpToken);
   }
@@ -297,7 +318,7 @@ export class AgentsService {
         `agent ${sourceId} is revoked, so its strategy is no longer running and cannot be forked`,
       );
     }
-    const mandate = this.parse(input.mandate);
+    const mandate = await this.parseFor(principal, input.mandate);
     const rules = compileMandate(mandate);
     const id = randomUUID();
     // Provisioned for the FORKER, so the owner quorum is theirs and never the
@@ -529,7 +550,7 @@ export class AgentsService {
           `agent ${id} is revoked; revocation is permanent, so hire a new agent`,
         );
       }
-      const mandate = this.parse(rawMandate);
+      const mandate = await this.parseFor(principal, rawMandate);
       const rules = compileMandate(mandate);
       try {
         await this.wallets.updatePolicy(agent.policyId, rules);
@@ -547,8 +568,17 @@ export class AgentsService {
 
   /**
    * Permanently revokes the agent: it stops at once (status `revoked`, so the
-   * runner and its MCP token refuse it), then its policy is emptied. Privy is
-   * deny-by-default, so `[]` means the wallet can sign nothing.
+   * runner and its MCP token refuse it), then its policy is cleared of
+   * everything that lets it take risk.
+   *
+   * REVOKE LEAVES THE EXIT OPEN (SEN-17). Until then it PATCHed the policy to
+   * `[]`, and a wallet whose policy has no rules signs nothing at all — which
+   * stops the agent, and also strands whatever it is holding, because a revoked
+   * agent cannot be amended either. {@link compileRevocationRules} is the
+   * answer: the two recovery rules and nothing else, so the owner can still call
+   * `POST /agents/:id/return` afterwards and the agent still cannot approve,
+   * deposit, trade or enroll. Nothing in it is new authority — every surviving
+   * rule was already in the live policy.
    *
    * The status flips BEFORE the enclave call, on purpose: revocation must not
    * wait on, or be blocked by, the provider. If the policy update fails the
@@ -556,31 +586,46 @@ export class AgentsService {
    * retries it. Idempotent once cleared.
    *
    * ONLY FOR A `ownerKind: 'server'` AGENT, like {@link amendMandate}:
-   * emptying a device-owned policy needs the phone's signature, so this refuses
-   * with `mandate_approval_required` and {@link prepareRevoke} carries it.
+   * re-PATCHing a device-owned policy needs the phone's signature, so this
+   * refuses with `mandate_approval_required` and {@link prepareRevoke} carries
+   * it.
    */
   revoke(principal: Principal, id: string): Promise<AgentRecord> {
     return this.withAgentLock(id, async () => {
       let agent = await this.owned(principal, id);
       if (agent.status === 'revoked' && agent.policyCleared) return agent;
       this.requireServerOwned(agent, 'revoked');
+      // Compiled from the mandate as it stands, before the status flips: the
+      // exit it names is the one the live policy already allows.
+      const rules = compileRevocationRules(agent.mandate);
       if (agent.status === 'active') {
         const now = new Date();
         agent = await this.store.update(id, { status: 'revoked', revokedAt: now, updatedAt: now });
       }
       try {
-        await this.wallets.updatePolicy(agent.policyId, []);
+        await this.wallets.updatePolicy(agent.policyId, rules);
       } catch (error) {
         throw this.walletFailure(
           'wallet_policy_update_failed',
           error,
-          `agent ${id} is revoked and will not run, but its wallet policy was not emptied; ` +
+          `agent ${id} is revoked and will not run, but its wallet policy was not cleared; ` +
             'revoke it again to retry',
         );
       }
-      this.logger.log(`revoked agent ${id}: policy ${agent.policyId} emptied`);
+      this.logger.log(
+        `revoked agent ${id}: policy ${agent.policyId} now ${rules.length} rule(s), ` +
+          `${this.describeExit(agent.mandate)}`,
+      );
       return this.store.update(id, { policyCleared: true, updatedAt: new Date() });
     });
+  }
+
+  /** For the revoke and hire logs: whether this mandate leaves a way out, and to where. */
+  private describeExit(mandate: Mandate): string {
+    return mandate.returnTo
+      ? `funds can still be returned to ${mandate.returnTo}`
+      : 'NO return rule: this mandate names no returnTo, so its funds can only be recovered with ' +
+          'the owner key';
   }
 
   // -------------------------------------------------------------------------
@@ -615,24 +660,39 @@ export class AgentsService {
         `agent ${id} is revoked; revocation is permanent, so hire a new agent`,
       );
     }
-    const mandate = this.parse(rawMandate);
+    const mandate = await this.parseFor(principal, rawMandate);
     // The SAME compiler the one-step path and the hire use: what the owner
     // approves has to be what the enclave would have been given anyway.
     const rules = compileMandate(mandate);
     return this.prepare(principal, agent, 'mandate_amend', rules, { mandate });
   }
 
-  /** The same, for the PATCH that empties the policy. `rules: []` signs nothing. */
+  /**
+   * The same, for the PATCH that revokes: {@link compileRevocationRules}, so the
+   * wallet is left able to send its funds home and nothing else.
+   *
+   * The phone recompiles those rules from the mandate it is holding and refuses
+   * to sign anything wider (`apps/mobile/src/agents/approval.ts`), which is why
+   * the rules are compiled from the STORED mandate here rather than composed
+   * freely: the two have to agree, and the stored mandate is the copy both sides
+   * can read.
+   */
   async prepareRevoke(principal: Principal, id: string): Promise<PreparedMandateChange> {
     const agent = await this.owned(principal, id);
     this.requireDeviceOwned(agent, 'revoked');
     if (agent.status === 'revoked' && agent.policyCleared) {
       throw new AgentRefusedError(
         'agent_revoked',
-        `agent ${id} is already revoked and its policy is empty; there is nothing to sign`,
+        `agent ${id} is already revoked and its policy is cleared; there is nothing to sign`,
       );
     }
-    return this.prepare(principal, agent, 'mandate_revoke', [], {});
+    return this.prepare(
+      principal,
+      agent,
+      'mandate_revoke',
+      compileRevocationRules(agent.mandate),
+      {},
+    );
   }
 
   /**
@@ -820,6 +880,52 @@ export class AgentsService {
       throw new AgentRefusedError('agent_not_found', `no agent ${id}`);
     }
     return agent;
+  }
+
+  /**
+   * `parse`, and then the ONE field a client does not get to write: `returnTo`,
+   * the address the agent's wallet may send ERC-20s to (SEN-15).
+   *
+   * Resolved from the caller's registered user wallet (SEN-40) on every hire,
+   * fork and amend, so "how do I get my money out" has an answer from the
+   * moment an agent exists. A client value is only ever COMPARED with it:
+   *
+   * - equal (or absent) — fine, the resolved address is what compiles;
+   * - different — `return_address_mismatch`. A client that could name the exit
+   *   could name its own, and this is a rule the enclave will then enforce
+   *   against the owner rather than for them;
+   * - no registered wallet at all — a client value is `return_address_unavailable`
+   *   (there is nothing to compare it with), and no client value compiles no
+   *   exit rule, exactly as before SEN-17.
+   *
+   * The comparison is `isAddressEqual`, not string equality: the client's copy
+   * came back through JSON and a caller may well have lowercased it.
+   */
+  private async parseFor(principal: Principal, raw: unknown): Promise<Mandate> {
+    const mandate = this.parse(raw);
+    const resolved = await this.returnAddressFor(principal);
+    if (!resolved) {
+      if (!mandate.returnTo) return mandate;
+      throw new AgentRefusedError(
+        'return_address_unavailable',
+        'returnTo is set by this server from your own wallet, and this account has no wallet ' +
+          'yet, so there is nothing it could be; POST /wallet/register from the phone first, or ' +
+          'leave returnTo out',
+      );
+    }
+    if (mandate.returnTo && !isAddressEqual(mandate.returnTo, resolved)) {
+      throw new AgentRefusedError(
+        'return_address_mismatch',
+        `returnTo must be your own wallet, ${resolved}, and this mandate names ` +
+          `${mandate.returnTo}; the address an agent may send funds to is resolved by this ` +
+          'server, never taken from the request',
+      );
+    }
+    return { ...mandate, returnTo: resolved };
+  }
+
+  private returnAddressFor(principal: Principal): Promise<Address | undefined> {
+    return this.returnAddresses?.addressFor(principal.userId) ?? Promise.resolve(undefined);
   }
 
   /** `parseMandate`, plus: a mandate that has already expired would hire an agent that can do nothing. */
