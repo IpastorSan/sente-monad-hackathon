@@ -179,7 +179,9 @@ pnpm --filter @sente/api run probe:privy    # [-- --env-file <path>] [-- --out r
 reused rather than a new Sente app. The probe only _creates_ objects, all named
 `sente-probe-…` (the owner quorums "Sente agent key" / "Sente mandate owner"),
 and only PATCHes policies it created in the same run. Turnstile's quorums,
-policy and wallet were never read or t**Execution mode: TEE.** Confirmed by the app owner in the Privy dashboard on
+policy and wallet were never read or touched.
+
+**Execution mode: TEE.** Confirmed by the app owner in the Privy dashboard on
 2026-09-11; TEE execution is Privy's default. The API itself cannot show this:
 the wallet object has no execution-mode field (`id, address, display_name,
 chain_type, policy_ids, additional_signers, exported_at, imported_at,
@@ -188,7 +190,6 @@ keys, none of which names TEE, enclave or execution mode. So the dashboard is th
 evidence, and "enclave-enforced" is accurate for the field sources listed above.
 The two lags below (aggregation, policy PATCH) are real regardless of mode;
 don't claim an exact cumulative cap or instant revocation.
-er mode.
 
 ### Results (run 6 of 6 — earlier runs found the fixes below)
 
