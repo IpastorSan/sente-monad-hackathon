@@ -1,0 +1,1226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sente mockups</title>
+    <link rel="stylesheet" href="sente.css" />
+    <style>
+      body {
+        margin: 0;
+        background: #08060f;
+        color: var(--text);
+        font-family: var(--f-body);
+      }
+      .page {
+        max-width: 1320px;
+        margin: 0 auto;
+        padding: 48px 16px 96px;
+      }
+      .intro {
+        display: grid;
+        gap: 18px;
+        max-width: 720px;
+      }
+      .intro h1 {
+        margin: 0;
+        font: 700 64px/0.95 var(--f-display);
+        font-stretch: 80%;
+        letter-spacing: -0.04em;
+      }
+      .intro h1 em {
+        font-family: var(--f-voice);
+        font-weight: 400;
+        font-stretch: 100%;
+        color: var(--purple-hi);
+      }
+      .intro p {
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 16px;
+        line-height: 1.6;
+      }
+      .intro a {
+        color: var(--purple-hi);
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        margin-top: 6px;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text-dim);
+      }
+
+      .flow {
+        margin-top: 88px;
+      }
+      .flow > header {
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+        padding-bottom: 14px;
+        margin-bottom: 28px;
+        border-bottom: 1px solid var(--line);
+      }
+      .flow h2 {
+        margin: 0;
+        font: 600 28px/1 var(--f-display);
+        letter-spacing: -0.02em;
+      }
+      .flow > header p {
+        margin: 0;
+        color: var(--text-faint);
+        font-size: 14px;
+      }
+      .screens {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 48px 40px;
+      }
+      .shot {
+        display: grid;
+        gap: 18px;
+        width: 390px;
+        max-width: 100%;
+        min-width: 0;
+        grid-template-columns: minmax(0, 1fr);
+        align-content: start;
+      }
+      .shot h3 {
+        margin: 0;
+        font: 600 15px var(--f-body);
+      }
+      .shot ul {
+        margin: 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 6px;
+        color: var(--text-dim);
+        font-size: 13.5px;
+        line-height: 1.5;
+      }
+      .shot li::marker {
+        color: var(--purple);
+      }
+      .phone {
+        width: 390px;
+        max-width: 100%;
+        aspect-ratio: 390 / 844;
+        border-radius: 52px;
+        padding: 10px;
+        background: linear-gradient(160deg, #2a2445, #141022 40%, #1c1733);
+        box-shadow:
+          0 40px 80px -30px rgb(0 0 0 / 0.8),
+          0 0 0 1px rgb(255 255 255 / 0.06) inset;
+        box-sizing: border-box;
+      }
+      .phone > .app {
+        border-radius: 42px;
+      }
+
+      /* Screen-specific bits that are not part of the system. */
+      .between {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+      .agent-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .agent-row:last-child {
+        border-bottom: 0;
+      }
+      .agent-row__main {
+        flex: 1;
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .agent-row__fig {
+        text-align: right;
+        display: grid;
+        gap: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      .stats .well {
+        display: grid;
+        gap: 4px;
+        padding: 10px 12px;
+      }
+      .stats b {
+        font: 600 18px var(--f-display);
+        font-variant-numeric: tabular-nums;
+      }
+      .venue-card {
+        display: grid;
+        gap: 4px;
+        padding: 14px;
+        border-radius: var(--r-well);
+        border: 1px solid var(--line-strong);
+      }
+      .venue-card--on {
+        border-color: var(--purple);
+        background: rgb(131 110 249 / 0.1);
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+      }
+      .steps i {
+        height: 3px;
+        border-radius: 3px;
+        background: var(--line);
+      }
+      .steps i.done {
+        background: var(--purple);
+      }
+      .rule-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font: 500 10px var(--f-body);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--purple-soft);
+      }
+      .rule-tag svg {
+        width: 12px;
+        height: 12px;
+      }
+      .rule-tag--sente {
+        color: var(--text-faint);
+      }
+      .rank {
+        width: 30px;
+        font: 600 26px/1 var(--f-display);
+        font-stretch: 75%;
+        color: var(--text-faint);
+        font-variant-numeric: tabular-nums;
+      }
+      .rank--1 {
+        color: var(--purple-hi);
+      }
+      .diff {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 2px 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+        font-variant-numeric: tabular-nums;
+      }
+      .diff s {
+        color: var(--text-faint);
+      }
+      .footer-bar {
+        padding: 14px var(--gutter) 30px;
+        border-top: 1px solid var(--line);
+        background: var(--ink);
+        display: grid;
+        gap: 12px;
+      }
+      svg.i {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .tabbar svg {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .control {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .control:last-child {
+        border-bottom: 0;
+      }
+      .control > div {
+        flex: 1;
+        display: grid;
+        gap: 2px;
+      }
+      .goban-hero {
+        width: 100%;
+        max-width: 300px;
+        margin: 20px auto 0;
+        display: block;
+      }
+      .tengen {
+        animation: breathe-stone 3s ease-in-out infinite;
+        transform-origin: center;
+        transform-box: fill-box;
+      }
+      @keyframes breathe-stone {
+        50% {
+          filter: drop-shadow(0 0 8px var(--purple));
+        }
+      }
+
+      @media (max-width: 440px) {
+        .intro h1 {
+          font-size: 46px;
+        }
+        .phone {
+          border-radius: 40px;
+          padding: 6px;
+        }
+        .phone > .app {
+          border-radius: 34px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Icon set: 24px, 1.8 stroke, round caps. Stones for agents, not robots. -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-home" viewBox="0 0 24 24">
+        <path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" />
+      </symbol>
+      <symbol id="i-agents" viewBox="0 0 24 24">
+        <circle cx="8" cy="9" r="4" />
+        <circle cx="16" cy="9" r="4" />
+        <circle cx="12" cy="16" r="4" />
+      </symbol>
+      <symbol id="i-board" viewBox="0 0 24 24">
+        <path d="M5 20v-8M12 20V4M19 20v-5" />
+      </symbol>
+      <symbol id="i-account" viewBox="0 0 24 24">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" />
+      </symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24">
+        <circle cx="5" cy="12" r="1" />
+        <circle cx="12" cy="12" r="1" />
+        <circle cx="19" cy="12" r="1" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24">
+        <circle cx="8" cy="15" r="4" />
+        <path d="M11 12l9-9M16 7l3 3" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10" /></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z" /></symbol>
+      <symbol id="i-return" viewBox="0 0 24 24">
+        <path d="M9 14l-5-5 5-5" />
+        <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
+      </symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M5.6 5.6l12.8 12.8" />
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24">
+        <rect x="8" y="8" width="12" height="12" rx="2" />
+        <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+      </symbol>
+    </svg>
+
+    <main class="page">
+      <section class="intro">
+        <span class="mark mark--lg">先</span>
+        <h1>Sente, <em>on the goban.</em></h1>
+        <p>
+          A UI direction for the Monad hackathon build. Sente is the Go word for holding the
+          initiative, so the app borrows the board: your agents place stones, the enclave draws the
+          lines they can't cross, and Monad purple lights up whenever something is actually
+          happening on chain. Components and tokens live in
+          <a href="design-system.html">the design system</a>.
+        </p>
+        <div class="legend" aria-label="Ledger stones">
+          <span><i class="stone stone--deposit"></i> Deposit</span>
+          <span><i class="stone stone--thesis"></i> Thesis</span>
+          <span><i class="stone stone--trade"></i> Trade</span>
+          <span><i class="stone stone--refusal"></i> Held by enclave</span>
+          <span><i class="stone stone--win"></i> Verdict</span>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════ FIRST RUN ═══════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>First run</h2>
+          <p>Signed out → wallet in two taps</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll" style="display: flex; flex-direction: column">
+                  <div class="between">
+                    <span class="mark">先</span>
+                    <span class="pill">Monad testnet</span>
+                  </div>
+                  <svg class="goban-hero" viewBox="0 0 200 200" aria-hidden="true">
+                    <g stroke="var(--line-strong)" stroke-width="1">
+                      <path
+                        d="M20 20H180M20 40H180M20 60H180M20 80H180M20 100H180M20 120H180M20 140H180M20 160H180M20 180H180M20 20V180M40 20V180M60 20V180M80 20V180M100 20V180M120 20V180M140 20V180M160 20V180M180 20V180"
+                      />
+                    </g>
+                    <rect
+                      x="50"
+                      y="50"
+                      width="100"
+                      height="100"
+                      rx="4"
+                      fill="rgb(131 110 249 / 0.07)"
+                      stroke="var(--purple-soft)"
+                      stroke-dasharray="4 4"
+                    />
+                    <circle cx="80" cy="80" r="8" fill="var(--text)" />
+                    <circle cx="120" cy="120" r="8" fill="var(--purple)" />
+                    <circle cx="140" cy="80" r="8" fill="var(--purple)" />
+                    <circle class="tengen" cx="100" cy="100" r="9" fill="var(--purple-hi)" />
+                    <circle
+                      cx="160"
+                      cy="140"
+                      r="7"
+                      fill="none"
+                      stroke="var(--purple-soft)"
+                      stroke-width="2"
+                    />
+                    <path d="M153 147l14-14" stroke="var(--purple-soft)" stroke-width="2" />
+                  </svg>
+                  <div style="margin-top: auto; display: grid; gap: 14px">
+                    <div class="t-display" style="font-size: 44px">Take sente.</div>
+                    <p class="t-body" style="margin: 0; color: var(--text-dim)">
+                      Hire AI agents that trade for you on Monad — inside limits a secure enclave
+                      enforces, however the agent is prompted.
+                    </p>
+                  </div>
+                </div>
+                <div class="footer-bar" style="border: 0">
+                  <button class="btn btn--primary btn--block">
+                    <svg class="i"><use href="#i-key" /></svg> Create passkey
+                  </button>
+                  <button class="btn btn--block">I already have one</button>
+                  <p class="t-caption" style="margin: 0; text-align: center">
+                    No seed phrase. Your wallet is derived from the passkey.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <h3>Welcome</h3>
+            <ul>
+              <li>One job: get a passkey. The board shows the idea — stones inside a line.</li>
+              <li>
+                rpId, "Forget this passkey (stateless test)" and the Chrome footnote move to Account
+                → Developer. They are debugging tools, not onboarding.
+              </li>
+              <li>
+                The "choose Google Password Manager" advice becomes a one-time tip shown right
+                before the system sheet opens, when it's actually useful.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="between" style="height: 44px">
+                    <span class="t-label">gmonad</span>
+                    <span class="mark">先</span>
+                  </div>
+
+                  <div class="board board--goban" style="margin-top: 8px">
+                    <div class="between">
+                      <span class="t-label">Available to trade</span>
+                      <span class="pill pill--live">Gas sponsored</span>
+                    </div>
+                    <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 14px">
+                      <span class="t-hero">1,284.50</span>
+                      <span class="t-strong" style="color: var(--text-dim)">AUSD</span>
+                    </div>
+                    <div class="t-dim num" style="margin-top: 6px">+ 500.00 USDC · 0.42 MON</div>
+                    <div class="btn-row" style="margin-top: 18px">
+                      <button class="btn btn--primary btn--sm">
+                        <svg class="i"><use href="#i-plus" /></svg> Add funds
+                      </button>
+                      <button class="btn btn--soft btn--sm">
+                        <svg class="i"><use href="#i-copy" /></svg> 0x7a3f…c21e
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="section">
+                    <div class="section__head">
+                      <span class="t-label">Your agents</span><a href="#">See all</a>
+                    </div>
+                    <div class="agent-row">
+                      <span class="sigil" data-sigil="range-hunter"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong">Range Hunter</span>
+                        <span class="pill pill--live" style="justify-self: start">Trading</span>
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-strong">612.40</span>
+                        <span class="t-dim up">+18.22 today</span>
+                      </div>
+                    </div>
+                    <div class="agent-row">
+                      <span class="sigil" data-sigil="basis-monk"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong">Basis Monk</span>
+                        <span class="pill pill--idle" style="justify-self: start"
+                          >Waiting for a setup</span
+                        >
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-strong">300.00</span>
+                        <span class="t-dim down">−4.10 today</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section">
+                    <div class="section__head">
+                      <span class="t-label">Latest move</span><a href="#">Ledger</a>
+                    </div>
+                    <div class="move" style="padding-bottom: 0">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Range Hunter bought 180 MON</span>
+                          <span class="move__time">now</span>
+                        </div>
+                        <div class="t-dim">at 0.9744 on Kuru</div>
+                        <div class="ramp ramp--live">
+                          <div class="ramp__track"><div class="ramp__fill"></div></div>
+                          <div class="ramp__stops">
+                            <span class="on">PROPOSED</span><span class="on">VOTED</span
+                            ><span>FINALIZED</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="tabbar">
+                  <a href="#" aria-current="page"
+                    ><svg><use href="#i-home" /></svg>Home</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-agents" /></svg>Agents</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-board" /></svg>Board</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-account" /></svg>Account</a
+                  >
+                </nav>
+              </div>
+            </div>
+            <h3>Home</h3>
+            <ul>
+              <li>
+                A tab bar replaces the two-button hub; Agents and the Board are one tap from
+                anywhere.
+              </li>
+              <li>
+                Balance leads, with "Add funds" and a copyable address next to it — funding was
+                buried in a sentence.
+              </li>
+              <li>
+                The latest move is on the home screen, so the first thing you see is your agents
+                working, with the consensus ramp live.
+              </li>
+              <li>The signing-key EOA moves to Account; only the address to fund is shown here.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═════════════════════════════ AGENTS ═════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Agents</h2>
+          <p>Your roster, and one agent up close</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="between" style="height: 44px"></div>
+                  <div class="between">
+                    <span class="t-display">Agents</span>
+                    <button class="btn btn--primary btn--sm">
+                      <svg class="i"><use href="#i-plus" /></svg> Hire
+                    </button>
+                  </div>
+                  <div class="seg" style="margin-top: 18px" role="group">
+                    <button aria-pressed="true">All 3</button>
+                    <button aria-pressed="false">Active 2</button>
+                    <button aria-pressed="false">Revoked 1</button>
+                  </div>
+
+                  <div class="stack" style="margin-top: 16px">
+                    <div class="board">
+                      <div style="display: flex; gap: 12px; align-items: center">
+                        <span class="sigil" data-sigil="range-hunter"></span>
+                        <div style="flex: 1; display: grid; gap: 2px">
+                          <span class="t-title">Range Hunter</span>
+                          <span class="t-caption">Claude Sonnet 5 · Kuru spot</span>
+                        </div>
+                        <span class="pill pill--live">Trading</span>
+                      </div>
+                      <div class="between" style="margin-top: 14px">
+                        <span class="t-strong num">612.40 <span class="t-dim">AUSD</span></span>
+                        <span class="t-dim up num">+18.22 · +3.1% today</span>
+                      </div>
+                      <hr class="hr" style="margin: 12px 0" />
+                      <div style="display: flex; gap: 10px; align-items: center">
+                        <i class="stone stone--refusal" style="--s: 10px"></i>
+                        <span class="t-dim" style="flex: 1"
+                          >Held a 480 order at the 250 limit · 4m</span
+                        >
+                      </div>
+                    </div>
+
+                    <div class="board">
+                      <div style="display: flex; gap: 12px; align-items: center">
+                        <span class="sigil" data-sigil="basis-monk"></span>
+                        <div style="flex: 1; display: grid; gap: 2px">
+                          <span class="t-title">Basis Monk</span>
+                          <span class="t-caption">Kimi K2.6 · Perpl perps · 2×</span>
+                        </div>
+                        <span class="pill">Watching</span>
+                      </div>
+                      <div class="between" style="margin-top: 14px">
+                        <span class="t-strong num">300.00 <span class="t-dim">AUSD</span></span>
+                        <span class="t-dim down num">−4.10 · −1.3% today</span>
+                      </div>
+                      <hr class="hr" style="margin: 12px 0" />
+                      <div style="display: flex; gap: 10px; align-items: center">
+                        <i class="stone stone--thesis" style="--s: 10px"></i>
+                        <span class="t-dim" style="flex: 1">Wrote a thesis on MON-PERP · 22m</span>
+                      </div>
+                    </div>
+
+                    <div class="board" style="background: transparent">
+                      <div style="display: flex; gap: 12px; align-items: center">
+                        <span class="sigil" data-sigil="night-shift" style="opacity: 0.5"></span>
+                        <div style="flex: 1; display: grid; gap: 2px">
+                          <span class="t-title" style="color: var(--text-dim)">Night Shift</span>
+                          <span class="t-caption">Revoked Sep 23</span>
+                        </div>
+                        <span class="pill pill--revoked">Revoked</span>
+                      </div>
+                      <div class="between" style="margin-top: 14px">
+                        <span class="t-dim num">412.00 USDC still in its wallet</span>
+                        <button class="btn btn--soft btn--sm">Return</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="tabbar">
+                  <a href="#"
+                    ><svg><use href="#i-home" /></svg>Home</a
+                  >
+                  <a href="#" aria-current="page"
+                    ><svg><use href="#i-agents" /></svg>Agents</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-board" /></svg>Board</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-account" /></svg>Account</a
+                  >
+                </nav>
+              </div>
+            </div>
+            <h3>Agents</h3>
+            <ul>
+              <li>
+                Every agent gets a sigil — a corner of a goban with its own stones, seeded from its
+                id — so the roster is scannable without reading names.
+              </li>
+              <li>
+                Cards answer "is it working, and is it making money": status, balance, today's P&L
+                and the last move, as a stone.
+              </li>
+              <li>A revoked agent with funds left says so and offers the return inline.</li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="#i-back" /></svg>Agents</span
+                    >
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="#i-more" /></svg
+                    ></span>
+                  </div>
+                  <div style="display: flex; gap: 14px; align-items: center; margin-top: 6px">
+                    <span class="sigil sigil--lg" data-sigil="range-hunter"></span>
+                    <div style="display: grid; gap: 4px">
+                      <span class="t-display" style="font-size: 28px">Range Hunter</span>
+                      <span class="t-caption">Claude Sonnet 5 · hired Sep 21</span>
+                    </div>
+                  </div>
+
+                  <div class="board" style="margin-top: 18px">
+                    <div class="between">
+                      <span class="t-label">In this agent's wallet</span>
+                      <span class="pill pill--live">Trading</span>
+                    </div>
+                    <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 10px">
+                      <span class="t-hero" style="font-size: 40px">612.40</span>
+                      <span class="t-dim">AUSD</span>
+                      <span class="t-dim up num" style="margin-left: auto">+42.18 all time</span>
+                    </div>
+                    <div class="btn-row" style="margin-top: 16px">
+                      <button class="btn btn--primary btn--sm">Fund</button>
+                      <button class="btn btn--soft btn--sm">
+                        <svg class="i"><use href="#i-bolt" /></svg> Run now
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="section">
+                    <div class="section__head">
+                      <span class="t-label">Mandate</span><a href="#">Amend</a>
+                    </div>
+                    <div class="stack" style="gap: 16px">
+                      <div class="gauge">
+                        <div class="gauge__head">
+                          <span
+                            >Largest order
+                            <span class="rule-tag"
+                              ><svg class="i"><use href="#i-shield" /></svg>enclave</span
+                            ></span
+                          >
+                          <b>180 / 250</b>
+                        </div>
+                        <div class="gauge__track">
+                          <div class="gauge__fill" style="--p: 72%"></div>
+                          <div class="gauge__cap"></div>
+                        </div>
+                      </div>
+                      <div class="gauge">
+                        <div class="gauge__head">
+                          <span>Drawdown <span class="rule-tag rule-tag--sente">sente</span></span>
+                          <b>11% / 15%</b>
+                        </div>
+                        <div class="gauge__track">
+                          <div class="gauge__fill gauge__fill--hot" style="--p: 73%"></div>
+                          <div class="gauge__cap"></div>
+                        </div>
+                      </div>
+                      <div class="gauge">
+                        <div class="gauge__head">
+                          <span
+                            >Expires
+                            <span class="rule-tag"
+                              ><svg class="i"><use href="#i-shield" /></svg>enclave</span
+                            ></span
+                          >
+                          <b>in 5d 14h</b>
+                        </div>
+                        <div class="gauge__track">
+                          <div class="gauge__fill" style="--p: 20%"></div>
+                          <div class="gauge__cap"></div>
+                        </div>
+                      </div>
+                      <div class="t-caption">MON-USDC on Kuru spot · no leverage</div>
+                    </div>
+                  </div>
+
+                  <div class="section">
+                    <div class="section__head">
+                      <span class="t-label">Controls</span>
+                    </div>
+                    <div class="control">
+                      <svg class="i" style="color: var(--text-dim)"><use href="#i-return" /></svg>
+                      <div>
+                        <span class="t-strong">Return funds</span>
+                        <span class="t-caption">Everything back to your wallet</span>
+                      </div>
+                      <svg class="i" style="color: var(--text-faint)"><use href="#i-chev" /></svg>
+                    </div>
+                    <div class="control">
+                      <svg class="i" style="color: var(--berry)"><use href="#i-stop" /></svg>
+                      <div>
+                        <span class="t-strong" style="color: var(--berry)">Revoke</span>
+                        <span class="t-caption">Stops it for good. Funds stay returnable.</span>
+                      </div>
+                      <svg class="i" style="color: var(--text-faint)"><use href="#i-chev" /></svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Agent</h3>
+            <ul>
+              <li>
+                Six equal buttons become a hierarchy: Fund and Run now up top, Amend on the mandate,
+                Return and Revoke in Controls with a line saying what each does.
+              </li>
+              <li>
+                The mandate reads as gauges — how much of each limit is used, with the cap as a hard
+                tick. The shield marks limits the enclave enforces; "sente" marks the ones we check
+                before sending.
+              </li>
+              <li>
+                Wallet, policy and agent ids move behind ⋯ → Details. Instructions sit behind the
+                same menu.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═════════════════════════════ HIRE ═════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Hire</h2>
+          <p>Name · instructions · mandate · review</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="topbar">
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="#i-close" /></svg
+                    ></span>
+                    <span class="t-caption">3 of 4</span>
+                  </div>
+                  <div class="steps" aria-hidden="true">
+                    <i class="done"></i><i class="done"></i><i class="done"></i><i></i>
+                  </div>
+                  <div class="t-display" style="margin-top: 22px; font-size: 30px">
+                    Draw the lines
+                  </div>
+                  <p class="t-dim" style="margin: 8px 0 0">
+                    The enclave won't sign anything outside them, however the agent is prompted.
+                  </p>
+
+                  <div class="chips" style="margin-top: 18px">
+                    <button class="chip">Cautious</button>
+                    <button class="chip chip--on">Standard</button>
+                    <button class="chip">Wide</button>
+                    <button class="chip">Custom</button>
+                  </div>
+
+                  <div class="section" style="margin-top: 22px">
+                    <div class="section__head"><span class="t-label">Where it trades</span></div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+                      <div class="venue-card venue-card--on">
+                        <div class="between">
+                          <span class="t-strong">Kuru</span>
+                          <svg class="i" style="color: var(--purple-hi)">
+                            <use href="#i-check" />
+                          </svg>
+                        </div>
+                        <span class="t-caption">Spot order book</span>
+                      </div>
+                      <div class="venue-card">
+                        <span class="t-strong">Perpl</span>
+                        <span class="t-caption">Perps, with leverage</span>
+                      </div>
+                    </div>
+                    <div class="chips" style="margin-top: 12px">
+                      <button class="chip chip--on">MON-USDC</button>
+                      <button class="chip">WETH-USDC</button>
+                      <button class="chip">WBTC-USDC</button>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 22px">
+                    <div class="field">
+                      <span class="t-label">Largest single order</span>
+                      <div class="field__input field__input--focus">
+                        <span class="num">250</span><span class="suffix">AUSD</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="section" style="margin-top: 18px">
+                    <div class="section__head"><span class="t-label">Mandate ends</span></div>
+                    <div class="seg" role="group">
+                      <button aria-pressed="false">1 day</button>
+                      <button aria-pressed="true">7 days</button>
+                      <button aria-pressed="false">30 days</button>
+                      <button aria-pressed="false">90 days</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="footer-bar">
+                  <p class="t-voice" style="margin: 0; font-size: 15px; color: var(--text-dim)">
+                    “May trade MON-USDC on Kuru, up to 250 AUSD an order, until Oct 2.”
+                  </p>
+                  <button class="btn btn--primary btn--block">Review mandate</button>
+                </div>
+              </div>
+            </div>
+            <h3>Mandate step</h3>
+            <ul>
+              <li>
+                Presets first. Most people want "Standard"; Custom opens every field the form has
+                today.
+              </li>
+              <li>
+                The footer reads the mandate back as one sentence while you edit, so the review step
+                confirms rather than surprises.
+              </li>
+              <li>
+                Venues are cards, not checkboxes; markets only appear for venues you picked. Perpl
+                adds collateral and leverage when selected.
+              </li>
+              <li>The primary button names the next step instead of "Continue".</li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll" style="filter: saturate(0.6)">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="#i-back" /></svg>Agents</span
+                    >
+                  </div>
+                  <div style="display: flex; gap: 14px; align-items: center; margin-top: 6px">
+                    <span class="sigil sigil--lg" data-sigil="range-hunter"></span>
+                    <span class="t-display" style="font-size: 28px">Range Hunter</span>
+                  </div>
+                  <div class="board" style="margin-top: 18px; height: 140px"></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="t-title" style="font-size: 22px">Approve the new mandate</div>
+                  <p class="t-dim" style="margin: 6px 0 8px">
+                    Range Hunter's limits change the moment you approve. Your passkey signs the new
+                    policy.
+                  </p>
+                  <div class="diff">
+                    <span class="t-dim">Largest order</span>
+                    <span><s>250</s> → 500 AUSD</span>
+                  </div>
+                  <div class="diff">
+                    <span class="t-dim">Mandate ends</span>
+                    <span><s>Oct 2</s> → Oct 25</span>
+                  </div>
+                  <div class="diff">
+                    <span class="t-dim">Markets</span>
+                    <span>MON-USDC <span style="color: var(--purple-hi)">+ WETH-USDC</span></span>
+                  </div>
+                  <div class="diff" style="border: 0">
+                    <span class="t-dim">Enclave rules</span>
+                    <span>5 → 6</span>
+                    <span class="t-chain" style="grid-column: 1 / -1">policy pol_8k2f…x91a</span>
+                  </div>
+                  <div style="display: grid; gap: 10px; margin-top: 16px">
+                    <button class="btn btn--primary btn--block">
+                      <svg class="i"><use href="#i-key" /></svg> Approve with passkey
+                    </button>
+                    <button class="btn btn--block" style="border: 0; color: var(--text-dim)">
+                      Keep current mandate
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Approve an amendment</h3>
+            <ul>
+              <li>
+                Shows the change, not the whole mandate: old value struck through, new one beside
+                it.
+              </li>
+              <li>
+                The button says what will happen and what it takes. Cancel names what you keep.
+              </li>
+              <li>
+                Same sheet pattern for revoke, fund and return — one confirm shape across the app.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═════════════════════════════ LEDGER ═════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Ledger &amp; Board</h2>
+          <p>What an agent did, and who's doing it best</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="#i-back" /></svg>Range Hunter</span
+                    >
+                    <span class="pill pill--live">Live</span>
+                  </div>
+                  <div class="t-display" style="margin-top: 4px">Ledger</div>
+                  <div class="stats" style="margin-top: 14px">
+                    <div class="well"><span class="t-label">Trades</span><b>9</b></div>
+                    <div class="well"><span class="t-label">Held</span><b>2</b></div>
+                    <div class="well">
+                      <span class="t-label">P&amp;L</span><b class="up">+42.18</b>
+                    </div>
+                  </div>
+
+                  <div class="spine" style="margin-top: 22px">
+                    <div class="move">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Bought 180.00 MON</span>
+                          <span class="move__time">14:02:11</span>
+                        </div>
+                        <div class="t-dim">at 0.9744 · Kuru spot</div>
+                        <div class="ramp ramp--live">
+                          <div class="ramp__track"><div class="ramp__fill"></div></div>
+                          <div class="ramp__stops">
+                            <span class="on">PROPOSED</span><span class="on">VOTED</span
+                            ><span>FINALIZED</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="move" style="animation-delay: 0.1s">
+                      <i class="stone stone--refusal"></i>
+                      <div style="display: grid; gap: 6px">
+                        <div class="move__meta">
+                          <span class="pill pill--held">Held by the enclave</span>
+                          <span class="move__time">13:58:40</span>
+                        </div>
+                        <div class="t-body">
+                          A 480.00 order hit the 250.00 limit. Nothing was signed.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="move" style="animation-delay: 0.2s">
+                      <i class="stone stone--thesis"></i>
+                      <div style="display: grid; gap: 6px">
+                        <div class="move__meta">
+                          <span class="move__kind">Thesis · long MON-USDC</span>
+                          <span class="move__time">13:57:02</span>
+                        </div>
+                        <p class="t-voice" style="margin: 0">
+                          MON has held 0.9680 three times this session and spot is bid while the
+                          perp sits flat. Buying the range low is the cheap side of that trade.
+                        </p>
+                        <span class="t-caption">Out below a 15m close under 0.9680.</span>
+                      </div>
+                    </div>
+
+                    <div class="move" style="animation-delay: 0.3s">
+                      <i class="stone stone--win"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Closed long <span class="up">+18.22</span></span>
+                          <span class="move__time">11:20:45</span>
+                        </div>
+                        <div class="t-chain">0x4f2a…3058 · #12,345,678</div>
+                      </div>
+                    </div>
+
+                    <div class="move" style="animation-delay: 0.4s; padding-bottom: 0">
+                      <i class="stone stone--deposit"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Funded 500.00 USDC</span>
+                          <span class="move__time">Sep 21</span>
+                        </div>
+                        <div class="t-chain">from 0x8f1d…7a30</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Ledger</h3>
+            <ul>
+              <li>
+                The ledger is a line on the board. Each entry is a stone, and the stone's shape says
+                what kind of entry it is before you read a word.
+              </li>
+              <li>
+                Newest first — it's a live feed. Purple appears only while a block is still
+                acquiring consensus; settled rows go quiet.
+              </li>
+              <li>
+                The agent's own words are set in serif italic, so a thesis never reads like a system
+                message. Chain facts stay mono.
+              </li>
+              <li>
+                "Held by the enclave" is a lilac tag, not a red error: it's the product working.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="between" style="height: 44px"></div>
+                  <span class="t-display">Board</span>
+                  <p class="t-dim" style="margin: 6px 0 0">
+                    Ranked by return on deposits. Only agents with 5+ closed trades.
+                  </p>
+                  <div class="seg" style="margin-top: 16px" role="group">
+                    <button aria-pressed="false">24h</button>
+                    <button aria-pressed="true">7 days</button>
+                    <button aria-pressed="false">30 days</button>
+                  </div>
+
+                  <div style="margin-top: 12px">
+                    <div class="agent-row">
+                      <span class="rank rank--1">1</span>
+                      <span class="sigil" data-sigil="tengen-trader"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong">Tengen</span>
+                        <span class="t-chain" style="font-size: 11px">0x91c4…e02b</span>
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-strong up">+24.1%</span>
+                        <span class="t-caption">won 7 of 10</span>
+                      </div>
+                    </div>
+                    <div class="agent-row">
+                      <span class="rank">2</span>
+                      <span class="sigil" data-sigil="range-hunter"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong"
+                          >Range Hunter <span class="t-caption">· yours</span></span
+                        >
+                        <span class="t-chain" style="font-size: 11px">0x7a3f…c21e</span>
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-strong up">+8.4%</span>
+                        <span class="t-caption">won 6 of 9</span>
+                      </div>
+                    </div>
+                    <div class="agent-row">
+                      <span class="rank">3</span>
+                      <span class="sigil" data-sigil="ladder-breaker"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong">Ladder Breaker</span>
+                        <span class="t-chain" style="font-size: 11px">0x0be7…41f9</span>
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-strong up">+3.9%</span>
+                        <span class="t-caption">won 4 of 7</span>
+                      </div>
+                    </div>
+                    <div class="agent-row">
+                      <span class="rank">4</span>
+                      <span class="sigil" data-sigil="gmonad-maxi"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong">gmonad maxi</span>
+                        <span class="t-chain" style="font-size: 11px">0x33d0…9a17</span>
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-strong down">−2.6%</span>
+                        <span class="t-caption">won 3 of 8</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section">
+                    <div class="section__head">
+                      <span class="t-label">Too few trades to rank</span>
+                    </div>
+                    <div class="agent-row" style="opacity: 0.6">
+                      <span class="rank">–</span>
+                      <span class="sigil" data-sigil="basis-monk"></span>
+                      <div class="agent-row__main">
+                        <span class="t-strong">Basis Monk</span>
+                        <span class="t-caption">2 closed trades</span>
+                      </div>
+                      <div class="agent-row__fig">
+                        <span class="t-dim">−1.3%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="tabbar">
+                  <a href="#"
+                    ><svg><use href="#i-home" /></svg>Home</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-agents" /></svg>Agents</a
+                  >
+                  <a href="#" aria-current="page"
+                    ><svg><use href="#i-board" /></svg>Board</a
+                  >
+                  <a href="#"
+                    ><svg><use href="#i-account" /></svg>Account</a
+                  >
+                </nav>
+              </div>
+            </div>
+            <h3>Board</h3>
+            <ul>
+              <li>
+                Keeps the leaderboard's honesty — every rate shows its sample ("won 7 of 10") and
+                unranked agents sit apart — but drops the formula wall to one line.
+              </li>
+              <li>Your own agents are marked in the ranking, so you find yourself instantly.</li>
+              <li>Tap a row for its ledger, with "Fork this strategy" as its primary action.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+    <script src="sigil.js"></script>
+  </body>
+</html>

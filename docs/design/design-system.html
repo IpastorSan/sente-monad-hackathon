@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Goban design system</title>
+    <link rel="stylesheet" href="sente.css" />
+    <style>
+      body {
+        margin: 0;
+        background: var(--ink);
+        color: var(--text);
+        font-family: var(--f-body);
+      }
+      .page {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 56px 16px 120px;
+      }
+      a {
+        color: var(--purple-hi);
+      }
+      .masthead {
+        display: grid;
+        gap: 20px;
+        padding-bottom: 40px;
+        border-bottom: 1px solid var(--line);
+      }
+      .masthead h1 {
+        margin: 0;
+        font: 700 clamp(56px, 11vw, 120px) / 0.88 var(--f-display);
+        font-stretch: 75%;
+        letter-spacing: -0.045em;
+      }
+      .masthead p {
+        margin: 0;
+        max-width: 640px;
+        color: var(--text-dim);
+        font-size: 17px;
+        line-height: 1.6;
+      }
+      .part {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 32px;
+        padding: 56px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .part > header h2 {
+        margin: 0;
+        font: 600 26px/1.1 var(--f-display);
+        letter-spacing: -0.02em;
+      }
+      .part > header p {
+        margin: 10px 0 0;
+        color: var(--text-faint);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .part > div {
+        min-width: 0;
+      }
+      @media (max-width: 760px) {
+        .part {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+      }
+
+      .principles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 14px;
+      }
+      .principles .board h3 {
+        margin: 0 0 8px;
+        font: 600 17px var(--f-display);
+      }
+      .principles .board p {
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .swatch-group + .swatch-group {
+        margin-top: 28px;
+      }
+      .swatches {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 12px;
+        margin-top: 10px;
+      }
+      .swatch {
+        border-radius: var(--r-well);
+        border: 1px solid var(--line);
+        overflow: hidden;
+        background: var(--board);
+      }
+      .swatch i {
+        display: block;
+        height: 64px;
+      }
+      .swatch div {
+        padding: 10px 12px;
+        display: grid;
+        gap: 2px;
+      }
+      .swatch b {
+        font: 500 13px var(--f-body);
+      }
+
+      .spec {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 24px;
+        align-items: baseline;
+        padding: 20px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .spec:first-child {
+        padding-top: 0;
+      }
+      .spec .t-chain {
+        white-space: nowrap;
+      }
+      .spec .t-caption {
+        grid-column: 1 / -1;
+      }
+      @media (max-width: 560px) {
+        .spec {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .stones {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+      }
+      .stones .board {
+        display: grid;
+        gap: 12px;
+        justify-items: start;
+      }
+      .stones .stone {
+        --s: 28px;
+      }
+      .stones .stone--refusal::after {
+        height: 3px;
+        left: -5px;
+        right: -5px;
+      }
+
+      .specimen {
+        display: grid;
+        gap: 18px;
+      }
+      .demo {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+      }
+      .demo-label {
+        margin-bottom: 10px;
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 14px;
+      }
+      .mini-phone {
+        position: relative;
+        height: 300px;
+        border-radius: var(--r-board);
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: var(--ink);
+      }
+      .mini-phone .sheet {
+        padding-bottom: 20px;
+      }
+
+      .voice-table {
+        display: grid;
+        gap: 0;
+      }
+      .voice-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .voice-row s {
+        color: var(--text-faint);
+      }
+      @media (max-width: 560px) {
+        .voice-row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+      pre {
+        margin: 0;
+        padding: 18px;
+        overflow-x: auto;
+        border-radius: var(--r-well);
+        background: var(--board);
+        border: 1px solid var(--line);
+        font: 400 12.5px/1.6 var(--f-chain);
+        color: var(--text-dim);
+      }
+      pre b {
+        color: var(--purple-soft);
+        font-weight: 400;
+      }
+      ul.plain {
+        margin: 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 8px;
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      ul.plain li::marker {
+        color: var(--purple);
+      }
+      svg.i {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-key" viewBox="0 0 24 24">
+        <circle cx="8" cy="15" r="4" />
+        <path d="M11 12l9-9M16 7l3 3" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+      </symbol>
+    </svg>
+
+    <main class="page">
+      <header class="masthead">
+        <span class="mark mark--lg">先</span>
+        <h1>Goban</h1>
+        <p>
+          Sente's design system. The app is a board: agents place stones, the enclave draws the
+          lines, and Monad purple marks the moment something happens on chain. Everything below is
+          drawn in CSS for review; the tokens map one-to-one onto
+          <code>apps/mobile/src/ui/theme.ts</code>. See it applied in
+          <a href="mockups.html">the mockups</a>.
+        </p>
+      </header>
+
+      <section class="part">
+        <header>
+          <h2>Principles</h2>
+          <p>Four rules. When a screen is unclear, one of these is being broken.</p>
+        </header>
+        <div class="principles">
+          <div class="board">
+            <h3>Purple is an event</h3>
+            <p>
+              Monad purple means an agent is acting or a block is landing. It is on the primary
+              button because pressing it makes something happen, and it drains out of a ledger row
+              once the block is final.
+            </p>
+          </div>
+          <div class="board">
+            <h3>A face is a speaker</h3>
+            <p>
+              Bricolage when the app raises its voice, Geist when it talks, Newsreader italic when
+              the agent talks, Geist Mono when the chain does. You know who said it before you read
+              it.
+            </p>
+          </div>
+          <div class="board">
+            <h3>Stones say what happened</h3>
+            <p>
+              Five ledger kinds, five stones. The shape carries the kind, so a scrolled ledger reads
+              as a pattern: runs of trades, a refusal, a verdict.
+            </p>
+          </div>
+          <div class="board">
+            <h3>Limits are drawn, not listed</h3>
+            <p>
+              A mandate is territory. Show how much of each limit is used and where the line is —
+              the user should see that an agent is near its edge without doing arithmetic.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Colour</h2>
+          <p>
+            A night ground tinted toward Monad's purple rather than a neutral black. Two outcome
+            colours, used only for money that moved.
+          </p>
+        </header>
+        <div>
+          <div class="swatch-group">
+            <span class="t-label">Ground</span>
+            <div class="swatches">
+              <div class="swatch">
+                <i style="background: var(--ink)"></i>
+                <div><b>ink</b><span class="t-chain">#0D0A19</span></div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--board)"></i>
+                <div><b>board</b><span class="t-chain">#15112A</span></div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--well)"></i>
+                <div><b>well</b><span class="t-chain">#1D1838</span></div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--line)"></i>
+                <div><b>line</b><span class="t-chain">#2A2447</span></div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--line-strong)"></i>
+                <div><b>line-strong</b><span class="t-chain">#40386A</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="swatch-group">
+            <span class="t-label">Text</span>
+            <div class="swatches">
+              <div class="swatch">
+                <i style="background: var(--text)"></i>
+                <div><b>text</b><span class="t-chain">#F3F0FF</span></div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--text-dim)"></i>
+                <div><b>text-dim</b><span class="t-chain">#AAA3CB</span></div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--text-faint)"></i>
+                <div><b>text-faint</b><span class="t-chain">#6F688F</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="swatch-group">
+            <span class="t-label">Signal — Monad</span>
+            <div class="swatches">
+              <div class="swatch">
+                <i style="background: var(--purple)"></i>
+                <div>
+                  <b>purple</b><span class="t-chain">#836EF9</span
+                  ><span class="t-caption">Primary action, trade, live block</span>
+                </div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--purple-hi)"></i>
+                <div>
+                  <b>purple-hi</b><span class="t-chain">#A898FF</span
+                  ><span class="t-caption">Purple as text on ink</span>
+                </div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--purple-soft)"></i>
+                <div>
+                  <b>purple-soft</b><span class="t-chain">#DDD7FE</span
+                  ><span class="t-caption">Agent voice, selection, enclave</span>
+                </div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--purple-deep)"></i>
+                <div>
+                  <b>purple-deep</b><span class="t-chain">#200052</span
+                  ><span class="t-caption">Text on purple-soft</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="swatch-group">
+            <span class="t-label">Outcome</span>
+            <div class="swatches">
+              <div class="swatch">
+                <i style="background: var(--mint)"></i>
+                <div>
+                  <b>mint</b><span class="t-chain">#5FE3B3</span><span class="t-caption">Gain</span>
+                </div>
+              </div>
+              <div class="swatch">
+                <i style="background: var(--berry)"></i>
+                <div>
+                  <b>berry</b><span class="t-chain">#F0508C</span
+                  ><span class="t-caption">Loss, destructive action</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Type</h2>
+          <p>
+            Four faces, each owned by one speaker. Numbers are always tabular. All four ship as
+            <code>@expo-google-fonts</code> packages.
+          </p>
+        </header>
+        <div>
+          <div class="spec">
+            <span class="t-hero">1,284.50</span>
+            <span class="t-chain">Bricolage 600 · 52 · wdth 80</span>
+            <span class="t-caption">Hero figure. One per screen: the balance that matters.</span>
+          </div>
+          <div class="spec">
+            <span class="t-display">Draw the lines</span>
+            <span class="t-chain">Bricolage 700 · 34 · wdth 85</span>
+            <span class="t-caption">Screen titles.</span>
+          </div>
+          <div class="spec">
+            <span class="t-title">Approve the new mandate</span>
+            <span class="t-chain">Bricolage 600 · 19</span>
+            <span class="t-caption">Sheet and card titles, agent names.</span>
+          </div>
+          <div class="spec">
+            <span class="t-body">A 480.00 order hit the 250.00 limit. Nothing was signed.</span>
+            <span class="t-chain">Geist 400 · 15 / 1.45</span>
+            <span class="t-caption">Body. Also Geist 500 for emphasis, 13 dim, 12 caption.</span>
+          </div>
+          <div class="spec">
+            <span class="t-label">Largest single order</span>
+            <span class="t-chain">Geist 500 · 11 · +0.1em caps</span>
+            <span class="t-caption">Section and field labels.</span>
+          </div>
+          <div class="spec">
+            <span class="t-voice"
+              >MON has held 0.9680 three times this session and spot is bid while the perp sits
+              flat.</span
+            >
+            <span class="t-chain">Newsreader italic · 17</span>
+            <span class="t-caption"
+              >The agent's own words: theses, invalidations, verdicts, the mandate read back.
+              Nothing else is ever set in it.</span
+            >
+          </div>
+          <div class="spec">
+            <span class="t-chain" style="font-size: 14px">0x4f2a…3058 · #12,345,678</span>
+            <span class="t-chain">Geist Mono 400 · 12</span>
+            <span class="t-caption"
+              >Chain facts only: hashes, addresses, block heights, policy ids. Mono means "the chain
+              said this".</span
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Stones</h2>
+          <p>
+            The ledger's vocabulary. Each entry is placed on a vertical board line and drops in with
+            a 600ms overshoot, like a stone set down.
+          </p>
+        </header>
+        <div class="stones">
+          <div class="board">
+            <i class="stone stone--deposit"></i>
+            <span class="t-strong">Deposit</span>
+            <span class="t-dim"
+              >White stone. Capital entering the game — the only entry the agent didn't make.</span
+            >
+          </div>
+          <div class="board">
+            <i class="stone stone--thesis"></i>
+            <span class="t-strong">Thesis</span>
+            <span class="t-dim">Hollow ring. Intent, written before the move.</span>
+          </div>
+          <div class="board">
+            <i class="stone stone--trade"></i>
+            <span class="t-strong">Trade</span>
+            <span class="t-dim">Solid purple, glowing. A move on the board.</span>
+          </div>
+          <div class="board">
+            <i class="stone stone--refusal"></i>
+            <span class="t-strong">Held</span>
+            <span class="t-dim">Ring behind a bar. The enclave refused to sign. Never red.</span>
+          </div>
+          <div class="board">
+            <div style="display: flex; gap: 10px">
+              <i class="stone stone--win"></i><i class="stone stone--loss"></i>
+            </div>
+            <span class="t-strong">Verdict</span>
+            <span class="t-dim">Half stone, mint or berry. What the move was worth.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Consensus ramp</h2>
+          <p>
+            SEN-24, restyled. A 3px track that fills in purple through Proposed → Voted → Finalized,
+            then settles to grey with the block height stamped beside it.
+          </p>
+        </header>
+        <div class="grid-2">
+          <div class="board">
+            <span class="t-label">Live</span>
+            <div class="ramp ramp--live">
+              <div class="ramp__track"><div class="ramp__fill"></div></div>
+              <div class="ramp__stops">
+                <span class="on">PROPOSED</span><span class="on">VOTED</span><span>FINALIZED</span>
+              </div>
+            </div>
+          </div>
+          <div class="board">
+            <span class="t-label">Settled</span>
+            <div class="ramp ramp--settled">
+              <div class="ramp__track"><div class="ramp__fill" style="--p: 100%"></div></div>
+              <div class="ramp__stops"><span>FINALIZED</span><span>#12,345,678</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Components</h2>
+          <p>
+            Stones are round, so anything you press is a pill. Surfaces are softly squared boards.
+            No elevation; depth comes from the ground stepping lighter.
+          </p>
+        </header>
+        <div class="specimen">
+          <div>
+            <div class="t-label demo-label">Buttons</div>
+            <div class="demo">
+              <button class="btn btn--primary">
+                <svg class="i"><use href="#i-key" /></svg> Approve with passkey
+              </button>
+              <button class="btn">Keep current mandate</button>
+              <button class="btn btn--soft">
+                <svg class="i"><use href="#i-plus" /></svg> Add funds
+              </button>
+              <button class="btn btn--danger">Revoke</button>
+              <button class="btn btn--primary" disabled>Hire agent</button>
+            </div>
+            <ul class="plain" style="margin-top: 14px">
+              <li>One primary per screen. The label says what happens: "Fund", not "Submit".</li>
+              <li>Destructive actions are never primary; they live in Controls or a sheet.</li>
+            </ul>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <div class="t-label demo-label">Chips</div>
+              <div class="chips">
+                <button class="chip">Cautious</button>
+                <button class="chip chip--on">Standard</button>
+                <button class="chip">Wide</button>
+              </div>
+            </div>
+            <div>
+              <div class="t-label demo-label">Segmented</div>
+              <div class="seg" role="group">
+                <button aria-pressed="false">24h</button>
+                <button aria-pressed="true">7 days</button>
+                <button aria-pressed="false">30 days</button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="t-label demo-label">Status pills</div>
+            <div class="demo">
+              <span class="pill pill--live">Trading</span>
+              <span class="pill">Watching</span>
+              <span class="pill pill--held">Held by the enclave</span>
+              <span class="pill pill--revoked">Revoked</span>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <span class="t-label">Largest single order</span>
+              <div class="field__input field__input--focus">
+                <span class="num">250</span><span class="suffix">AUSD</span>
+              </div>
+              <span class="t-caption">The enclave refuses any order above this.</span>
+            </div>
+            <div class="field">
+              <span class="t-label">Name</span>
+              <div class="field__input"><span class="placeholder">Range Hunter</span></div>
+            </div>
+          </div>
+
+          <div class="board">
+            <div class="t-label demo-label">Mandate gauge</div>
+            <div class="gauge">
+              <div class="gauge__head">
+                <span
+                  >Largest order
+                  <span class="t-caption" style="color: var(--purple-soft)">· enclave</span></span
+                >
+                <b>180 / 250 AUSD</b>
+              </div>
+              <div class="gauge__track">
+                <div class="gauge__fill" style="--p: 72%"></div>
+                <div class="gauge__cap"></div>
+              </div>
+            </div>
+            <div class="gauge" style="margin-top: 16px">
+              <div class="gauge__head">
+                <span>Drawdown <span class="t-caption">· sente</span></span>
+                <b>11% / 15%</b>
+              </div>
+              <div class="gauge__track">
+                <div class="gauge__fill gauge__fill--hot" style="--p: 73%"></div>
+                <div class="gauge__cap"></div>
+              </div>
+            </div>
+            <ul class="plain" style="margin-top: 16px">
+              <li>Ten notches, so 70% reads at a glance. The cap is a hard lilac tick.</li>
+              <li>
+                Turns toward berry past 60% of a loss limit; order and time limits stay purple.
+              </li>
+              <li>
+                Each rule names its enforcer: <b>enclave</b> (the signer refuses) or
+                <b>sente</b> (we check before sending).
+              </li>
+            </ul>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <div class="t-label demo-label">Agent sigils</div>
+              <div class="demo">
+                <span class="sigil sigil--lg" data-sigil="range-hunter"></span>
+                <span class="sigil sigil--lg" data-sigil="basis-monk"></span>
+                <span class="sigil sigil--lg" data-sigil="tengen-trader"></span>
+                <span class="sigil sigil--lg" data-sigil="ladder-breaker"></span>
+              </div>
+              <p class="t-dim" style="margin: 12px 0 0">
+                A 4×4 corner of a goban with stones seeded from the agent id. Stable, unique, and no
+                avatars to generate or moderate.
+              </p>
+            </div>
+            <div>
+              <div class="t-label demo-label">Sheet</div>
+              <div class="mini-phone">
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="t-title">Revoke Range Hunter?</div>
+                  <p class="t-dim" style="margin: 6px 0 14px">
+                    It stops trading for good. The 612.40 AUSD in its wallet stays returnable.
+                  </p>
+                  <button class="btn btn--danger btn--block">Revoke permanently</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Motion</h2>
+          <p>Three motions, each tied to something real. Reduced motion turns all of them off.</p>
+        </header>
+        <ul class="plain">
+          <li>
+            <b>Place</b> — a new ledger entry rises 6px and settles with a slight overshoot over
+            600ms. Entries arriving together stagger by 100ms.
+          </li>
+          <li>
+            <b>Consensus</b> — the ramp fills a third per consensus state, only between states the
+            block actually reported (SEN-24's rule stands).
+          </li>
+          <li>
+            <b>Breathe</b> — the dot on a live status pill pulses on a 2.4s cycle. It's the only
+            idle animation in the app, and it means "this agent is running right now".
+          </li>
+        </ul>
+      </section>
+
+      <section class="part">
+        <header>
+          <h2>Voice</h2>
+          <p>
+            Write from the user's side of the screen. Name what they control, not how it's built.
+          </p>
+        </header>
+        <div class="voice-table">
+          <div class="voice-row">
+            <s>signed out (passkey known on this device)</s>
+            <span>Welcome back. Sign in with your passkey.</span>
+          </div>
+          <div class="voice-row">
+            <s>Agent Ledger — theses, trades, refusals</s>
+            <span>Ledger</span>
+          </div>
+          <div class="voice-row">
+            <s>Continue</s>
+            <span>Review mandate</span>
+          </div>
+          <div class="voice-row">
+            <s>policy_violation · place_market</s>
+            <span
+              >Held by the enclave: a 480.00 order hit the 250.00 limit. Nothing was signed.</span
+            >
+          </div>
+          <div class="voice-row">
+            <s>Cancel</s>
+            <span>Keep current mandate</span>
+          </div>
+          <div class="voice-row" style="border: 0">
+            <s>Forget this passkey (stateless test)</s>
+            <span>Moved to Account → Developer</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="part" style="border: 0">
+        <header>
+          <h2>In the app</h2>
+          <p>
+            What changes in <code>theme.ts</code> and <code>_layout.tsx</code> when we adopt it.
+          </p>
+        </header>
+        <div>
+          <pre>
+<b>export const color</b> = {
+  ink: '#0D0A19',        <span>// was ground  #0B0B0C</span>
+  board: '#15112A',      <span>// was raised  #111112</span>
+  well: '#1D1838',       <span>// new: inputs, stats, segmented track</span>
+  line: '#2A2447',       <span>// was rule</span>
+  lineStrong: '#40386A', <span>// was ruleStrong</span>
+  text: '#F3F0FF',
+  textDim: '#AAA3CB',
+  textFaint: '#6F688F',
+  purple: '#836EF9',     <span>// was ramp — now also primary + trade</span>
+  purpleHi: '#A898FF',
+  purpleSoft: '#DDD7FE',
+  purpleDeep: '#200052',
+  mint: '#5FE3B3',       <span>// new: gain</span>
+  berry: '#F0508C',      <span>// was danger: loss + destructive</span>
+};
+
+<b>export const font</b> = {
+  display: 'BricolageGrotesque_700Bold',   <span>// @expo-google-fonts/bricolage-grotesque</span>
+  body: 'Geist_400Regular',                <span>// @expo-google-fonts/geist</span>
+  voice: 'Newsreader_400Regular_Italic',   <span>// @expo-google-fonts/newsreader</span>
+  chain: 'GeistMono_400Regular',           <span>// @expo-google-fonts/geist-mono</span>
+};
+
+<b>export const RADIUS</b> = { board: 20, well: 14, stone: 999 };</pre>
+          <ul class="plain" style="margin-top: 18px">
+            <li>
+              New kit pieces: <code>Stone</code>, <code>Gauge</code>, <code>Pill</code>,
+              <code>Sigil</code>, <code>Segmented</code>, <code>TabBar</code>. <code>Section</code>,
+              <code>Row</code> and <code>Sheet</code> keep their APIs and restyle.
+            </li>
+            <li>
+              Navigation moves to expo-router <code>(tabs)</code>: Home, Agents, Board, Account.
+              Agent detail, ledger and hire stay stack screens above the tabs.
+            </li>
+            <li>
+              Bricolage's width axis isn't in the static Expo fonts; use the Condensed cut or accept
+              the default width on device.
+            </li>
+          </ul>
+        </div>
+      </section>
+    </main>
+    <script src="sigil.js"></script>
+  </body>
+</html>

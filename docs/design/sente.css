@@ -1,0 +1,733 @@
+/*
+ * Sente — "Goban" design system.
+ *
+ * One stylesheet shared by design-system.html and mockups.html. The tokens at
+ * the top are the ones meant to land in apps/mobile/src/ui/theme.ts; everything
+ * below them is the component vocabulary drawn in CSS so it can be reviewed
+ * before any of it is written in React Native.
+ *
+ * Four voices, four faces — and a face always means the same thing:
+ *   Bricolage Grotesque  the app speaking loudly (screen titles, the balance)
+ *   Geist                the app speaking (everything else)
+ *   Newsreader italic    the AGENT speaking (theses, invalidations, verdicts)
+ *   Geist Mono           the CHAIN speaking (hashes, addresses, block heights)
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,500..800&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Noto+Serif+JP:wght@700&display=swap');
+
+:root {
+  /* Ground: Monad's night, not a neutral black. */
+  --ink: #0d0a19;
+  --board: #15112a;
+  --well: #1d1838;
+  --line: #2a2447;
+  --line-strong: #40386a;
+
+  /* Text runs lilac-white to dusk. */
+  --text: #f3f0ff;
+  --text-dim: #aaa3cb;
+  --text-faint: #6f688f;
+
+  /* Monad purple: the colour of an agent acting and a block landing. */
+  --purple: #836ef9;
+  --purple-hi: #a898ff;
+  --purple-soft: #ddd7fe;
+  --purple-deep: #200052;
+  --purple-glow: rgb(131 110 249 / 0.28);
+
+  /* Outcome colours, used only for money that moved. */
+  --mint: #5fe3b3;
+  --berry: #f0508c;
+  --berry-deep: #a0055d;
+
+  /* Faces */
+  --f-display: 'Bricolage Grotesque', 'Geist', system-ui, sans-serif;
+  --f-body: 'Geist', system-ui, sans-serif;
+  --f-voice: 'Newsreader', Georgia, serif;
+  --f-chain: 'Geist Mono', ui-monospace, monospace;
+  --f-mark: 'Noto Serif JP', serif;
+
+  /* Shape: stones are round, boards are softly squared. */
+  --r-board: 20px;
+  --r-well: 14px;
+  --r-stone: 999px;
+  --gutter: 20px;
+
+  --ease-place: cubic-bezier(0.2, 0.9, 0.25, 1.15);
+}
+
+/* ─── Type ────────────────────────────────────────────────────────────────── */
+
+.t-display {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-stretch: 85%;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.t-hero {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-stretch: 80%;
+  font-size: 52px;
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.t-title {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-size: 19px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.t-body {
+  font: 400 15px/1.45 var(--f-body);
+}
+.t-strong {
+  font: 500 15px/1.45 var(--f-body);
+}
+.t-dim {
+  font: 400 13px/1.45 var(--f-body);
+  color: var(--text-dim);
+}
+.t-caption {
+  font: 400 12px/1.4 var(--f-body);
+  color: var(--text-faint);
+}
+.t-label {
+  font: 500 11px/1.3 var(--f-body);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.t-voice {
+  font-family: var(--f-voice);
+  font-style: italic;
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--purple-soft);
+}
+.t-chain {
+  font: 400 12px/1.5 var(--f-chain);
+  color: var(--text-dim);
+  letter-spacing: -0.01em;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.up {
+  color: var(--mint);
+}
+.down {
+  color: var(--berry);
+}
+
+/* ─── The app surface (inside a phone) ────────────────────────────────────── */
+
+.app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--f-body);
+  overflow: hidden;
+}
+.app__scroll {
+  flex: 1;
+  overflow: hidden;
+  padding: 8px var(--gutter) 24px;
+}
+.app__status {
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 26px 6px;
+  font: 600 13px var(--f-body);
+  color: var(--text);
+}
+.app__status span:last-child {
+  letter-spacing: 2px;
+  font-size: 11px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+}
+.topbar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font: 500 15px var(--f-body);
+}
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-stone);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  background: transparent;
+}
+
+/* The mark: 先 on a Monad-purple stone. */
+.mark {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-stone);
+  background: radial-gradient(circle at 35% 30%, var(--purple-hi), var(--purple) 55%, #5a45d6);
+  color: var(--ink);
+  font: 700 17px/1 var(--f-mark);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08) inset;
+}
+.mark--lg {
+  width: 64px;
+  height: 64px;
+  font-size: 34px;
+}
+
+/* ─── Surfaces ────────────────────────────────────────────────────────────── */
+
+.board {
+  background: var(--board);
+  border: 1px solid var(--line);
+  border-radius: var(--r-board);
+  padding: 16px;
+}
+/* The goban: a faint 19-line grid behind the one surface that earns it. */
+.board--goban {
+  background:
+    radial-gradient(120% 90% at 100% 0%, rgb(131 110 249 / 0.22), transparent 60%),
+    repeating-linear-gradient(0deg, transparent 0 21px, rgb(221 215 254 / 0.05) 21px 22px),
+    repeating-linear-gradient(90deg, transparent 0 21px, rgb(221 215 254 / 0.05) 21px 22px),
+    var(--board);
+}
+.well {
+  background: var(--well);
+  border-radius: var(--r-well);
+  padding: 12px 14px;
+}
+.section {
+  margin-top: 26px;
+}
+.section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.section__head a {
+  font: 500 13px var(--f-body);
+  color: var(--purple-hi);
+  text-decoration: none;
+}
+.hr {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 50px;
+  padding: 0 20px;
+  border-radius: var(--r-stone);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font: 600 15px var(--f-body);
+  cursor: pointer;
+  transition:
+    transform 0.12s,
+    background 0.2s;
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn:focus-visible,
+.chip:focus-visible,
+.seg button:focus-visible {
+  outline: 2px solid var(--purple-hi);
+  outline-offset: 2px;
+}
+.btn--primary {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: #fff;
+  box-shadow: 0 8px 24px -8px var(--purple-glow);
+}
+.btn--soft {
+  background: var(--well);
+  border-color: transparent;
+}
+.btn--danger {
+  border-color: rgb(240 80 140 / 0.45);
+  color: var(--berry);
+}
+.btn--sm {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+.btn--block {
+  width: 100%;
+}
+.btn[disabled] {
+  opacity: 0.35;
+  box-shadow: none;
+}
+.btn-row {
+  display: flex;
+  gap: 10px;
+}
+.btn-row > .btn {
+  flex: 1;
+}
+
+/* ─── Chips, segments, pills ──────────────────────────────────────────────── */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  padding: 8px 12px;
+  border-radius: var(--r-stone);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font: 500 13px var(--f-body);
+}
+.chip--on {
+  background: var(--purple-soft);
+  border-color: var(--purple-soft);
+  color: var(--purple-deep);
+}
+
+.seg {
+  display: flex;
+  padding: 3px;
+  border-radius: var(--r-stone);
+  background: var(--well);
+}
+.seg button {
+  flex: 1;
+  padding: 8px 0;
+  border: 0;
+  border-radius: var(--r-stone);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 13px var(--f-body);
+}
+.seg button[aria-pressed='true'] {
+  background: var(--line-strong);
+  color: var(--text);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border-radius: var(--r-stone);
+  font: 500 11px/1.4 var(--f-body);
+  letter-spacing: 0.02em;
+  background: var(--well);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill--live {
+  background: rgb(131 110 249 / 0.16);
+  color: var(--purple-hi);
+}
+.pill--live::before {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.pill--idle {
+  color: var(--text-dim);
+}
+.pill--revoked {
+  color: var(--berry);
+  background: rgb(240 80 140 / 0.12);
+}
+.pill--held {
+  color: var(--purple-soft);
+  background: rgb(221 215 254 / 0.1);
+}
+.pill--held::before {
+  background: transparent;
+  box-shadow: 0 0 0 1.5px currentColor inset;
+}
+@keyframes breathe {
+  50% {
+    box-shadow: 0 0 0 4px rgb(131 110 249 / 0.25);
+  }
+}
+
+/* ─── Rows & fields ───────────────────────────────────────────────────────── */
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.row > :first-child {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.row > :last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field__input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 14px;
+  border-radius: var(--r-well);
+  background: var(--well);
+  border: 1px solid transparent;
+  font: 400 16px var(--f-body);
+  color: var(--text);
+}
+.field__input--focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 4px rgb(131 110 249 / 0.14);
+}
+.field__input .suffix {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 14px;
+}
+.field__input .placeholder {
+  color: var(--text-faint);
+}
+
+/* ─── Stones: the ledger's vocabulary ─────────────────────────────────────── */
+/*
+ * One stone per entry kind, and the shape is the meaning:
+ *   deposit   white stone          capital entering the game
+ *   thesis    hollow purple ring   intent, not yet played
+ *   trade     solid purple stone   a move on the board
+ *   refusal   ring behind a bar    the enclave's boundary held
+ *   verdict   half stone           what the move was worth (mint / berry)
+ */
+.stone {
+  --s: 14px;
+  position: relative;
+  flex: none;
+  width: var(--s);
+  height: var(--s);
+  border-radius: 50%;
+}
+.stone--deposit {
+  background: radial-gradient(circle at 35% 30%, #fff, #d8d3ee 70%);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.4);
+}
+.stone--thesis {
+  box-shadow: 0 0 0 2px var(--purple) inset;
+  background: var(--ink);
+}
+.stone--trade {
+  background: radial-gradient(circle at 35% 30%, var(--purple-hi), var(--purple) 60%, #5a45d6);
+  box-shadow: 0 0 12px var(--purple-glow);
+}
+.stone--refusal {
+  box-shadow: 0 0 0 2px var(--purple-soft) inset;
+  background: var(--ink);
+}
+.stone--refusal::after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: calc(50% - 1px);
+  height: 2px;
+  background: var(--purple-soft);
+  transform: rotate(-45deg);
+  border-radius: 2px;
+}
+.stone--win {
+  background: linear-gradient(90deg, var(--mint) 50%, var(--ink) 50%);
+  box-shadow: 0 0 0 2px var(--mint) inset;
+}
+.stone--loss {
+  background: linear-gradient(90deg, var(--berry) 50%, var(--ink) 50%);
+  box-shadow: 0 0 0 2px var(--berry) inset;
+}
+
+/* The spine: a line of the board, with the entries placed on it. */
+.spine {
+  position: relative;
+  display: grid;
+  gap: 0;
+}
+.spine::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--line-strong);
+}
+.move {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 14px;
+  padding: 0 0 22px;
+  animation: place 0.6s var(--ease-place) both;
+}
+.move > .stone {
+  margin-top: 3px;
+  z-index: 1;
+}
+.move__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.move__kind {
+  font: 500 11px var(--f-body);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.move__time {
+  font: 400 11px var(--f-chain);
+  color: var(--text-faint);
+}
+@keyframes place {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+/* ─── The consensus ramp (SEN-24), restyled ───────────────────────────────── */
+
+.ramp {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.ramp__track {
+  position: relative;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.ramp__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p, 0%);
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--purple), var(--purple-hi));
+  box-shadow: 0 0 10px var(--purple);
+}
+.ramp--live .ramp__fill {
+  animation: consensus 2.8s cubic-bezier(0.6, 0, 0.2, 1) infinite;
+}
+.ramp__stops {
+  display: flex;
+  justify-content: space-between;
+  font: 500 10px var(--f-chain);
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.ramp__stops .on {
+  color: var(--purple-hi);
+}
+.ramp--settled .ramp__fill {
+  background: var(--line-strong);
+  box-shadow: none;
+}
+@keyframes consensus {
+  0% {
+    width: 0;
+  }
+  30% {
+    width: 34%;
+  }
+  55% {
+    width: 67%;
+  }
+  80%,
+  100% {
+    width: 100%;
+  }
+}
+
+/* ─── Mandate gauge: how much of the territory is used ────────────────────── */
+
+.gauge {
+  display: grid;
+  gap: 7px;
+}
+.gauge__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+}
+.gauge__head b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.gauge__head span {
+  color: var(--text-dim);
+}
+.gauge__track {
+  position: relative;
+  height: 8px;
+  border-radius: 8px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--well) 0 calc(10% - 2px),
+    transparent calc(10% - 2px) 10%
+  );
+}
+.gauge__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p);
+  border-radius: 8px;
+  background: var(--purple);
+}
+.gauge__fill--hot {
+  background: linear-gradient(90deg, var(--purple), var(--berry));
+}
+.gauge__cap {
+  position: absolute;
+  right: -1px;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--purple-soft);
+}
+
+/* ─── Sheets, tab bar, toast ──────────────────────────────────────────────── */
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(6 4 14 / 0.72);
+  backdrop-filter: blur(2px);
+}
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px var(--gutter) 30px;
+  background: var(--board);
+  border-top: 1px solid var(--line-strong);
+  border-radius: 28px 28px 0 0;
+}
+.sheet__grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--line-strong);
+  margin: 0 auto 18px;
+}
+
+.tabbar {
+  display: flex;
+  justify-content: space-around;
+  padding: 10px 12px 26px;
+  border-top: 1px solid var(--line);
+  background: rgb(13 10 25 / 0.94);
+}
+.tabbar a {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  font: 500 10px var(--f-body);
+  color: var(--text-faint);
+  text-decoration: none;
+}
+.tabbar a[aria-current='page'] {
+  color: var(--text);
+}
+.tabbar a[aria-current='page'] svg {
+  color: var(--purple-hi);
+}
+.tabbar svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Agent sigil: a 5×5 corner of a goban with the agent's own stones on it. */
+.sigil {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--well);
+  display: grid;
+  place-items: center;
+}
+.sigil svg {
+  width: 30px;
+  height: 30px;
+}
+.sigil--lg {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+}
+.sigil--lg svg {
+  width: 42px;
+  height: 42px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .ramp--live .ramp__fill {
+    width: 67%;
+  }
+}
