@@ -107,6 +107,8 @@ DENY GAS_DRIP_DRY_RUN          refused true under NODE_ENV=production, and a dep
 DENY NODE_ENV                  docker-compose.yml pins it to production and outranks this file
 DENY PORT                      docker-compose.yml pins it to 3000, the port Caddy proxies to
 DENY STATE_DIR                 docker-compose.yml pins it to the bind-mounted /var/lib/sente/state
+DENY TREASURY_PRIVATE_KEY      dev scripts only (agent:fund, probes); the API never reads it, and it is real testnet money
+DENY PRIVY_AGENT_VENUES_*      fixtures for the agent:venues-live / withdraw probes; the API never reads them
 DENY EXPO_PUBLIC_*             compiled into the app bundle, so public by construction; the server never reads them
 DENY PERPL_DEV_*               a dev account for local live scripts, not something the API reads
 DENY PRIVY_PROBE_*             bookkeeping written by probe:privy; nothing reads it
