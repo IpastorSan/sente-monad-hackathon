@@ -359,8 +359,55 @@ export type AuthErrorDescription = {
  * the right provider in the system sheet, and nothing but this message tells
  * them so.
  */
+/**
+ * One link of the chain as text. A native module does not reject with an Error:
+ * `react-native-passkey` rejects with a plain object, and `String(obj)` is
+ * "[object Object]", which is how a real reason becomes a shrug. Prefer the
+ * fields a native rejection actually carries, and fall back to JSON so nothing
+ * is silently dropped.
+ */
+function describeOne(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value !== null) {
+    const bag = value as Record<string, unknown>;
+    const named = ['message', 'error', 'code', 'name', 'reason']
+      .map((key) => (typeof bag[key] === 'string' ? (bag[key] as string) : undefined))
+      .filter((part): part is string => part !== undefined && part.length > 0);
+    if (named.length > 0) return [...new Set(named)].join(': ');
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return Object.prototype.toString.call(value);
+    }
+  }
+  return String(value);
+}
+
+/**
+ * The platform's own words, which are the only ones that identify the real
+ * failure. mera wraps a native WebAuthn rejection as `PASSKEY_OPERATION_FAILED`
+ * with the original on `cause`, and reading only `message` leaves the user (and
+ * us) staring at "Passkey creation failed" while the reason sits one field away.
+ * Walks the chain, because a cause can itself have one. Bounded, so a cycle or a
+ * deep chain cannot hang the screen.
+ */
+function causeChain(error: unknown, depth = 4): string[] {
+  const seen = new Set<unknown>();
+  const out: string[] = [];
+  let current: unknown = error;
+  while (current !== null && current !== undefined && out.length < depth && !seen.has(current)) {
+    seen.add(current);
+    const message = describeOne(current);
+    if (message.length > 0 && !out.includes(message)) out.push(message);
+    current = current instanceof Error ? (current.cause as unknown) : undefined;
+  }
+  return out;
+}
+
 export function describeAuthError(error: unknown): AuthErrorDescription {
-  const detail = error instanceof Error ? error.message : String(error);
+  const chain = causeChain(error);
+  const detail = chain.join(' — ') || (error instanceof Error ? error.message : String(error));
   if (!isMeraError(error)) {
     return { code: null, title: 'Something went wrong', detail };
   }
