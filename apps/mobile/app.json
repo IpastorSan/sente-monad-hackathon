@@ -43,7 +43,8 @@
             "minSdkVersion": 28
           }
         }
-      ]
+      ],
+      "./plugins/withAssetStatements"
     ],
     "experiments": {
       "typedRoutes": true
