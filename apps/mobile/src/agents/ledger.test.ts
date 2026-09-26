@@ -307,6 +307,49 @@ test('SEN-22’s verdict maps even though the API’s kind union does not have i
   assert.equal(heldLabel(missed.held), 'Thesis did not hold');
 });
 
+test('a real SEN-22 verdict carries its PnL under `realisedPnl`, and it is read', () => {
+  // The fixture is what `recordVerdict` in `tools/gate.ts` writes: the whole
+  // `Verdict` spread into `detail`, plus the settling fill's block.
+  const entry = only('verdict', [
+    event(12, 'verdict', {
+      agentId: 'agt_1',
+      market: 'MON-USDC',
+      venue: 'kuru',
+      direction: 'long',
+      thesisSeq: 3,
+      fills: 2,
+      realisedPnl: '18.22',
+      pnlAsset: 'USDC',
+      costBasis: '175.39',
+      held: true,
+      closedAt: AT,
+      notes: ['0.5 MON was sold with no lot of this thesis behind it.'],
+      blockNumber: 12_345_700,
+    }),
+  ]);
+  assert.equal(entry.origin, 'verdict');
+  assert.equal(entry.pnl, '18.22');
+  assert.equal(entry.direction, 'long');
+  assert.equal(entry.market, 'MON-USDC');
+  assert.equal(entry.blockNumber, 12_345_700);
+  assert.deepEqual(entry.notes, ['0.5 MON was sold with no lot of this thesis behind it.']);
+});
+
+test('a close reads the position it closed off its closing fill, which trades against it', () => {
+  const long = only('verdict', [
+    event(13, 'close', { symbol: 'BTC-PERP', side: 'sell', realizedPnl: '4', txHash: '0xab' }),
+  ]);
+  assert.equal(long.origin, 'close');
+  assert.equal(long.direction, 'long');
+  assert.equal(long.txHash, '0xab');
+  assert.deepEqual(long.notes, []);
+
+  const short = only('verdict', [event(14, 'close', { symbol: 'BTC-PERP', side: 'buy' })]);
+  assert.equal(short.direction, 'short');
+  const unknown = only('verdict', [event(15, 'close', { symbol: 'BTC-PERP' })]);
+  assert.equal(unknown.direction, null);
+});
+
 test('a verdict with no PnL still renders, showing the held flag alone', () => {
   const entry = only('verdict', [event(1, 'verdict', { held: false })]);
   assert.equal(entry.pnl, null);

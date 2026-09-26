@@ -1,10 +1,10 @@
 /**
- * The consensus ramp (SEN-24): the hairline under a Ledger trade that fills in
+ * The consensus ramp (SEN-24): the track under a Ledger trade that fills in
  * Monad purple as the block the order landed in acquires consensus.
  *
  * A Monad block goes `Proposed` -> `Voted` -> `Finalized`, and SEN-21 exposes
  * exactly that per height, with the epoch ms at which each state was first
- * seen. This draws those states as progress — one Skia hairline, a third per
+ * seen. This draws those states as progress — one Skia track, a third per
  * stop — and only ever animates between states the block's own record contains.
  * A block that skipped `Voted` (Monad does) jumps a third and leaves `VOTED`
  * dark, because that is what the network did.
@@ -18,12 +18,19 @@
  * from mount and a screenful was a request burst on open.
  *
  * Purple marks an event, not a block. A record whose last state landed more than
- * a couple of seconds ago is settled on arrival — no fill, no ticks, just the
- * neutral track and the height — so a ledger full of old trades is achromatic
- * and the one row that is happening right now is the one that lights up. That is
- * also why the drain: once the block is final the ramp has nothing left to say,
- * so the purple leaves and the block height stamps in behind it, in mono, which
- * is the fact worth keeping.
+ * a couple of seconds ago is settled on arrival — no purple, no ticks, just the
+ * neutral fill and the height — so a ledger full of old trades goes quiet and the
+ * one row that is happening right now is the one that lights up. That is also
+ * why the drain: once the block is final the ramp has nothing left to say, so
+ * the purple (and its glow) fades to the neutral fill and the block height
+ * stamps in behind it, in mono, which is the fact worth keeping.
+ *
+ * The Goban look (SEN-60): a 3px rounded track in `line`, the fill a purple
+ * gradient with a soft glow while it is lit, `lineStrong` once settled, and the
+ * stop labels in 10px mono — the reached ones `purpleHi` while lit. The states,
+ * the feed, the ticks and WHEN the drain happens are SEN-24's and SEN-35's
+ * untouched; only what the drain looks like changed, from emptying the fill to
+ * fading its purple to neutral.
  *
  * Ticks are per stop and mean "the chain reported this moments ago", not "I
  * watched it land": a row arrives about a second after its order executed, so
@@ -53,7 +60,14 @@ import {
   type ReactNode,
 } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Canvas, Rect } from '@shopify/react-native-skia';
+import {
+  BlurMask,
+  Canvas,
+  Group,
+  LinearGradient,
+  RoundedRect,
+  vec,
+} from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   Easing,
@@ -80,8 +94,14 @@ import { color, font, text } from './theme';
 // Cadence and shape
 // ---------------------------------------------------------------------------
 
-/** A hairline: the same 1dp the Ledger's own rules use. */
-const TRACK = 1;
+/** The track's thickness (`.ramp__track` in `docs/design/sente.css`). */
+const TRACK = 3;
+/**
+ * Room above and below the track for the lit fill's glow. The canvas is taller
+ * than the track by this much each side and pulls its margins in by the same,
+ * so the glow is drawn without moving the layout.
+ */
+const GLOW = 6;
 /** The ramp's unit is a third: one per stop. */
 const STOPS = 3;
 /** The last stop. Landing on it in a live ramp is what starts the drain. */
@@ -549,22 +569,28 @@ function liveCaption(
   return elapsed === null ? key : `${key} +${groupThousands(String(elapsed))} ms`;
 }
 
-/** What the fill is worth: a third per stop reached, nothing once it drains. */
-function fillFraction(stop: number | null, drained: boolean): number {
-  if (stop === null || drained) return 0;
+/**
+ * What the fill is worth: a third per stop reached. A drain no longer empties
+ * it (SEN-60) — the purple fades off a fill that stays, now neutral, because a
+ * settled block still reached where it reached. A reorg empties it: nothing on
+ * this ramp was about the block the chain settled on.
+ */
+function fillFraction(stop: number | null, phase: Phase): number {
+  if (stop === null || phase === 'reorged') return 0;
   return (stop + 1) / STOPS;
 }
 
 /**
- * A stop's label colour. Purple only while the ramp is live and lit; `textDim`
- * once the reading is a record, `textFaint` for a stop the block never passed.
+ * A stop's label colour. `purpleHi` only while the ramp is live and lit;
+ * `textDim` once the reading is a record, `textFaint` for a stop the block never
+ * passed.
  */
 function stopColor(index: number, stop: number | null, phase: Phase, drained: boolean): string {
   const reached = stop !== null && index <= stop;
   // A reorg takes the whole reading back: nothing on this ramp was about the
   // block the chain settled on.
   if (phase === 'reorged') return color.textFaint;
-  if (reached && phase === 'live' && !drained) return color.purple;
+  if (reached && phase === 'live' && !drained) return color.purpleHi;
   if (reached && phase === 'live') return color.textDim;
   return color.textFaint;
 }
@@ -590,6 +616,8 @@ export function ConsensusRamp({
   const [drained, setDrained] = useState(false);
 
   const fill = useSharedValue(0);
+  /** The purple's presence, 0..1: up while lit, down as it drains to neutral. */
+  const lit = useSharedValue(0);
   const stamp = useSharedValue(0);
 
   // A ramp that arrived after the fact settles at once: reading a record is not
@@ -631,14 +659,25 @@ export function ConsensusRamp({
     return () => clearTimeout(hold);
   }, [phase, stop, live]);
 
-  const target = fillFraction(stop, drained);
-  const leaving = drained || phase === 'reorged';
+  const target = fillFraction(stop, phase);
+  const reorged = phase === 'reorged';
+  // A record read after the fact is drawn where it is, not walked there: the
+  // walk is for a block that is moving now.
+  const instant = live === false && !reorged;
   useEffect(() => {
     fill.value = withTiming(target, {
-      duration: leaving ? DRAIN_MS : FILL_MS,
-      easing: leaving ? Easing.inOut(Easing.quad) : Easing.out(Easing.cubic),
+      duration: instant ? 0 : reorged ? DRAIN_MS : FILL_MS,
+      easing: reorged ? Easing.inOut(Easing.quad) : Easing.out(Easing.cubic),
     });
-  }, [fill, target, leaving]);
+  }, [fill, target, instant, reorged]);
+
+  const lighting = phase === 'live' && live === true && !drained;
+  useEffect(() => {
+    lit.value = withTiming(lighting ? 1 : 0, {
+      duration: lighting ? FILL_MS : DRAIN_MS,
+      easing: Easing.inOut(Easing.quad),
+    });
+  }, [lit, lighting]);
 
   // The height stamps in as the purple leaves — and for a ramp that never lit,
   // because the stamp is the one thing it still knows.
@@ -662,9 +701,35 @@ export function ConsensusRamp({
       accessibilityLabel={accessibilityLabel(phase, stop, blockNumber)}
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      <Canvas style={{ width, height: TRACK }}>
-        <Rect x={0} y={0} width={width} height={TRACK} color={color.line} />
-        <Rect x={0} y={0} width={fillWidth} height={TRACK} color={color.purple} />
+      <Canvas style={[styles.canvas, { width }]}>
+        <RoundedRect x={0} y={GLOW} width={width} height={TRACK} r={TRACK / 2} color={color.line} />
+        <RoundedRect
+          x={0}
+          y={GLOW}
+          width={fillWidth}
+          height={TRACK}
+          r={TRACK / 2}
+          color={color.lineStrong}
+        />
+        <Group opacity={lit}>
+          <RoundedRect
+            x={0}
+            y={GLOW}
+            width={fillWidth}
+            height={TRACK}
+            r={TRACK / 2}
+            color={color.purple}
+          >
+            <BlurMask blur={5} style="normal" />
+          </RoundedRect>
+          <RoundedRect x={0} y={GLOW} width={fillWidth} height={TRACK} r={TRACK / 2}>
+            <LinearGradient
+              start={vec(0, 0)}
+              end={vec(Math.max(width, 1), 0)}
+              colors={[color.purple, color.purpleHi]}
+            />
+          </RoundedRect>
+        </Group>
       </Canvas>
 
       <View style={styles.stops}>
@@ -718,15 +783,14 @@ function accessibilityLabel(phase: Phase, stop: number | null, blockNumber: numb
 }
 
 const styles = StyleSheet.create({
-  ramp: { marginTop: 14 },
-  stops: { flexDirection: 'row', marginTop: 5 },
+  ramp: { marginTop: 10 },
+  canvas: { height: TRACK + GLOW * 2, marginVertical: -GLOW },
+  stops: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   stop: {
-    flex: 1,
     fontFamily: font.chain,
     fontSize: 10,
     lineHeight: 14,
     letterSpacing: 0.6,
-    textAlign: 'center',
   },
   captionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
   caption: {

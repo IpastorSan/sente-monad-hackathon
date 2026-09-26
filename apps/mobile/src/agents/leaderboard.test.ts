@@ -13,12 +13,16 @@ import {
   amountLabel,
   percent,
   pnlLabel,
+  rankingLine,
   rankLabel,
+  rankNumeral,
   rateWithSample,
   roiLabel,
+  settledLabel,
   thesisLabel,
   tooFewLabel,
   venueLabel,
+  wonLabel,
 } from './leaderboard.ts';
 
 test('a win rate is never printed without the sample it came from', () => {
@@ -90,4 +94,35 @@ test('percent keeps one decimal, and none when there is none', () => {
   assert.equal(percent(0.5), '50%');
   assert.equal(percent(1), '100%');
   assert.equal(percent(0.0313), '3.1%');
+});
+
+// ---------------------------------------------------------------------------
+// The Goban board (SEN-60)
+
+test('the board prints the sample as a count, never as a bare rate', () => {
+  assert.equal(wonLabel(7, 10), 'won 7 of 10');
+  assert.equal(wonLabel(0, 3), 'won 0 of 3');
+  assert.equal(wonLabel(1204, 2000), 'won 1,204 of 2,000');
+  assert.equal(wonLabel(0, 0), 'no settled trades');
+  assert.doesNotMatch(wonLabel(7, 10), /%/u);
+});
+
+test('the rank numeral is unpadded, and an unranked row earns no number', () => {
+  assert.equal(rankNumeral(1), '1');
+  assert.equal(rankNumeral(12), '12');
+  assert.equal(rankNumeral(null), '–');
+});
+
+test('the ranking line takes its threshold from the API, not from a constant', () => {
+  assert.equal(
+    rankingLine(3),
+    'Ranked by return on capital deployed. Only agents with 3+ settled trades.',
+  );
+  assert.match(rankingLine(5), /5\+ settled trades/u);
+});
+
+test('an unranked row counts its settled trades in words', () => {
+  assert.equal(settledLabel(1), '1 settled trade');
+  assert.equal(settledLabel(2), '2 settled trades');
+  assert.equal(settledLabel(0), '0 settled trades');
 });

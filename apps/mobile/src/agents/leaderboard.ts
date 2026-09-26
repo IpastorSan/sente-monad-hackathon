@@ -100,3 +100,41 @@ export function percent(rate: number): string {
   const fraction = Math.abs(tenths % 10);
   return fraction === 0 ? `${whole}%` : `${whole}.${fraction}%`;
 }
+
+// ---------------------------------------------------------------------------
+// The Goban board (SEN-60)
+
+/**
+ * `1`, `12` — the big condensed numeral beside a ranked row. Unpadded, unlike
+ * `rankLabel`: at display size the numeral IS the column. An unranked row gets
+ * an en dash, not a number it has not earned.
+ */
+export function rankNumeral(rank: number | null): string {
+  return rank === null ? '–' : String(rank);
+}
+
+/**
+ * `won 7 of 10` — the sample itself, in words. Not a rate: `rateWithSample`
+ * stays the only function that prints a percentage, and this one cannot print
+ * its numerator without its denominator.
+ */
+export function wonLabel(wins: number, n: number): string {
+  if (n <= 0) return 'no settled trades';
+  return `won ${groupThousands(String(wins))} of ${groupThousands(String(n))}`;
+}
+
+/** `2 settled trades` — what an unranked row shows where the address would be. */
+export function settledLabel(n: number): string {
+  return `${groupThousands(String(n))} settled ${n === 1 ? 'trade' : 'trades'}`;
+}
+
+/**
+ * The one dim line under the title, in place of the formula wall. The ORDER is
+ * `compareRows` in `services/api/src/agents/leaderboard/metrics.ts` (ROI first);
+ * the threshold is the API's own `minTrades`, never a copy of it. The formula
+ * itself is still printed verbatim, in the fine print under the table.
+ */
+export function rankingLine(minTrades: number): string {
+  const n = groupThousands(String(minTrades));
+  return `Ranked by return on capital deployed. Only agents with ${n}+ settled trades.`;
+}
