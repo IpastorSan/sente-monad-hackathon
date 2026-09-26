@@ -22,16 +22,11 @@ import {
   type EventConsensus,
   type LedgerEntry,
 } from './ledger.ts';
+import { stoneFor, type LedgerStone } from './ledgerView.ts';
+import { isTrading, relativeAge } from './usage.ts';
 
 /** Home shows at most this many agents; "See all" has the rest. */
 export const HOME_AGENT_LIMIT = 3;
-
-/**
- * How recent the last event must be for an agent to read as "Trading". The
- * runner wakes an agent every few minutes; past this, it is waiting for a
- * setup rather than in the middle of one.
- */
-export const TRADING_WINDOW_MS = 15 * 60_000;
 
 /**
  * The short list: active agents before revoked ones, and the most recently
@@ -66,11 +61,9 @@ export function agentPill(
   now: number,
 ): AgentPill {
   if (agent.status === 'revoked') return { label: 'Revoked', tone: 'revoked' };
-  const last = summary?.lastEvent?.at;
-  if (last !== undefined && now - last <= TRADING_WINDOW_MS) {
-    return { label: 'Trading', tone: 'live' };
-  }
-  return { label: 'Watching', tone: 'idle' };
+  return isTrading(summary, now)
+    ? { label: 'Trading', tone: 'live' }
+    : { label: 'Watching', tone: 'idle' };
 }
 
 /**
@@ -105,8 +98,8 @@ export function stableBalance(
   return formatFixedAtoms(total, decimals, { places: 2 });
 }
 
-/** Which stone a move gets. The Ledger's five kinds, with a verdict split by outcome. */
-export type MoveStone = 'deposit' | 'thesis' | 'trade' | 'refusal' | 'win' | 'loss';
+/** Which stone a move gets: the Ledger's own (`ledgerView.stoneFor`). */
+export type MoveStone = LedgerStone;
 
 export type LatestMove = {
   agentId: string;
@@ -181,9 +174,8 @@ function describe(
         detail: entry.message || entry.code,
       };
     case 'verdict': {
-      const loss = entry.pnl !== null && Number(entry.pnl) < 0;
       return {
-        stone: loss ? 'loss' : 'win',
+        stone: stoneFor(entry),
         title:
           entry.market !== null ? `${name} closed ${entry.market}` : `${name} closed a position`,
         detail: `${signedPnl(entry.pnl)} · ${heldLabel(entry.held)}`,
@@ -206,11 +198,6 @@ function blockOf(entry: LedgerEntry): LatestMove['block'] {
 
 /** `now`, `4m ago`, `3h ago`, `2d ago`. Coarse on purpose: it is a glance, not a record. */
 export function sinceLabel(at: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - at) / 1000));
-  if (seconds < 60) return 'now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  const age = relativeAge(at, now);
+  return age === 'now' ? age : `${age} ago`;
 }

@@ -3,15 +3,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { ActivityEvent, Agent, AgentSummary } from './api.ts';
-import {
-  agentPill,
-  homeAgents,
-  latestMove,
-  pnlToday,
-  sinceLabel,
-  stableBalance,
-  TRADING_WINDOW_MS,
-} from './home.ts';
+import { agentPill, homeAgents, latestMove, pnlToday, sinceLabel, stableBalance } from './home.ts';
+import { TRADING_WINDOW_MS } from './usage.ts';
 
 const NOW = Date.parse('2026-09-26T12:00:00.000Z');
 

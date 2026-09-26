@@ -18,6 +18,7 @@
 import { formatFixedAtoms, normalizeDecimal } from './amounts.ts';
 import type { AgentMandate, AgentSummary, WireAgentEvent } from './api.ts';
 import { depositAmount, signedPnl, toLedgerEntries, venueLabel } from './ledger.ts';
+import { stoneFor, type LedgerStone } from './ledgerView.ts';
 import { formatNotional } from './mandate.ts';
 import { BALANCE_PLACES } from '../ui/format.ts';
 
@@ -136,13 +137,25 @@ export function expiryUsage(since: number, expiresAt: number, now: number): Gaug
 // Status
 
 /**
- * "Trading" rather than "Watching": the agent did something in the last day.
- * The summary's `lastEvent` already leaves out run summaries, so a runner that
- * woke up and decided nothing does not count as activity.
+ * How recent the last event must be for an agent to read as "Trading" — the
+ * breathing pill, which means "running right now", so it needs a recent event
+ * to back it. The runner wakes an agent every few minutes; past this window it
+ * is waiting for a setup rather than in the middle of one. One rule for every
+ * screen that shows the pill (SEN-57/SEN-58 had a window each).
  */
-export function isTrading(summary: AgentSummary | undefined, now: number): boolean {
+export const TRADING_WINDOW_MS = 15 * MINUTE;
+
+/**
+ * "Trading" rather than "Watching". The summary's `lastEvent` already leaves
+ * out run summaries, so a runner that woke up and decided nothing does not
+ * count as activity.
+ */
+export function isTrading(
+  summary: Pick<AgentSummary, 'lastEvent'> | undefined,
+  now: number,
+): boolean {
   const at = summary?.lastEvent?.at;
-  return at !== undefined && now - at < DAY && now - at >= -MINUTE;
+  return at !== undefined && now - at <= TRADING_WINDOW_MS && now - at >= -MINUTE;
 }
 
 /** `now`, `4m`, `3h`, `2d`: how long ago, for a line that is already about time. */
@@ -204,7 +217,8 @@ export function formatHolding(holding: Holding): string {
 // ---------------------------------------------------------------------------
 // The last move
 
-export type MoveStone = 'deposit' | 'thesis' | 'trade' | 'refusal' | 'win' | 'loss';
+/** The Ledger's stone, so a move is placed the same everywhere (`ledgerView.stoneFor`). */
+export type MoveStone = LedgerStone;
 
 export type Move = { stone: MoveStone; line: string; at: number };
 
@@ -242,13 +256,9 @@ export function describeMove(event: WireAgentEvent): Move | null {
       };
     case 'verdict': {
       const market = entry.market ?? 'a position';
-      const tone = pnlTone(entry.pnl);
-      if (entry.pnl === null) return { stone: 'trade', line: `Closed ${market}`, at };
-      return {
-        stone: tone === 'down' ? 'loss' : 'win',
-        line: `Closed ${market} at ${signedPnl(entry.pnl)}`,
-        at,
-      };
+      const stone = stoneFor(entry);
+      if (entry.pnl === null) return { stone, line: `Closed ${market}`, at };
+      return { stone, line: `Closed ${market} at ${signedPnl(entry.pnl)}`, at };
     }
     case 'deposit': {
       const amount = depositAmount(entry).replace(/^\+/, '');

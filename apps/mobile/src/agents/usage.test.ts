@@ -11,6 +11,7 @@ import {
   formatHolding,
   holdsReturnable,
   isTrading,
+  TRADING_WINDOW_MS,
   mainHolding,
   orderUsage,
   pnlTone,
@@ -114,11 +115,13 @@ test('expiryUsage is the elapsed share of the mandate, then expired', () => {
   assert.equal(expiryUsage(NOW + HOUR, end, NOW).used, 0);
 });
 
-test('isTrading means an event in the last 24 hours', () => {
+test('isTrading means an event inside the trading window', () => {
   assert.equal(isTrading(undefined, NOW), false);
   assert.equal(isTrading(summary(), NOW), false);
   assert.equal(isTrading(summary({ lastEvent: event('thesis', {}) }), NOW), true);
-  const old = event('thesis', {}, { at: NOW - DAY - 1 });
+  const edge = event('thesis', {}, { at: NOW - TRADING_WINDOW_MS });
+  assert.equal(isTrading(summary({ lastEvent: edge }), NOW), true);
+  const old = event('thesis', {}, { at: NOW - TRADING_WINDOW_MS - 1 });
   assert.equal(isTrading(summary({ lastEvent: old }), NOW), false);
 });
 
