@@ -262,6 +262,23 @@ export class AgentEventsQueryDto {
   limit?: number;
 }
 
+/**
+ * `GET /agents/activity` (SEN-56): how many of the newest events, across all
+ * the caller's agents, to return. Smaller than the per-agent page on purpose —
+ * this feeds a home-screen headline and a short list under it, not a ledger.
+ */
+export const AGENT_ACTIVITY_DEFAULT_LIMIT = 20;
+export const AGENT_ACTIVITY_MAX_LIMIT = 50;
+
+export class AgentActivityQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(AGENT_ACTIVITY_MAX_LIMIT)
+  limit?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Responses. Every bigint crosses the wire as a decimal string.
 // ---------------------------------------------------------------------------
@@ -495,6 +512,50 @@ export interface AgentEventsResponseDto {
    * one. Equals the request cursor when the page is empty.
    */
   nextSeq: number;
+}
+
+/**
+ * `GET /agents/summaries` (SEN-56): one per agent the caller owns, revoked ones
+ * included — the same set `GET /agents` returns. Every figure is computed from
+ * the agent's event log on each read (`events/summary.ts`), which also says
+ * which event fields each one is read from.
+ *
+ * The mobile client is written against these field names: they are API
+ * surface, like the event DTO's.
+ */
+export interface AgentSummaryDto {
+  agentId: string;
+  /** Fills that landed: count of `fill` events. */
+  trades: number;
+  /** Refusals, both layers (sente + enclave). */
+  held: number;
+  /** `thesis` events. */
+  theses: number;
+  /**
+   * Realised P&L summed from `verdict` events, as exact decimal strings in quote
+   * units — Kuru's USDC and Perpl's AUSD summed as one unit, as the leaderboard
+   * does. `'0'` when nothing has settled. `last24h` is the verdicts whose `at`
+   * is within the last 24 hours.
+   */
+  pnl: { last24h: string; allTime: string };
+  /** Max notional (quote units, decimal string) among the orders that landed; null if none. */
+  largestOrderNotional: string | null;
+  /** Epoch ms when the CURRENT mandate took effect: the hire, or the last committed amend. */
+  mandateSince: number;
+  /** The newest event that is not a `run`, exactly as an item of `GET /agents/:id/events`. */
+  lastEvent: AgentEventResponseDto | null;
+}
+
+export interface AgentSummariesResponseDto {
+  summaries: AgentSummaryDto[];
+}
+
+/** An event of `GET /agents/activity`: the events route's item, plus whose it is. */
+export type AgentActivityEventDto = AgentEventResponseDto & { agentName: string };
+
+export interface AgentActivityResponseDto {
+  /** Newest first, across every agent the caller owns; `run` summaries left out. */
+  events: AgentActivityEventDto[];
 }
 
 export function toAgentEventResponse(event: AgentEvent): AgentEventResponseDto {
