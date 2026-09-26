@@ -564,7 +564,7 @@ function stopColor(index: number, stop: number | null, phase: Phase, drained: bo
   // A reorg takes the whole reading back: nothing on this ramp was about the
   // block the chain settled on.
   if (phase === 'reorged') return color.textFaint;
-  if (reached && phase === 'live' && !drained) return color.ramp;
+  if (reached && phase === 'live' && !drained) return color.purple;
   if (reached && phase === 'live') return color.textDim;
   return color.textFaint;
 }
@@ -663,8 +663,8 @@ export function ConsensusRamp({
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
       <Canvas style={{ width, height: TRACK }}>
-        <Rect x={0} y={0} width={width} height={TRACK} color={color.rule} />
-        <Rect x={0} y={0} width={fillWidth} height={TRACK} color={color.ramp} />
+        <Rect x={0} y={0} width={width} height={TRACK} color={color.line} />
+        <Rect x={0} y={0} width={fillWidth} height={TRACK} color={color.purple} />
       </Canvas>
 
       <View style={styles.stops}>
@@ -722,7 +722,7 @@ const styles = StyleSheet.create({
   stops: { flexDirection: 'row', marginTop: 5 },
   stop: {
     flex: 1,
-    fontFamily: font.mono,
+    fontFamily: font.chain,
     fontSize: 10,
     lineHeight: 14,
     letterSpacing: 0.6,
@@ -731,7 +731,7 @@ const styles = StyleSheet.create({
   captionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
   caption: {
     flexShrink: 1,
-    fontFamily: font.mono,
+    fontFamily: font.chain,
     fontSize: 10.5,
     lineHeight: 16,
     letterSpacing: 0.4,

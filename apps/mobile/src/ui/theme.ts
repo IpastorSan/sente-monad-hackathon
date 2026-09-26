@@ -1,60 +1,110 @@
 /**
- * "Instrument Grey" — the plan's design direction, as tokens.
+ * "Goban" — Sente's design system, as tokens (SEN-55). The reference is
+ * `docs/design/design-system.html`; the values here are the ones it prints.
  *
- * Achromatic ground, colour only where it carries information. Hairline
- * rules instead of cards: no glass, no blur, no elevation, no large radii.
- * Inter everywhere, with tabular figures for numbers; true mono is reserved
- * for chain facts (addresses, ids), so mono means "this came from the chain".
+ * The app is a board: agents place stones, the enclave draws the lines they
+ * cannot cross, and Monad purple marks the moment something happens. Four
+ * rules hold it together:
  *
- * Two chromatic tokens, and no more. `ramp` is Monad's purple, and it belongs
- * to the consensus ramp (SEN-24) and to nothing else — it marks a chain event
- * in progress, and it leaves the screen when the event is over. `danger` is
- * for destructive actions and errors, because those carry information too.
- * Everything else is grey, on purpose.
+ * - Purple is an event. It is on the primary button because pressing it makes
+ *   something happen, on a trade because that is a move, and on the consensus
+ *   ramp (SEN-24) while a block is landing — and it drains out once the block
+ *   is final. Nothing decorative is purple.
+ * - A face is a speaker. Bricolage when the app raises its voice, Geist when it
+ *   talks, Newsreader italic when the AGENT talks (theses, invalidations, the
+ *   mandate read back), Geist Mono when the CHAIN does (hashes, addresses,
+ *   block heights). Numbers are always tabular.
+ * - Stones say what happened: the ledger's five entry kinds each have a stone
+ *   (`Stone` in kit.tsx), so the shape carries the kind.
+ * - Limits are drawn, not listed: a mandate limit is a `Gauge` with its cap.
+ *
+ * `mint` and `berry` are outcome colours, for money that moved; `berry` also
+ * marks destructive actions. An enclave refusal is never berry: it is the
+ * product working, so it is `purpleSoft`.
  */
 import { StyleSheet } from 'react-native';
 
 export const color = {
-  ground: '#0B0B0C',
-  /** A tone step for the sheet, not an elevation. */
-  raised: '#111112',
-  rule: '#232326',
-  ruleStrong: '#3A3A3E',
-  text: '#EDEDED',
-  textDim: '#A0A0A5',
-  textFaint: '#67676C',
-  danger: '#E5534B',
-  /**
-   * Monad's purple. The consensus ramp's own colour: a block acquiring
-   * consensus fills in it, and the fill drains back to neutral once the block
-   * is final, so the purple is an event rather than a state.
-   */
-  ramp: '#836EF9',
+  /** The ground: Monad's night, not a neutral black. */
+  ink: '#0D0A19',
+  /** A surface: cards, sheets. A tone step, not an elevation. */
+  board: '#15112A',
+  /** Inputs, stat tiles, the segmented track. */
+  well: '#1D1838',
+  line: '#2A2447',
+  lineStrong: '#40386A',
+  text: '#F3F0FF',
+  textDim: '#AAA3CB',
+  textFaint: '#6F688F',
+  /** Monad purple: primary action, a trade, a block acquiring consensus. */
+  purple: '#836EF9',
+  /** Purple as text or a glyph on ink, where `purple` is too dark to read. */
+  purpleHi: '#A898FF',
+  /** Selection, the agent's voice, the enclave's boundary. */
+  purpleSoft: '#DDD7FE',
+  /** Text on `purpleSoft`. */
+  purpleDeep: '#200052',
+  mint: '#5FE3B3',
+  berry: '#F0508C',
+  /** The sheet's backdrop. */
+  scrim: 'rgba(6, 4, 14, 0.72)',
 } as const;
 
+/**
+ * Loaded in `app/_layout.tsx`. Each family is one registered face, so styles
+ * set `fontFamily` and never `fontWeight` — Android would synthesise a bold.
+ */
 export const font = {
-  regular: 'Inter_400Regular',
-  medium: 'Inter_500Medium',
-  semibold: 'Inter_600SemiBold',
-  mono: 'monospace',
+  regular: 'Geist_400Regular',
+  medium: 'Geist_500Medium',
+  semibold: 'Geist_600SemiBold',
+  display: 'BricolageGrotesque_700Bold',
+  displaySemibold: 'BricolageGrotesque_600SemiBold',
+  voice: 'Newsreader_400Regular_Italic',
+  chain: 'GeistMono_400Regular',
 } as const;
 
 export const GUTTER = 20;
-export const RADIUS = 2;
+
+export const RADIUS = {
+  /** Cards and sheets: softly squared boards. */
+  board: 20,
+  /** Inputs, tiles, sigils. */
+  well: 14,
+  /** Anything you press is a stone. */
+  stone: 999,
+} as const;
 
 export const text = StyleSheet.create({
+  /** One per screen: the balance that matters. */
+  hero: {
+    fontFamily: font.displaySemibold,
+    fontSize: 52,
+    lineHeight: 54,
+    letterSpacing: -1.8,
+    color: color.text,
+    fontVariant: ['tabular-nums'],
+  },
+  /** Screen titles. */
   display: {
-    fontFamily: font.semibold,
-    fontSize: 28,
-    lineHeight: 34,
-    letterSpacing: -0.6,
+    fontFamily: font.display,
+    fontSize: 32,
+    lineHeight: 36,
+    letterSpacing: -0.8,
     color: color.text,
   },
-  title: { fontFamily: font.semibold, fontSize: 17, lineHeight: 22, color: color.text },
-  body: { fontFamily: font.regular, fontSize: 15, lineHeight: 21, color: color.text },
-  strong: { fontFamily: font.medium, fontSize: 15, lineHeight: 21, color: color.text },
+  /** Sheet and card titles, agent names. */
+  title: {
+    fontFamily: font.displaySemibold,
+    fontSize: 19,
+    lineHeight: 24,
+    letterSpacing: -0.2,
+    color: color.text,
+  },
+  body: { fontFamily: font.regular, fontSize: 15, lineHeight: 22, color: color.text },
+  strong: { fontFamily: font.medium, fontSize: 15, lineHeight: 22, color: color.text },
   dim: { fontFamily: font.regular, fontSize: 13, lineHeight: 19, color: color.textDim },
-  caption: { fontFamily: font.regular, fontSize: 12, lineHeight: 16, color: color.textFaint },
+  caption: { fontFamily: font.regular, fontSize: 12, lineHeight: 17, color: color.textFaint },
   label: {
     fontFamily: font.medium,
     fontSize: 11,
@@ -63,8 +113,12 @@ export const text = StyleSheet.create({
     textTransform: 'uppercase',
     color: color.textFaint,
   },
-  /** Chain facts only: addresses, ids, tokens. */
-  mono: { fontFamily: font.mono, fontSize: 12.5, lineHeight: 18, color: color.textDim },
+  /** The agent's own words, and nothing else. */
+  voice: { fontFamily: font.voice, fontSize: 17, lineHeight: 24, color: color.purpleSoft },
+  /** Chain facts only: hashes, addresses, block heights, policy and agent ids. */
+  mono: { fontFamily: font.chain, fontSize: 12, lineHeight: 18, color: color.textDim },
   num: { fontVariant: ['tabular-nums'] },
-  danger: { color: color.danger },
+  up: { color: color.mint },
+  down: { color: color.berry },
+  danger: { color: color.berry },
 });

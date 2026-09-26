@@ -309,6 +309,35 @@ export type AgentEventsPage = {
 };
 
 /**
+ * One agent's activity in a line, from `GET /agents/summaries` (SEN-56): what
+ * the agents list, Home and the agent screen show without reading the whole
+ * event log. Every figure is computed by the API from that log.
+ */
+export type AgentSummary = {
+  agentId: string;
+  /** Fills that landed. */
+  trades: number;
+  /** Refusals, both layers: each is the mandate holding. */
+  held: number;
+  theses: number;
+  /**
+   * Realised P&L from the agent's verdicts, as exact decimal strings in quote
+   * units — USDC and AUSD summed as one unit, as the leaderboard does. `"0"`
+   * when nothing has settled.
+   */
+  pnl: { last24h: string; allTime: string };
+  /** The largest order notional it has sent, in quote units; `null` if none. */
+  largestOrderNotional: string | null;
+  /** Epoch ms the current mandate took effect: the hire or the last amend. */
+  mandateSince: number;
+  /** The newest event that is not a run summary. */
+  lastEvent: WireAgentEvent | null;
+};
+
+/** One row of `GET /agents/activity`: an event, and whose it is. */
+export type ActivityEvent = WireAgentEvent & { agentName: string };
+
+/**
  * One row of `GET /leaderboard` (SEN-26).
  *
  * `n` is the denominator of `winRate` and `capitalDeployedUsd` of `roi`; the
@@ -547,6 +576,25 @@ export class AgentsApi {
       events: page.events ?? [],
       nextSeq: page.nextSeq ?? afterSeq ?? 0,
     };
+  }
+
+  /** `GET /agents/summaries` (SEN-56) — one line per agent the user owns, revoked included. */
+  async summaries(): Promise<AgentSummary[]> {
+    const page = await this.request<{ summaries?: AgentSummary[] }>('GET', '/agents/summaries');
+    return page.summaries ?? [];
+  }
+
+  /**
+   * `GET /agents/activity` (SEN-56) — the latest events across all the user's
+   * agents, NEWEST first (unlike `events`), run summaries left out, each with
+   * its `consensus` attached the same way.
+   */
+  async activity(limit?: number): Promise<ActivityEvent[]> {
+    const page = await this.request<{ events?: ActivityEvent[] }>(
+      'GET',
+      `/agents/activity${limit !== undefined ? `?limit=${limit}` : ''}`,
+    );
+    return page.events ?? [];
   }
 
   /**

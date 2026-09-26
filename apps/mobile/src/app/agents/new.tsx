@@ -691,7 +691,7 @@ const styles = StyleSheet.create({
   grow: { flex: 1 },
   after: { marginTop: 10 },
   rail: { flexDirection: 'row', gap: 4, marginTop: 16, marginBottom: 10 },
-  railSegment: { flex: 1, height: 2, backgroundColor: color.rule },
+  railSegment: { flex: 1, height: 2, backgroundColor: color.line },
   railOn: { backgroundColor: color.text },
   token: { color: color.text },
   approvalSummary: { marginTop: 8 },

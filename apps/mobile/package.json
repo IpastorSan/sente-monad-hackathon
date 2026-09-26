@@ -16,7 +16,10 @@
   },
   "dependencies": {
     "@category-labs/mera": "0.2.0",
-    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
+    "@expo-google-fonts/geist": "^0.4.2",
+    "@expo-google-fonts/geist-mono": "^0.4.3",
+    "@expo-google-fonts/newsreader": "^0.4.1",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@scure/base": "^2.4.0",

@@ -131,9 +131,9 @@ const styles = StyleSheet.create({
   },
   hire: { minHeight: 36, paddingHorizontal: 14 },
   cta: { marginTop: 20 },
-  empty: { marginTop: 24, paddingTop: 20, borderTopWidth: 1, borderTopColor: color.rule, gap: 8 },
-  list: { marginTop: 12, borderTopWidth: 1, borderTopColor: color.rule },
-  row: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: color.rule, gap: 3 },
+  empty: { marginTop: 24, paddingTop: 20, borderTopWidth: 1, borderTopColor: color.line, gap: 8 },
+  list: { marginTop: 12, borderTopWidth: 1, borderTopColor: color.line },
+  row: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: color.line, gap: 3 },
   rowTop: {
     flexDirection: 'row',
     alignItems: 'baseline',

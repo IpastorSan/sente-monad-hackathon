@@ -1,8 +1,11 @@
 /**
- * The handful of primitives the agent screens are built from. Hairlines and
- * type do the structural work; nothing here draws a card.
+ * The plain primitives every screen is built from, in the Goban system
+ * (SEN-55). Anything you press is a stone — a pill — and surfaces are softly
+ * squared boards; there is no elevation, depth comes from the ground stepping
+ * lighter (`ink` → `board` → `well`). The pieces with a meaning of their own —
+ * stones, sigils, gauges, status pills — are in `goban.tsx`.
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -24,6 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { groupThousands } from '@/agents/amounts';
 
+import { Icon, type IconName } from './icons';
 import { color, font, GUTTER, RADIUS, text } from './theme';
 
 export function Screen({
@@ -31,33 +35,34 @@ export function Screen({
   footer,
   refreshing,
   onRefresh,
+  tabbed = false,
 }: {
   children: ReactNode;
   /** Pinned below the scroll area: the step's primary actions. */
   footer?: ReactNode;
   refreshing?: boolean;
   onRefresh?: () => void;
+  /** Inside the tab navigator, which owns the bottom inset. */
+  tabbed?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const bottom = tabbed ? 24 : insets.bottom + 40;
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: footer ? 24 : insets.bottom + 40 },
-        ]}
+        contentContainerStyle={[styles.content, { paddingBottom: footer ? 24 : bottom }]}
         keyboardShouldPersistTaps="handled"
         refreshControl={
           onRefresh ? (
             <RefreshControl
               refreshing={refreshing ?? false}
               onRefresh={onRefresh}
-              tintColor={color.textDim}
-              colors={[color.ground]}
-              progressBackgroundColor={color.text}
+              tintColor={color.purpleHi}
+              colors={[color.purple]}
+              progressBackgroundColor={color.board}
             />
           ) : undefined
         }
@@ -81,8 +86,15 @@ export function TopBar({
   return (
     <View style={styles.topBar}>
       {back ? (
-        <Pressable accessibilityRole="button" hitSlop={12} onPress={back.onPress}>
-          <Text style={styles.back}>‹ {back.label}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Back to ${back.label}`}
+          hitSlop={12}
+          onPress={back.onPress}
+          style={styles.backRow}
+        >
+          <Icon name="back" size={18} color={color.textDim} />
+          <Text style={styles.back}>{back.label}</Text>
         </Pressable>
       ) : (
         <View />
@@ -92,7 +104,31 @@ export function TopBar({
   );
 }
 
-/** A labelled block under a hairline. The rule, not a box, is the structure. */
+/** A round, outlined icon button: overflow menus, close. */
+export function IconButton({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: IconName;
+  /** Read by screen readers; there is no visible text. */
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+    >
+      <Icon name={icon} size={18} color={color.textDim} />
+    </Pressable>
+  );
+}
+
+/** A labelled block. `aside` sits right of the label: a link or a count. */
 export function Section({
   label,
   aside,
@@ -113,12 +149,67 @@ export function Section({
   );
 }
 
-type ButtonKind = 'primary' | 'secondary' | 'danger';
+/** The text link a Section puts in its `aside`. */
+export function SectionLink({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="link" hitSlop={10} onPress={onPress}>
+      <Text style={styles.sectionLink}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/**
+ * A board: the one surface. `goban` draws the faint board grid behind it — for
+ * the single card per screen that earns it (the balance on Home).
+ */
+export function Card({
+  children,
+  goban = false,
+  quiet = false,
+  style,
+}: {
+  children: ReactNode;
+  goban?: boolean;
+  /** Outline only, for something that is over (a revoked agent). */
+  quiet?: boolean;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <View style={[styles.card, quiet && styles.cardQuiet, style]}>
+      {goban ? <GobanGrid /> : null}
+      {children}
+    </View>
+  );
+}
+
+function GobanGrid() {
+  return (
+    <View style={styles.grid} pointerEvents="none">
+      {Array.from({ length: 24 }, (_, i) => (
+        <View
+          key={`h${i}`}
+          style={[styles.gridLine, { top: i * 22, left: 0, right: 0, height: 1 }]}
+        />
+      ))}
+      {Array.from({ length: 24 }, (_, i) => (
+        <View
+          key={`v${i}`}
+          style={[styles.gridLine, { left: i * 22, top: 0, bottom: 0, width: 1 }]}
+        />
+      ))}
+      <View style={styles.glow} />
+    </View>
+  );
+}
+
+type ButtonKind = 'primary' | 'secondary' | 'soft' | 'danger';
 
 export function Button({
   label,
   onPress,
   kind = 'secondary',
+  size = 'md',
+  icon,
   disabled = false,
   busy = false,
   style,
@@ -126,11 +217,14 @@ export function Button({
   label: string;
   onPress: () => void;
   kind?: ButtonKind;
+  size?: 'md' | 'sm';
+  icon?: IconName;
   disabled?: boolean;
   busy?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
   const inactive = disabled || busy;
+  const ink = BUTTON_INK[kind];
   return (
     <Pressable
       accessibilityRole="button"
@@ -139,16 +233,22 @@ export function Button({
       disabled={inactive}
       style={({ pressed }) => [
         styles.button,
+        size === 'sm' && styles.buttonSm,
         BUTTON[kind],
         inactive && styles.inactive,
-        pressed && styles.pressed,
+        pressed && styles.buttonPressed,
         style,
       ]}
     >
       {busy ? (
-        <ActivityIndicator color={kind === 'primary' ? color.ground : color.text} />
+        <ActivityIndicator color={ink} />
       ) : (
-        <Text style={[styles.buttonText, BUTTON_TEXT[kind]]}>{label}</Text>
+        <>
+          {icon ? <Icon name={icon} size={size === 'sm' ? 16 : 18} color={ink} /> : null}
+          <Text style={[styles.buttonText, size === 'sm' && styles.buttonTextSm, { color: ink }]}>
+            {label}
+          </Text>
+        </>
       )}
     </Pressable>
   );
@@ -177,7 +277,7 @@ export function Field({
   onChangeText: (value: string) => void;
   placeholder?: string;
   multiline?: boolean;
-  /** Shows a live `n / max` count, which turns red past the limit. */
+  /** Shows a live `n / max` count, which turns berry past the limit. */
   max?: number;
   error?: string | undefined;
   hint?: string;
@@ -185,6 +285,7 @@ export function Field({
   keyboardType?: KeyboardTypeOptions;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
 }) {
+  const [focused, setFocused] = useState(false);
   const over = max !== undefined && value.length > max;
   const numeric = keyboardType === 'decimal-pad' || keyboardType === 'number-pad';
   return (
@@ -197,18 +298,26 @@ export function Field({
           </Text>
         ) : null}
       </View>
-      <View style={[styles.inputRow, (error || over) && styles.inputRowError]}>
+      <View
+        style={[
+          styles.inputRow,
+          focused && styles.inputRowFocus,
+          (error || over) && styles.inputRowError,
+        ]}
+      >
         <TextInput
           value={value}
           onChangeText={onChangeText}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           placeholder={placeholder}
           placeholderTextColor={color.textFaint}
           multiline={multiline}
           keyboardType={keyboardType}
           autoCapitalize={autoCapitalize}
           autoCorrect={!numeric && autoCapitalize !== 'none'}
-          cursorColor={color.text}
-          selectionColor={color.textDim}
+          cursorColor={color.purpleHi}
+          selectionColor={color.purple}
           textAlignVertical={multiline ? 'top' : 'center'}
           style={[styles.input, multiline && styles.inputMultiline, numeric && text.num]}
         />
@@ -242,7 +351,13 @@ export function SelectRow({
       style={({ pressed }) => [styles.selectRow, pressed && styles.pressed]}
     >
       <View style={[mode === 'radio' ? styles.radio : styles.check, selected && styles.markOn]}>
-        {selected ? <View style={mode === 'radio' ? styles.radioDot : styles.checkDot} /> : null}
+        {selected ? (
+          mode === 'radio' ? (
+            <View style={styles.radioDot} />
+          ) : (
+            <Icon name="check" size={13} color={color.ink} strokeWidth={2.6} />
+          )
+        ) : null}
       </View>
       <View style={styles.grow}>
         <Text style={text.body}>{title}</Text>
@@ -272,9 +387,9 @@ export function ToggleRow({
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: color.rule, true: color.text }}
-        thumbColor={value ? color.ground : color.textDim}
-        ios_backgroundColor={color.rule}
+        trackColor={{ false: color.lineStrong, true: color.purple }}
+        thumbColor={value ? color.text : color.textDim}
+        ios_backgroundColor={color.lineStrong}
       />
     </View>
   );
@@ -305,6 +420,38 @@ export function Chips({ children }: { children: ReactNode }) {
   return <View style={styles.chips}>{children}</View>;
 }
 
+/** One choice out of a few, in a well: time windows, filters. */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: readonly { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <View style={styles.segmented} accessibilityRole="radiogroup">
+      {options.map((option) => {
+        const on = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: on }}
+            onPress={() => onChange(option.value)}
+            style={[styles.segment, on && styles.segmentOn]}
+          >
+            <Text style={[styles.segmentText, on && styles.segmentTextOn]} numberOfLines={1}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** Label left, value right, hairline below. Values are tabular unless they are chain facts. */
 export function Row({
   label,
@@ -325,9 +472,43 @@ export function Row({
   );
 }
 
+/**
+ * A pressable list row with an icon, a title, a line saying what it does, and
+ * a chevron: the Controls list on an agent, the Account screen.
+ */
+export function ActionRow({
+  icon,
+  title,
+  detail,
+  onPress,
+  danger = false,
+}: {
+  icon: IconName;
+  title: string;
+  detail?: string;
+  onPress: () => void;
+  danger?: boolean;
+}) {
+  const tint = danger ? color.berry : color.textDim;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+    >
+      <Icon name={icon} size={20} color={tint} />
+      <View style={styles.grow}>
+        <Text style={[text.strong, danger && text.danger]}>{title}</Text>
+        {detail ? <Text style={text.caption}>{detail}</Text> : null}
+      </View>
+      <Icon name="chevron" size={16} color={color.textFaint} />
+    </Pressable>
+  );
+}
+
 export type NoticeTone = 'info' | 'ok' | 'error';
 
-/** A message set off by a rule on its left edge: error in red, the rest neutral. */
+/** A message in a well, with a coloured edge: berry for an error, purple for ok. */
 export function Notice({
   tone = 'info',
   title,
@@ -342,8 +523,8 @@ export function Notice({
       accessibilityRole={tone === 'error' ? 'alert' : undefined}
       style={[
         styles.notice,
-        tone === 'error' && { borderLeftColor: color.danger },
-        tone === 'ok' && { borderLeftColor: color.text },
+        tone === 'error' && { borderLeftColor: color.berry },
+        tone === 'ok' && { borderLeftColor: color.purple },
       ]}
     >
       <Text style={[text.strong, tone === 'error' && text.danger]}>{title}</Text>
@@ -368,7 +549,7 @@ export function Tag({ label, filled = false }: { label: string; filled?: boolean
 export function Loading() {
   return (
     <View style={styles.loading}>
-      <ActivityIndicator color={color.textDim} />
+      <ActivityIndicator color={color.purpleHi} />
     </View>
   );
 }
@@ -403,11 +584,10 @@ export function Sheet({
       >
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+          <View style={styles.grip} />
           <View style={styles.sheetHead}>
-            <Text style={[text.title, styles.grow]}>{title}</Text>
-            <Pressable accessibilityRole="button" hitSlop={12} onPress={onClose}>
-              <Text style={styles.back}>Close</Text>
-            </Pressable>
+            <Text style={[text.title, styles.sheetTitle, styles.grow]}>{title}</Text>
+            <IconButton icon="close" label="Close" onPress={onClose} />
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetBody}>
             {children}
@@ -419,26 +599,37 @@ export function Sheet({
 }
 
 const BUTTON = StyleSheet.create({
-  primary: { backgroundColor: color.text, borderColor: color.text },
-  secondary: { borderColor: color.ruleStrong },
-  danger: { borderColor: color.danger },
+  primary: {
+    backgroundColor: color.purple,
+    borderColor: color.purple,
+    shadowColor: color.purple,
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  secondary: { borderColor: color.lineStrong },
+  soft: { backgroundColor: color.well, borderColor: color.well },
+  danger: { borderColor: 'rgba(240, 80, 140, 0.45)' },
 });
 
-const BUTTON_TEXT = StyleSheet.create({
-  primary: { color: color.ground },
-  secondary: { color: color.text },
-  danger: { color: color.danger },
-});
+const BUTTON_INK: Record<ButtonKind, string> = {
+  primary: '#FFFFFF',
+  secondary: color.text,
+  soft: color.text,
+  danger: color.berry,
+};
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: color.ground },
+  screen: { flex: 1, backgroundColor: color.ink },
   content: { paddingHorizontal: GUTTER, paddingTop: 8 },
   footer: {
     paddingHorizontal: GUTTER,
     paddingTop: 12,
+    gap: 12,
     borderTopWidth: 1,
-    borderTopColor: color.rule,
-    backgroundColor: color.ground,
+    borderTopColor: color.line,
+    backgroundColor: color.ink,
   },
   topBar: {
     height: 48,
@@ -446,149 +637,212 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -4 },
   back: { fontFamily: font.medium, fontSize: 15, color: color.textDim },
-  section: {
-    marginTop: 28,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: color.rule,
-    gap: 4,
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: RADIUS.stone,
+    borderWidth: 1,
+    borderColor: color.line,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  section: { marginTop: 28, gap: 4 },
   sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 8,
+  },
+  sectionLink: { fontFamily: font.medium, fontSize: 13, color: color.purpleHi },
+  card: {
+    padding: 16,
+    borderRadius: RADIUS.board,
+    borderWidth: 1,
+    borderColor: color.line,
+    backgroundColor: color.board,
+    overflow: 'hidden',
+  },
+  cardQuiet: { backgroundColor: 'transparent' },
+  grid: { ...StyleSheet.absoluteFill },
+  gridLine: { position: 'absolute', backgroundColor: 'rgba(221, 215, 254, 0.05)' },
+  glow: {
+    position: 'absolute',
+    top: -120,
+    right: -120,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(131, 110, 249, 0.14)',
   },
   button: {
-    minHeight: 48,
-    paddingHorizontal: 16,
+    minHeight: 50,
+    paddingHorizontal: 20,
     borderWidth: 1,
-    borderRadius: RADIUS,
+    borderRadius: RADIUS.stone,
+    flexDirection: 'row',
+    gap: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  buttonSm: { minHeight: 38, paddingHorizontal: 14 },
   buttonText: { fontFamily: font.semibold, fontSize: 15 },
+  buttonTextSm: { fontSize: 13 },
   buttonRow: { flexDirection: 'row', gap: 10 },
-  inactive: { opacity: 0.35 },
+  inactive: { opacity: 0.35, shadowOpacity: 0, elevation: 0 },
   pressed: { opacity: 0.7 },
-  field: { marginTop: 20, gap: 6 },
+  buttonPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
+  field: { marginTop: 20, gap: 8 },
   fieldHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: color.ruleStrong,
+    paddingHorizontal: 14,
+    borderRadius: RADIUS.well,
+    borderWidth: 1,
+    borderColor: color.well,
+    backgroundColor: color.well,
   },
-  inputRowError: { borderBottomColor: color.danger },
+  inputRowFocus: { borderColor: color.purple },
+  inputRowError: { borderColor: color.berry },
   input: {
     flex: 1,
     fontFamily: font.regular,
     fontSize: 16,
     color: color.text,
-    paddingVertical: 10,
+    paddingVertical: 13,
     paddingHorizontal: 0,
   },
-  inputMultiline: { minHeight: 120, maxHeight: 260 },
-  suffix: { fontFamily: font.medium, fontSize: 14, color: color.textDim, marginLeft: 8 },
+  inputMultiline: { minHeight: 140, maxHeight: 280 },
+  suffix: { fontFamily: font.medium, fontSize: 14, color: color.textFaint, marginLeft: 8 },
   selectRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: color.rule,
+    borderBottomColor: color.line,
   },
   grow: { flex: 1 },
   check: {
-    width: 18,
-    height: 18,
-    borderWidth: 1,
-    borderColor: color.ruleStrong,
-    borderRadius: RADIUS,
+    width: 20,
+    height: 20,
+    borderWidth: 1.5,
+    borderColor: color.lineStrong,
+    borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkDot: { width: 10, height: 10, backgroundColor: color.ground },
   radio: {
-    width: 18,
-    height: 18,
-    borderWidth: 1,
-    borderColor: color.ruleStrong,
-    borderRadius: 9,
+    width: 20,
+    height: 20,
+    borderWidth: 1.5,
+    borderColor: color.lineStrong,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  radioDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.ground },
-  markOn: { backgroundColor: color.text, borderColor: color.text },
+  radioDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.ink },
+  markOn: { backgroundColor: color.purpleSoft, borderColor: color.purpleSoft },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   chip: {
     paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 13,
     borderWidth: 1,
-    borderColor: color.ruleStrong,
-    borderRadius: RADIUS,
+    borderColor: color.lineStrong,
+    borderRadius: RADIUS.stone,
   },
-  chipOn: { backgroundColor: color.text, borderColor: color.text },
+  chipOn: { backgroundColor: color.purpleSoft, borderColor: color.purpleSoft },
   chipText: { fontFamily: font.medium, fontSize: 13, color: color.text },
-  chipTextOn: { color: color.ground },
+  chipTextOn: { color: color.purpleDeep },
+  segmented: {
+    flexDirection: 'row',
+    padding: 3,
+    borderRadius: RADIUS.stone,
+    backgroundColor: color.well,
+  },
+  segment: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: RADIUS.stone,
+    alignItems: 'center',
+  },
+  segmentOn: { backgroundColor: color.lineStrong },
+  segmentText: { fontFamily: font.medium, fontSize: 13, color: color.textDim },
+  segmentTextOn: { color: color.text },
   row: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
     gap: 16,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderBottomWidth: 1,
-    borderBottomColor: color.rule,
+    borderBottomColor: color.line,
   },
   rowLabel: { flexShrink: 0, maxWidth: '55%' },
   rowValue: { flexShrink: 1, textAlign: 'right' },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: color.line,
+  },
   notice: {
     marginTop: 16,
-    paddingLeft: 12,
-    paddingVertical: 2,
-    borderLeftWidth: 2,
-    borderLeftColor: color.ruleStrong,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: RADIUS.well,
+    borderLeftWidth: 3,
+    borderLeftColor: color.lineStrong,
+    backgroundColor: color.well,
     gap: 4,
   },
   tag: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 2,
     borderWidth: 1,
-    borderColor: color.text,
-    borderRadius: RADIUS,
+    borderColor: color.purpleSoft,
+    borderRadius: RADIUS.stone,
   },
-  tagFilled: { backgroundColor: color.text },
+  tagFilled: { backgroundColor: color.purpleSoft },
   tagText: {
     fontFamily: font.semibold,
     fontSize: 10,
     letterSpacing: 1,
     textTransform: 'uppercase',
-    color: color.text,
+    color: color.purpleSoft,
   },
-  tagTextFilled: { color: color.ground },
+  tagTextFilled: { color: color.purpleDeep },
   loading: { paddingVertical: 40, alignItems: 'center' },
   sheetRoot: { flex: 1, justifyContent: 'flex-end' },
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-  },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: color.scrim },
   sheet: {
     maxHeight: '88%',
-    backgroundColor: color.raised,
+    backgroundColor: color.board,
     borderTopWidth: 1,
-    borderTopColor: color.ruleStrong,
+    borderTopColor: color.lineStrong,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+  },
+  grip: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 10,
+    backgroundColor: color.lineStrong,
   },
   sheetHead: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
     paddingHorizontal: GUTTER,
-    paddingTop: 18,
+    paddingTop: 14,
     paddingBottom: 6,
   },
+  sheetTitle: { fontSize: 22, lineHeight: 28 },
   sheetBody: { paddingHorizontal: GUTTER, paddingBottom: 8 },
 });
