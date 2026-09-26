@@ -326,7 +326,7 @@ export type AgentSummary = {
    * when nothing has settled.
    */
   pnl: { last24h: string; allTime: string };
-  /** The largest order notional it has sent, in quote units; `null` if none. */
+  /** The largest notional among orders that landed, in quote units, as recorded; `null` if none. */
   largestOrderNotional: string | null;
   /** Epoch ms the current mandate took effect: the hire or the last amend. */
   mandateSince: number;
