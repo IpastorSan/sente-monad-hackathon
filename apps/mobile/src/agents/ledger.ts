@@ -146,6 +146,18 @@ export type RefusalEntry = Base & {
 /** A close, or SEN-22's verdict: what the position actually did. */
 export type VerdictEntry = Base & {
   kind: 'verdict';
+  /**
+   * Which event this row came from. A Perpl close is followed by the verdict
+   * it settles, and both carry a PnL — the venue's gross figure and the net one
+   * — so anything that TOTALS PnL must count one of them, and it is the
+   * verdict's, as `GET /agents/summaries` does (SEN-60).
+   */
+  origin: 'close' | 'verdict';
+  /**
+   * The position's direction. A verdict states it; a close is read off its
+   * closing fill, which trades AGAINST the position (a sell closes a long).
+   */
+  direction: Direction | null;
   /** Realised PnL as a decimal string, or null when nothing reported one. */
   pnl: string | null;
   /** `null` when the event did not say — a venue close, or a quiet venue. */
@@ -158,6 +170,14 @@ export type VerdictEntry = Base & {
    */
   blockNumber: number | null;
   consensus: EventConsensus | null;
+  /** The settling transaction — a chain fact, so the screen sets it in mono. */
+  txHash: string | null;
+  /**
+   * What the number does NOT account for, in the API's own sentences (SEN-22's
+   * `notes`). Written by Sente, not by the agent, so it is never set in the
+   * agent's voice.
+   */
+  notes: string[];
 };
 
 /**
@@ -288,19 +308,34 @@ function refusalEntry(event: LedgerEvent): RefusalEntry {
 
 function verdictEntry(event: LedgerEvent): VerdictEntry {
   const detail = event.detail;
+  const close = event.kind === 'close';
+  const side = directionOf(text(detail, 'side'));
   return {
     kind: 'verdict',
+    origin: close ? 'close' : 'verdict',
     seq: event.seq,
     at: event.at,
     ...runOf(event),
-    // `pnl` is the verdict's own field and `realizedPnl` is what a venue close
-    // carries; either one is the same number to the user.
-    pnl: text(detail, 'pnl') ?? text(detail, 'realizedPnl'),
+    direction: close ? opposite(side) : directionOf(text(detail, 'direction')),
+    // `realisedPnl` is what SEN-22's verdict actually writes (the whole
+    // `Verdict` is spread into the event — `recordVerdict` in `tools/gate.ts`),
+    // `realizedPnl` is what a venue close carries, and `pnl` is the older name.
+    // Reading only the last two left every real verdict without its number
+    // until SEN-60. All three are the same figure to the user.
+    pnl: text(detail, 'pnl') ?? text(detail, 'realisedPnl') ?? text(detail, 'realizedPnl'),
     held: booleanAt(detail, 'held') ?? booleanAt(detail, 'thesisHeld'),
     market: text(detail, 'symbol') ?? text(detail, 'market'),
     blockNumber: numberAt(detail, 'blockNumber'),
     consensus: event.consensus ?? null,
+    txHash: text(detail, 'txHash'),
+    notes: stringsAt(detail, 'notes'),
   };
+}
+
+function opposite(direction: Direction | null): Direction | null {
+  if (direction === 'long') return 'short';
+  if (direction === 'short') return 'long';
+  return null;
 }
 
 /**
@@ -363,6 +398,13 @@ function numberAt(source: Record<string, unknown>, key: string): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function stringsAt(source: Record<string, unknown>, key: string): string[] {
+  const value = source[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item !== '')
+    : [];
 }
 
 function booleanAt(source: Record<string, unknown>, key: string): boolean | null {
@@ -558,13 +600,17 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
     },
     {
       kind: 'verdict',
+      origin: 'verdict',
       seq: 6,
       at: at(1),
+      direction: 'long',
       pnl: '12.4',
       held: true,
       market: 'MON-USDC',
       blockNumber: null,
       consensus: null,
+      txHash: null,
+      notes: [],
     },
   ];
 }
