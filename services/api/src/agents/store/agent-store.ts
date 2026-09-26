@@ -83,6 +83,20 @@ export interface AgentRecord {
   readonly policyCleared: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  /**
+   * When the CURRENT mandate took effect (SEN-56): the hire, or the last amend
+   * the enclave accepted — through either path, the server-signed PATCH or the
+   * device's prepare → commit. `updatedAt` cannot answer this: a revoke, a
+   * policy clear, a gas drip and an ERC-8004 id all move it without touching
+   * the mandate. The app draws the mandate's expiry gauge from here to
+   * `mandate.expiresAt`.
+   *
+   * Optional because agents stored before SEN-56 do not have it; read it
+   * through `mandateSinceOf`, which falls back to `createdAt` — true for every
+   * such agent that was never amended, and the best the record can say for one
+   * that was.
+   */
+  readonly mandateSince?: Date;
   readonly revokedAt?: Date;
   /**
    * Whether the owner published this agent's system prompt (SEN-28). Default
@@ -119,6 +133,7 @@ export type AgentPatch = Partial<
   Pick<
     AgentRecord,
     | 'mandate'
+    | 'mandateSince'
     | 'status'
     | 'policyCleared'
     | 'updatedAt'
@@ -155,6 +170,11 @@ export interface AgentStore {
   findByAddress(address: string): Promise<AgentRecord | undefined>;
   /** Rejects an unknown id. Returns the updated record. */
   update(id: string, patch: AgentPatch): Promise<AgentRecord>;
+}
+
+/** When the agent's current mandate took effect; see `AgentRecord.mandateSince`. */
+export function mandateSinceOf(agent: Pick<AgentRecord, 'createdAt' | 'mandateSince'>): Date {
+  return agent.mandateSince ?? agent.createdAt;
 }
 
 /** The key both stores index wallet addresses under. */

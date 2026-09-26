@@ -1,8 +1,15 @@
-import { BadRequestException, HttpException, ValidationPipe } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  ValidationPipe,
+  type INestApplication,
+} from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
-import type { Auth, Principal } from '../auth/principal';
+import { Auth, type Principal } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ConsensusService, type PollTag, type TaggedBlock } from '../chain/consensus.service';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
@@ -11,6 +18,7 @@ import { AgentsService } from './agents.service';
 import { DeviceMandateOwners, ServerMandateOwners } from './mandate-owner';
 import { InMemoryUserWalletRegistry } from '../wallet/store/user-wallet-registry';
 import {
+  AgentActivityQueryDto,
   AgentEventsQueryDto,
   AgentIdParamDto,
   AmendMandateDto,
@@ -18,8 +26,10 @@ import {
   ForkAgentDto,
   RevokeAgentDto,
 } from './dto/agent.dto';
-import { InMemoryAgentEventLog } from './events/agent-event-log';
-import { InMemoryAgentStore } from './store/agent-store';
+import { AGENT_EVENTS, InMemoryAgentEventLog } from './events/agent-event-log';
+import { ReturnFundsService } from './recovery/return-funds.service';
+import { AgentRunnerService } from './runner/agent-runner.service';
+import { InMemoryAgentStore, mandateSinceOf } from './store/agent-store';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
 
 const USDC = KURU_TESTNET_TOKENS.USDC.address;
@@ -62,8 +72,9 @@ function setup(wallets = new FakeAgentWalletProvider()) {
     logger: { log: () => undefined, warn: () => undefined },
     autoStart: false,
   });
+  const service = new AgentsService(new InMemoryAgentStore(), wallets, new ServerMandateOwners());
   const controller = new AgentsController(
-    new AgentsService(new InMemoryAgentStore(), wallets, new ServerMandateOwners()),
+    service,
     auth,
     // The run route has its own spec (runner/run-route.spec.ts).
     {} as never,
@@ -74,6 +85,7 @@ function setup(wallets = new FakeAgentWalletProvider()) {
   );
   return {
     controller,
+    service,
     events,
     consent: async (blockNumber: number) => {
       byTag.set('finalized', { number: blockNumber, id: `0x${'f'.repeat(64)}` });
@@ -411,6 +423,249 @@ describe('AgentsController', () => {
   });
 
   /**
+   * SEN-56: the redesign's per-agent cards and its home-screen feed. The
+   * arithmetic is `events/summary.spec.ts`'s; this covers ownership, the wire
+   * shape, and that each figure reaches the route.
+   */
+  describe('GET /agents/summaries and GET /agents/activity (SEN-56)', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    /** Alice hires two agents and Bob one, each with a little history. */
+    async function seeded() {
+      const h = setup();
+      const hireAs = async (userId: string, name: string) => {
+        h.as(userId);
+        return (await h.controller.hire(body({ name }) as unknown as CreateAgentDto)).agent;
+      };
+      const alpha = await hireAs('alice', 'Alpha');
+      const beta = await hireAs('alice', 'Beta');
+      const mallory = await hireAs('bob', 'Mallory');
+      h.as('alice');
+
+      const on = (agentId: string) => ({ agentId, runId: 'run-1' });
+      await h.events.append({ ...on(alpha.id), kind: 'thesis', detail: { market: 'MON-USDC' } });
+      await h.events.append({
+        ...on(alpha.id),
+        kind: 'order',
+        tool: 'place_market',
+        detail: {
+          status: 'ok',
+          intent: { venue: 'kuru', kind: 'order', market: '0xabc', notional: '42.5' },
+          blockNumber: 74_000_030,
+        },
+      });
+      await h.events.append({
+        ...on(alpha.id),
+        kind: 'fill',
+        tool: 'place_market',
+        detail: { symbol: 'MON-USDC', blockNumber: 74_000_030 },
+      });
+      await h.events.append({
+        ...on(alpha.id),
+        kind: 'verdict',
+        tool: 'place_market',
+        detail: { realisedPnl: '4.95', pnlAsset: 'USDC', blockNumber: 74_000_030 },
+      });
+      await h.events.append({
+        ...on(beta.id),
+        kind: 'refusal',
+        layer: 'enclave',
+        detail: { code: 'policy_violation' },
+      });
+      await h.events.append({
+        ...on(mallory.id),
+        kind: 'fill',
+        detail: { symbol: 'MON-USDC', blockNumber: 74_000_031 },
+      });
+      await h.events.append({ ...on(alpha.id), kind: 'run', detail: { stopReason: 'end_turn' } });
+      return { ...h, alpha, beta, mallory };
+    }
+
+    it("summarises every agent the caller owns, revoked ones included, and nobody else's", async () => {
+      const { controller, consent, alpha, beta } = await seeded();
+      await controller.revoke({ id: beta.id }, {});
+      await consent(74_000_030);
+
+      const { summaries } = await controller.summaries();
+
+      expect(summaries.map((s) => s.agentId)).toEqual([alpha.id, beta.id]);
+      expect(summaries[0]).toEqual({
+        agentId: alpha.id,
+        trades: 1,
+        held: 0,
+        theses: 1,
+        pnl: { last24h: '4.95', allTime: '4.95' },
+        largestOrderNotional: '42.5',
+        mandateSince: new Date(alpha.createdAt).getTime(),
+        // The verdict, not the run after it — shaped like an /events item, ramp included.
+        lastEvent: {
+          seq: 4,
+          agentId: alpha.id,
+          runId: 'run-1',
+          at: expect.any(Number),
+          kind: 'verdict',
+          tool: 'place_market',
+          detail: { realisedPnl: '4.95', pnlAsset: 'USDC', blockNumber: 74_000_030 },
+          consensus: { state: 'Finalized', at: { finalized: expect.any(Number) } },
+        },
+      });
+      expect(summaries[1]).toMatchObject({
+        agentId: beta.id,
+        trades: 0,
+        held: 1,
+        pnl: { last24h: '0', allTime: '0' },
+        largestOrderNotional: null,
+        lastEvent: { kind: 'refusal', layer: 'enclave' },
+      });
+      expect(summaries[1]!.lastEvent).not.toHaveProperty('consensus');
+      // The same item /events serves, byte for byte.
+      const page = await controller.listEvents({ id: alpha.id }, {});
+      expect(summaries[0]!.lastEvent).toEqual(page.events[3]);
+    });
+
+    it('answers a user with no agents with empty lists, not an error', async () => {
+      const { controller, as } = await seeded();
+      as('carol');
+      expect(await controller.summaries()).toEqual({ summaries: [] });
+      expect(await controller.activity({})).toEqual({ events: [] });
+    });
+
+    it('moves mandateSince on a committed amend, and on nothing else', async () => {
+      jest.useFakeTimers({ now: 1_800_000_000_000, doNotFake: ['nextTick', 'setImmediate'] });
+      const { controller } = setup();
+      const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
+      const since = async () => (await controller.summaries()).summaries[0]!.mandateSince;
+      expect(await since()).toBe(1_800_000_000_000);
+
+      jest.setSystemTime(1_800_000_060_000);
+      await controller.amendMandate(
+        { id: agent.id },
+        { mandate: body()['mandate'] as Record<string, unknown> },
+      );
+      expect(await since()).toBe(1_800_000_060_000);
+
+      // A refused amend leaves the mandate — and so its start — where it was.
+      jest.setSystemTime(1_800_000_120_000);
+      await httpError(controller.amendMandate({ id: agent.id }, { mandate: { version: 2 } }));
+      expect(await since()).toBe(1_800_000_060_000);
+      // A revoke moves `updatedAt`, not the mandate.
+      await controller.revoke({ id: agent.id }, {});
+      expect(await since()).toBe(1_800_000_060_000);
+    });
+
+    it('falls back to createdAt for an agent stored before mandateSince existed', () => {
+      const createdAt = new Date(1_700_000_000_000);
+      expect(mandateSinceOf({ createdAt })).toBe(createdAt);
+      const amended = new Date(1_700_000_500_000);
+      expect(mandateSinceOf({ createdAt, mandateSince: amended })).toBe(amended);
+    });
+
+    it("lists the newest moves across the caller's agents, runs left out, nobody else's", async () => {
+      const { controller, consent, alpha, beta } = await seeded();
+      await consent(74_000_030);
+
+      const { events } = await controller.activity({});
+
+      expect(events.map((e) => [e.kind, e.agentId, e.agentName])).toEqual([
+        ['refusal', beta.id, 'Beta'],
+        ['verdict', alpha.id, 'Alpha'],
+        ['fill', alpha.id, 'Alpha'],
+        ['order', alpha.id, 'Alpha'],
+        ['thesis', alpha.id, 'Alpha'],
+      ]);
+      // Each is an /events item with the agent's name beside it, consensus included.
+      const page = await controller.listEvents({ id: alpha.id }, {});
+      expect(events[1]).toEqual({ ...page.events[3], agentName: 'Alpha' });
+      expect(events[1]!.consensus).toMatchObject({ state: 'Finalized' });
+      expect(events[0]).not.toHaveProperty('consensus');
+
+      const two = await controller.activity({ limit: 2 });
+      expect(two.events.map((e) => e.kind)).toEqual(['refusal', 'verdict']);
+    });
+
+    it('defaults the activity page to 20 events', async () => {
+      const { controller, events, alpha } = await seeded();
+      for (let i = 0; i < 30; i += 1) {
+        await events.append({ agentId: alpha.id, kind: 'thesis', detail: { market: `M-${i}` } });
+      }
+      expect((await controller.activity({})).events).toHaveLength(20);
+    });
+
+    it('validates the activity query like the events query', async () => {
+      await expect(
+        pipe.transform({ limit: '50' }, { type: 'query', metatype: AgentActivityQueryDto }),
+      ).resolves.toEqual({ limit: 50 });
+      for (const query of [{ limit: '0' }, { limit: '51' }, { limit: 'x' }, { kind: 'fill' }]) {
+        await expect(
+          pipe.transform(query, { type: 'query', metatype: AgentActivityQueryDto }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      }
+    });
+
+    /**
+     * Route precedence can only be proved through the router: a controller
+     * method called directly never goes near `:id`. So this boots the real
+     * controller behind Nest's HTTP adapter, with the auth guard stubbed and
+     * the global ValidationPipe as main.ts configures it — which is what would
+     * answer a 400 if `:id` captured `summaries` and failed its UUID check.
+     */
+    describe('over HTTP', () => {
+      let app: INestApplication | undefined;
+
+      afterEach(async () => {
+        await app?.close();
+      });
+
+      it('never lets :id capture summaries or activity', async () => {
+        const h = await seeded();
+        const moduleRef = await Test.createTestingModule({
+          controllers: [AgentsController],
+          providers: [
+            { provide: AgentsService, useValue: h.service },
+            { provide: Auth, useValue: { principal: () => ({ userId: 'alice' }) } },
+            { provide: AgentRunnerService, useValue: {} },
+            { provide: AGENT_EVENTS, useValue: h.events },
+            { provide: ConsensusService, useValue: { stateOf: () => undefined } },
+            { provide: ReturnFundsService, useValue: {} },
+          ],
+        })
+          .overrideGuard(SessionAuthGuard)
+          .useValue({ canActivate: () => true })
+          .compile();
+        app = moduleRef.createNestApplication({ logger: false });
+        app.useGlobalPipes(pipe);
+        await app.listen(0, '127.0.0.1');
+        const base = await app.getUrl();
+        const get = async (path: string) => {
+          const response = await fetch(new URL(path, base));
+          return { status: response.status, body: (await response.json()) as unknown };
+        };
+
+        const summaries = await get('/agents/summaries');
+        expect(summaries.status).toBe(200);
+        expect(summaries.body).toMatchObject({
+          summaries: [{ agentId: h.alpha.id }, { agentId: h.beta.id }],
+        });
+
+        const activity = await get('/agents/activity?limit=1');
+        expect(activity.status).toBe(200);
+        expect(activity.body).toMatchObject({ events: [{ kind: 'refusal', agentName: 'Beta' }] });
+        expect(await get('/agents/activity?limit=51')).toMatchObject({ status: 400 });
+
+        // `:id` still routes, and still refuses what is not a UUID.
+        expect(await get(`/agents/${h.alpha.id}`)).toMatchObject({
+          status: 200,
+          body: { id: h.alpha.id },
+        });
+        expect(await get('/agents/not-a-uuid')).toMatchObject({ status: 400 });
+        expect(await get(`/agents/${h.mallory.id}`)).toMatchObject({ status: 404 });
+      });
+    });
+  });
+
+  /**
    * SEN-44 over HTTP: one route per verb, two body shapes, and the owner model
    * deciding which. The service spec covers what each does; this covers that
    * the route hands the right one over and refuses a body that is neither.
@@ -474,6 +729,32 @@ describe('AgentsController', () => {
         { prepareId: revokePrepare.prepareId, signature: wallets.acceptedSignature },
       );
       expect(revoked).toMatchObject({ status: 'revoked', policyCleared: true });
+    });
+
+    it('moves mandateSince when a signed amend commits (SEN-56)', async () => {
+      jest.useFakeTimers({ now: 1_800_000_000_000, doNotFake: ['nextTick', 'setImmediate'] });
+      try {
+        const { controller, wallets } = await deviceSetup();
+        const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
+        const since = async () => (await controller.summaries()).summaries[0]!.mandateSince;
+
+        jest.setSystemTime(1_800_000_060_000);
+        const prepared = await controller.prepareMandate(
+          { id: agent.id },
+          { mandate: body()['mandate'] as Record<string, unknown> },
+        );
+        // Preparing changes nothing: only the commit installs the mandate.
+        expect(await since()).toBe(1_800_000_000_000);
+
+        jest.setSystemTime(1_800_000_120_000);
+        await controller.amendMandate(
+          { id: agent.id },
+          { prepareId: prepared.prepareId, signature: wallets.acceptedSignature },
+        );
+        expect(await since()).toBe(1_800_000_120_000);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('refuses the one-step routes, and a half-given approval', async () => {

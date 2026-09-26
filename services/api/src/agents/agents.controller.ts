@@ -21,8 +21,10 @@ import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { agentErrorStatus, agentErrorToHttpBody } from './agents.errors';
 import { AgentsService } from './agents.service';
 import {
+  AgentActivityQueryDto,
   AgentEventsQueryDto,
   AgentIdParamDto,
+  AGENT_ACTIVITY_DEFAULT_LIMIT,
   AGENT_EVENTS_DEFAULT_LIMIT,
   AmendMandateDto,
   CreateAgentDto,
@@ -36,6 +38,7 @@ import {
   toAgentResponse,
   toPreparedMandateChangeResponse,
   toReturnFundsResponse,
+  type AgentActivityResponseDto,
   type AgentEventResponseDto,
   type AgentEventsResponseDto,
   type AgentListResponseDto,
@@ -43,10 +46,13 @@ import {
   type HireAgentResponseDto,
   type PreparedMandateChangeDto,
   type ReturnFundsResponseDto,
+  type AgentSummariesResponseDto,
 } from './dto/agent.dto';
 import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
+import { latestEvents, summariseEvents } from './events/summary';
 import { ReturnFundsService } from './recovery/return-funds.service';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
+import { mandateSinceOf } from './store/agent-store';
 
 /**
  * AUTH: the seam `wallet/` and `gas/` use — `SessionAuthGuard` (SEN-37) puts a
@@ -65,8 +71,9 @@ export class AgentsController {
     private readonly runner: AgentRunnerService,
     @Inject(AGENT_EVENTS) private readonly events: AgentEventLog,
     /**
-     * SEN-21: only `GET /agents/:id/events` uses this, to say how far Monad has
-     * taken the block an order or fill confirmed in. `ChainModule` provides it;
+     * SEN-21: the event routes use this — `GET /agents/:id/events`, and since
+     * SEN-56 the summaries' `lastEvent` and `GET /agents/activity` — to say how
+     * far Monad has taken the block an event names. `ChainModule` provides it;
      * see `agents.module.ts`.
      */
     private readonly consensus: ConsensusService,
@@ -96,6 +103,70 @@ export class AgentsController {
     return this.guard(async () => ({
       agents: (await this.agents.list(this.auth.principal())).map(toAgentResponse),
     }));
+  }
+
+  /**
+   * ROUTE ORDER IS LOAD-BEARING for the next two: Express matches routes in the
+   * order Nest registers them, which is declaration order, so `summaries` and
+   * `activity` are declared BEFORE `@Get(':id')`. After it, `:id` would capture
+   * them and the UUID pipe would answer a 400 for a route that exists.
+   */
+
+  /**
+   * One summary per agent the caller owns, revoked ones included — exactly the
+   * set `GET /agents` returns (SEN-56). The figures are `events/summary.ts`'s,
+   * computed from each agent's whole log on every read; `lastEvent` is shaped
+   * like an item of `GET /agents/:id/events`, consensus included.
+   *
+   * PERSISTENCE: the log keeps 10k events per agent (oldest dropped first), so
+   * `allTime` means "over the log this server still holds" — for an agent past
+   * the cap, its oldest verdicts are no longer in it.
+   */
+  @Get('summaries')
+  async summaries(): Promise<AgentSummariesResponseDto> {
+    return this.guard(async () => {
+      const now = Date.now();
+      const agents = await this.agents.list(this.auth.principal());
+      const summaries = await Promise.all(
+        agents.map(async (agent) => {
+          const { lastEvent, ...figures } = summariseEvents(await this.events.list(agent.id), now);
+          return {
+            agentId: agent.id,
+            ...figures,
+            mandateSince: mandateSinceOf(agent).getTime(),
+            lastEvent: lastEvent ? this.withConsensus(toAgentEventResponse(lastEvent)) : null,
+          };
+        }),
+      );
+      return { summaries };
+    });
+  }
+
+  /**
+   * The newest events across every agent the caller owns, newest first, `run`
+   * summaries left out (SEN-56): the home screen's "latest move". Each item is
+   * an item of `GET /agents/:id/events` — `agentId` and `consensus` included —
+   * plus the agent's name, so the row can say whose move it was without a
+   * second request.
+   *
+   * Reads each agent's whole log rather than its last `limit`: `run` events are
+   * filtered out afterwards, so a page of the newest N could hold nothing else.
+   * The in-memory log hands out its stored records without copying them.
+   */
+  @Get('activity')
+  async activity(@Query() query: AgentActivityQueryDto): Promise<AgentActivityResponseDto> {
+    return this.guard(async () => {
+      const agents = await this.agents.list(this.auth.principal());
+      const names = new Map(agents.map((agent) => [agent.id, agent.name]));
+      const logs = await Promise.all(agents.map((agent) => this.events.list(agent.id)));
+      const events = latestEvents(logs, query.limit ?? AGENT_ACTIVITY_DEFAULT_LIMIT);
+      return {
+        events: events.map((event) => ({
+          ...this.withConsensus(toAgentEventResponse(event)),
+          agentName: names.get(event.agentId) ?? '',
+        })),
+      };
+    });
   }
 
   @Get(':id')

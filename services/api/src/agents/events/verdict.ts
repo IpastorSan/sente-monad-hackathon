@@ -70,7 +70,7 @@ export type ThesisDirection = 'long' | 'short';
 export type VerdictVenue = 'kuru' | 'perpl';
 
 /** What Perpl quotes money in: its `dpnl` and `fnd` are AUSD, 6dp. */
-const PERPL_PNL_ASSET = 'AUSD';
+export const PERPL_PNL_ASSET = 'AUSD';
 
 export interface Verdict {
   readonly agentId: string;
@@ -423,11 +423,13 @@ function consume(
 }
 
 /**
- * Exact SIGNED decimal arithmetic, local to this module: every other decimal
- * helper in the repo is exact only for non-negative strings, and both `dpnl`
- * and funding arrive signed. BigInt with a scale, never `Number`.
+ * Exact SIGNED decimal arithmetic: every other decimal helper in the repo is
+ * exact only for non-negative strings, and both `dpnl` and funding arrive
+ * signed. BigInt with a scale, never `Number`. Exported for `summary.ts`
+ * (SEN-56), which sums the `realisedPnl` strings `decimalString` writes here:
+ * one parser for the producer and its reader, so the two cannot drift apart.
  */
-interface Scaled {
+export interface Scaled {
   readonly units: bigint;
   readonly scale: number;
 }
@@ -443,7 +445,7 @@ function scaled(value: string): Scaled {
 }
 
 /** A decimal off an event, or `undefined` when it is not one. */
-function decimalOf(value: unknown): Scaled | undefined {
+export function decimalOf(value: unknown): Scaled | undefined {
   return typeof value === 'string' && SIGNED_DECIMAL.test(value) ? scaled(value) : undefined;
 }
 
@@ -451,7 +453,7 @@ function rescaled(value: Scaled, scale: number): bigint {
   return value.units * 10n ** BigInt(scale - value.scale);
 }
 
-function addScaled(a: Scaled, b: Scaled): Scaled {
+export function addScaled(a: Scaled, b: Scaled): Scaled {
   const scale = Math.max(a.scale, b.scale);
   return { units: rescaled(a, scale) + rescaled(b, scale), scale };
 }
@@ -477,7 +479,7 @@ function isZero(value: Scaled): boolean {
 }
 
 /** Back to a decimal string, trailing zeros trimmed. */
-function decimalString(value: Scaled): string {
+export function decimalString(value: Scaled): string {
   const negative = value.units < 0n;
   const digits = (negative ? -value.units : value.units).toString().padStart(value.scale + 1, '0');
   const whole = digits.slice(0, digits.length - value.scale);

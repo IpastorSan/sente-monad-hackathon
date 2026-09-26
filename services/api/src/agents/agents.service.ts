@@ -37,6 +37,7 @@ import { RETURN_ADDRESSES, type ReturnAddresses } from './return-address';
 import {
   AGENT_STORE,
   type AgentGasFunding,
+  type AgentPatch,
   type AgentRecord,
   type AgentStore,
 } from './store/agent-store';
@@ -90,6 +91,16 @@ export function forkName(sourceName: string): string {
  * store's invariants must hold for callers that skip the DTO); a blank or
  * missing one falls back to `forkName(source)`.
  */
+/**
+ * The patch for a mandate the enclave has just accepted (SEN-56). The mandate
+ * and the moment it took effect travel together, so no amend path can install
+ * a new mandate and leave the expiry gauge measuring from the old one.
+ */
+function mandateChange(mandate: Mandate): AgentPatch {
+  const now = new Date();
+  return { mandate, mandateSince: now, updatedAt: now };
+}
+
 function clampAgentName(name: string, sourceName: string): string {
   const trimmed = name.trim();
   if (trimmed === '') return forkName(sourceName);
@@ -275,6 +286,7 @@ export class AgentsService {
       public: input.public ?? false,
       createdAt: now,
       updatedAt: now,
+      mandateSince: now,
       gasFunding: { funded: false, reason: 'drip_pending' },
     };
     await this.store.insert(agent);
@@ -348,6 +360,7 @@ export class AgentsService {
       forkedFrom: source.id,
       createdAt: now,
       updatedAt: now,
+      mandateSince: now,
       gasFunding: { funded: false, reason: 'drip_pending' },
     };
     await this.store.insert(agent);
@@ -562,7 +575,7 @@ export class AgentsService {
         );
       }
       this.logger.log(`amended agent ${id}: policy ${agent.policyId} now ${rules.length} rules`);
-      return this.store.update(id, { mandate, updatedAt: new Date() });
+      return this.store.update(id, mandateChange(mandate));
     });
   }
 
@@ -733,7 +746,7 @@ export class AgentsService {
       this.logger.log(
         `amended agent ${id} with an owner signature: policy ${agent.policyId} replaced`,
       );
-      return this.store.update(id, { mandate, updatedAt: new Date() });
+      return this.store.update(id, mandateChange(mandate));
     });
   }
 
