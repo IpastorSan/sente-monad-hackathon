@@ -11,6 +11,12 @@
  * the new agent, and copies its system prompt only if the source's owner
  * published it. The mandate written here is the forker's OWN — it is compiled
  * into the new wallet's policy, and the source's wallet is never touched.
+ *
+ * SEN-59 (Goban): each step has a title that says what it is for, the primary
+ * button names the step it leads to, and the mandate step starts from a preset
+ * and reads the mandate back as one sentence while it is edited. None of that
+ * reaches the wire: presets only fill the form, and the mandate sent is still
+ * `buildMandate`'s (`presets.ts`, `mandateToSend`).
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -27,28 +33,29 @@ import {
   type HireAgentResult,
   type PreparedMandateChange,
 } from '@/agents/api';
-import { amendMandateWithApproval, describeApprovalError, needsApproval } from '@/agents/approval';
+import {
+  amendMandateWithApproval,
+  describeApprovalError,
+  expectedPolicyRules,
+  needsApproval,
+} from '@/agents/approval';
+import { MandateChanges, RulesChange } from '@/agents/MandateChanges';
+import { MandateStep } from '@/agents/MandateStep';
 import { MandateSummary } from '@/agents/MandateSummary';
 import {
-  AUSD,
-  buildMandate,
   defaultMandateForm,
-  EXPIRY_PRESETS_DAYS,
-  formatExpiry,
   formFromMandate,
-  KURU_MARKETS,
-  relevantDepositTokens,
   type MandateErrors,
   type MandateForm,
 } from '@/agents/mandate';
+import { mandateToSend, presetValues, resolveExpiry, type PresetChoice } from '@/agents/presets';
+import { readBack } from '@/agents/readback';
 import { useSession } from '@/session';
-import { shortAddress } from '@/ui/format';
 import {
   Button,
-  ButtonRow,
-  Chip,
-  Chips,
+  Card,
   Field,
+  IconButton,
   Loading,
   Notice,
   Row,
@@ -62,18 +69,64 @@ import {
 import { color, text } from '@/ui/theme';
 
 type StepId = 'identity' | 'instructions' | 'mandate' | 'review';
+type Mode = 'hire' | 'amend' | 'fork';
 
-const STEP_TITLES: Record<StepId, string> = {
-  identity: 'Identity',
-  instructions: 'Instructions',
-  mandate: 'Mandate',
-  review: 'Review',
-};
-
-const DAY_SECONDS = 86_400;
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 type ErrorCopy = { title: string; detail: string };
+
+/** What each step is for, in the words of the person doing it. */
+function stepCopy(
+  mode: Mode,
+  step: StepId,
+  names: { agent: string; source: string },
+): { title: string; subtitle: string } {
+  switch (step) {
+    case 'identity':
+      return {
+        title: 'Name your agent',
+        subtitle: 'What you’ll call it, and which model does its thinking.',
+      };
+    case 'instructions':
+      return {
+        title: 'Tell it how to trade',
+        subtitle: 'In your own words. The mandate on the next step bounds all of it.',
+      };
+    case 'mandate':
+      if (mode === 'amend')
+        return {
+          title: 'Redraw the lines',
+          subtitle: `${names.agent}’s current mandate stands until you save a new one.`,
+        };
+      if (mode === 'fork')
+        return {
+          title: 'Draw your lines',
+          subtitle: `${names.source}’s strategy, held to a mandate of your own.`,
+        };
+      return {
+        title: 'Draw the lines',
+        subtitle: 'Outside them its orders are refused, however the agent is prompted.',
+      };
+    case 'review':
+      return {
+        title: mode === 'amend' ? 'Review the change' : 'Review the mandate',
+        subtitle: 'Read it once more: this is what the agent’s wallet will be held to.',
+      };
+  }
+}
+
+/** The primary button names the step it leads to, not "Continue". */
+const NEXT_LABEL: Record<Exclude<StepId, 'review'>, string> = {
+  identity: 'Write instructions',
+  instructions: 'Draw the lines',
+  mandate: 'Review mandate',
+};
+
+const SUBMIT_LABEL: Record<Mode, string> = {
+  hire: 'Hire agent',
+  amend: 'Save mandate',
+  fork: 'Fork agent',
+};
 
 export default function HireAgentScreen() {
   const router = useRouter();
@@ -86,6 +139,7 @@ export default function HireAgentScreen() {
 
   /** The agent being forked, named for the copy. Falls back to the raw id. */
   const source = fork ? from?.trim() || fork : undefined;
+  const mode: Mode = amend ? 'amend' : fork ? 'fork' : 'hire';
 
   const steps: StepId[] =
     amend || fork ? ['mandate', 'review'] : ['identity', 'instructions', 'mandate', 'review'];
@@ -101,6 +155,12 @@ export default function HireAgentScreen() {
   const [form, setForm] = useState<MandateForm>(() => defaultMandateForm(nowSeconds()));
   /** A preset counts from the moment of submitting; `null` keeps `form.expiresAt` as is. */
   const [expiryDays, setExpiryDays] = useState<number | null>(7);
+  /**
+   * SEN-59: the chip over the mandate form. A new hire starts on Standard,
+   * which IS the default form above; an amend starts on Custom, because the
+   * form holds the agent's own mandate. Any edit afterwards turns it Custom.
+   */
+  const [preset, setPreset] = useState<PresetChoice>(amend ? 'custom' : 'standard');
   const [showErrors, setShowErrors] = useState(false);
 
   const [target, setTarget] = useState<Agent | null>(null);
@@ -117,6 +177,8 @@ export default function HireAgentScreen() {
   const [pending, setPending] = useState<{
     change: PreparedMandateChange;
     mandate: AgentMandate;
+    /** SEN-59: rules the stored mandate compiles to, for "Enclave rules before → after". */
+    rulesBefore: number;
   } | null>(null);
 
   /**
@@ -160,13 +222,31 @@ export default function HireAgentScreen() {
     setForm((current) => (current.returnTo === returnTo ? current : { ...current, returnTo }));
   }, [returnTo]);
 
-  const patch = (change: Partial<MandateForm>) => setForm((current) => ({ ...current, ...change }));
-
-  const currentMandate = () => {
-    const now = nowSeconds();
-    const expiresAt = expiryDays === null ? form.expiresAt : now + expiryDays * DAY_SECONDS;
-    return buildMandate({ ...form, expiresAt }, now);
+  const patch = (change: Partial<MandateForm>) => {
+    setForm((current) => ({ ...current, ...change }));
+    setPreset('custom');
   };
+
+  const chooseExpiry = (days: number | null) => {
+    setExpiryDays(days);
+    setPreset('custom');
+  };
+
+  /**
+   * A preset replaces the form wholesale — it is a starting point, not a
+   * merge — but never the way out: `returnTo` stays the live wallet's.
+   * Custom changes nothing; it only says the fields are yours now.
+   */
+  const choosePreset = (choice: PresetChoice) => {
+    setPreset(choice);
+    if (choice === 'custom') return;
+    const values = presetValues(choice, nowSeconds(), form.returnTo);
+    setForm(values.form);
+    setExpiryDays(values.expiryDays);
+  };
+
+  const currentMandate = () => mandateToSend(form, expiryDays, nowSeconds());
+  const expiresAt = resolveExpiry(form, expiryDays, nowSeconds());
   const mandateResult = currentMandate();
   const mandateErrors: MandateErrors = showErrors && !mandateResult.ok ? mandateResult.errors : {};
   /**
@@ -218,6 +298,7 @@ export default function HireAgentScreen() {
         setPending({
           change: await api.prepareAmendMandate(target.id, result.mandate),
           mandate: result.mandate,
+          rulesBefore: expectedPolicyRules(target.mandate).length,
         });
       } else if (amend) {
         await api.amendMandate(amend, result.mandate);
@@ -277,17 +358,18 @@ export default function HireAgentScreen() {
 
   if (hired) return <Hired result={hired} />;
 
-  const title = amend
-    ? `Amend ${target?.name ?? 'mandate'}`
-    : fork
-      ? `Fork ${source ?? 'an agent'}`
-      : 'Hire an agent';
-
   if (!api || (amend && !target)) {
+    const title = amend
+      ? `Amend ${target?.name ?? 'mandate'}`
+      : fork
+        ? `Fork ${source ?? 'an agent'}`
+        : 'Hire an agent';
     return (
       <Screen>
-        <TopBar back={{ label: 'Cancel', onPress: () => router.back() }} />
-        <Text style={text.display}>{title}</Text>
+        <View style={styles.stepBar}>
+          <IconButton icon="close" label="Close" onPress={() => router.back()} />
+        </View>
+        <Text style={[text.display, styles.title]}>{title}</Text>
         {!api ? (
           <Notice title="Sign in first" detail="Agents belong to your passkey account." />
         ) : loadError ? (
@@ -299,37 +381,52 @@ export default function HireAgentScreen() {
     );
   }
 
+  const copy = stepCopy(mode, step, {
+    agent: target?.name ?? 'The agent',
+    source: source ?? 'The source',
+  });
   const last = index === steps.length - 1;
-  const footer = (
-    <ButtonRow>
-      <Button label={index === 0 ? 'Cancel' : 'Back'} onPress={back} style={styles.grow} />
-      {last ? (
-        <Button
-          label={amend ? 'Save mandate' : fork ? 'Fork agent' : 'Hire agent'}
-          kind="primary"
-          busy={submitting}
-          disabled={!mandateResult.ok}
-          onPress={() => void submit()}
-          style={styles.grow}
-        />
-      ) : (
-        <Button label="Continue" kind="primary" onPress={next} style={styles.grow} />
-      )}
-    </ButtonRow>
+  const primary = last ? (
+    <Button
+      label={SUBMIT_LABEL[mode]}
+      kind="primary"
+      busy={submitting}
+      disabled={!mandateResult.ok}
+      onPress={() => void submit()}
+    />
+  ) : (
+    <Button label={NEXT_LABEL[step as Exclude<StepId, 'review'>]} kind="primary" onPress={next} />
   );
+  const footer =
+    step === 'mandate' ? (
+      <>
+        {/* SEN-59: the mandate read back as it is drawn, in the agent's voice. */}
+        <Text style={[text.voice, styles.readBack]}>{`“${readBack(form, expiresAt)}”`}</Text>
+        {primary}
+      </>
+    ) : (
+      primary
+    );
 
   return (
     <Screen footer={footer}>
-      <TopBar back={{ label: 'Cancel', onPress: () => router.back() }} />
-      <Text style={text.display}>{title}</Text>
-      <View style={styles.rail}>
+      <View style={styles.stepBar}>
+        <IconButton
+          icon={index === 0 ? 'close' : 'back'}
+          label={index === 0 ? 'Close' : 'Back'}
+          onPress={back}
+        />
+        <Text style={[text.caption, text.num]}>
+          {index + 1} of {steps.length}
+        </Text>
+      </View>
+      <View style={styles.rail} accessibilityElementsHidden importantForAccessibility="no">
         {steps.map((id, i) => (
           <View key={id} style={[styles.railSegment, i <= index && styles.railOn]} />
         ))}
       </View>
-      <Text style={[text.label, text.num]}>
-        Step {index + 1} of {steps.length} · {STEP_TITLES[step]}
-      </Text>
+      <Text style={[text.display, styles.title]}>{copy.title}</Text>
+      <Text style={[text.dim, styles.subtitle]}>{copy.subtitle}</Text>
 
       {step === 'identity' ? (
         <>
@@ -386,9 +483,10 @@ export default function HireAgentScreen() {
             max={AGENT_LIMITS.strategy}
             placeholder="What it trades, when it acts, and when it stays out."
           />
-          <Text style={[text.dim, styles.after]}>
-            The mandate on the next step bounds all of this. Nothing written here can raise a limit.
-          </Text>
+          <Notice
+            title="Nothing written here can raise a limit"
+            detail="The mandate on the next step bounds all of this, however it is worded."
+          />
         </>
       ) : null}
 
@@ -397,8 +495,12 @@ export default function HireAgentScreen() {
           form={form}
           patch={patch}
           errors={mandateErrors}
+          expiresAt={expiresAt}
           expiryDays={expiryDays}
-          setExpiryDays={setExpiryDays}
+          setExpiryDays={chooseExpiry}
+          preset={preset}
+          choosePreset={choosePreset}
+          canKeepExpiry={mode === 'amend'}
           fork={fork && source ? { source, name, setName } : undefined}
         />
       ) : null}
@@ -407,26 +509,31 @@ export default function HireAgentScreen() {
         <>
           {fork ? (
             <Section label="Forked from">
-              <Row label="Source" value={source ?? fork} />
-              <Row label="Name" value={forkAgentName} />
-              <Row label="Copied" value="Strategy and model" />
-              <Row
-                label="Not copied"
-                value="The source’s wallet, mandate and track record — and its prompt, unless it is public"
-              />
+              <Card>
+                <Row label="Source" value={source ?? fork} />
+                <Row label="Name" value={forkAgentName} />
+                <Row label="Copied" value="Strategy and model" />
+                <Row
+                  label="Not copied"
+                  value="The source’s wallet, mandate and track record — and its prompt, unless it is public"
+                />
+              </Card>
             </Section>
           ) : !amend ? (
             <Section label="Agent">
-              <Row label="Name" value={name.trim()} />
-              <Row label="Model" value={modelLabel(model)} />
-              <Row
-                label="System prompt"
-                value={`${systemPrompt.length.toLocaleString('en-US')} characters`}
-              />
-              <Row
-                label="Strategy"
-                value={`${strategy.length.toLocaleString('en-US')} characters`}
-              />
+              <Card>
+                <Row label="Name" value={name.trim()} />
+                <Row label="Model" value={modelLabel(model)} />
+                <Row
+                  label="System prompt"
+                  value={`${systemPrompt.length.toLocaleString('en-US')} characters`}
+                />
+                <Row
+                  label="Strategy"
+                  value={`${strategy.length.toLocaleString('en-US')} characters`}
+                />
+                <Row label="Prompt" value={isPublic ? 'Published' : 'Private'} />
+              </Card>
             </Section>
           ) : null}
           <Section label="Mandate">
@@ -445,211 +552,53 @@ export default function HireAgentScreen() {
         </>
       ) : null}
 
-      {/* SEN-44: the approval step for a device-owned mandate. */}
+      {/*
+       * SEN-44: the approval step for a device-owned mandate. SEN-59: it shows
+       * the CHANGE — old limits struck through beside the new ones — because
+       * that is what the passkey is being asked to approve. The rule count
+       * before is what the stored mandate compiles to (`expectedPolicyRules`,
+       * the mirror `approval.ts` verifies against); after is the API's own
+       * count of the prepared policy.
+       */}
       <Sheet
         visible={pending !== null}
-        title={`Approve this mandate for ${target?.name ?? 'your agent'}?`}
+        title="Approve the new mandate"
         onClose={() => setPending(null)}
       >
-        <Text style={text.body}>
-          Your passkey signs the policy change itself. Sente holds no key that can widen this
-          agent’s mandate — this phone checks that the change is exactly what you wrote and then
-          approves it.
+        <Text style={[text.dim, styles.sheetLead]}>
+          {target?.name ?? 'Your agent'}’s limits change the moment you approve. Your passkey signs
+          the policy change itself: Sente holds no key that can widen this agent’s mandate, and this
+          phone checks the change is exactly what you wrote before it signs.
         </Text>
         {pending ? (
           <>
-            <Row label="Enclave rules after" value={String(pending.change.summary.ruleCount)} />
-            <Row label="Policy" value={pending.change.summary.policyId} mono />
-            <View style={styles.approvalSummary}>
+            {target ? (
+              <MandateChanges before={target.mandate} after={pending.mandate} />
+            ) : (
               <MandateSummary mandate={pending.mandate} />
-            </View>
+            )}
+            <RulesChange
+              before={pending.rulesBefore}
+              after={pending.change.summary.ruleCount}
+              policyId={pending.change.summary.policyId}
+            />
           </>
         ) : null}
         {submitError ? (
           <Notice tone="error" title={submitError.title} detail={submitError.detail} />
         ) : null}
         <View style={styles.approvalActions}>
-          <ButtonRow>
-            <Button label="Cancel" onPress={() => setPending(null)} style={styles.grow} />
-            <Button
-              label="Approve with passkey"
-              kind="primary"
-              busy={submitting}
-              onPress={() => void approve()}
-              style={styles.grow}
-            />
-          </ButtonRow>
+          <Button
+            label="Approve with passkey"
+            kind="primary"
+            icon="key"
+            busy={submitting}
+            onPress={() => void approve()}
+          />
+          <Button label="Keep current mandate" kind="soft" onPress={() => setPending(null)} />
         </View>
       </Sheet>
     </Screen>
-  );
-}
-
-function MandateStep({
-  form,
-  patch,
-  errors,
-  expiryDays,
-  setExpiryDays,
-  fork,
-}: {
-  form: MandateForm;
-  patch: (change: Partial<MandateForm>) => void;
-  errors: MandateErrors;
-  expiryDays: number | null;
-  setExpiryDays: (days: number | null) => void;
-  /** Set only when forking (SEN-28): the source's name, and the copy's name. */
-  fork?: { source: string; name: string; setName: (value: string) => void };
-}) {
-  const toggleMarket = (address: MandateForm['kuruMarkets'][number]) =>
-    patch({
-      kuruMarkets: form.kuruMarkets.includes(address)
-        ? form.kuruMarkets.filter((market) => market !== address)
-        : [...form.kuruMarkets, address],
-    });
-
-  const depositTokens = relevantDepositTokens(form.kuruMarkets);
-  const expiresAt = expiryDays === null ? form.expiresAt : nowSeconds() + expiryDays * DAY_SECONDS;
-
-  return (
-    <>
-      {fork ? (
-        <Section label="Fork">
-          <Text style={text.dim}>
-            {fork.source}’s strategy and model are copied into an agent of your own. Its system
-            prompt comes with it only if that agent is public, and your copy is private either way.
-            Nothing of the source’s wallet, mandate or record comes across.
-          </Text>
-          <Field
-            label="Name"
-            value={fork.name}
-            onChangeText={fork.setName}
-            max={AGENT_LIMITS.name}
-            placeholder="Name for your copy"
-            autoCapitalize="words"
-            hint="Leave it blank and the copy is named after the agent you are forking."
-          />
-        </Section>
-      ) : null}
-
-      <Section label="Venues">
-        <ToggleRow
-          title="Kuru"
-          detail="Spot order books"
-          value={form.kuru}
-          onValueChange={(kuru) => patch({ kuru })}
-        />
-        <ToggleRow
-          title="Perpl"
-          detail="Perpetual futures"
-          value={form.perpl}
-          onValueChange={(perpl) => patch({ perpl })}
-        />
-        {errors.venues ? <Text style={[text.dim, text.danger]}>{errors.venues}</Text> : null}
-      </Section>
-
-      {form.kuru ? (
-        <>
-          <Section label="Kuru markets">
-            {KURU_MARKETS.map((market) => (
-              <SelectRow
-                key={market.address}
-                title={market.symbol}
-                detail={<Text style={text.mono}>{shortAddress(market.address)}</Text>}
-                selected={form.kuruMarkets.includes(market.address)}
-                onPress={() => toggleMarket(market.address)}
-              />
-            ))}
-            {errors.kuruMarkets ? (
-              <Text style={[text.dim, text.danger]}>{errors.kuruMarkets}</Text>
-            ) : null}
-          </Section>
-
-          {depositTokens.length > 0 ? (
-            <Section label="Kuru deposit caps">
-              <Text style={text.dim}>
-                The most one deposit may move into Kuru, per token. Leave a token blank and the
-                agent can’t deposit it.
-              </Text>
-              {depositTokens.map((token) => (
-                <Field
-                  key={token.symbol}
-                  label={`${token.symbol} per deposit`}
-                  value={form.depositCaps[token.symbol] ?? ''}
-                  onChangeText={(value) =>
-                    patch({ depositCaps: { ...form.depositCaps, [token.symbol]: value } })
-                  }
-                  keyboardType="decimal-pad"
-                  suffix={token.symbol}
-                  placeholder="0"
-                />
-              ))}
-              {errors.depositCaps ? (
-                <Text style={[text.dim, text.danger, styles.after]}>{errors.depositCaps}</Text>
-              ) : null}
-            </Section>
-          ) : null}
-        </>
-      ) : null}
-
-      {form.perpl ? (
-        <Section label="Perpl">
-          <Field
-            label="Collateral per transfer"
-            value={form.perplCollateral}
-            onChangeText={(perplCollateral) => patch({ perplCollateral })}
-            keyboardType="decimal-pad"
-            suffix={AUSD.symbol}
-            placeholder="0"
-            error={errors.perplCollateral}
-            hint="The most one transfer may move into Perpl."
-          />
-          <Field
-            label="Markets"
-            value={form.perplMarkets}
-            onChangeText={(perplMarkets) => patch({ perplMarkets })}
-            autoCapitalize="characters"
-            placeholder="BTC-PERP, ETH-PERP"
-            error={errors.perplMarkets}
-          />
-          <Field
-            label="Max leverage"
-            value={form.maxLeverage}
-            onChangeText={(maxLeverage) => patch({ maxLeverage })}
-            keyboardType="decimal-pad"
-            suffix="×"
-            error={errors.maxLeverage}
-          />
-        </Section>
-      ) : null}
-
-      <Section label="Orders">
-        <Field
-          label="Largest single order"
-          value={form.maxOrderNotional}
-          onChangeText={(maxOrderNotional) => patch({ maxOrderNotional })}
-          keyboardType="decimal-pad"
-          placeholder="0"
-          error={errors.maxOrderNotional}
-          hint="Notional, in the market’s quote token: USDC on Kuru, AUSD on Perpl."
-        />
-      </Section>
-
-      <Section label="Expiry">
-        <Chips>
-          {EXPIRY_PRESETS_DAYS.map((days) => (
-            <Chip
-              key={days}
-              label={days === 1 ? '1 day' : `${days} days`}
-              selected={expiryDays === days}
-              onPress={() => setExpiryDays(days)}
-            />
-          ))}
-        </Chips>
-        <Text style={[text.dim, text.num, styles.after]}>Ends {formatExpiry(expiresAt)}</Text>
-        {errors.expiresAt ? <Text style={[text.dim, text.danger]}>{errors.expiresAt}</Text> : null}
-      </Section>
-    </>
   );
 }
 
@@ -675,10 +624,12 @@ function Hired({ result }: { result: HireAgentResult }) {
         <Text style={text.dim}>Empty for now. Fund it from the agent’s page.</Text>
       </Section>
       <Section label="MCP token · shown once">
-        <Text style={[text.mono, styles.token]} selectable>
-          {mcpToken}
-        </Text>
-        <Text style={text.dim}>
+        <Card>
+          <Text style={[text.mono, styles.token]} selectable>
+            {mcpToken}
+          </Text>
+        </Card>
+        <Text style={[text.dim, styles.after]}>
           Sente keeps only a hash of it, so this is the only time it appears. You need it only to
           connect an outside MCP client to this agent.
         </Text>
@@ -688,12 +639,20 @@ function Hired({ result }: { result: HireAgentResult }) {
 }
 
 const styles = StyleSheet.create({
-  grow: { flex: 1 },
   after: { marginTop: 10 },
-  rail: { flexDirection: 'row', gap: 4, marginTop: 16, marginBottom: 10 },
-  railSegment: { flex: 1, height: 2, backgroundColor: color.line },
-  railOn: { backgroundColor: color.text },
+  stepBar: {
+    height: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  rail: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  railSegment: { flex: 1, height: 3, borderRadius: 3, backgroundColor: color.line },
+  railOn: { backgroundColor: color.purple },
+  title: { marginTop: 22 },
+  subtitle: { marginTop: 8 },
+  readBack: { fontSize: 15, lineHeight: 22, color: color.textDim },
   token: { color: color.text },
-  approvalSummary: { marginTop: 8 },
-  approvalActions: { marginTop: 20 },
+  sheetLead: { marginTop: 6, marginBottom: 8 },
+  approvalActions: { marginTop: 16, gap: 10 },
 });
