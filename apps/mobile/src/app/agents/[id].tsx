@@ -1,15 +1,19 @@
 /**
- * One agent: its wallet and balances, its mandate, and the five things you can
- * do to it — fund, run, amend, return the funds, revoke. Fund, run, return and
- * revoke confirm in an in-app sheet (never `Alert`); amend reuses the hire
- * form's mandate and review steps.
+ * One agent: what its wallet holds, its mandate drawn as gauges, its latest
+ * moves, and the things you can do to it — in the order you reach for them
+ * (SEN-58). Fund and Run now sit on the wallet card, Amend on the mandate,
+ * Return and Revoke in Controls with a line saying what each does; ids and the
+ * instructions are behind ⋯ → Details. Fund, run, return and revoke confirm in
+ * an in-app sheet (never `Alert`); amend reuses the hire form's mandate and
+ * review steps.
  *
  * Return is available on a REVOKED agent too, and deliberately so (SEN-17): a
  * revoke leaves the way out open, so "how do I get my money back" has the same
- * one-tap answer after the agent has stopped as before.
+ * one-tap answer after the agent has stopped as before. The agents list links
+ * straight to it with `?sheet=return`.
  */
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { formatAtoms, parseAmount } from '@/agents/amounts';
@@ -18,27 +22,45 @@ import {
   describeAgentsError,
   modelLabel,
   type Agent,
+  type AgentSummary,
   type PreparedMandateChange,
 } from '@/agents/api';
 import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
 import { FUNDING_TOKENS } from '@/agents/fund';
-import { MandateSummary } from '@/agents/MandateSummary';
-import type { Token } from '@/agents/mandate';
+import { signedPnl } from '@/agents/ledger';
+import { describeMandate, type Enforcer, type Token } from '@/agents/mandate';
+import { MoveLine } from '@/agents/MoveLine';
+import {
+  describeMove,
+  expiryUsage,
+  formatHolding,
+  isTrading,
+  mainHolding,
+  orderUsage,
+  pnlTone,
+  type Move,
+} from '@/agents/usage';
+import { toHoldings } from '@/agents/useWalletHoldings';
 import { useSession } from '@/session';
 import { describeSendError, sendSponsored } from '@/wallet/send';
 import { isoDate, shortAddress } from '@/ui/format';
+import { EnforcerTag, Gauge, Pill, Sigil } from '@/ui/goban';
 import {
+  ActionRow,
   Button,
   ButtonRow,
+  Card,
   Chip,
   Chips,
   Field,
+  IconButton,
   Loading,
   Notice,
   Row,
   Screen,
   Section,
+  SectionLink,
   Sheet,
   TopBar,
   type NoticeTone,
@@ -46,19 +68,37 @@ import {
 import { color, text } from '@/ui/theme';
 
 type NoticeState = { tone: NoticeTone; title: string; detail?: string };
-type SheetId = 'fund' | 'run' | 'return' | 'revoke';
+type SheetId = 'fund' | 'run' | 'return' | 'revoke' | 'details';
+
+/** How many moves the screen shows; the Ledger has the rest. */
+const LATEST_MOVES = 3;
+
+/**
+ * Limits drawn as a gauge or as the caption, so the rows below the gauges
+ * leave them out. `returnTo` is in Details: it is an address, not a limit.
+ */
+const NOT_A_ROW = new Set([
+  'maxOrderNotional',
+  'expiresAt',
+  'kuru.markets',
+  'perpl.markets',
+  'returnTo',
+]);
 
 export default function AgentScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, sheet: askedSheet } = useLocalSearchParams<{ id: string; sheet?: string }>();
   const { agents: api } = useSession();
 
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [summary, setSummary] = useState<AgentSummary | undefined>(undefined);
+  /** `null` while reading; `'failed'` when the event log could not be read. */
+  const [moves, setMoves] = useState<Move[] | 'failed' | null>(null);
   const [loadError, setLoadError] = useState<NoticeState | null>(null);
   const [balances, setBalances] = useState<Record<string, bigint> | null>(null);
   const [sheet, setSheet] = useState<SheetId | null>(null);
   const [notice, setNotice] = useState<NoticeState | null>(null);
-  const [showInstructions, setShowInstructions] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const refreshBalances = useCallback((address: Agent['address']) => {
     readBalances(address).then(setBalances, () => setBalances(null));
@@ -66,14 +106,34 @@ export default function AgentScreen() {
 
   const load = useCallback(async () => {
     if (!api || !id) return;
-    try {
-      const fresh = await api.get(id);
-      setAgent(fresh);
-      setLoadError(null);
-      refreshBalances(fresh.address);
-    } catch (error) {
-      setLoadError({ tone: 'error', ...describeAgentsError(error) });
+    // The summary and the moves only decorate the agent: an API that predates
+    // SEN-56, or a blip, leaves the screen standing with the caps and no usage.
+    const [fresh, summaries, events] = await Promise.allSettled([
+      api.get(id),
+      api.summaries(),
+      api.events(id, undefined, 5),
+    ]);
+    if (fresh.status === 'rejected') {
+      setLoadError({ tone: 'error', ...describeAgentsError(fresh.reason) });
+      return;
     }
+    setAgent(fresh.value);
+    setLoadError(null);
+    refreshBalances(fresh.value.address);
+    setSummary(
+      summaries.status === 'fulfilled'
+        ? summaries.value.find((line) => line.agentId === id)
+        : undefined,
+    );
+    setMoves(
+      events.status === 'fulfilled'
+        ? events.value.events
+            .map(describeMove)
+            .filter((move): move is Move => move !== null)
+            .reverse()
+            .slice(0, LATEST_MOVES)
+        : 'failed',
+    );
   }, [api, id, refreshBalances]);
 
   useFocusEffect(
@@ -81,6 +141,22 @@ export default function AgentScreen() {
       void load();
     }, [load]),
   );
+
+  const refresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
+  // Arriving from the list's inline "Return" opens the return sheet once, not
+  // on every refetch.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (agent && askedSheet === 'return' && !opened.current) {
+      opened.current = true;
+      setSheet('return');
+    }
+  }, [agent, askedSheet]);
 
   const close = () => setSheet(null);
   const finish = (next: NoticeState) => {
@@ -107,136 +183,329 @@ export default function AgentScreen() {
   }
 
   const active = agent.status === 'active';
+  const now = Date.now();
+  const trading = active && isTrading(summary, now);
+  const holdings = balances ? toHoldings(balances) : null;
+  const main = holdings
+    ? mainHolding(holdings, agent.mandate.venues.includes('kuru') ? 'USDC' : 'AUSD')
+    : null;
+  const others = holdings?.filter((holding) => holding !== main && holding.atoms > 0n) ?? [];
+  const allTime = summary?.pnl.allTime;
+  const allTimeTone = pnlTone(allTime);
 
   return (
-    <Screen>
-      <TopBar back={{ label: 'Agents', onPress: backToList }} />
-      <Text style={text.display}>{agent.name}</Text>
-      <Text style={[text.dim, styles.meta]}>
-        {active ? '● Active' : '○ Revoked'} · {modelLabel(agent.model)} · hired{' '}
-        {isoDate(agent.createdAt)}
-      </Text>
+    <Screen refreshing={refreshing} onRefresh={() => void refresh()}>
+      <TopBar
+        back={{ label: 'Agents', onPress: backToList }}
+        right={<IconButton icon="more" label="Details" onPress={() => setSheet('details')} />}
+      />
+      <View style={styles.header}>
+        <Sigil seed={agent.id} size={56} dimmed={!active} />
+        <View style={styles.headerText}>
+          <Text style={[text.display, styles.name]} numberOfLines={2}>
+            {agent.name}
+          </Text>
+          <Text style={text.caption}>
+            {modelLabel(agent.model)} · hired {isoDate(agent.createdAt)}
+          </Text>
+        </View>
+      </View>
 
       {notice ? <Notice tone={notice.tone} title={notice.title} detail={notice.detail} /> : null}
 
-      {/* The Ledger is where an agent stops being a name and becomes a record. */}
-      <Button
-        label="Agent Ledger — theses, trades, refusals"
-        onPress={() => router.push({ pathname: '/agents/[id]/ledger', params: { id: agent.id } })}
-        style={styles.ledgerLink}
-      />
-
-      {active ? (
-        <View style={styles.actions}>
-          <ButtonRow>
-            <Button
-              label="Fund"
-              kind="primary"
-              onPress={() => setSheet('fund')}
-              style={styles.grow}
-            />
-            <Button label="Run now" onPress={() => setSheet('run')} style={styles.grow} />
-          </ButtonRow>
-          <ButtonRow>
-            <Button
-              label="Amend mandate"
-              onPress={() => router.push({ pathname: '/agents/new', params: { amend: agent.id } })}
-              style={styles.grow}
-            />
-            <Button label="Return funds" onPress={() => setSheet('return')} style={styles.grow} />
-          </ButtonRow>
-          <Button label="Revoke" kind="danger" onPress={() => setSheet('revoke')} />
-        </View>
-      ) : (
-        <>
-          <Notice
-            title={`Revoked${agent.revokedAt ? ` on ${isoDate(agent.revokedAt)}` : ''}`}
-            detail={
-              agent.policyCleared === false
-                ? 'The agent won’t run again, but its wallet policy still holds the old rules. Revoke again to clear it.'
-                : 'It can’t trade, deposit or approve anything again — revoking is permanent. Its ' +
-                  'policy keeps only the way out, so you can still send its funds back to your wallet.'
-            }
-          />
-          <View style={styles.actions}>
-            {/* The whole point of a revoke that keeps the exit (SEN-17). */}
-            <Button label="Return funds" kind="primary" onPress={() => setSheet('return')} />
-            {agent.policyCleared === false ? (
-              <Button label="Revoke again" kind="danger" onPress={() => setSheet('revoke')} />
-            ) : null}
-          </View>
-        </>
+      {active ? null : (
+        <Notice
+          title={`Revoked${agent.revokedAt ? ` on ${isoDate(agent.revokedAt)}` : ''}`}
+          detail={
+            agent.policyCleared === false
+              ? 'The agent won’t run again, but its wallet policy still holds the old rules. Revoke again to clear it.'
+              : 'It can’t trade, deposit or approve anything again — revoking is permanent. Its ' +
+                'policy keeps only the way out, so you can still send its funds back to your wallet.'
+          }
+        />
       )}
 
-      <Section label="Wallet">
-        <Text style={text.mono} selectable>
-          {agent.address}
-        </Text>
-      </Section>
-
-      <Section
-        label="Balances"
-        aside={
-          <Text style={text.caption} onPress={() => refreshBalances(agent.address)}>
-            Refresh
-          </Text>
-        }
-      >
-        {balances === null ? (
-          <Text style={text.dim}>Reading the chain…</Text>
+      <Card quiet={!active} style={styles.wallet}>
+        <View style={styles.between}>
+          <Text style={text.label}>In this agent’s wallet</Text>
+          {active ? (
+            <Pill label={trading ? 'Trading' : 'Watching'} tone={trading ? 'live' : 'idle'} />
+          ) : (
+            <Pill label="Revoked" tone="revoked" />
+          )}
+        </View>
+        {main ? (
+          <View style={styles.figure}>
+            <Text style={[text.hero, styles.hero]}>{formatHolding(main)}</Text>
+            <Text style={text.dim}>{main.symbol}</Text>
+            {allTime !== undefined ? (
+              <Text
+                style={[
+                  text.dim,
+                  text.num,
+                  styles.pnl,
+                  allTimeTone === 'up' && text.up,
+                  allTimeTone === 'down' && text.down,
+                ]}
+              >
+                {allTimeTone === null ? '0' : signedPnl(allTime)} all time
+              </Text>
+            ) : null}
+          </View>
         ) : (
-          FUNDING_TOKENS.map((token) => (
-            <Row
-              key={token.symbol}
-              label={token.symbol}
-              value={formatAtoms(balances[token.symbol] ?? 0n, token.decimals)}
+          <Text style={[text.dim, styles.reading]}>
+            {balances === null ? 'Reading the chain…' : '—'}
+          </Text>
+        )}
+        {others.length > 0 ? (
+          <Text style={[text.caption, text.num]}>
+            {others.map((holding) => `${formatHolding(holding)} ${holding.symbol}`).join(' · ')}
+          </Text>
+        ) : null}
+        <View style={styles.walletActions}>
+          {active ? (
+            <ButtonRow>
+              <Button
+                label="Fund"
+                kind="primary"
+                size="sm"
+                onPress={() => setSheet('fund')}
+                style={styles.grow}
+              />
+              <Button
+                label="Run now"
+                kind="soft"
+                size="sm"
+                icon="bolt"
+                onPress={() => setSheet('run')}
+                style={styles.grow}
+              />
+            </ButtonRow>
+          ) : (
+            // The whole point of a revoke that keeps the exit (SEN-17).
+            <Button
+              label="Return funds"
+              kind="primary"
+              size="sm"
+              icon="return"
+              onPress={() => setSheet('return')}
             />
-          ))
-        )}
-      </Section>
+          )}
+        </View>
+      </Card>
 
-      <Section label="Mandate">
-        <MandateSummary mandate={agent.mandate} />
-      </Section>
+      {/*
+       * A revoked agent's policy keeps only the way out, so its mandate no
+       * longer bounds anything and drawing its gauges would read as live limits.
+       */}
+      {active ? (
+        <Section
+          label="Mandate"
+          aside={
+            <SectionLink
+              label="Amend"
+              onPress={() => router.push({ pathname: '/agents/new', params: { amend: agent.id } })}
+            />
+          }
+        >
+          <MandateGauges agent={agent} summary={summary} now={now} />
+        </Section>
+      ) : null}
 
       <Section
-        label="Instructions"
+        label="Latest moves"
         aside={
-          <Text style={text.caption} onPress={() => setShowInstructions((shown) => !shown)}>
-            {showInstructions ? 'Hide' : 'Show'}
-          </Text>
+          <SectionLink
+            label="Ledger"
+            onPress={() =>
+              router.push({ pathname: '/agents/[id]/ledger', params: { id: agent.id } })
+            }
+          />
         }
       >
-        {showInstructions ? (
-          <>
-            <Text style={text.label}>System prompt</Text>
-            <Text style={[text.body, styles.prose]} selectable>
-              {agent.systemPrompt || '—'}
-            </Text>
-            <Text style={[text.label, styles.after]}>Strategy</Text>
-            <Text style={[text.body, styles.prose]} selectable>
-              {agent.strategy || '—'}
-            </Text>
-          </>
-        ) : (
-          <Text style={[text.dim, text.num]}>
-            {agent.systemPrompt.length.toLocaleString('en-US')} +{' '}
-            {agent.strategy.length.toLocaleString('en-US')} characters
+        {moves === null ? (
+          <Text style={text.caption}>Reading its moves…</Text>
+        ) : moves === 'failed' ? (
+          <Text style={text.caption}>Couldn’t read its moves. Pull down to try again.</Text>
+        ) : moves.length === 0 ? (
+          <Text style={text.dim}>
+            {active
+              ? 'No moves yet. It trades on its next run, or when you run it now.'
+              : 'No moves.'}
           </Text>
+        ) : (
+          <View style={styles.moves}>
+            {moves.map((move) => (
+              <MoveLine key={`${move.at}-${move.line}`} move={move} now={now} />
+            ))}
+          </View>
         )}
       </Section>
 
-      <Section label="Identifiers">
-        <Row label="Agent" value={agent.id} mono />
-        <Row label="Wallet" value={agent.walletId} mono />
-        <Row label="Policy" value={agent.policyId} mono />
-      </Section>
+      {active ? (
+        <Section label="Controls">
+          <ActionRow
+            icon="return"
+            title="Return funds"
+            detail="Everything back to your wallet"
+            onPress={() => setSheet('return')}
+          />
+          <ActionRow
+            icon="stop"
+            title="Revoke"
+            detail="Stops it for good. Funds stay returnable."
+            danger
+            onPress={() => setSheet('revoke')}
+          />
+        </Section>
+      ) : agent.policyCleared === false ? (
+        <Section label="Controls">
+          <ActionRow
+            icon="stop"
+            title="Revoke again"
+            detail="Clears the old rules from its wallet policy."
+            danger
+            onPress={() => setSheet('revoke')}
+          />
+        </Section>
+      ) : null}
 
+      <DetailsSheet agent={agent} visible={sheet === 'details'} onClose={close} />
       <FundSheet agent={agent} visible={sheet === 'fund'} onClose={close} onSent={finish} />
       <RunSheet agent={agent} visible={sheet === 'run'} onClose={close} />
       <ReturnSheet agent={agent} visible={sheet === 'return'} onClose={close} onDone={finish} />
       <RevokeSheet agent={agent} visible={sheet === 'revoke'} onClose={close} onDone={finish} />
     </Screen>
+  );
+}
+
+/**
+ * The mandate as territory. Only two limits have anything to measure against
+ * them — the largest order the agent has sent, and time — so only those two are
+ * gauges; every other limit is its cap, as a row. Each says who enforces it,
+ * from `describeMandate`, so this screen and the hire review agree.
+ */
+function MandateGauges({
+  agent,
+  summary,
+  now,
+}: {
+  agent: Agent;
+  summary: AgentSummary | undefined;
+  now: number;
+}) {
+  const { mandate } = agent;
+  const limits = describeMandate(mandate);
+  const enforcerOf = (limitId: string): Enforcer | undefined =>
+    limits.find((limit) => limit.id === limitId)?.enforcer;
+
+  const order = orderUsage(summary, mandate);
+  const since = summary?.mandateSince ?? Date.parse(agent.createdAt);
+  const expiry = expiryUsage(since, mandate.expiresAt, now);
+
+  const markets = [
+    ['kuru.markets', 'Kuru spot'],
+    ['perpl.markets', 'Perpl perps'],
+  ]
+    .map(([limitId, venue]) => {
+      const limit = limits.find((candidate) => candidate.id === limitId);
+      return limit ? `${limit.value} on ${venue}` : null;
+    })
+    .filter((line): line is string => line !== null);
+
+  return (
+    <View style={styles.gauges}>
+      <View style={styles.gaugeBlock}>
+        <Gauge
+          label="Largest order"
+          value={order.value}
+          used={order.used}
+          enforcer={enforcerOf('maxOrderNotional')}
+        />
+        <Text style={text.caption}>
+          {!order.measured
+            ? 'Usage shows once Sente reports this agent’s orders.'
+            : order.over
+              ? 'Its largest order is above the current cap.'
+              : summary?.largestOrderNotional === null
+                ? 'No orders yet. The cap is in quote units.'
+                : 'Its largest order so far, in quote units.'}
+        </Text>
+      </View>
+      <Gauge
+        label="Mandate ends"
+        value={expiry.value}
+        used={expiry.used}
+        enforcer={enforcerOf('expiresAt')}
+      />
+      {limits.some((limit) => !NOT_A_ROW.has(limit.id)) ? (
+        <View>
+          {limits
+            .filter((limit) => !NOT_A_ROW.has(limit.id))
+            .map((limit) => (
+              <LimitRow
+                key={limit.id}
+                label={limit.label}
+                value={limit.value}
+                enforcer={limit.enforcer}
+              />
+            ))}
+        </View>
+      ) : null}
+      {markets.length > 0 ? <Text style={text.caption}>{markets.join(' · ')}</Text> : null}
+    </View>
+  );
+}
+
+/** A limit with no usage to draw: its cap, and who enforces it — a gauge's head alone. */
+function LimitRow({
+  label,
+  value,
+  enforcer,
+}: {
+  label: string;
+  value: string;
+  enforcer: Enforcer;
+}) {
+  return (
+    <View style={styles.limit}>
+      <View style={styles.limitLabel}>
+        <Text style={text.dim}>{label}</Text>
+        <EnforcerTag enforcer={enforcer} />
+      </View>
+      <Text style={[text.strong, text.num, styles.limitValue]}>{value}</Text>
+    </View>
+  );
+}
+
+/** ⋯ → Details: the ids a support question needs, and the instructions the agent runs on. */
+function DetailsSheet({
+  agent,
+  visible,
+  onClose,
+}: {
+  agent: Agent;
+  visible: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <Sheet visible={visible} title="Details" onClose={onClose}>
+      <Row label="Agent" value={agent.id} mono />
+      <Row label="Wallet" value={agent.address} mono />
+      <Row label="Wallet id" value={agent.walletId} mono />
+      <Row label="Policy" value={agent.policyId} mono />
+      {agent.erc8004AgentId ? <Row label="ERC-8004" value={agent.erc8004AgentId} mono /> : null}
+      {/* The whole address, never shortened: it is the one place its funds can go. */}
+      <Row label="Funds return to" value={agent.mandate.returnTo ?? 'Nowhere'} mono />
+      <Text style={[text.label, styles.instructions]}>System prompt</Text>
+      <Text style={[text.body, styles.prose]} selectable>
+        {agent.systemPrompt || '—'}
+      </Text>
+      <Text style={[text.label, styles.instructions]}>Strategy</Text>
+      <Text style={[text.body, styles.prose]} selectable>
+        {agent.strategy || '—'}
+      </Text>
+    </Sheet>
   );
 }
 
@@ -459,6 +728,7 @@ function RunSheet({
       <Button
         label="Run now"
         kind="primary"
+        icon="bolt"
         busy={busy}
         onPress={() => void run()}
         style={styles.sheetAction}
@@ -558,6 +828,7 @@ function ReturnSheet({
       <Button
         label="Return everything"
         kind="primary"
+        icon="return"
         busy={busy}
         disabled={!exit}
         onPress={() => void send()}
@@ -686,11 +957,32 @@ function RevokeSheet({
 
 const styles = StyleSheet.create({
   grow: { flex: 1 },
-  meta: { marginTop: 4 },
-  ledgerLink: { marginTop: 18 },
-  actions: { marginTop: 20, gap: 10 },
-  actionsTop: { marginTop: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 6 },
+  headerText: { flex: 1, gap: 4 },
+  name: { fontSize: 28, lineHeight: 32 },
+  wallet: { marginTop: 18 },
+  between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  figure: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 10 },
+  hero: { fontSize: 40, lineHeight: 44 },
+  pnl: { marginLeft: 'auto' },
+  reading: { marginTop: 10 },
+  walletActions: { marginTop: 16 },
+  gauges: { gap: 16 },
+  gaugeBlock: { gap: 6 },
+  limit: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: color.line,
+  },
+  limitLabel: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  limitValue: { fontSize: 14, flexShrink: 1, textAlign: 'right' },
+  moves: { gap: 12 },
+  instructions: { marginTop: 20 },
   after: { marginTop: 10 },
-  prose: { color: color.textDim, marginTop: 4 },
+  prose: { color: color.textDim, marginTop: 6 },
   sheetAction: { marginTop: 20 },
 });
