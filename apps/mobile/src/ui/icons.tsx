@@ -27,6 +27,7 @@ const PATHS = {
   stop: 'M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0M5.6 5.6l12.8 12.8',
   copy: 'M10 8h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zM16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3',
   code: 'M8 7l-5 5 5 5M16 7l5 5-5 5',
+  share: 'M12 15V3M7 8l5-5 5 5M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6',
 } as const;
 
 export type IconName = keyof typeof PATHS;
