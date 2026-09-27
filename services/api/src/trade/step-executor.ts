@@ -7,7 +7,10 @@
  * "Batching"): the phone signs every payload at once, and this class sends
  * them in order, each only after the previous user operation reported
  * `success`. A deposit that lands before a place that reverts leaves the USDC
- * in the user's Kuru account, which M-T15 turns into "where your funds are".
+ * in the user's Kuru account, which M-T15 turns into "where your funds are":
+ * {@link StepExecutor.onStepLanded} decodes a landed place's fills into the
+ * trade's `result`, and a finished trade gets its `funds` (SEN-97,
+ * `outcome.ts`).
  *
  * Three rules shape everything below:
  *
@@ -47,6 +50,7 @@ import type { Bundler } from '../wallet/bundler/bundler';
 import type { SponsoredSendOutcome } from '../wallet/send/sponsored-send';
 import type { UserWalletProvider } from '../wallet/user-wallet.provider';
 import { WalletRefusedError } from '../wallet/wallet.errors';
+import { fundsAfter, type TradeOutcomes } from './outcome';
 import type { StepStatus, Trade, TradeStep, TradeStore } from './trade-store';
 
 export interface StepExecutorOptions {
@@ -64,6 +68,8 @@ export interface StepExecutorDeps {
   readonly bundler: Pick<Bundler, 'receipt'>;
   /** The wallet module's `SEND_SPACER` — the same instance its transfers use. */
   readonly spacer: Pick<WriteSpacer, 'run'>;
+  /** Decodes a landed place (SEN-97). Absent in specs about sending alone. */
+  readonly outcomes?: Pick<TradeOutcomes, 'placeResult'>;
   readonly options: StepExecutorOptions;
 }
 
@@ -104,15 +110,23 @@ export class StepExecutor {
 
   /**
    * Called once per step whose user operation landed, included or reverted,
-   * with its receipt (whose `logs` carry the fills). M-T15 decodes the order
-   * outcome here. A throw is logged and does not stop the trade: the step has
-   * already landed, and its status must not depend on decoding it.
+   * with its receipt. A landed place becomes the trade's `result`, decoded
+   * from the OPERATION's own `logs` (SEN-97) — the same `TradeOutcomes` call
+   * `TradeService.reconcile` makes for a place it settles late. A throw is
+   * logged and does not stop the trade: the step has already landed, and its
+   * status must not depend on decoding it.
    */
   protected onStepLanded(
-    _step: TradeStep,
-    _receipt: UserOperationReceipt,
-    _trade: Trade,
-  ): void | Promise<void> {}
+    step: TradeStep,
+    receipt: UserOperationReceipt,
+    trade: Trade,
+  ): void | Promise<void> {
+    const outcomes = this.#deps.outcomes;
+    if (!outcomes) return;
+    return outcomes.placeResult(trade, step, receipt.logs).then((result) => {
+      if (result) this.#save(trade, { result });
+    });
+  }
 
   async #run(trade: Trade, signatures: readonly string[]): Promise<void> {
     let steps: TradeStep[] = trade.steps.map((step) => ({ ...step, status: 'queued' }));
@@ -131,10 +145,21 @@ export class StepExecutor {
 
       for (let rest = index + 1; rest < steps.length; rest++) set(rest, { status: 'not_sent' });
       // An `unknown` step may still land, so the trade is not called failed.
-      if (outcome.status !== 'unknown') this.#save(current, { status: 'failed' });
+      if (outcome.status !== 'unknown') current = this.#save(current, { status: 'failed' });
+      this.#settleFunds(current);
       return;
     }
-    this.#save(current, { status: 'completed' });
+    this.#settleFunds(this.#save(current, { status: 'completed' }));
+  }
+
+  /**
+   * Says where the deposit is once nothing is in flight. `trade` is the
+   * store's copy, so it carries the `result` the hook wrote beside the
+   * executor's own patches.
+   */
+  #settleFunds(trade: Trade): void {
+    const funds = fundsAfter(trade);
+    if (funds) this.#save(trade, { funds });
   }
 
   async #runStep(

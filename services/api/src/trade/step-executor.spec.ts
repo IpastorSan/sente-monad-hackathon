@@ -8,7 +8,14 @@ import { WriteSpacer } from '../spacing/write-spacer';
 import type { SponsoredSendOutcome } from '../wallet/send/sponsored-send';
 import type { SendRequest } from '../wallet/user-wallet.provider';
 import { StepExecutor, type StepExecutorDeps } from './step-executor';
-import { TradeStore, type StepKind, type Trade, type TradeStep } from './trade-store';
+import {
+  TradeStore,
+  type KuruPlaceContext,
+  type KuruPlaceResult,
+  type StepKind,
+  type Trade,
+  type TradeStep,
+} from './trade-store';
 
 // The executor logs every refusal and timeout; the assertions below cover them.
 beforeAll(() => Logger.overrideLogger(false));
@@ -278,5 +285,73 @@ describe('StepExecutor', () => {
       'landed 2',
     ]);
     expect(store.get('alice', 'trade-2')!.status).toBe('completed');
+  });
+});
+
+describe('StepExecutor — fill results (SEN-97)', () => {
+  const PLACE: KuruPlaceContext = {
+    market: getAddress(`0x${'4d'.repeat(20)}`),
+    symbol: 'MON-USDC',
+    side: 'buy',
+    orderType: 'market',
+    timeInForce: 'IOC',
+    quantity: 10n ** 9n,
+    price: '0.03',
+    params: {} as KuruPlaceContext['params'],
+    quoteDecimals: 6,
+    funding: { symbol: 'USDC', decimals: 6, deposit: 5_000_000n },
+  };
+  const FILLED: KuruPlaceResult = {
+    status: 'partially_filled',
+    requestedSize: '10',
+    filledSize: '6.2',
+    fee: '0.001',
+    feeAsset: 'USDC',
+    fills: [],
+    unfilledCancelled: '3.8',
+  };
+
+  function withOutcomes(opts: Parameters<typeof harness>[0] = {}) {
+    const h = harness(opts);
+    const placeResult = jest.fn<
+      Promise<KuruPlaceResult | undefined>,
+      [Trade, TradeStep, readonly unknown[]]
+    >((_trade, s) => Promise.resolve(s.kind === 'place' ? FILLED : undefined));
+    const deps: StepExecutorDeps = { ...h.deps, outcomes: { placeResult } };
+    return { ...h, deps, placeResult };
+  }
+
+  it('stores the landed place as the trade result, from its own receipt', async () => {
+    const { store, deps, placeResult } = withOutcomes();
+    await new StepExecutor(deps).execute(claimedTrade(store, { place: PLACE }), ['a', 'b', 'c']);
+
+    const done = store.get('alice', 'trade-1')!;
+    expect(done.status).toBe('completed');
+    expect(done.result).toEqual(FILLED);
+    // Every landed step is offered; only the place yields a result.
+    expect(placeResult.mock.calls.map(([, s]) => [s.index, s.status])).toEqual([
+      [0, 'included'],
+      [1, 'included'],
+      [2, 'included'],
+    ]);
+    expect(done.funds).toBeUndefined();
+  });
+
+  it('deposited but the order reverted: says the deposit is in the Kuru account', async () => {
+    const { store, deps } = withOutcomes({ receipts: { 2: false } });
+    await new StepExecutor(deps).execute(claimedTrade(store, { place: PLACE }), ['a', 'b', 'c']);
+
+    const done = store.get('alice', 'trade-1')!;
+    expect(done.status).toBe('failed');
+    expect(done.funds).toEqual([{ where: 'kuru', symbol: 'USDC', amount: '5' }]);
+  });
+
+  it('says nothing about funds or fills while a step is unknown', async () => {
+    const { store, deps } = withOutcomes({ receipts: { 2: 'never' } });
+    await new StepExecutor(deps).execute(claimedTrade(store, { place: PLACE }), ['a', 'b', 'c']);
+    const done = store.get('alice', 'trade-1')!;
+    expect(done.status).toBe('executing');
+    expect(done.funds).toBeUndefined();
+    expect(done.result).toBeUndefined();
   });
 });

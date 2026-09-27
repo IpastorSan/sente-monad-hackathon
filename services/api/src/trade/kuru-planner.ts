@@ -60,7 +60,7 @@ import {
   type PublicClient,
 } from 'viem';
 
-import type { StepKind } from './trade-store.ts';
+import type { KuruPlaceContext, StepKind } from './trade-store.ts';
 
 /** Plan "Shared wire types". Amounts are decimal strings of integer atoms/units. */
 export type KuruPlaceIntent = {
@@ -121,6 +121,8 @@ export type KuruPlan = {
   readonly steps: readonly PlannedStep[];
   /** Render only. Strings, so it is JSON as-is. */
   readonly summary: Record<string, string>;
+  /** A place's order and funding, for decoding its receipt later (SEN-97). */
+  readonly place?: KuruPlaceContext;
 };
 
 export type KuruPlannerDeps = {
@@ -301,6 +303,18 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
       kuruFree: fromUnits(free, token.decimals),
       deposit: fromUnits(shortfall, token.decimals),
       feePps: feePps.toString(),
+    },
+    place: {
+      market: market.address,
+      symbol: market.symbol,
+      side: intent.side,
+      orderType: intent.orderType,
+      timeInForce,
+      quantity,
+      price: priceDecimal,
+      params,
+      quoteDecimals: market.quote.decimals,
+      funding: { symbol: token.symbol, decimals: token.decimals, deposit: shortfall },
     },
   };
 }
