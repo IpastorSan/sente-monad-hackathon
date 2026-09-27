@@ -8,6 +8,7 @@ import { ChainModule } from './chain/chain.module';
 import { CreditsModule } from './credits/credits.module';
 import { GasModule } from './gas/gas.module';
 import { HealthModule } from './health/health.module';
+import { PortfolioModule } from './portfolio/portfolio.module';
 import { PresetsModule } from './presets/presets.module';
 import { TradeModule } from './trade/trade.module';
 import { VenuesModule } from './venues/venues.module';
@@ -26,6 +27,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     WalletModule,
     // The user's own manual trades (SEN-83), behind USER_TRADING — off by default.
     TradeModule,
+    // GET /portfolio and /portfolio/fills (SEN-101), behind the same flag.
+    PortfolioModule,
     VenuesModule,
     AgentsModule,
     // The agent leaderboard (SEN-26): registered performance, read from the
