@@ -10,9 +10,9 @@
  * (Short/Long) stay pinned at the bottom, and once the hero scrolls away the
  * price condenses into a header so Buy is never pressed blind.
  *
- * Two sections wait on routes that aren't built, and say so in code rather
- * than faking it: "Your position" needs `GET /portfolio` (M-T19), and the
- * ticket needs `GET /trade/capabilities` (U-13). Every choice with a rule
+ * "Your position" waits on `GET /portfolio` (M-T19) and says so in code
+ * rather than faking it; Sell/Buy open the ticket only when
+ * `useTradingEnabled` says trading is on (SEN-119). Every choice with a rule
  * behind it is in `markets/asset.ts`, under test; this file only lays out.
  */
 import * as Haptics from 'expo-haptics';
@@ -61,6 +61,7 @@ import { useDepth, useKlines, useMarkets, useTicker } from '@/markets/hooks';
 import { flipFavourite, readFavourites } from '@/markets/localLists';
 import { marketKey } from '@/markets/select';
 import { useSession } from '@/session';
+import { useTradingEnabled } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { Sigil } from '@/ui/goban';
 import { Button, Card, Loading, Notice, Section, Sheet, TopBar } from '@/ui/kit';
@@ -157,7 +158,7 @@ function Asset({
   const [starred, toggleStar] = useFavourite(marketKey(market));
   const agents = useAgentsTrading(market);
   const position = useYourPositionUntilPortfolio(market);
-  const trading = useTradingEnabledUntilCapabilities();
+  const trading = useTradingEnabled();
 
   const bars = klines.data?.klines ?? NO_BARS;
   const live = livePrice(ticker.data);
@@ -187,11 +188,11 @@ function Asset({
       setGated(true);
       return;
     }
-    // The ticket route is U-13's; it exists only once the capability says so.
+    // The ticket (SEN-119) opens only once the capability says so.
     router.push({
       pathname: '/trade/[venue]/[symbol]',
       params: { venue, symbol: market.symbol, side },
-    } as never);
+    });
   };
 
   return (
@@ -429,15 +430,6 @@ function useYourPositionUntilPortfolio(
   _market: MarketDto,
 ): { levels: { price: string; kind: 'entry' | 'liq' | 'limit'; label: string }[] } | null {
   return null;
-}
-
-/**
- * STUB (SEN-112) until there is a `/trade` client for `GET /trade/capabilities`
- * (U-13). Treated as disabled, so Sell/Buy explain instead of opening a ticket
- * that can't place anything.
- */
-function useTradingEnabledUntilCapabilities(): boolean {
-  return false;
 }
 
 // ─── Data hooks ─────────────────────────────────────────────────────────────
