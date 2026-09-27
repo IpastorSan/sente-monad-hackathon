@@ -247,7 +247,9 @@ describe('resolveParams', () => {
     for (const value of [12.5, 4000, 2701, 2750, 2799, 64210.123456]) {
       if (value < fine.min || value > fine.max) continue;
       const result = resolveParams(guardian, { [fine.key]: value });
-      const keyErrors = result.ok ? [] : result.errors.filter((e) => e.key === fine.key);
+      const keyErrors: { key: string; message: string }[] = result.ok
+        ? []
+        : result.errors.filter((e) => e.key === fine.key);
       assert.deepEqual(keyErrors, [], `${value} should be on a ${fine.step} step`);
     }
   });
