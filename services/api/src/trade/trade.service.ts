@@ -34,6 +34,12 @@
  * ({@link TradeService.reconcile}). A place settled this way gets its fills
  * decoded exactly as an on-time one does (SEN-97, `outcome.ts`).
  *
+ * PERPL ONBOARDING (SEN-99) is a trade like any other: `perpl-planner.ts`
+ * plans it from the live Perpl context and the Exchange's own record of the
+ * wallet, and it commits and executes through the same steps. Whether order
+ * forwarding is on is not readable on chain, so the server believes it only
+ * after an onboarding trade of its own completed ({@link TradeService.knownForwarding}).
+ *
  * A step `unknown` WITHOUT a user-operation hash (SEN-97) is settled from
  * what there is:
  *
@@ -56,6 +62,7 @@ import type { KuruLog } from '@sente/venues/kuru';
 import { getAddress, type PublicClient } from 'viem';
 
 import { PREPARED_APPROVAL_TTL_MS } from '../agents/prepared-approval';
+import { perplAccountInfo } from '../agents/venues/perpl-agent';
 import type { Principal } from '../auth/principal';
 import { BUNDLER, type Bundler } from '../wallet/bundler/bundler';
 import { sponsoredCallTransaction } from '../wallet/send/sponsored-send';
@@ -68,6 +75,7 @@ import { USER_WALLETS, type UserWalletProvider } from '../wallet/user-wallet.pro
 import { MONAD_PUBLIC_CLIENT } from '../wallet/wallet.module';
 import { WalletRefusedError, walletRefusalToHttpException } from '../wallet/wallet.errors';
 import type {
+  PerplAccountDto,
   PreparedTradeDto,
   TradeCapabilitiesDto,
   TradeIntentDto,
@@ -77,20 +85,24 @@ import {
   KuruPlanRefusedError,
   planKuru,
   type KuruIntent,
+  type KuruPlan,
   type KuruPlanRefusalReason,
 } from './kuru-planner';
 import { tradeIdempotencyKey } from './idempotency-key';
+import { PERPL_CONTEXT, type PerplContextSource } from './perpl-context';
+import {
+  perplParams,
+  PerplPlanRefusedError,
+  planPerplOnboard,
+  type PerplOnboardIntent,
+  type PerplPlanRefusalReason,
+} from './perpl-planner';
 import { fundsAfter, TradeOutcomes } from './outcome';
 import { StepExecutor } from './step-executor';
 import { TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeStore, type StepStatus, type Trade, type TradeStep } from './trade-store';
 
-/** Plan "Shared wire types". Planned in M-T17; accepted and refused until then. */
-export type PerplOnboardIntent = {
-  kind: 'perpl.onboard';
-  clientTradeId: string;
-  amountAtoms: string;
-};
+export type { PerplOnboardIntent };
 export type TradeIntent = KuruIntent | PerplOnboardIntent;
 
 export { tradeIdempotencyKey };
@@ -103,12 +115,15 @@ export { tradeIdempotencyKey };
  */
 export type TradeRefusalReason =
   | 'trading_disabled'
+  // Sent by nothing since SEN-99 planned Perpl onboarding; kept because the
+  // app (apps/mobile/src/trade/types.ts) still lists it, for the next venue.
   | 'not_supported_yet'
   | 'trade_id_conflict'
   | 'trade_not_found'
   | 'trade_expired'
   | 'signature_count_mismatch'
-  | KuruPlanRefusalReason;
+  | KuruPlanRefusalReason
+  | PerplPlanRefusalReason;
 
 const REFUSAL_STATUS: Record<TradeRefusalReason, HttpStatus> = {
   // 404, not 403: with the flag off the routes should look absent (plan §5).
@@ -128,6 +143,9 @@ const REFUSAL_STATUS: Record<TradeRefusalReason, HttpStatus> = {
   reserve_balance: HttpStatus.UNPROCESSABLE_ENTITY,
   deposit_cap_exceeded: HttpStatus.UNPROCESSABLE_ENTITY,
   insufficient_balance: HttpStatus.UNPROCESSABLE_ENTITY,
+  below_min_account_open: HttpStatus.UNPROCESSABLE_ENTITY,
+  // Nothing left to sign: a conflict with the account's state, like `already_terminal`.
+  perpl_already_onboarded: HttpStatus.CONFLICT,
   // The order is already filled or cancelled — a conflict with the book's state.
   already_terminal: HttpStatus.CONFLICT,
 };
@@ -196,24 +214,20 @@ export class TradeService {
     @Inject(BUNDLER) private readonly bundler: Pick<Bundler, 'receipt'>,
     @Inject(MONAD_PUBLIC_CLIENT) private readonly client: PublicClient,
     private readonly outcomes: TradeOutcomes,
+    @Inject(PERPL_CONTEXT) private readonly perplContext: PerplContextSource,
   ) {}
 
   capabilities(): TradeCapabilitiesDto {
     const { enabled, atomicBatch, chainId } = this.config;
-    // Perpl onboarding and orders arrive with M-T17/M-T23; until then the app
-    // must not offer them.
+    // Stays false although onboarding plans since SEN-99: the phone cannot
+    // verify its steps yet (M-T16), there is no enrollment (M-T18), and orders
+    // come with M-T23. Offering Perpl before all three would strand users.
     return { enabled, atomicBatch, chainId, venues: { kuru: enabled, perpl: false } };
   }
 
   async prepare(principal: Principal, dto: TradeIntentDto): Promise<PreparedTradeDto> {
     this.assertEnabled();
     const intent = toTradeIntent(dto);
-    if (intent.kind === 'perpl.onboard') {
-      throw new TradeRefusedError(
-        'not_supported_yet',
-        'Perpl onboarding is not available yet; only Kuru trades can be prepared',
-      );
-    }
     const binding = await this.bound(principal);
     const intentHash = hashIntent(intent);
     const now = this.now();
@@ -225,7 +239,7 @@ export class TradeService {
       return toPrepared(this.sameIntentOrRefuse(existing, intentHash));
     }
 
-    const plan = await this.planOrRefuse(intent, binding);
+    const plan = await this.planOrRefuse(intent, binding, principal.userId, now);
     const steps: TradeStep[] = [];
     for (const [index, planned] of plan.steps.entries()) {
       const { to, data, value } = planned.transaction;
@@ -307,6 +321,24 @@ export class TradeService {
     this.assertEnabled();
     const trades = this.store.listRecent(principal.userId, limit, this.now());
     return (await Promise.all(trades.map((trade) => this.reconcile(trade)))).map(toView);
+  }
+
+  /**
+   * `GET /trade/perpl/account`: the wallet's Perpl account as the Exchange
+   * holds it, and what onboarding would still need. The read key and `apiKey`
+   * come with enrollment (M-T18); until then always `'unlinked'`.
+   */
+  async perplAccount(principal: Principal): Promise<PerplAccountDto> {
+    this.assertEnabled();
+    const binding = await this.bound(principal);
+    const params = perplParams(await this.perplContext());
+    const account = await perplAccountInfo(this.client, binding.address, params.exchange);
+    return {
+      accountId: account ? account.accountId.toString() : null,
+      forwarding: account !== null && this.knownForwarding(principal.userId, binding, this.now()),
+      minOpenAtoms: params.minAccountOpenAmount.toString(),
+      readKey: 'unlinked',
+    };
   }
 
   /** Overridable clock for the spec. */
@@ -449,19 +481,52 @@ export class TradeService {
     return existing;
   }
 
-  private async planOrRefuse(intent: KuruIntent, binding: UserWalletBinding) {
+  private async planOrRefuse(
+    intent: TradeIntent,
+    binding: UserWalletBinding,
+    userId: string,
+    now: Date,
+  ): Promise<KuruPlan> {
+    // A Perpl plan is a Kuru plan without `place`: the same steps and summary.
+    const deps = {
+      client: this.client,
+      wallet: binding.address,
+      atomicBatch: this.config.atomicBatch,
+    };
     try {
-      return await planKuru(intent, {
-        client: this.client,
-        wallet: binding.address,
-        atomicBatch: this.config.atomicBatch,
+      if (intent.kind !== 'perpl.onboard') return await planKuru(intent, deps);
+      return await planPerplOnboard(intent, {
+        ...deps,
+        context: await this.perplContext(),
+        // `null`, not `false`: unknown still plans the forwarding leg.
+        forwarding: this.knownForwarding(userId, binding, now) || null,
       });
     } catch (error) {
-      if (error instanceof KuruPlanRefusedError) {
+      if (error instanceof KuruPlanRefusedError || error instanceof PerplPlanRefusedError) {
         throw new TradeRefusedError(error.reason, error.message);
       }
       throw error;
     }
+  }
+
+  /**
+   * Whether this server saw the wallet turn order forwarding on: a completed
+   * onboarding trade always ends with `allowOrderForwarding(true)` (alone or
+   * inside its batch), unless forwarding was already known on. Forwarding is
+   * only reported on Perpl's authenticated socket, which the server cannot
+   * open for a user before enrollment (M-T18), so this is the one evidence it
+   * has. In memory: after a restart it is unknown again, and the next
+   * onboarding re-sends the harmless forwarding leg.
+   */
+  private knownForwarding(userId: string, binding: UserWalletBinding, now: Date): boolean {
+    return this.store
+      .listRecent(userId, Number.MAX_SAFE_INTEGER, now)
+      .some(
+        (trade) =>
+          trade.kind === 'perpl.onboard' &&
+          trade.status === 'completed' &&
+          trade.address.toLowerCase() === binding.address.toLowerCase(),
+      );
   }
 }
 
