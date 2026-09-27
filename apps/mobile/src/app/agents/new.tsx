@@ -205,7 +205,11 @@ export default function HireAgentScreen() {
       (agent) => {
         if (cancelled) return;
         setTarget(agent);
-        setForm({ ...formFromMandate(agent.mandate), ...(returnTo ? { returnTo } : {}) });
+        // SEN-124: the stored mandate's `returnTo` came from the server, so it
+        // is dropped rather than carried: the form only ever holds the live
+        // wallet's address, and none at all until the wallet has registered.
+        const { returnTo: _stored, ...loaded } = formFromMandate(agent.mandate);
+        setForm({ ...loaded, ...(returnTo ? { returnTo } : {}) });
         setExpiryDays(null);
       },
       (error: unknown) => {
@@ -336,10 +340,13 @@ export default function HireAgentScreen() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // SEN-124: the phone's own wallet, not the mandate's `returnTo`, is what
+      // the way out is checked against; `null` (not registered yet) is refused.
       await amendMandateWithApproval(
         api,
         target,
         pending.mandate,
+        returnTo,
         auth.signPrivyAuthorization,
         pending.change,
       );

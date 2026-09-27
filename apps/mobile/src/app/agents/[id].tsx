@@ -1423,7 +1423,7 @@ function RevokeSheet({
   onClose: () => void;
   onDone: (notice: NoticeState) => void;
 }) {
-  const { agents: api, auth } = useSession();
+  const { agents: api, auth, wallet } = useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<NoticeState | null>(null);
   /**
@@ -1462,7 +1462,15 @@ function RevokeSheet({
     setError(null);
     try {
       const revoked = signs
-        ? await revokeWithApproval(api, agent, auth.signPrivyAuthorization, prepared ?? undefined)
+        ? // SEN-124: `agent.mandate.returnTo` is the server's word; the way out
+          // is checked against this phone's own wallet, and `null` is refused.
+          await revokeWithApproval(
+            api,
+            agent,
+            wallet.address,
+            auth.signPrivyAuthorization,
+            prepared ?? undefined,
+          )
         : await api.revoke(agent.id);
       onDone(
         revoked.policyCleared === false
