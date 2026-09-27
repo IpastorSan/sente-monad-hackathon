@@ -8,11 +8,15 @@
  * only whose address it is — the session's registered wallet — and where
  * Perpl credentials would come from.
  *
+ * Like the agent portfolio, each section is read independently and reported
+ * as a `SectionResult` (SEN-123), so a venue that is down costs that section
+ * only.
+ *
  * Nothing is cached or stored: every call re-reads chain and venue state, so a
  * restart can never misreport a balance (plan "Persistence").
  */
-import { Inject, Injectable, type Provider } from '@nestjs/common';
-import type { Address, PublicClient } from 'viem';
+import { Inject, Injectable, Logger, type Provider } from '@nestjs/common';
+import { BaseError, type Address, type PublicClient } from 'viem';
 
 import {
   AGENT_WALLET_TOKENS,
@@ -34,7 +38,14 @@ import {
 } from '../wallet/store/user-wallet-registry';
 import { WalletRefusedError } from '../wallet/wallet.errors';
 import { MONAD_PUBLIC_CLIENT } from '../wallet/wallet.module';
-import type { FillDto, FillsPageDto, FillsQueryDto, PortfolioDto } from './dto/portfolio.dto';
+import type { SectionResult } from '../venues/dto/markets.dto';
+import type {
+  FillDto,
+  FillsPageDto,
+  FillsQueryDto,
+  PerplPortfolioSection,
+  PortfolioDto,
+} from './dto/portfolio.dto';
 
 /** Everything the service reads through: the seam the spec fakes. */
 export interface UserPortfolioReaders {
@@ -77,6 +88,7 @@ type TradeWithSummary = Trade & { readonly summary?: Record<string, string> };
 export class UserPortfolioService {
   readonly #readers: UserPortfolioReaders;
   readonly #now: () => number;
+  readonly #logger = new Logger(UserPortfolioService.name);
 
   constructor(@Inject(USER_PORTFOLIO_READERS) readers: UserPortfolioReaders) {
     this.#readers = readers;
@@ -85,30 +97,34 @@ export class UserPortfolioService {
 
   async portfolio(principal: Principal): Promise<PortfolioDto> {
     const { address } = await this.#bound(principal);
+    const { userId } = principal;
     const asOf = this.#now();
+    // Each read settles into its own section (SEN-123): with `Promise.all`
+    // over the bare reads, one venue timing out failed the whole request and
+    // the phone lost the wallet along with it.
     const [wallet, kuru, perpl] = await Promise.all([
-      this.#readers.wallet.balances(address),
+      this.#section('wallet', userId, async () => ({
+        balances: (await this.#readers.wallet.balances(address)).map((token) => ({
+          symbol: token.symbol,
+          address: token.address,
+          decimals: token.decimals,
+          raw: token.raw.toString(),
+          amount: token.amount,
+        })),
+      })),
       // `account` = the wallet: for a user the Privy wallet is the AccountCore
       // root (plan §2), not the retired Kernel address gotcha 9 describes.
-      readKuruAccount(this.#readers.kuruVenue(address)),
-      readPerplAccount(address, {
-        accountInfo: this.#readers.perplAccountInfo,
-        venue: this.#readers.perplReadVenue(principal.userId, address),
-      }),
+      this.#section('kuru', userId, () => readKuruAccount(this.#readers.kuruVenue(address))),
+      this.#section('perpl', userId, async () =>
+        toPerplSection(
+          await readPerplAccount(address, {
+            accountInfo: this.#readers.perplAccountInfo,
+            venue: this.#readers.perplReadVenue(userId, address),
+          }),
+        ),
+      ),
     ]);
-
-    return {
-      asOf,
-      wallet: wallet.map((token) => ({
-        symbol: token.symbol,
-        address: token.address,
-        decimals: token.decimals,
-        raw: token.raw.toString(),
-        amount: token.amount,
-      })),
-      kuru,
-      perpl: toPerplSection(perpl),
-    };
+    return { asOf, wallet, kuru, perpl };
   }
 
   /**
@@ -138,6 +154,19 @@ export class UserPortfolioService {
     return { fills: page, next: end < all.length ? String(end) : null };
   }
 
+  async #section<T extends object>(
+    name: string,
+    userId: string,
+    read: () => Promise<T>,
+  ): Promise<SectionResult<T>> {
+    try {
+      return { ok: true, ...(await read()) };
+    } catch (error) {
+      this.#logger.warn(`User ${userId}: portfolio ${name} read failed: ${messageOf(error)}`);
+      return { ok: false, error: messageOf(error) };
+    }
+  }
+
   async #bound(principal: Principal): Promise<UserWalletBinding> {
     const binding = await this.#readers.registry.find(principal.userId);
     if (!binding) {
@@ -150,9 +179,15 @@ export class UserPortfolioService {
   }
 }
 
+/** viem's `shortMessage` drops the request dump (URL, calldata) its `message` carries. */
+function messageOf(error: unknown): string {
+  if (error instanceof BaseError) return error.shortMessage;
+  return error instanceof Error ? error.message : String(error);
+}
+
 function toPerplSection(
   snapshot: Awaited<ReturnType<typeof readPerplAccount>>,
-): PortfolioDto['perpl'] {
+): PerplPortfolioSection {
   switch (snapshot.status) {
     case 'no_account':
       return { status: 'not_onboarded' };

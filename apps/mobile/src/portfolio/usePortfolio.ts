@@ -31,7 +31,10 @@ export type UserPortfolio = {
   /** `null` with trading off, before the first answer, or when the route refused. */
   portfolio: Portfolio | null;
   polled: Polled<Portfolio>;
-  /** What the cash card shows: `/portfolio`'s wallet, or the wallet session's without it. */
+  /**
+   * What the cash card shows: `/portfolio`'s wallet, or the wallet session's
+   * without it or when that section failed.
+   */
   wallet: WalletAmount[] | null;
 };
 
@@ -43,7 +46,12 @@ export function useUserPortfolio(): UserPortfolio {
   });
   const portfolio = trading ? polled.data : null;
   const walletAmounts = useMemo<WalletAmount[] | null>(() => {
-    if (portfolio) return portfolio.wallet.map(({ symbol, amount }) => ({ symbol, amount }));
+    if (portfolio?.wallet.ok) {
+      return portfolio.wallet.balances.map(({ symbol, amount }) => ({ symbol, amount }));
+    }
+    // `/portfolio`'s wallet section failed on its own (SEN-123): the wallet
+    // session's `/wallet` is a separate read of the same address, so its cash
+    // is still real; the screen names the failed section for the rest.
     const held = wallet.wallet;
     return held ? held.balances.map(({ symbol, amount }) => ({ symbol, amount })) : null;
   }, [portfolio, wallet.wallet]);

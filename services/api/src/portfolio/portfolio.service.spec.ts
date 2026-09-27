@@ -66,11 +66,20 @@ describe('UserPortfolioService.portfolio', () => {
     const { service } = harness({ kuruVenue: () => venue });
     expect(await service.portfolio(ALICE)).toEqual({
       asOf: NOW,
-      wallet: [
-        { symbol: 'MON', address: ADDRESS, decimals: 18, raw: '2000000000000000000', amount: '2' },
-      ],
-      kuru: { accountId: null, balances: [], openOrders: [] },
-      perpl: { status: 'not_onboarded' },
+      wallet: {
+        ok: true,
+        balances: [
+          {
+            symbol: 'MON',
+            address: ADDRESS,
+            decimals: 18,
+            raw: '2000000000000000000',
+            amount: '2',
+          },
+        ],
+      },
+      kuru: { ok: true, accountId: null, balances: [], openOrders: [] },
+      perpl: { ok: true, status: 'not_onboarded' },
     });
     // Id 0 has nothing to list: no Gateway round trip for it.
     expect(venue.getBalances).not.toHaveBeenCalled();
@@ -110,12 +119,15 @@ describe('UserPortfolioService.portfolio', () => {
 
     // Every venue is read at the session's registered wallet, nothing else.
     expect(reads).toEqual([ADDRESS, ADDRESS, ADDRESS]);
-    expect(portfolio.wallet.map((t) => [t.symbol, t.raw, t.amount])).toEqual([
+    expect(
+      portfolio.wallet.ok && portfolio.wallet.balances.map((t) => [t.symbol, t.raw, t.amount]),
+    ).toEqual([
       ['MON', '100000000000000000', '0.1'],
       ['USDC', '12345678', '12.345678'],
       ['AUSD', '0', '0'],
     ]);
     expect(portfolio.kuru).toEqual({
+      ok: true,
       accountId: '42',
       balances: [
         { asset: 'USDC', available: '5.5', locked: '35', total: '40.5' },
@@ -125,6 +137,7 @@ describe('UserPortfolioService.portfolio', () => {
     });
     // No read key yet (M-T18): the chain's balance, and positions left out as unknown.
     expect(portfolio.perpl).toEqual({
+      ok: true,
       status: 'unlinked',
       accountId: '7',
       balances: [{ asset: 'AUSD', available: '125', locked: '25', total: '150' }],
@@ -145,11 +158,44 @@ describe('UserPortfolioService.portfolio', () => {
         Promise.resolve(userId === 'alice' && address === ADDRESS ? venue : undefined),
     });
     expect((await service.portfolio(ALICE)).perpl).toEqual({
+      ok: true,
       status: 'ok',
       accountId: '7',
       balances: [{ asset: 'AUSD', available: '90', locked: '10', total: '100' }],
       positions: [],
       openOrders: [],
+    });
+  });
+
+  it('keeps the wallet and Perpl when the Kuru read throws (SEN-123)', async () => {
+    const venue = kuru(42n);
+    venue.getBalances = () => Promise.reject(new Error('Kuru RPC timed out'));
+    const { service } = harness({
+      kuruVenue: () => venue,
+      perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 150_000_000n, locked: 0n }),
+    });
+
+    const portfolio = await service.portfolio(ALICE);
+
+    expect(portfolio.kuru).toEqual({ ok: false, error: 'Kuru RPC timed out' });
+    expect(portfolio.wallet).toMatchObject({ ok: true, balances: [{ symbol: 'MON' }] });
+    expect(portfolio.perpl).toMatchObject({ ok: true, status: 'unlinked', accountId: '7' });
+  });
+
+  it('isolates a failing wallet and a failing Perpl read too', async () => {
+    const { service } = harness({
+      wallet: { balances: () => Promise.reject(new Error('balanceOf reverted')) },
+      perplReadVenue: () => {
+        throw new Error('read key vault unreachable');
+      },
+      perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 1n, locked: 0n }),
+    });
+
+    expect(await service.portfolio(ALICE)).toEqual({
+      asOf: NOW,
+      wallet: { ok: false, error: 'balanceOf reverted' },
+      kuru: { ok: true, accountId: null, balances: [], openOrders: [] },
+      perpl: { ok: false, error: 'read key vault unreachable' },
     });
   });
 

@@ -15,6 +15,7 @@ import type {
   Decimal,
   OrderDto,
   PositionDto,
+  SectionResult,
   VenueId,
 } from '../../venues/dto/markets.dto';
 import type { TokenBalanceDto } from '../../wallet/dto/wallet.dto';
@@ -27,28 +28,37 @@ import type { TokenBalanceDto } from '../../wallet/dto/wallet.dto';
  */
 export type PerplPortfolioStatus = 'ok' | 'unlinked' | 'not_onboarded';
 
+export interface PerplPortfolioSection {
+  status: PerplPortfolioStatus;
+  /** Present whenever the account exists (`ok` and `unlinked`). */
+  accountId?: string;
+  /** `unlinked`: the chain's collateral balance only, which excludes margin in positions. */
+  balances?: BalanceDto[];
+  /** Only with `ok`; absent means unknown, not none. */
+  positions?: PositionDto[];
+  openOrders?: OrderDto[];
+}
+
+/**
+ * Every section is a `SectionResult`, the agent portfolio's shape (SEN-123):
+ * one venue that fails to answer costs its own section, never the whole
+ * response, so a Kuru outage still shows the wallet and Perpl. A failed
+ * section is `{ ok: false, error }` — unknown, which the phone must never
+ * draw as empty.
+ */
 export interface PortfolioDto {
   /** Unix ms of the read. */
   asOf: number;
   /** The user's Privy wallet: MON, every Kuru market token, and AUSD. */
-  wallet: TokenBalanceDto[];
-  kuru: {
+  wallet: SectionResult<{ balances: TokenBalanceDto[] }>;
+  kuru: SectionResult<{
     /** `null` until the wallet's first Kuru deposit creates its AccountCore account. */
     accountId: string | null;
     /** `available` is free, `locked` is reserved by resting orders. */
     balances: BalanceDto[];
     openOrders: OrderDto[];
-  };
-  perpl: {
-    status: PerplPortfolioStatus;
-    /** Present whenever the account exists (`ok` and `unlinked`). */
-    accountId?: string;
-    /** `unlinked`: the chain's collateral balance only, which excludes margin in positions. */
-    balances?: BalanceDto[];
-    /** Only with `ok`; absent means unknown, not none. */
-    positions?: PositionDto[];
-    openOrders?: OrderDto[];
-  };
+  }>;
+  perpl: SectionResult<PerplPortfolioSection>;
 }
 
 export interface FillDto {
