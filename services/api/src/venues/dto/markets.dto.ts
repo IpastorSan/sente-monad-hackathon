@@ -4,8 +4,22 @@
  * The mobile app codes against these shapes, so they change only together
  * with that section.
  *
- * Types only: the class-validator query DTOs for `/markets` land in B-T6.
+ * The class-validator param and query DTOs for the `/markets` routes (SEN-77,
+ * plan B-T6) follow the contract, at the end of the file.
  */
+import { Type } from 'class-transformer';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  ValidateBy,
+} from 'class-validator';
+
 export type Decimal = string; // exact decimal, never a float
 export type VenueId = 'kuru' | 'perpl';
 export type QuoteCurrency = 'USDC' | 'AUSD'; // Kuru Testnet USDC vs Agora AUSD — never interchangeable
@@ -295,4 +309,115 @@ export interface PresetStatsDto {
   definition: string;
   notes: string[];
   asOf: number;
+}
+
+// ---------------------------------------------------------------------------
+// `/markets` params and queries (SEN-77, plan B-T6). Query values arrive as
+// strings, so numeric ones carry `@Type(() => Number)` for the global pipe's
+// `transform` step.
+
+export const VENUE_IDS: readonly VenueId[] = ['kuru', 'perpl'];
+export const KLINE_INTERVALS: readonly KlineInterval[] = [
+  '1m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '4h',
+  '1d',
+  '1w',
+];
+
+export const DEPTH_DEFAULT_LIMIT = 20;
+export const DEPTH_MAX_LIMIT = 50;
+export const KLINES_DEFAULT_LIMIT = 200;
+export const KLINES_MAX_LIMIT = 1000;
+export const QUOTE_DEFAULT_MAX_SLIPPAGE: Decimal = '0.005';
+export const QUOTE_MAX_SLIPPAGE: Decimal = '0.05';
+
+/** `:venue/:symbol`. The symbol ends up in cache keys and logs, so it is bounded here. */
+export class MarketParamsDto {
+  @IsIn(VENUE_IDS)
+  venue!: VenueId;
+
+  @Matches(/^[A-Za-z0-9._-]{1,32}$/, { message: 'symbol must be 1-32 of [A-Za-z0-9._-]' })
+  symbol!: string;
+}
+
+export class TickersQueryDto {
+  @IsOptional()
+  @IsIn(VENUE_IDS)
+  venue?: VenueId;
+}
+
+export class DepthQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(DEPTH_MAX_LIMIT)
+  limit?: number;
+}
+
+export class KlinesQueryDto {
+  /**
+   * Checked against every interval either venue serves. One that exists but
+   * not on this venue (Perpl `1w`) passes here and is the service's 400
+   * `interval_not_supported`.
+   */
+  @IsIn(KLINE_INTERVALS)
+  interval!: KlineInterval;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(KLINES_MAX_LIMIT)
+  limit?: number;
+
+  /** Unix ms, exclusive. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  endTime?: number;
+}
+
+export class QuoteQueryDto {
+  @IsIn(['buy', 'sell'])
+  side!: 'buy' | 'sell';
+
+  /**
+   * Only bounded here. The controller checks its shape, so a malformed size
+   * answers the same 400 `invalid_size` as one the venue cannot represent:
+   * that reason is what the app branches on (`apps/mobile/src/markets/hooks.ts`).
+   */
+  @IsString()
+  @MaxLength(64)
+  size!: string;
+
+  @IsOptional()
+  @IsDecimalAtMost(QUOTE_MAX_SLIPPAGE)
+  maxSlippage?: Decimal;
+}
+
+/** Up to 18 places: the precision the service compares decimals at. */
+export const UNSIGNED_DECIMAL = /^\d+(\.\d{1,18})?$/;
+
+/** Compared exactly: as floats, `'0.0500000000000000001'` would pass for 0.05. */
+function IsDecimalAtMost(max: Decimal): PropertyDecorator {
+  return ValidateBy({
+    name: 'isDecimalAtMost',
+    constraints: [max],
+    validator: {
+      validate: (value: unknown) =>
+        typeof value === 'string' && UNSIGNED_DECIMAL.test(value) && x18(value) <= x18(max),
+      defaultMessage: (args) => `${args?.property ?? 'value'} must be a decimal from 0 to ${max}`,
+    },
+  });
+}
+
+function x18(value: Decimal): bigint {
+  const [whole = '0', fraction = ''] = value.split('.');
+  return BigInt(whole + fraction.padEnd(18, '0'));
 }
