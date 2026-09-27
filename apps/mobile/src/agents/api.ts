@@ -139,6 +139,26 @@ type AgentFields = {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /**
+   * The agent's own run cadence (SEN-67). `null` when it has none; absent from
+   * an API that predates the field, which reads the same.
+   */
+  schedule?: AgentSchedule | null;
+  /** The catalog preset it was hired (or forked) from (SEN-73); `null` when free-form. */
+  preset?: AgentPresetRef | null;
+};
+
+export type AgentSchedule = { everySeconds: number };
+
+/** `AgentPresetDto` on the agent response (SEN-73). */
+export type AgentPresetRef = {
+  id: string;
+  version: number;
+  /** The catalog's display name; the id itself once the preset has left the catalog. */
+  name: string;
+  params: Record<string, unknown>;
+  /** The strategy or system prompt differs from the preset's render of `params`. */
+  customized: boolean;
 };
 
 export type Agent = AgentFields & { mandate: AgentMandate };
@@ -393,6 +413,115 @@ export type Leaderboard = {
   generatedAt: string;
 };
 
+// ---------------------------------------------------------------------------
+// Portfolio and schedule (SEN-115). Copied from the wire contract in
+// `docs/design/trading/plan-backend.md`; money stays a decimal string.
+
+type Decimal = string;
+
+/** One section of the portfolio: a venue that failed to read never fails the rest. */
+export type SectionResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+export type BalanceDto = { asset: string; available: Decimal; locked: Decimal; total: Decimal };
+
+export type OrderDto = {
+  venue: VenueId;
+  id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  type: 'limit' | 'market';
+  status: string;
+  price: Decimal | null;
+  size: Decimal;
+  filledSize: Decimal;
+  leverage: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type PositionDto = {
+  symbol: string;
+  side: 'long' | 'short';
+  size: Decimal;
+  entryPrice: Decimal;
+  markPrice: Decimal;
+  /** Our formula, excluding accrued funding: label it "est.". */
+  liquidationPriceEst: Decimal | null;
+  leverage: number;
+  margin: Decimal;
+  unrealizedPnl: Decimal;
+  realizedPnl: Decimal | null;
+  fundingPaid: Decimal | null;
+  quote: 'AUSD';
+  updatedAt: number;
+};
+
+export type SpotHoldingDto = {
+  asset: string;
+  market: string;
+  amount: Decimal;
+  inWallet: Decimal;
+  inAccount: Decimal;
+  lockedInOrders: Decimal;
+  markPrice: Decimal | null;
+  /** USDC. */
+  value: Decimal | null;
+  costBasis: {
+    avgPrice: Decimal | null;
+    coveredSize: Decimal;
+    uncoveredSize: Decimal;
+    unrealizedPnl: Decimal | null;
+    complete: boolean;
+    source: 'event-log-fifo';
+  };
+  note?: string;
+};
+
+export type PerplPortfolioSection =
+  | {
+      status: 'ok';
+      accountId: string;
+      balances: BalanceDto[];
+      positions: PositionDto[];
+      openOrders: OrderDto[];
+    }
+  | {
+      status: 'not_enrolled';
+      accountId: string;
+      balances: BalanceDto[];
+      positions: null;
+      openOrders: null;
+    }
+  | { status: 'no_account' }
+  | { status: 'not_in_mandate' };
+
+/** `GET /agents/:id/portfolio` (B-T10): what the agent holds, venue by venue. */
+export type AgentPortfolioDto = {
+  agentId: string;
+  address: string;
+  asOf: number;
+  wallet: SectionResult<{ balances: (BalanceDto & { decimals: number })[] }>;
+  kuru: SectionResult<{ accountId: string | null; balances: BalanceDto[]; openOrders: OrderDto[] }>;
+  perpl: SectionResult<PerplPortfolioSection>;
+  holdings: SpotHoldingDto[];
+  /** USDC and AUSD added as dollars, so only ever "≈ $". */
+  totals: { approxUsd: Decimal; byQuote: { USDC: Decimal; AUSD: Decimal }; note: string };
+};
+
+export type SchedulePauseReason =
+  'credits_low' | 'credits_exhausted' | 'credits_unavailable' | 'daily_cap';
+
+/** `GET /agents/:id/schedule` (B-T13): the cadence in force and when it next runs. */
+export type AgentScheduleStatusDto = {
+  everySeconds: number | null;
+  /** Whose cadence it is: the agent's own, Sente's global tick, or none. */
+  source: 'agent' | 'global' | null;
+  /** ISO 8601. */
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  paused: { reason: SchedulePauseReason; until: string | null } | null;
+};
+
 /** A non-2xx response, carrying the API's stable `reason` when it sent one. */
 export class AgentsApiError extends Error {
   readonly status: number;
@@ -642,6 +771,50 @@ export class AgentsApi {
       source: page.source ?? { kind: 'ok' },
       generatedAt: page.generatedAt ?? '',
     };
+  }
+
+  /**
+   * `GET /agents/:id/portfolio` (B-T10) — balances, positions, holdings.
+   * `null` when the route is not deployed (Nest's own 404, no `reason`), so
+   * the cockpit hides the section rather than showing an error (SEN-115). A
+   * 404 that names `agent_not_found` is about the agent and still throws.
+   */
+  portfolio(id: string): Promise<AgentPortfolioDto | null> {
+    return this.optional(
+      this.request<AgentPortfolioDto>('GET', `/agents/${encodeURIComponent(id)}/portfolio`),
+    );
+  }
+
+  /** `GET /agents/:id/schedule` (B-T13) — `null` while the route is not deployed. */
+  schedule(id: string): Promise<AgentScheduleStatusDto | null> {
+    return this.optional(
+      this.request<AgentScheduleStatusDto>('GET', `/agents/${encodeURIComponent(id)}/schedule`),
+    );
+  }
+
+  /**
+   * `PATCH /agents/:id/schedule` (SEN-67). `null` clears the agent's own
+   * cadence: it then runs only when asked (or on Sente's global tick, if the
+   * server has one). 60..86400 s; 409 `agent_revoked` once revoked.
+   */
+  async setSchedule(id: string, everySeconds: number | null): Promise<Agent> {
+    return fromWireAgent(
+      await this.request<WireAgent>('PATCH', `/agents/${encodeURIComponent(id)}/schedule`, {
+        everySeconds,
+      }),
+    );
+  }
+
+  /** A route an older API lacks answers Nest's bare 404; that reads as "not here yet". */
+  private async optional<T>(pending: Promise<T>): Promise<T | null> {
+    try {
+      return await pending;
+    } catch (error) {
+      if (error instanceof AgentsApiError && error.status === 404 && error.reason === undefined) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /** One request, and at most one silent re-authentication — see `WalletApi`. */
