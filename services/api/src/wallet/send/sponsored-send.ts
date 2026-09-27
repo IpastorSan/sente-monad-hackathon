@@ -136,6 +136,31 @@ export function sponsoredTransferTransaction(
   };
 }
 
+/**
+ * The `params.transaction` of an arbitrary contract call from the user's wallet
+ * (SEN-87) — what a trade step sends, where a transfer uses
+ * {@link sponsoredTransferTransaction}.
+ *
+ * The same canonical shape, because the phone rebuilds and compares it byte
+ * for byte: `to` checksummed, `value` as unpadded `0x` hex, and `value` ABSENT
+ * rather than `0x0` when nothing is attached — an absent key and a zero are
+ * different signed bytes. `data` is passed through untouched; checking what it
+ * does is the phone's job, against its own ABI.
+ */
+export function sponsoredCallTransaction(
+  to: Address,
+  data: Hex,
+  value?: bigint,
+): Record<string, unknown> {
+  if (value !== undefined && value < 0n) throw new RangeError('a call value cannot be negative');
+  return {
+    to: getAddress(to),
+    data,
+    ...(value ? { value: hexQuantity(value) } : {}),
+    chain_id: SEND_CHAIN_ID,
+  };
+}
+
 /** The whole Privy RPC body for a sponsored send. See the module header. */
 export function sponsoredSendBody(transaction: Record<string, unknown>): Record<string, unknown> {
   return {

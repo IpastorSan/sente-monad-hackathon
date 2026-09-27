@@ -34,6 +34,32 @@ export interface PrepareSendInput {
   walletId: string;
   /** Privy's `params.transaction` — `send/sponsored-send.ts` builds it. */
   transaction: Record<string, unknown>;
+  /**
+   * Sent as `privy-idempotency-key`, so Privy runs the request at most once in
+   * 24h (SEN-87). It is a `privy-` header, so it is part of what the phone
+   * signs: a replayed signature carries the same key and is deduplicated, and
+   * a key changed at commit time is a signature Privy refuses. Absent, the
+   * request is built exactly as before this field existed.
+   */
+  idempotencyKey?: string;
+}
+
+/**
+ * The request a send prepares: an {@link EnclaveRequest} plus the idempotency
+ * key its signed payload was built with (SEN-87).
+ *
+ * Kept ON the stored request rather than passed to `commitSend` separately,
+ * for the same reason the body is: the key is signed bytes, so commit must
+ * send the one that was approved, not one recomposed beside it. Any plain
+ * `EnclaveRequest` is also one of these, with no key.
+ */
+export interface SendRequest extends EnclaveRequest {
+  readonly idempotencyKey?: string;
+}
+
+/** A prepared send, whose request remembers its idempotency key. */
+export interface PreparedSendRequest extends PreparedEnclaveRequest {
+  readonly request: SendRequest;
 }
 
 /**
@@ -54,7 +80,7 @@ export interface UserWalletProvider {
   provision(input: ProvisionUserWalletInput): Promise<ProvisionedUserWallet>;
 
   /** The `eth_sendTransaction` that would move the funds, and what its owner signs. */
-  prepareSend(input: PrepareSendInput): Promise<PreparedEnclaveRequest>;
+  prepareSend(input: PrepareSendInput): Promise<PreparedSendRequest>;
 
   /**
    * Sends a prepared transfer with the phone's signature attached.
@@ -63,7 +89,7 @@ export interface UserWalletProvider {
    * back: a sponsored send returns a USER OPERATION hash (gotcha 8), and the
    * caller needs it to read the right receipt.
    */
-  commitSend(request: EnclaveRequest, approval: EnclaveApproval): Promise<SponsoredSendOutcome>;
+  commitSend(request: SendRequest, approval: EnclaveApproval): Promise<SponsoredSendOutcome>;
 }
 
 /** Privy server wallets, owned by a 1-key quorum holding the device key. */
@@ -81,22 +107,22 @@ export class PrivyUserWalletProvider implements UserWalletProvider {
     return { walletId: wallet.id, address: getAddress(wallet.address), ownerQuorumId };
   }
 
-  prepareSend(input: PrepareSendInput): Promise<PreparedEnclaveRequest> {
+  prepareSend(input: PrepareSendInput): Promise<PreparedSendRequest> {
     const path = walletRpcPath(input.walletId);
     const body = sponsoredSendBody(input.transaction);
+    // Only a key that was given is stored or signed: no key means no header,
+    // and so the same request and payload as a send made before SEN-87.
+    const idempotencyKey = input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {};
     return Promise.resolve({
       // `subject` is the wallet, not a policy: this request spends, it does not
       // re-bound anything. Carried so a refusal can name what it was about.
-      request: { method: 'POST', path, body, subject: input.walletId },
+      request: { method: 'POST', path, body, subject: input.walletId, ...idempotencyKey },
       // Built by the same client that will send it, so the two cannot drift.
-      payload: this.#client.authorizationPayload('POST', path, body),
+      payload: this.#client.authorizationPayload('POST', path, body, idempotencyKey),
     });
   }
 
-  async commitSend(
-    request: EnclaveRequest,
-    approval: EnclaveApproval,
-  ): Promise<SponsoredSendOutcome> {
+  async commitSend(request: SendRequest, approval: EnclaveApproval): Promise<SponsoredSendOutcome> {
     const response = await this.#client.request<unknown>(
       request.method,
       request.path,
@@ -104,7 +130,12 @@ export class PrivyUserWalletProvider implements UserWalletProvider {
       // The phone's signature, forwarded verbatim and alone. There is no
       // `approvals` key here and there must never be one: a server key on this
       // request would be a server that can spend the user's funds.
-      { signatures: [approval.signature] },
+      // The stored key rides along: it is a signed header, so the phone's
+      // signature only verifies with the key the payload was built with.
+      {
+        signatures: [approval.signature],
+        ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}),
+      },
     );
     return readSendResponse(response);
   }
@@ -122,7 +153,7 @@ export class UnconfiguredUserWalletProvider implements UserWalletProvider {
     return Promise.reject(this.#unconfigured('no user wallet can be created'));
   }
 
-  prepareSend(): Promise<PreparedEnclaveRequest> {
+  prepareSend(): Promise<PreparedSendRequest> {
     return Promise.reject(this.#unconfigured('no send can be prepared'));
   }
 

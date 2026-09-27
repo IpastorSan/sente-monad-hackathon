@@ -2,10 +2,23 @@ import { KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
 import { decodeFunctionData, erc20Abi, getAddress } from 'viem';
 
 import {
+  generateAuthorizationKey,
+  signAuthorizationPayload,
+} from '../../agents/privy/authorization-key';
+import { PrivyClient } from '../../agents/privy/privy.client';
+import {
+  FAKE_APP_ID,
+  FAKE_APP_SECRET,
+  fakePrivy,
+  requestSignedByAny,
+} from '../../agents/privy/testing/fake-privy';
+import { PrivyUserWalletProvider } from '../user-wallet.provider';
+import {
   readSendResponse,
   SEND_CAIP2,
   SEND_CHAIN_ID,
   sendableToken,
+  sponsoredCallTransaction,
   sponsoredSendBody,
   sponsoredTransferTransaction,
 } from './sponsored-send';
@@ -71,6 +84,125 @@ describe('sponsoredSendBody', () => {
       params: { transaction },
     });
     expect(SEND_CAIP2).toBe(`eip155:${SEND_CHAIN_ID}`);
+  });
+});
+
+describe('sponsoredCallTransaction', () => {
+  const CALLDATA = '0xdeadbeef';
+
+  it('checksums `to` and carries no `value` when none is attached', () => {
+    const transaction = sponsoredCallTransaction(RECIPIENT as `0x${string}`, CALLDATA);
+
+    expect(transaction).toEqual({
+      to: getAddress(RECIPIENT),
+      data: CALLDATA,
+      chain_id: SEND_CHAIN_ID,
+    });
+    expect(transaction).not.toHaveProperty('value');
+  });
+
+  it('leaves a zero value out rather than signing `0x0`', () => {
+    expect(sponsoredCallTransaction(getAddress(RECIPIENT), CALLDATA, 0n)).not.toHaveProperty(
+      'value',
+    );
+  });
+
+  it('writes a non-zero value as unpadded hex', () => {
+    expect(sponsoredCallTransaction(getAddress(RECIPIENT), CALLDATA, 10n ** 17n)).toEqual({
+      to: getAddress(RECIPIENT),
+      data: CALLDATA,
+      value: '0x16345785d8a0000',
+      chain_id: SEND_CHAIN_ID,
+    });
+  });
+
+  it('refuses a negative value', () => {
+    expect(() => sponsoredCallTransaction(getAddress(RECIPIENT), CALLDATA, -1n)).toThrow(
+      RangeError,
+    );
+  });
+});
+
+// SEN-87: the idempotency key is a signed `privy-` header, so it has to be in
+// the payload the phone signs AND in the request commit sends — one without
+// the other is a 401 at Privy. Checked end to end against the fake Privy.
+describe('PrivyUserWalletProvider idempotency key', () => {
+  const WALLET_ID = 'wallet-1';
+  const KEY = 'sente-trade:client-1:0';
+
+  function provider() {
+    const fake = fakePrivy((request) =>
+      request.url.endsWith('/rpc')
+        ? { status: 200, body: { data: { hash: '', transaction_id: 'tx-1' } } }
+        : undefined,
+    );
+    const client = new PrivyClient({
+      appId: FAKE_APP_ID,
+      appSecret: FAKE_APP_SECRET,
+      fetch: fake.fetch,
+    });
+    return { fake, wallets: new PrivyUserWalletProvider(client) };
+  }
+
+  const transaction = sponsoredTransferTransaction(USDC, getAddress(RECIPIENT), 1n);
+
+  it('puts the key in the signed headers and sends the same header on commit', async () => {
+    const { fake, wallets } = provider();
+    const owner = generateAuthorizationKey();
+
+    const prepared = await wallets.prepareSend({
+      walletId: WALLET_ID,
+      transaction,
+      idempotencyKey: KEY,
+    });
+    expect(prepared.payload.headers).toEqual({
+      'privy-app-id': FAKE_APP_ID,
+      'privy-idempotency-key': KEY,
+    });
+    expect(prepared.request.idempotencyKey).toBe(KEY);
+
+    const signature = signAuthorizationPayload(owner.privateKey, prepared.payload);
+    await wallets.commitSend(prepared.request, { signature });
+
+    const sent = fake.calls.at(-1)!;
+    expect(sent.headers['privy-idempotency-key']).toBe(KEY);
+    // The phone's signature verifies over what was actually sent.
+    expect(requestSignedByAny(sent, [owner.publicKey])).toBe(true);
+  });
+
+  it('without a key, signs and sends exactly what a transfer always did', async () => {
+    const { fake, wallets } = provider();
+    const owner = generateAuthorizationKey();
+
+    const prepared = await wallets.prepareSend({ walletId: WALLET_ID, transaction });
+    expect(prepared.payload.headers).toEqual({ 'privy-app-id': FAKE_APP_ID });
+    expect(prepared.request).not.toHaveProperty('idempotencyKey');
+
+    await wallets.commitSend(prepared.request, {
+      signature: signAuthorizationPayload(owner.privateKey, prepared.payload),
+    });
+
+    const sent = fake.calls.at(-1)!;
+    expect(sent.headers).not.toHaveProperty('privy-idempotency-key');
+    expect(requestSignedByAny(sent, [owner.publicKey])).toBe(true);
+  });
+
+  it('a key changed after signing breaks the signature', async () => {
+    const { fake, wallets } = provider();
+    const owner = generateAuthorizationKey();
+
+    const prepared = await wallets.prepareSend({
+      walletId: WALLET_ID,
+      transaction,
+      idempotencyKey: KEY,
+    });
+    const signature = signAuthorizationPayload(owner.privateKey, prepared.payload);
+    await wallets.commitSend(
+      { ...prepared.request, idempotencyKey: `${KEY}-other` },
+      { signature },
+    );
+
+    expect(requestSignedByAny(fake.calls.at(-1)!, [owner.publicKey])).toBe(false);
   });
 });
 
