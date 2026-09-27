@@ -23,6 +23,12 @@ import { PERPL_COLLATERAL_DECIMALS } from '@sente/venues/perpl';
 import { isAddressEqual } from 'viem';
 import * as z from 'zod/v4';
 
+import type { KlineInterval } from '../../venues/dto/markets.dto';
+import {
+  IntervalNotSupportedError,
+  InvalidSizeError,
+  MarketNotFoundError,
+} from '../../venues/market-data.service';
 import { toMandateDto } from '../dto/agent.dto';
 import type { AgentRecord } from '../store/agent-store';
 import type { KuruToolVenue, ToolContext, ToolVenues } from './context';
@@ -325,6 +331,27 @@ const listMarkets = defineTool({
   },
 });
 
+/**
+ * A shared market-data read, with the service's "you asked for something that
+ * does not exist" errors turned into `invalid_input` (SEN-79): the model should
+ * fix its arguments, not read them as the venue being down. `venue_unavailable`
+ * stays a venue error.
+ */
+async function marketRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      error instanceof MarketNotFoundError ||
+      error instanceof IntervalNotSupportedError ||
+      error instanceof InvalidSizeError
+    ) {
+      throw invalidInput(error.message);
+    }
+    throw error;
+  }
+}
+
 const getDepth = defineTool({
   name: 'get_depth',
   kind: 'read',
@@ -335,8 +362,117 @@ const getDepth = defineTool({
     limit: z.number().int().min(1).max(50).optional().describe('Levels per side; default 10.'),
   }),
   async handler(ctx, args) {
+    const limit = args.limit ?? 10;
+    // SEN-79: Perpl's adapter opens a fresh socket per `getDepth`, and every
+    // run snapshots every allowed Perpl market, so it reads the shared held
+    // book instead. Kuru's is one Gateway HTTP call and stays per-agent.
+    const { marketData } = ctx;
+    if (args.venue === 'perpl' && marketData) {
+      return marketRead(() => marketData.depth('perpl', args.market, limit));
+    }
     const v = venueOf(await ctx.venues(), args.venue);
-    return v.getDepth({ symbol: args.market, limit: args.limit ?? 10 });
+    return v.getDepth({ symbol: args.market, limit });
+  },
+});
+
+const KLINE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const;
+
+const getKlines = defineTool({
+  name: 'get_klines',
+  kind: 'read',
+  description:
+    'Price candles (klines) for one market, oldest first: t is the open time (Unix ms), then ' +
+    'open, high, low, close, and qv the quote-unit volume (null when the venue does not ' +
+    'report it; volumes are estimates). Use them for ranges, averages and highs/lows over ' +
+    'time. Perpl has no 1w candles.',
+  input: z.strictObject({
+    venue,
+    market,
+    interval: z.enum(KLINE_INTERVALS).describe('Candle width.'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('How many of the most recent candles; default 48.'),
+  }),
+  async handler(ctx, args) {
+    const interval: KlineInterval = args.interval;
+    const limit = args.limit ?? 48;
+    // Refused here, not left to the venue, so the model gets a fixable
+    // invalid_input with or without the shared service behind it.
+    if (args.venue === 'perpl' && interval === '1w') {
+      throw invalidInput('Perpl has no 1w candles; use 1d or shorter');
+    }
+    const { marketData } = ctx;
+    const klines = marketData
+      ? (await marketRead(() => marketData.klines(args.venue, args.market, interval, limit))).klines
+      : await venueOf(await ctx.venues(), args.venue).getKlines({
+          symbol: args.market,
+          interval,
+          limit,
+        });
+    return {
+      interval,
+      // Volumes are estimates on both venues (`KlinesDto.volumeIsEstimate`).
+      volumeIsEstimate: true,
+      // Short keys: a 48-candle answer is read on every run, so it is priced in tokens.
+      candles: klines.map((k) => ({
+        t: k.openTime,
+        o: k.open,
+        h: k.high,
+        l: k.low,
+        c: k.close,
+        qv: k.quoteVolume ?? null,
+      })),
+    };
+  },
+});
+
+const MAX_QUOTE_SLIPPAGE = '0.05';
+const DEFAULT_QUOTE_SLIPPAGE = '0.005';
+
+const quoteOrder = defineTool({
+  name: 'quote',
+  kind: 'read',
+  description:
+    'What a market order of this size would get right now, walked against the live book: ' +
+    'fillable size, average price, notional, fee, slippage against mid, and worstPrice, the ' +
+    'bound for your maxSlippage. Pass worstPrice as slippageLimitPrice to place_market. If ' +
+    'partial is true, only fillableWithinWorstPrice would fill and the rest is cancelled.',
+  input: z.strictObject({
+    venue,
+    market,
+    side,
+    size: positive.describe('Base units, e.g. "0.5".'),
+    maxSlippage: decimal
+      .refine((v) => compareDecimal(v, MAX_QUOTE_SLIPPAGE) <= 0, `at most ${MAX_QUOTE_SLIPPAGE}`)
+      .optional()
+      .describe(
+        `Fraction of the best price you accept moving through, e.g. "0.005" for 0.5%; ` +
+          `default ${DEFAULT_QUOTE_SLIPPAGE}, at most ${MAX_QUOTE_SLIPPAGE}.`,
+      ),
+  }),
+  async handler(ctx, args) {
+    const { marketData } = ctx;
+    const maxSlippage = args.maxSlippage ?? DEFAULT_QUOTE_SLIPPAGE;
+    if (marketData) {
+      return marketRead(() =>
+        marketData.quote(args.venue, args.market, {
+          side: args.side,
+          size: args.size,
+          maxSlippage,
+        }),
+      );
+    }
+    // Without the shared service there is no slippage bound to report: the
+    // venue's own quote is the book walk alone.
+    return venueOf(await ctx.venues(), args.venue).quote({
+      symbol: args.market,
+      side: args.side,
+      size: args.size,
+    });
   },
 });
 
@@ -697,6 +833,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   getMandate,
   listMarkets,
   getDepth,
+  getKlines,
+  quoteOrder,
   getBalances,
   getPositions,
   getOpenOrders,

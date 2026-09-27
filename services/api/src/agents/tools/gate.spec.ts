@@ -1,7 +1,9 @@
 import { EnclaveRefusedError } from '../agents.errors';
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
-import { AgentTools, type ToolContext } from './context';
+import type { DepthDto, KlinesDto, QuoteDto } from '../../venues/dto/markets.dto';
+import { MarketNotFoundError } from '../../venues/market-data.service';
+import { AgentTools, type ToolContext, type ToolMarketData } from './context';
 import { GATED_TOOLS, toResultText, type ToolOutcome } from './gate';
 import { ENCLAVE_REFUSAL_MESSAGE } from './refusals';
 import { BTC_PERP, EXPIRES_AT, MON_USDC, NOW, testAgent, WETH_USDC } from './testing/agent-fixture';
@@ -14,7 +16,12 @@ const tool = (name: string) => {
 };
 
 async function harness(
-  options: { precheck?: boolean; perpl?: boolean; agent?: Partial<AgentRecord> } = {},
+  options: {
+    precheck?: boolean;
+    perpl?: boolean;
+    agent?: Partial<AgentRecord>;
+    marketData?: ToolMarketData;
+  } = {},
 ) {
   const store = new InMemoryAgentStore();
   const agent = testAgent(options.agent);
@@ -28,6 +35,7 @@ async function harness(
     precheck: options.precheck ?? true,
     venuesFor: () => Promise.resolve(fakes.venues),
     now: () => now,
+    ...(options.marketData ? { marketData: options.marketData } : {}),
   });
   const ctx = tools.context(agent, { runId: 'run-1' });
   const call = (name: string, args: unknown, context: ToolContext = ctx) =>
@@ -867,5 +875,172 @@ describe('venue pre-flight (SEN-19)', () => {
     const [kuru] = (outcome as { result: unknown[] }).result as Array<Record<string, unknown>>;
     expect(kuru).toMatchObject({ venue: 'kuru', available: true });
     expect(kuru.wallet).toEqual([{ asset: 'USDC', available: '6', locked: '0', total: '6' }]);
+  });
+
+  describe('market-data reads (SEN-79)', () => {
+    /** A `MarketDataService` stand-in that records what it was asked. */
+    function fakeMarketData() {
+      const calls: { method: string; args: unknown[] }[] = [];
+      const marketData: ToolMarketData = {
+        klines: (venue, symbol, interval, limit) => {
+          calls.push({ method: 'klines', args: [venue, symbol, interval, limit] });
+          if (symbol === 'NOPE-USDC') return Promise.reject(new MarketNotFoundError(venue, symbol));
+          const dto: KlinesDto = {
+            venue,
+            symbol,
+            interval,
+            klines: [
+              {
+                openTime: 1_000,
+                closeTime: 1_999,
+                open: '1',
+                high: '2',
+                low: '0.5',
+                close: '1.5',
+                volume: '10',
+                quoteVolume: null,
+              },
+            ],
+            volumeIsEstimate: true,
+            asOf: 2_000,
+          };
+          return Promise.resolve(dto);
+        },
+        quote: (venue, symbol, request) => {
+          calls.push({ method: 'quote', args: [venue, symbol, request] });
+          const dto: QuoteDto = {
+            venue,
+            symbol,
+            side: request.side,
+            size: request.size,
+            fillableSize: request.size,
+            averagePrice: '3.5',
+            notional: '35',
+            estimatedFee: '0.01',
+            feeAsset: 'USDC',
+            slippageVsMid: '0.001',
+            maxSlippage: request.maxSlippage,
+            worstPrice: '3.52',
+            fillableWithinWorstPrice: request.size,
+            partial: false,
+            minNotionalOk: true,
+            bookAsOf: 2_000,
+            stale: false,
+          };
+          return Promise.resolve(dto);
+        },
+        depth: (venue, symbol, limit) => {
+          calls.push({ method: 'depth', args: [venue, symbol, limit] });
+          const dto: DepthDto = {
+            venue,
+            symbol,
+            bids: [],
+            asks: [],
+            sequence: null,
+            stale: false,
+            asOf: 2_000,
+          };
+          return Promise.resolve(dto);
+        },
+      };
+      return { marketData, calls };
+    }
+
+    it('get_klines and quote are reads: no thesis, no write, and short candle keys', async () => {
+      const md = fakeMarketData();
+      const h = await harness({ marketData: md.marketData });
+      expect(tool('get_klines').kind).toBe('read');
+      expect(tool('quote').kind).toBe('read');
+
+      const klines = await h.call('get_klines', {
+        venue: 'kuru',
+        market: MON_USDC,
+        interval: '1h',
+      });
+      expect(klines).toEqual({
+        ok: true,
+        result: {
+          interval: '1h',
+          volumeIsEstimate: true,
+          candles: [{ t: 1_000, o: '1', h: '2', l: '0.5', c: '1.5', qv: null }],
+        },
+      });
+      const quote = await h.call('quote', {
+        venue: 'kuru',
+        market: MON_USDC,
+        side: 'buy',
+        size: '10',
+      });
+      expect(quote).toMatchObject({
+        ok: true,
+        result: { worstPrice: '3.52', maxSlippage: '0.005' },
+      });
+
+      expect(md.calls).toEqual([
+        { method: 'klines', args: ['kuru', MON_USDC, '1h', 48] },
+        {
+          method: 'quote',
+          args: ['kuru', MON_USDC, { side: 'buy', size: '10', maxSlippage: '0.005' }],
+        },
+      ]);
+      expect(h.kuru.writes()).toEqual([]);
+      expect(await h.refusals()).toEqual([]);
+    });
+
+    it('refuses a Perpl 1w request as invalid input, with or without the shared service', async () => {
+      const md = fakeMarketData();
+      const args = { venue: 'perpl', market: BTC_PERP, interval: '1w' };
+      for (const h of [await harness({ marketData: md.marketData }), await harness()]) {
+        expect(refused(await h.call('get_klines', args)).refusal?.code).toBe('invalid_input');
+      }
+      expect(md.calls).toEqual([]);
+    });
+
+    it('turns an unknown market into invalid input, and bounds maxSlippage and limit', async () => {
+      const md = fakeMarketData();
+      const h = await harness({ marketData: md.marketData });
+      const unknown = { venue: 'kuru', market: 'NOPE-USDC', interval: '1h' };
+      expect(refused(await h.call('get_klines', unknown)).refusal?.code).toBe('invalid_input');
+      const tooLoose = {
+        venue: 'kuru',
+        market: MON_USDC,
+        side: 'buy',
+        size: '1',
+        maxSlippage: '0.06',
+      };
+      expect(refused(await h.call('quote', tooLoose)).refusal?.code).toBe('invalid_input');
+      const tooMany = { venue: 'kuru', market: MON_USDC, interval: '1h', limit: 201 };
+      expect(refused(await h.call('get_klines', tooMany)).refusal?.code).toBe('invalid_input');
+    });
+
+    it('reads Perpl depth through the shared service, and Kuru depth from the venue', async () => {
+      const md = fakeMarketData();
+      const h = await harness({ marketData: md.marketData });
+      expect((await h.call('get_depth', { venue: 'perpl', market: BTC_PERP })).ok).toBe(true);
+      expect((await h.call('get_depth', { venue: 'kuru', market: MON_USDC })).ok).toBe(true);
+      expect(md.calls).toEqual([{ method: 'depth', args: ['perpl', BTC_PERP, 10] }]);
+      expect(h.perpl.calls.map((c) => c.method)).not.toContain('getDepth');
+      expect(h.kuru.calls.map((c) => c.method)).toContain('getDepth');
+    });
+
+    it("falls back to the agent's venues without the shared service", async () => {
+      const h = await harness();
+      const klines = await h.call('get_klines', {
+        venue: 'kuru',
+        market: MON_USDC,
+        interval: '5m',
+      });
+      expect(klines).toEqual({
+        ok: true,
+        result: { interval: '5m', volumeIsEstimate: true, candles: [] },
+      });
+      const quote = { venue: 'kuru', market: MON_USDC, side: 'sell', size: '2' };
+      expect((await h.call('quote', quote)).ok).toBe(true);
+      expect(h.kuru.calls.find((c) => c.method === 'quote')!.args).toEqual({
+        symbol: MON_USDC,
+        side: 'sell',
+        size: '2',
+      });
+    });
   });
 });

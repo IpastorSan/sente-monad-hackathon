@@ -28,6 +28,7 @@ describe('toRunnerTools', () => {
   it('exposes every gated tool with a JSON schema built from its zod schema', async () => {
     const { runner, byName } = await setup();
     expect(runner.map((t) => t.name)).toEqual(GATED_TOOLS.map((t) => t.name));
+    expect(runner.map((t) => t.name)).toEqual(expect.arrayContaining(['get_klines', 'quote']));
 
     // A custom tool (`type: 'custom'`), so the union narrows to one with a schema.
     const tool = byName('place_market') as unknown as {

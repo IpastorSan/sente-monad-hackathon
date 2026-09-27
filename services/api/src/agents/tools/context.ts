@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { PerpsVenue, Venue } from '@sente/venues';
 import type { KuruVenue } from '@sente/venues/kuru';
 
+import type { MarketDataService } from '../../venues/market-data.service';
 import type { AgentEventLog } from '../events/agent-event-log';
 import type { AgentRecord, AgentStore } from '../store/agent-store';
 import { KeyedMutex } from './keyed-mutex';
@@ -17,6 +18,12 @@ export interface ToolVenues {
   /** Absent until the agent's wallet has enrolled a Perpl API key. */
   readonly perpl?: PerpsVenue;
 }
+
+/**
+ * The shared, cached market-data reads (SEN-79): one Perpl socket and one TTL
+ * cache for every agent and phone, instead of a socket per run per market.
+ */
+export type ToolMarketData = Pick<MarketDataService, 'klines' | 'quote' | 'depth'>;
 
 export interface RecordedThesis {
   readonly market: string;
@@ -52,6 +59,8 @@ export interface ToolContext {
   readonly currentAgent: () => Promise<AgentRecord | undefined>;
   /** Unix seconds, for the mandate's expiry. */
   readonly now: () => number;
+  /** Absent in specs that only fake the venues; reads then go to the agent's own venues. */
+  readonly marketData?: ToolMarketData;
 }
 
 export interface AgentToolsOptions {
@@ -60,6 +69,7 @@ export interface AgentToolsOptions {
   readonly events: AgentEventLog;
   readonly precheck: boolean;
   readonly now?: () => number;
+  readonly marketData?: ToolMarketData;
 }
 
 /**
@@ -79,7 +89,7 @@ export class AgentTools {
   }
 
   context(agent: AgentRecord, options: { runId?: string } = {}): ToolContext {
-    const { store, venuesFor, events, precheck } = this.#options;
+    const { store, venuesFor, events, precheck, marketData } = this.#options;
     return {
       agent,
       runId: options.runId ?? `run-${randomUUID()}`,
@@ -90,6 +100,7 @@ export class AgentTools {
       writeLock: this.#writeLock,
       currentAgent: () => store.get(agent.id),
       now: this.#options.now ?? (() => Math.floor(Date.now() / 1000)),
+      ...(marketData ? { marketData } : {}),
     };
   }
 }
