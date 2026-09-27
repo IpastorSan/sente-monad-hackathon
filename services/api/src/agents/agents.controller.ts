@@ -7,6 +7,7 @@ import {
   HttpException,
   HttpStatus,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
@@ -52,6 +53,7 @@ import {
 import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
 import { latestEvents, summariseEvents } from './events/summary';
 import { ReturnFundsService } from './recovery/return-funds.service';
+import { AgentRunScheduler, type AgentScheduleStatusDto } from './runner/agent-run.scheduler';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
 import { mandateSinceOf } from './store/agent-store';
 
@@ -80,6 +82,11 @@ export class AgentsController {
     private readonly consensus: ConsensusService,
     /** SEN-17: `POST /agents/:id/return`, the way an owner takes their money back. */
     private readonly returns: ReturnFundsService,
+    /**
+     * SEN-71: `GET /agents/:id/schedule`. Optional and last so the specs that
+     * build this controller by hand for other routes need not know it.
+     */
+    @Optional() private readonly scheduler?: AgentRunScheduler,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -302,6 +309,21 @@ export class AgentsController {
         await this.agents.setSchedule(this.auth.principal(), params.id, body.everySeconds),
       ),
     );
+  }
+
+  /**
+   * How and when the scheduler runs this agent (SEN-71): its cadence and where
+   * it comes from (`agent` = its own schedule, `global` = AGENT_TICK_SECONDS),
+   * the last run of any trigger, the next scheduled one, and why scheduled
+   * runs are held back, if they are. 404 `agent_not_found` for someone else's.
+   */
+  @Get(':id/schedule')
+  async getSchedule(@Param() params: AgentIdParamDto): Promise<AgentScheduleStatusDto> {
+    return this.guard(async () => {
+      const agent = await this.agents.get(this.auth.principal(), params.id);
+      if (!this.scheduler) throw new Error('AgentRunScheduler is not provided');
+      return this.scheduler.status(agent);
+    });
   }
 
   /**

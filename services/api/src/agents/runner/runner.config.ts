@@ -2,7 +2,11 @@
 export const AGENT_RUNNER_CONFIG = Symbol('AGENT_RUNNER_CONFIG');
 
 export interface AgentRunnerConfig {
-  /** Seconds between scheduled runs of every active agent; `undefined` = no scheduler (default). */
+  /**
+   * Cadence, in seconds, for active agents WITHOUT a schedule of their own;
+   * `undefined` = those run manually only (default). Since SEN-71 an agent's
+   * own `schedule` wins, and this is the fallback.
+   */
   readonly tickSeconds: number | undefined;
   /** Wall-clock budget for one run, enforced with an AbortController. */
   readonly timeoutMs: number;
@@ -102,8 +106,109 @@ export function describeAgentRunnerConfig(
     `agent runner: timeout ${config.timeoutMs} ms, ${config.maxIterations} iterations, ` +
     `write spacing ${config.writeSpacingMs} ms, thinking ${config.thinking ? 'adaptive' : 'off'}`;
   if (config.tickSeconds === undefined) {
-    logger.log(`${base}, scheduler off (AGENT_TICK_SECONDS unset)`);
+    logger.log(`${base}, default cadence off (AGENT_TICK_SECONDS unset)`);
     return;
   }
-  logger.warn(`${base}, scheduler ON: every active agent runs every ${config.tickSeconds} s`);
+  logger.warn(
+    `${base}, default cadence ON: every active agent without its own schedule runs every ` +
+      `${config.tickSeconds} s`,
+  );
+}
+
+/** DI token for the resolved scheduler configuration (SEN-71). */
+export const AGENT_SCHEDULE_CONFIG = Symbol('AGENT_SCHEDULE_CONFIG');
+
+/**
+ * The scheduler's own knobs (SEN-71). Kept apart from `AgentRunnerConfig`,
+ * which every run reads, because only the scheduler and its guard need these.
+ */
+export interface AgentScheduleConfig {
+  /** How often the scheduler looks for due agents; `undefined` = no scheduled runs at all. */
+  readonly pollSeconds: number | undefined;
+  /** Scheduled runs open at once across the process; manual runs don't count. */
+  readonly maxConcurrent: number;
+  /** A scheduled run is skipped while the owner's key has less than this left, USD. */
+  readonly minCreditsUsd: number;
+  /** Scheduled runs one agent may start per UTC day. */
+  readonly maxRunsPerDay: number;
+}
+
+export const AGENT_SCHEDULE_DEFAULTS = {
+  pollSeconds: 15,
+  // A few runs at once keeps Perpl's 10 req/min and OpenRouter's rate limits
+  // out of reach when many cadences line up.
+  maxConcurrent: 3,
+  // Roughly one short run: below it a run would likely die mid-loop on a 402.
+  minCreditsUsd: 0.1,
+  // One every 5 min all day. At the 60 s minimum cadence an agent could
+  // otherwise run 1,440 times a day (plan-backend.md, "Scheduler cost").
+  maxRunsPerDay: 288,
+} as const;
+
+/**
+ * Pure env -> scheduler config (SEN-71). Every variable is optional; a typo
+ * fails the boot.
+ *
+ * - `AGENT_SCHEDULER_POLL_SECONDS`: default 15, 5..300; `0` or `off` turns
+ *   every scheduled run off, per-agent cadences included.
+ * - `AGENT_SCHEDULE_MAX_CONCURRENT`: default 3, 1..50.
+ * - `AGENT_SCHEDULE_MIN_CREDITS_USD`: default 0.10, a decimal from 0 to 1000.
+ * - `AGENT_SCHEDULE_MAX_RUNS_PER_DAY`: default 288, 1..1440.
+ */
+export function loadAgentScheduleConfig(env: NodeJS.ProcessEnv = process.env): AgentScheduleConfig {
+  const pollRaw = env['AGENT_SCHEDULER_POLL_SECONDS']?.trim().toLowerCase();
+  const pollSeconds =
+    pollRaw === '0' || pollRaw === 'off'
+      ? undefined
+      : integer(env, 'AGENT_SCHEDULER_POLL_SECONDS', AGENT_SCHEDULE_DEFAULTS.pollSeconds, {
+          min: 5,
+          max: 300,
+        });
+
+  const creditsRaw = env['AGENT_SCHEDULE_MIN_CREDITS_USD']?.trim();
+  let minCreditsUsd: number = AGENT_SCHEDULE_DEFAULTS.minCreditsUsd;
+  if (creditsRaw) {
+    if (!/^\d+(\.\d+)?$/.test(creditsRaw) || Number(creditsRaw) > 1000) {
+      throw new Error(
+        `AGENT_SCHEDULE_MIN_CREDITS_USD must be a decimal from 0 to 1000; got "${creditsRaw}"`,
+      );
+    }
+    minCreditsUsd = Number(creditsRaw);
+  }
+
+  return {
+    pollSeconds,
+    maxConcurrent: integer(
+      env,
+      'AGENT_SCHEDULE_MAX_CONCURRENT',
+      AGENT_SCHEDULE_DEFAULTS.maxConcurrent,
+      { min: 1, max: 50 },
+    ),
+    minCreditsUsd,
+    maxRunsPerDay: integer(
+      env,
+      'AGENT_SCHEDULE_MAX_RUNS_PER_DAY',
+      AGENT_SCHEDULE_DEFAULTS.maxRunsPerDay,
+      { min: 1, max: 1440 },
+    ),
+  };
+}
+
+/** Boot-time line for the scheduler (SEN-71). */
+export function describeAgentScheduleConfig(
+  runner: AgentRunnerConfig,
+  schedule: AgentScheduleConfig,
+  logger: { log(message: string): void; warn(message: string): void },
+): void {
+  if (schedule.pollSeconds === undefined) {
+    logger.log('agent scheduler off (AGENT_SCHEDULER_POLL_SECONDS=off): no scheduled runs at all');
+    return;
+  }
+  logger.log(
+    `agent scheduler: poll every ${schedule.pollSeconds} s, ${schedule.maxConcurrent} at once, ` +
+      `skip under $${schedule.minCreditsUsd} left, at most ${schedule.maxRunsPerDay} runs/agent/day; ` +
+      (runner.tickSeconds === undefined
+        ? 'agents without their own cadence run manually only'
+        : `agents without their own cadence run every ${runner.tickSeconds} s`),
+  );
 }
