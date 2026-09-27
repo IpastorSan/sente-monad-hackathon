@@ -47,10 +47,11 @@ type MarketDataMessage = {
 /**
  * One L2 book snapshot, then disconnect.
  *
- * Perpl publishes the order book ONLY on the market-data socket — there is no
- * REST endpoint for it. The market-data server allows 10 requests/min per
- * connection, so a short-lived connection per read is the cheap option for
- * occasional quotes; a strategy that polls should hold a subscription instead.
+ * The book also has a REST read (`/v1/market-data/:id/book`, found in SEN-62)
+ * that this predates; it served 100 of the socket's 113 BTC bid levels, so it
+ * is truncated. The market-data server allows 10 requests/min per connection,
+ * so a short-lived connection per read is the cheap option for occasional
+ * quotes; a strategy that polls should hold a subscription instead.
  */
 export function fetchBookSnapshot(
   wsUrl: string,

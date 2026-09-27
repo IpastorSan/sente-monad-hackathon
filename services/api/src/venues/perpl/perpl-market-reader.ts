@@ -17,7 +17,9 @@
  * was taken in the last 30 s, the newest book we hold is served `stale: true`
  * rather than opening another.
  *
- * `funding` stays null: B-T1 has not named a funding endpoint yet.
+ * `funding` is still null, but needs no new request: every `/pub/context`
+ * market carries its latest `funding` event and `funding_interval_sec`
+ * (SEN-62, docs/perpl.md "Market data, probed"). Wiring it is a follow-up.
  */
 import type { Logger } from '@nestjs/common';
 import type { Decimal, Kline } from '@sente/venues';
@@ -315,7 +317,9 @@ export class PerplMarketReader implements PerplReader {
       quote: quoteCurrency(m.collateral),
       last,
       mark: positive(state.mrk, m.pd),
-      // `orl` is the oracle price; whether it is Perpl's index is unconfirmed (B-T1).
+      // `orl` is Perpl's live oracle price. Funding's own `idx` is set from it
+      // once per interval: at the moment a rate was set, all 9 markets' `idx` sat
+      // within 0.06% of `orl` (SEN-62), so `orl` is the index a ticker should show.
       index: positive(state.orl, m.pd),
       bid,
       ask,
