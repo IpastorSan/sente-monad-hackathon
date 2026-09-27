@@ -384,6 +384,175 @@ describe('MarketDataService (Kuru)', () => {
   });
 });
 
+/**
+ * The service's TTL table is policy, not plumbing (SEN-131, audit finding #8):
+ * `ttl-cache.spec.ts` proves the primitive, these prove each read is wired with
+ * the lifetime the table promises. Every read walks the same clock: cached
+ * below its TTL, reloaded at it, then — with the venue failing — served stale
+ * until TTL + stale-if-error and refused from that instant on.
+ */
+describe('MarketDataService (Kuru) cache lifetimes', () => {
+  const SECOND = 1_000;
+  const MINUTE = 60 * SECOND;
+  const DAY_CLOSE = '0.5';
+
+  let now: number;
+  let kuru: ReturnType<typeof fakeKuru>;
+  let service: MarketDataService;
+
+  beforeEach(() => {
+    now = NOW;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    kuru = fakeKuru();
+    // A 24h close unlike the 1m close, so a ticker whose `last` fell back to
+    // the day's close is told apart from one that still has its own.
+    const candles = kuru.getKlines.getMockImplementation()!;
+    kuru.getKlines.mockImplementation(async (query) => {
+      const klines = await candles(query);
+      return query.interval === '1h' ? klines.map((k) => ({ ...k, close: DAY_CLOSE })) : klines;
+    });
+    service = new MarketDataService(kuru, new UnavailablePerplReader());
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  const candleReads = (interval: string) => () =>
+    kuru.getKlines.mock.calls.filter(([query]) => query.interval === interval).length;
+  /** Fails one interval's candles only, so the ticker's other reads stay healthy. */
+  const failCandles = (interval: string) => () => {
+    const healthy = kuru.getKlines.getMockImplementation()!;
+    kuru.getKlines.mockImplementation((query) =>
+      query.interval === interval ? Promise.reject(new Error('data source 502')) : healthy(query),
+    );
+  };
+  const request = { side: 'buy' as const, size: '1', maxSlippage: '0.01' };
+
+  type Case = {
+    readonly read: string;
+    readonly ttl: number;
+    readonly staleIfError: number;
+    /** How many times the venue was asked for this read's source. */
+    readonly calls: () => number;
+    readonly fail: () => void;
+    /**
+     * Resolves to the `stale` flag the caller sees (undefined where the read
+     * carries none); rejects once the read is no longer answered.
+     */
+    readonly probe: () => Promise<boolean | undefined>;
+  };
+
+  const klineCase = (interval: '1m' | '5m' | '1h', ttl: number): Case => ({
+    read: `klines ${interval}`,
+    ttl,
+    staleIfError: 5 * MINUTE,
+    calls: () => kuru.getKlines.mock.calls.length,
+    fail: () => kuru.getKlines.mockRejectedValue(new Error('data source 502')),
+    // Klines carry no stale flag; one loaded before now is a cached or stale one.
+    probe: async () => (await service.klines('kuru', 'MON-USDC', interval, 7)).asOf !== now,
+  });
+
+  const cases: Case[] = [
+    {
+      read: 'markets',
+      ttl: MINUTE,
+      staleIfError: 10 * MINUTE,
+      calls: () => kuru.getMarkets.mock.calls.length,
+      fail: () => kuru.getMarkets.mockRejectedValue(new Error('data source 502')),
+      probe: async () => void (await service.market('kuru', 'MON-USDC')),
+    },
+    {
+      read: 'depth',
+      ttl: 2 * SECOND,
+      staleIfError: 10 * SECOND,
+      calls: () => kuru.getDepth.mock.calls.length,
+      fail: () => kuru.getDepth.mockRejectedValue(new Error('gateway timeout')),
+      probe: async () => (await service.depth('kuru', 'MON-USDC', 5)).stale,
+    },
+    {
+      read: 'last',
+      ttl: 10 * SECOND,
+      staleIfError: MINUTE,
+      calls: candleReads('1m'),
+      fail: failCandles('1m'),
+      probe: async () => {
+        const ticker = await service.ticker('kuru', 'MON-USDC');
+        // The ticker swallows a failed `last`; its absence is the refusal.
+        if (ticker.last !== '1.005') throw new Error(`no 1m close (got ${ticker.last})`);
+        return ticker.stale;
+      },
+    },
+    {
+      read: '24h fields',
+      ttl: MINUTE,
+      staleIfError: 5 * MINUTE,
+      calls: candleReads('1h'),
+      fail: failCandles('1h'),
+      probe: async () => {
+        const ticker = await service.ticker('kuru', 'MON-USDC');
+        if (ticker.open24h === null) throw new Error('no 24h stats');
+        return ticker.stale;
+      },
+    },
+    klineCase('1m', 10 * SECOND),
+    klineCase('5m', 30 * SECOND),
+    klineCase('1h', MINUTE),
+    {
+      read: 'quote book',
+      ttl: 1_500,
+      staleIfError: 5 * SECOND,
+      calls: () => kuru.bookSnapshot.mock.calls.length,
+      fail: () => kuru.bookSnapshot.mockRejectedValue(new Error('rpc timeout')),
+      probe: async () => (await service.quote('kuru', 'MON-USDC', request)).stale,
+    },
+  ];
+
+  it.each(cases)(
+    '$read: cached below its TTL, reloaded at it, stale-if-error within the window, refused past it',
+    async ({ ttl, staleIfError, calls, fail, probe }) => {
+      await probe();
+      expect(calls()).toBe(1);
+
+      now = NOW + ttl - 1;
+      await probe();
+      expect(calls()).toBe(1);
+
+      now = NOW + ttl;
+      expect(await probe()).not.toBe(true);
+      expect(calls()).toBe(2);
+
+      // The window is measured from the reload just made, not the first load.
+      const loadedAt = now;
+      fail();
+      now = loadedAt + ttl + staleIfError - 1;
+      const stale = await probe();
+      if (stale !== undefined) expect(stale).toBe(true);
+      expect(calls()).toBe(3);
+
+      now = loadedAt + ttl + staleIfError;
+      await expect(probe()).rejects.toThrow();
+      expect(calls()).toBe(4);
+    },
+  );
+
+  // The quote's book is what the phone signs against, so its bound is spelled
+  // out rather than left to the table above.
+  it('never prices a quote on a book older than 6.5 s (1.5 s TTL + 5 s stale-if-error)', async () => {
+    await service.quote('kuru', 'MON-USDC', request);
+    kuru.bookSnapshot.mockRejectedValue(new Error('rpc timeout'));
+
+    now = NOW + 6_499;
+    expect(await service.quote('kuru', 'MON-USDC', request)).toMatchObject({
+      stale: true,
+      bookAsOf: NOW,
+    });
+
+    now = NOW + 6_500;
+    await expect(service.quote('kuru', 'MON-USDC', request)).rejects.toBeInstanceOf(
+      VenueUnavailableError,
+    );
+  });
+});
+
 describe('fillableWithin', () => {
   const asks = [
     { price: 100n, size: 5n },

@@ -240,9 +240,9 @@ describe('PerplMarketReader', () => {
       snapshot.mockRejectedValue(new Error('socket refused'));
       await expect(reader.depth('BTC-PERP', 5)).rejects.toThrow(/socket refused/);
 
-      feedBook({ book: BOOK, receivedAt: NOW - 60_000, stale: true });
+      feedBook({ book: BOOK, receivedAt: NOW - 20_000, stale: true });
       advance(1_000);
-      expect(await reader.depth('BTC-PERP', 5)).toMatchObject({ stale: true, asOf: NOW - 60_000 });
+      expect(await reader.depth('BTC-PERP', 5)).toMatchObject({ stale: true, asOf: NOW - 20_000 });
       expect(snapshot).toHaveBeenCalledTimes(1);
     });
   });
@@ -313,6 +313,143 @@ describe('PerplMarketReader', () => {
           reader.quote('BTC-PERP', { side: 'buy', size, maxSlippage: '0.01' }),
         ).rejects.toBeInstanceOf(InvalidSizeError);
       }
+    });
+  });
+});
+
+/**
+ * Perpl's lifetimes are its own table, not the service's (SEN-131, audit
+ * finding #8): each cached read is cached below its TTL, reloaded at it,
+ * served stale while the venue fails within its stale-if-error window, and
+ * refused from the end of it. The book has no TTL — the feed decides
+ * freshness — so its bound gets its own tests below.
+ */
+describe('PerplMarketReader cache lifetimes', () => {
+  const SECOND = 1_000;
+  const MINUTE = 60 * SECOND;
+
+  afterEach(() => jest.restoreAllMocks());
+
+  type Rig = ReturnType<typeof setup>;
+  type Case = {
+    readonly read: string;
+    readonly ttl: number;
+    readonly staleIfError: number;
+    readonly calls: (rig: Rig) => number;
+    readonly fail: (rig: Rig) => void;
+    /** Resolves to the caller-visible `stale` flag; rejects once the read is refused. */
+    readonly probe: (rig: Rig) => Promise<boolean>;
+  };
+
+  const klineCase = (interval: '1m' | '5m' | '1d', ttl: number): Case => ({
+    read: `klines ${interval}`,
+    ttl,
+    staleIfError: 5 * MINUTE,
+    calls: ({ data }) => data.getKlines.mock.calls.length,
+    fail: ({ data }) => data.getKlines.mockRejectedValue(new Error('candles 500')),
+    // Klines carry no stale flag; one loaded before now is a cached or stale one.
+    probe: async ({ reader }) => (await reader.klines('BTC-PERP', interval, 7)).asOf !== Date.now(),
+  });
+
+  const cases: Case[] = [
+    {
+      read: 'context (catalog and every price)',
+      ttl: 3 * SECOND,
+      staleIfError: 30 * SECOND,
+      calls: ({ data }) => data.context.mock.calls.length,
+      fail: ({ data }) => data.context.mockRejectedValue(new Error('context 502')),
+      probe: async ({ reader }) => (await reader.ticker('BTC-PERP')).stale,
+    },
+    {
+      read: '24h fields',
+      ttl: MINUTE,
+      staleIfError: 5 * MINUTE,
+      calls: ({ data }) => data.getKlines.mock.calls.length,
+      fail: ({ data }) => data.getKlines.mockRejectedValue(new Error('candles 500')),
+      probe: async ({ reader }) => {
+        const ticker = await reader.ticker('BTC-PERP');
+        // The ticker swallows failed candles; null 24h fields are the refusal.
+        if (ticker.open24h === null) throw new Error('no 24h stats');
+        return ticker.stale;
+      },
+    },
+    klineCase('1m', 10 * SECOND),
+    klineCase('5m', 30 * SECOND),
+    klineCase('1d', MINUTE),
+  ];
+
+  it.each(cases)(
+    '$read: cached below its TTL, reloaded at it, stale-if-error within the window, refused past it',
+    async ({ ttl, staleIfError, calls, fail, probe }) => {
+      const rig = setup();
+      await probe(rig);
+      expect(calls(rig)).toBe(1);
+
+      rig.advance(ttl - 1);
+      await probe(rig);
+      expect(calls(rig)).toBe(1);
+
+      rig.advance(1);
+      expect(await probe(rig)).toBe(false);
+      expect(calls(rig)).toBe(2);
+
+      // The window is measured from the reload just made, not the first load.
+      fail(rig);
+      rig.advance(ttl + staleIfError - 1);
+      expect(await probe(rig)).toBe(true);
+      expect(calls(rig)).toBe(3);
+
+      rig.advance(1);
+      await expect(probe(rig)).rejects.toThrow();
+      expect(calls(rig)).toBe(4);
+    },
+  );
+
+  describe('the book a quote is priced on', () => {
+    const request = { side: 'buy' as const, size: '0.1', maxSlippage: '0.01' };
+
+    it('rides out one failed snapshot stale, and is refused at 60 s old', async () => {
+      const { reader, snapshot, advance } = setup();
+      expect(await reader.quote('BTC-PERP', request)).toMatchObject({
+        stale: false,
+        bookAsOf: NOW,
+      });
+
+      snapshot.mockRejectedValue(new Error('socket refused'));
+      advance(30_000);
+      expect(await reader.quote('BTC-PERP', request)).toMatchObject({ stale: true, bookAsOf: NOW });
+      expect(snapshot).toHaveBeenCalledTimes(2);
+
+      advance(29_999);
+      expect(await reader.quote('BTC-PERP', request)).toMatchObject({ stale: true, bookAsOf: NOW });
+
+      advance(1);
+      await expect(reader.quote('BTC-PERP', request)).rejects.toThrow(
+        /no BTC-PERP order book newer than 60 s: socket refused/,
+      );
+      expect(snapshot).toHaveBeenCalledTimes(3);
+    });
+
+    it('refuses a dead feed book at 60 s old while snapshots keep failing', async () => {
+      const { reader, snapshot, feedBook, advance } = setup();
+      snapshot.mockRejectedValue(new Error('socket refused'));
+      feedBook({ book: BOOK, receivedAt: NOW - 59_999, stale: true });
+      expect(await reader.depth('BTC-PERP', 5)).toMatchObject({ stale: true, asOf: NOW - 59_999 });
+
+      advance(1);
+      await expect(reader.depth('BTC-PERP', 5)).rejects.toBeInstanceOf(VenueUnavailableError);
+    });
+
+    // SEN-62: deltas arrive only on change, so a live socket vouches for a
+    // quiet book; the age cap must not refuse it.
+    it('serves a quiet book on a live socket as fresh, however old its last frame', async () => {
+      const { reader, snapshot, feedBook } = setup();
+      feedBook({ book: BOOK, receivedAt: NOW - HOUR, stale: false });
+      expect(await reader.quote('BTC-PERP', request)).toMatchObject({
+        stale: false,
+        bookAsOf: NOW - HOUR,
+      });
+      expect(snapshot).not.toHaveBeenCalled();
     });
   });
 });
