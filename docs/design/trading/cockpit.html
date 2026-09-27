@@ -1,0 +1,1615 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent cockpit</title>
+    <link rel="stylesheet" href="../sente.css" />
+    <link rel="stylesheet" href="trading.css" />
+    <script src="chart.js" defer></script>
+    <script src="../sigil.js" defer></script>
+    <style>
+      /* cockpit.html only: pieces that are not (yet) in trading.css. */
+      .between {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+      }
+      .tn {
+        font: 500 10px var(--f-chain);
+        letter-spacing: 0.04em;
+        color: var(--text-faint);
+        align-self: center;
+      }
+      .app__scroll--sticky {
+        padding-bottom: 96px;
+      }
+
+      /* Header */
+      .ck-head {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        margin-top: 4px;
+      }
+      .ck-head__main {
+        display: grid;
+        gap: 5px;
+        min-width: 0;
+      }
+      .ck-head__meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+      .preset {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 7px;
+        border-radius: 6px;
+        border: 1px solid var(--line-strong);
+        font: 500 11px/1.5 var(--f-body);
+        color: var(--text-dim);
+      }
+      .ck-mini {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .ck-mini .sigil {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+      }
+      .ck-mini .sigil svg {
+        width: 24px;
+        height: 24px;
+      }
+      .seg--tabs {
+        margin-top: 14px;
+      }
+      .seg--tabs button {
+        padding: 7px 0;
+      }
+
+      /* Stats chips */
+      .stat4 {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .stat4 > div {
+        display: grid;
+        gap: 2px;
+        padding: 8px 9px;
+        border-radius: var(--r-well);
+        background: var(--well);
+        min-width: 0;
+      }
+      .stat4 b {
+        font: 600 15px var(--f-display);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .stat4 .t-caption {
+        font-size: 10.5px;
+        white-space: nowrap;
+      }
+
+      /* Position card on the cockpit */
+      .poscard {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border-radius: var(--r-board);
+        background: var(--board);
+        border: 1px solid var(--line);
+      }
+      .poscard__top {
+        display: grid;
+        grid-template-columns: 36px 1fr auto;
+        gap: 12px;
+        align-items: center;
+      }
+      .poscard .t-voice {
+        font-size: 14.5px;
+        line-height: 1.35;
+        margin: 0;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .fig {
+        text-align: right;
+        display: grid;
+        gap: 1px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Stop → target track. --e entry, --m mark, as % from stop to target. */
+      .track {
+        position: relative;
+        height: 6px;
+        border-radius: 6px;
+        background: var(--well);
+      }
+      .track::before,
+      .track::after {
+        content: '';
+        position: absolute;
+        top: -3px;
+        width: 2px;
+        height: 12px;
+        border-radius: 2px;
+      }
+      .track::before {
+        left: 0;
+        background: var(--berry);
+      }
+      .track::after {
+        right: 0;
+        background: var(--mint);
+      }
+      .track i {
+        position: absolute;
+        top: -4px;
+        left: var(--e);
+        width: 2px;
+        height: 14px;
+        background: var(--text);
+        border-radius: 2px;
+      }
+      .track b {
+        position: absolute;
+        top: -4px;
+        left: calc(var(--m) - 7px);
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--purple);
+        border: 2px solid var(--ink);
+        box-shadow: 0 0 0 1px var(--purple-hi);
+        animation: breathe 2.4s ease-in-out infinite;
+      }
+      .track__span {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: var(--e);
+        width: calc(var(--m) - var(--e));
+        background: rgb(95 227 179 / 0.35);
+        border-radius: 6px;
+      }
+      .track-legend {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+        font: 500 11px var(--f-chain);
+        color: var(--text-faint);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Sticky ask composer at the foot of the cockpit */
+      .ask-bar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 12px var(--gutter) 28px;
+        background: linear-gradient(to top, var(--ink) 72%, transparent);
+        z-index: 4;
+      }
+      .ask-field {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 6px 6px 16px;
+        border-radius: 999px;
+        background: var(--well);
+        border: 1px solid var(--line-strong);
+        color: var(--text-faint);
+        font: 400 14px var(--f-body);
+      }
+      .ask-field span {
+        flex: 1;
+      }
+      .send {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--purple);
+        color: #fff;
+      }
+
+      /* Live position */
+      .live-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
+        flex-wrap: wrap;
+      }
+      .asof {
+        font: 400 11px var(--f-chain);
+        color: var(--text-faint);
+      }
+      .lev {
+        display: inline-block;
+        padding: 0 6px;
+        border-radius: 4px;
+        font: 600 10px/1.6 var(--f-body);
+        color: var(--text);
+        background: var(--line-strong);
+      }
+      .lv-mark {
+        --lv: var(--purple);
+      }
+      .levels .t-caption {
+        font-size: 10.5px;
+        white-space: nowrap;
+      }
+      .levels b {
+        font: 600 13px var(--f-body);
+        font-variant-numeric: tabular-nums;
+      }
+      .levels--watched .lv-tp .t-caption::after,
+      .levels--watched .lv-sl .t-caption::after {
+        content: ' ◌';
+        color: var(--text-faint);
+      }
+      .watch-note {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        margin-top: 8px;
+        font: 400 11.5px/1.45 var(--f-body);
+        color: var(--text-dim);
+      }
+      .watch-note svg {
+        margin-top: 1px;
+        color: var(--purple-hi);
+      }
+      .why {
+        display: grid;
+        gap: 6px;
+        padding: 12px 14px;
+        border-radius: var(--r-well);
+        background: var(--board);
+        border-left: 2px solid var(--purple);
+      }
+      .why .t-voice {
+        font-size: 15px;
+        line-height: 1.38;
+        margin: 0;
+      }
+      .next {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 10px;
+        align-items: start;
+        font: 400 12.5px/1.45 var(--f-body);
+        color: var(--text-dim);
+      }
+      .next svg {
+        color: var(--text-faint);
+        margin-top: 1px;
+      }
+      .next b {
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      .liq-meter {
+        position: relative;
+        height: 8px;
+        border-radius: 8px;
+        background: repeating-linear-gradient(
+          90deg,
+          var(--well) 0 calc(10% - 2px),
+          transparent calc(10% - 2px) 10%
+        );
+      }
+      .liq-meter i {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: var(--p);
+        border-radius: 8px;
+        background: var(--line-strong);
+      }
+      .liq-meter b {
+        position: absolute;
+        top: -3px;
+        left: calc(var(--p) - 7px);
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--purple);
+        border: 2px solid var(--ink);
+      }
+      .liq-meter::after {
+        content: '';
+        position: absolute;
+        right: -1px;
+        top: -4px;
+        bottom: -4px;
+        width: 2px;
+        border-radius: 2px;
+        background: var(--berry);
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .kv > div {
+        display: grid;
+        gap: 2px;
+        padding: 8px 10px;
+        border-radius: var(--r-well);
+        background: var(--well);
+        font-variant-numeric: tabular-nums;
+      }
+      .kv b {
+        font: 500 13.5px var(--f-body);
+      }
+
+      /* History */
+      .best {
+        display: flex;
+        gap: 8px;
+        margin: 0 calc(-1 * var(--gutter));
+        padding: 0 var(--gutter);
+        overflow: hidden;
+      }
+      .best > div {
+        flex: none;
+        width: 132px;
+        display: grid;
+        gap: 4px;
+        padding: 12px;
+        border-radius: var(--r-well);
+        background: var(--board);
+        border: 1px solid var(--line);
+      }
+      .best > div:first-child {
+        border-color: rgb(95 227 179 / 0.35);
+      }
+      .best .big {
+        font-size: 26px;
+      }
+      .day {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin: 4px 0 12px 28px;
+      }
+      .day b {
+        font: 500 11px var(--f-body);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+      }
+      .spine--tight .move {
+        padding-bottom: 16px;
+      }
+      .spine--tight .t-voice {
+        font-size: 14.5px;
+        line-height: 1.35;
+        margin: 0;
+      }
+      .chips--sm .chip {
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+
+      /* Mandate card */
+      .rules {
+        font: 400 15px/1.5 var(--f-body);
+        color: var(--text);
+        margin: 0;
+      }
+      .rules b {
+        font-weight: 600;
+      }
+      .proof {
+        display: grid;
+        gap: 0;
+      }
+      .proof > div {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 9px 0;
+        border-bottom: 1px dashed var(--line-strong);
+        font-size: 13.5px;
+      }
+      .proof > div:last-child {
+        border-bottom: 0;
+      }
+      .proof span:first-child {
+        color: var(--text-dim);
+      }
+      .proof b {
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      .rule-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font: 500 9.5px var(--f-body);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--purple-soft);
+        vertical-align: 1px;
+        margin-left: 4px;
+      }
+      .rule-tag svg {
+        width: 11px;
+        height: 11px;
+      }
+      .rule-tag--sente {
+        color: var(--text-faint);
+      }
+      .amend {
+        display: grid;
+        grid-template-columns: 48px 1fr;
+        gap: 10px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .amend:last-child {
+        border-bottom: 0;
+      }
+      .amend time {
+        font: 500 11px/1.8 var(--f-chain);
+        color: var(--text-faint);
+      }
+      .amend s {
+        color: var(--text-faint);
+      }
+
+      /* Ask sheet */
+      .under {
+        filter: saturate(0.8);
+      }
+      .composer {
+        min-height: 76px;
+        align-items: flex-start;
+        font-size: 16px;
+        line-height: 1.4;
+      }
+      .caret {
+        display: inline-block;
+        width: 2px;
+        height: 18px;
+        margin-left: 1px;
+        vertical-align: -3px;
+        background: var(--purple-hi);
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      .about {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px 3px 4px;
+        border-radius: 999px;
+        background: var(--well);
+        font: 500 12px var(--f-body);
+        color: var(--text-dim);
+      }
+      .reminder {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 10px;
+        padding: 11px 12px;
+        border-radius: var(--r-well);
+        border: 1px solid var(--line-strong);
+        font: 400 12.5px/1.45 var(--f-body);
+        color: var(--text-dim);
+      }
+      .reminder svg {
+        color: var(--purple-soft);
+      }
+
+      /* Run landing */
+      .you-said {
+        display: grid;
+        gap: 4px;
+        margin-left: auto;
+        max-width: 82%;
+        padding: 10px 14px;
+        border-radius: 18px 18px 4px 18px;
+        background: var(--well);
+        font: 400 14px/1.4 var(--f-body);
+      }
+      .pending {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-faint);
+        font: 400 12px var(--f-body);
+      }
+      .pending i {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--purple-hi);
+        animation: dot 1.2s ease-in-out infinite;
+      }
+      .pending i:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .pending i:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes dot {
+        50% {
+          opacity: 0.2;
+        }
+      }
+      .move--new {
+        animation: place 0.6s var(--ease-place) both;
+      }
+      .move--new > div {
+        padding: 8px 10px;
+        margin: -8px -10px 0;
+        border-radius: 12px;
+        background: rgb(131 110 249 / 0.08);
+      }
+
+      /* Alerts */
+      .alert {
+        display: grid;
+        grid-template-columns: 14px 1fr auto;
+        gap: 12px;
+        align-items: start;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .alert:last-child {
+        border-bottom: 0;
+      }
+      .alert > .stone {
+        margin-top: 4px;
+      }
+      .alert__body {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        font: 400 14px/1.4 var(--f-body);
+      }
+      .alert__body b {
+        font-weight: 600;
+      }
+      .alert time {
+        font: 400 11px/1.9 var(--f-chain);
+        color: var(--text-faint);
+      }
+      .alert--unread {
+        position: relative;
+      }
+      .alert--unread::before {
+        content: '';
+        position: absolute;
+        left: -12px;
+        top: 20px;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--purple);
+      }
+      .sides {
+        display: flex;
+        gap: 6px;
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head">
+        <div class="crumbs"><a href="index.html">Trading study</a> / Agent cockpit</div>
+        <h1>Inside an agent</h1>
+        <p>
+          Open an agent and see what it holds, what it did and what it made, then step into a live
+          position: the chart with its entry, target and stop drawn on it, the thesis beside the
+          P&amp;L, and a plain sentence about what it will do next. You never close an agent's
+          position yourself. You ask it to, and it acts at once, inside its mandate.
+        </p>
+      </header>
+
+      <!-- ════════════════════════════════ Flow 1: the cockpit ═══════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>The cockpit</h2>
+          <p>Overview · history · mandate: three tabs on one agent</p>
+        </header>
+        <div class="screens">
+          <!-- 1. Overview -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll app__scroll--sticky">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Agents</span
+                    >
+                    <span style="display: flex; gap: 8px">
+                      <button class="btn btn--primary btn--sm" style="min-height: 36px">
+                        <svg class="i i--sm"><use href="icons.svg#i-plus" /></svg>Fund
+                      </button>
+                      <span class="icon-btn"
+                        ><svg class="i"><use href="icons.svg#i-more" /></svg
+                      ></span>
+                    </span>
+                  </div>
+                  <div class="ck-head">
+                    <span class="sigil sigil--lg" data-sigil="range-hunter"></span>
+                    <div class="ck-head__main">
+                      <span class="t-display" style="font-size: 28px">Range Hunter</span>
+                      <div class="ck-head__meta">
+                        <span class="preset">Range Trader</span>
+                        <span class="t-caption">Claude Sonnet 5</span>
+                        <span class="pill pill--live">Trading</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="seg seg--tabs">
+                    <button aria-pressed="true">Overview</button><button>History</button
+                    ><button>Mandate</button>
+                  </div>
+
+                  <div style="margin-top: 18px">
+                    <div class="t-label">All-time P&amp;L</div>
+                    <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 6px">
+                      <span class="big up">+42<small>.18</small></span>
+                      <span class="t-dim">USDC</span>
+                      <span class="t-dim up num" style="margin-left: auto">+18.22 today</span>
+                    </div>
+                    <div class="t-caption" style="margin-top: 4px">
+                      <span id="rh-eq" class="num" style="color: var(--text-dim)">612.40</span>
+                      USDC in its wallet · realised only
+                    </div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"area","seed":"range-hunter-equity","start":500,"drift":0.0017538,"vol":0.006,"height":92,"last":false,"scrub":"#rh-eq","label":"Range Hunter equity since Sep 21"}'
+                  ></div>
+                  <div class="ranges" style="margin-top: 4px">
+                    <button>1D</button><button>1W</button><button aria-pressed="true">All</button>
+                  </div>
+
+                  <div class="stat4" style="margin-top: 12px">
+                    <div><span class="t-caption">Won</span><b>6 of 9</b></div>
+                    <div><span class="t-caption">Avg hold</span><b>3h 40m</b></div>
+                    <div><span class="t-caption">Held</span><b>2</b></div>
+                    <div><span class="t-caption">Live since</span><b>Sep 21</b></div>
+                  </div>
+
+                  <div class="section" style="margin-top: 18px">
+                    <div class="section__head">
+                      <span class="t-label">Open position</span><a href="#rh-live">Open</a>
+                    </div>
+                    <div class="poscard">
+                      <div class="poscard__top">
+                        <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                        <div style="display: grid; gap: 2px">
+                          <span class="t-strong"
+                            >MON <span class="side side--long">Long</span></span
+                          >
+                          <span class="t-caption num">180 MON @ 0.9744 · Kuru</span>
+                        </div>
+                        <div class="fig">
+                          <span class="t-strong up">+1.22</span>
+                          <span class="t-caption up">+0.70%</span>
+                        </div>
+                      </div>
+                      <div>
+                        <div class="track" style="--e: 48%; --m: 60%">
+                          <span class="track__span"></span><i></i><b></b>
+                        </div>
+                        <div class="track-legend">
+                          <span>stop 0.9460</span><span>target 1.0050</span>
+                        </div>
+                      </div>
+                      <p class="t-voice">
+                        MON keeps bouncing between 0.95 and 1.01. I'm buying the lower half and
+                        selling near the top.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div class="ask-bar">
+                  <div style="display: flex; gap: 8px">
+                    <button class="btn btn--soft btn--sm" style="min-height: 50px; flex: none">
+                      <svg class="i i--sm"><use href="icons.svg#i-bolt" /></svg>Run now
+                    </button>
+                    <div class="ask-field" style="flex: 1">
+                      <span>Ask it to…</span>
+                      <span class="send" style="flex: none"
+                        ><svg class="i"><use href="icons.svg#i-send" /></svg
+                      ></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Overview: a trader profile, not a settings page</h3>
+            <div class="backing">
+              <span class="b b--live">Live · verdict P&amp;L, summaries</span
+              ><span class="b b--api">API · equity history</span
+              ><span class="b b--api">API · /agents/:id/portfolio</span
+              ><span class="b b--live">Live · fund, run</span>
+            </div>
+            <ul>
+              <li>
+                The headline is realised P&amp;L from verdicts, so it's true today. Wallet value and
+                the open position's +1.22 need the portfolio route, since spot has no uPnL yet.
+              </li>
+              <li>
+                The open position shows where the price sits between its stop and its target: a
+                purple dot on a track, with the entry as a white tick. The thesis sits right under
+                it.
+              </li>
+              <li>
+                The ask box stays at the foot of every cockpit tab, beside Run now (a run with no
+                instruction). Asking is how you steer the agent, so it gets a permanent place. Fund
+                sits top right.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 2. History -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll app__scroll--sticky">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Agents</span
+                    >
+                    <span class="ck-mini"
+                      ><span class="sigil" data-sigil="range-hunter"></span
+                      ><span class="t-strong">Range Hunter</span></span
+                    >
+                  </div>
+                  <div class="seg seg--tabs" style="margin-top: 8px">
+                    <button>Overview</button><button aria-pressed="true">History</button
+                    ><button>Mandate</button>
+                  </div>
+
+                  <div class="section" style="margin-top: 16px">
+                    <div class="section__head">
+                      <span class="t-label">Best trades</span
+                      ><span class="t-caption">won 6 of 9</span>
+                    </div>
+                    <div class="best">
+                      <div>
+                        <span class="t-caption">Trade #1 · MON long</span>
+                        <span class="big up">+18<small>.22</small></span>
+                        <span class="t-caption num">held 2h 14m · Sep 27</span>
+                      </div>
+                      <div>
+                        <span class="t-caption">Trade #2 · MON long</span>
+                        <span class="big up">+11<small>.40</small></span>
+                        <span class="t-caption num">held 5h 02m · Sep 25</span>
+                      </div>
+                      <div>
+                        <span class="t-caption">Trade #3 · MON long</span>
+                        <span class="big up">+8<small>.05</small></span>
+                        <span class="t-caption num">held 1h 48m · Sep 24</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="chips chips--sm" style="margin-top: 16px">
+                    <span class="chip chip--on">All</span><span class="chip">Trades</span
+                    ><span class="chip">Theses</span><span class="chip">Held</span
+                    ><span class="chip">Funding</span>
+                  </div>
+
+                  <div class="day" style="margin-top: 18px">
+                    <b>Today · Sep 27</b><span class="t-caption up num">+18.22</span>
+                  </div>
+                  <div class="spine spine--tight">
+                    <div class="move">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Bought 60.00 MON</span>
+                          <span class="move__time">08:31</span>
+                        </div>
+                        <div class="t-dim num">at 0.9770 · now long 180 MON</div>
+                      </div>
+                    </div>
+                    <div class="move">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Bought 120.00 MON</span>
+                          <span class="move__time">07:56</span>
+                        </div>
+                        <div class="t-dim num">at 0.9731 · Kuru spot</div>
+                      </div>
+                    </div>
+                    <div class="move">
+                      <i class="stone stone--refusal"></i>
+                      <div style="display: grid; gap: 4px">
+                        <div class="move__meta">
+                          <span class="pill pill--held">Held</span>
+                          <span class="move__time">07:54</span>
+                        </div>
+                        <div class="t-dim">
+                          A 480.00 USDC order was over its 250.00 limit. Nothing was signed.
+                        </div>
+                      </div>
+                    </div>
+                    <div class="move">
+                      <i class="stone stone--thesis"></i>
+                      <div style="display: grid; gap: 4px">
+                        <div class="move__meta">
+                          <span class="move__kind">Thesis · long MON</span>
+                          <span class="move__time">07:53</span>
+                        </div>
+                        <p class="t-voice">
+                          Back at the floor of the range. Buying here, out at 1.0050 or 0.9460.
+                        </p>
+                      </div>
+                    </div>
+                    <div class="move">
+                      <i class="stone stone--win"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Closed long <span class="up">+18.22</span></span>
+                          <span class="move__time">03:10</span>
+                        </div>
+                        <div class="t-dim num">Trade #1 · 0.9340 → 1.0286 · held 2h 14m</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="day"><b>Sep 26</b><span class="t-caption down num">−2.52</span></div>
+                  <div class="spine spine--tight">
+                    <div class="move">
+                      <i class="stone stone--loss"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Closed long <span class="down">−2.52</span></span>
+                          <span class="move__time">21:45</span>
+                        </div>
+                        <div class="t-dim">Stop 0.9460 seen at the 21:45 check</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="ask-bar">
+                  <div class="ask-field">
+                    <span>Ask Range Hunter to…</span>
+                    <span class="send" style="flex: none"
+                      ><svg class="i"><use href="icons.svg#i-send" /></svg
+                    ></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>History: best trades on top, the stone spine below</h3>
+            <div class="backing">
+              <span class="b b--live">Live · agent events, verdicts</span
+              ><span class="b b--api">API · durable event log</span>
+            </div>
+            <ul>
+              <li>
+                Closed trades become cards you can compare at a glance (FOMO's "Trade #1"). The
+                spine keeps Goban's grammar: ring = thesis, solid = trade, barred ring = held, half
+                stone = verdict.
+              </li>
+              <li>
+                Grouped by day, each day with its realised total. A stop exit says which check saw
+                it, because a watched level only acts when the agent runs.
+              </li>
+              <li>
+                The event log lives in memory today and is lost on restart. History needs it
+                persisted before this screen can go back to Sep 21.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 3. Mandate -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Agents</span
+                    >
+                    <span class="ck-mini"
+                      ><span class="sigil" data-sigil="range-hunter"></span
+                      ><span class="t-strong">Range Hunter</span></span
+                    >
+                  </div>
+                  <div class="seg seg--tabs" style="margin-top: 8px">
+                    <button>Overview</button><button>History</button
+                    ><button aria-pressed="true">Mandate</button>
+                  </div>
+
+                  <div
+                    class="board board--goban"
+                    style="margin-top: 16px; display: grid; gap: 12px"
+                  >
+                    <div class="between">
+                      <span class="t-label">The rules</span>
+                      <span class="t-caption">signed Sep 21 · amended twice</span>
+                    </div>
+                    <p class="rules">
+                      Range Hunter may trade <b>MON for USDC on Kuru spot</b>, up to
+                      <b>250 USDC an order</b> and <b>400 USDC a day</b>, with no leverage, until
+                      <b>Oct 5</b>. Its funds can only go back to you.
+                    </p>
+                    <div class="proof">
+                      <div><span>Made for you, realised</span><b class="up">+42.18 USDC</b></div>
+                      <div>
+                        <span>Held orders that broke its limits</span
+                        ><span class="pill pill--held">Held 2</span>
+                      </div>
+                      <div><span>Largest order</span><b>180 of 250 USDC</b></div>
+                    </div>
+                  </div>
+
+                  <div class="stack" style="display: grid; gap: 14px; margin-top: 18px">
+                    <div class="gauge">
+                      <div class="gauge__head">
+                        <span
+                          >Spent in the last 24h<span class="rule-tag"
+                            ><svg class="i"><use href="icons.svg#i-shield" /></svg>enclave</span
+                          ></span
+                        >
+                        <b>355 / 400</b>
+                      </div>
+                      <div class="gauge__track">
+                        <div class="gauge__fill gauge__fill--hot" style="--p: 89%"></div>
+                        <div class="gauge__cap"></div>
+                      </div>
+                    </div>
+                    <div class="gauge">
+                      <div class="gauge__head">
+                        <span
+                          >Expires<span class="rule-tag"
+                            ><svg class="i"><use href="icons.svg#i-shield" /></svg>enclave</span
+                          ></span
+                        >
+                        <b>in 7d 14h</b>
+                      </div>
+                      <div class="gauge__track">
+                        <div class="gauge__fill" style="--p: 46%"></div>
+                        <div class="gauge__cap"></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 18px">
+                    <div class="section__head"><span class="t-label">Amendments</span></div>
+                    <div class="amend">
+                      <time>Sep 26</time>
+                      <div>
+                        Expiry <s>Sep 28</s> → Oct 5
+                        <div class="t-chain">signed on this phone · 0x9c1e…44b0</div>
+                      </div>
+                    </div>
+                    <div class="amend">
+                      <time>Sep 24</time>
+                      <div>
+                        Funding cap <s>600</s> → 1,000 USDC
+                        <div class="t-chain">signed on this phone · 0x31d7…a2f9</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="btn-row" style="margin-top: 14px">
+                    <button class="btn btn--primary btn--sm">Amend</button>
+                    <button class="btn btn--soft btn--sm">Return funds</button>
+                    <button class="btn btn--danger btn--sm">Revoke</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Mandate card: rules, then proof, then the ledger</h3>
+            <div class="backing">
+              <span class="b b--live">Live · mandate, amend, revoke, return</span
+              ><span class="b b--live">Live · held count from events</span
+              ><span class="b b--api">API · rolling-cap usage</span>
+            </div>
+            <ul>
+              <li>
+                One plain sentence first (feel.cash's rewards panel), then proof it held: what it
+                made you, what was held, how close it came to a limit.
+              </li>
+              <li>
+                The shield marks limits the enclave enforces. Order size is our pre-send check, so
+                it lives in the proof, not a gauge. There's no drawdown limit, because the mandate
+                has no such field.
+              </li>
+              <li>
+                The daily-spend gauge runs hot at 89%. A sell still fits, so asking it to close half
+                won't be blocked by that cap.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════ Flow 2: inside a live position ═══════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Inside a live position</h2>
+          <p>The chart with its levels, the P&amp;L, the why, and what happens next</p>
+        </header>
+        <div class="screens">
+          <!-- 4. Range Hunter's MON long -->
+          <article class="shot" id="rh-live">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll" style="padding-bottom: 100px; padding-top: 0">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Range Hunter</span
+                    >
+                    <span class="pill pill--live">Live · as of 3s</span>
+                  </div>
+                  <div class="between" style="align-items: flex-end">
+                    <div>
+                      <div class="t-title">
+                        MON <span class="side side--long" style="vertical-align: 3px">Long</span>
+                      </div>
+                      <div class="t-caption num">180 MON · Kuru spot · USDC</div>
+                    </div>
+                    <div class="fig">
+                      <span class="t-caption">Unrealised</span>
+                      <span class="big big--md up">+1<small>.22</small></span>
+                    </div>
+                  </div>
+                  <div class="between" style="margin-top: 4px">
+                    <span class="t-dim">Mark <span id="rh-mark" class="num">0.9812</span></span>
+                    <span class="t-dim up num">+0.70% since entry</span>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON-205","start":1.03265,"drift":0.0002,"points":72,"height":218,"tone":"purple","scrub":"#rh-mark","lines":[{"at":0.9744,"kind":"entry","label":"ENTRY"},{"at":1.005,"kind":"tp","label":"TARGET · WATCHED"},{"at":0.946,"kind":"sl","label":"STOP · WATCHED"}],"markers":[{"i":-21,"kind":"agent","label":"120"},{"i":-14,"kind":"agent","label":"+60"}],"label":"MON 5m with Range Hunter levels"}'
+                  ></div>
+                  <div class="watch-note">
+                    <svg class="i i--sm"><use href="icons.svg#i-eye" /></svg>
+                    <span
+                      >Target and stop are levels the agent checks each run, not orders on
+                      Kuru.</span
+                    >
+                  </div>
+
+                  <div class="levels levels--watched" style="margin-top: 12px">
+                    <div class="lv-entry"><span class="t-caption">Entry</span><b>0.9744</b></div>
+                    <div class="lv-tp"><span class="t-caption">Target</span><b>1.0050</b></div>
+                    <div class="lv-sl"><span class="t-caption">Stop</span><b>0.9460</b></div>
+                    <div class="lv-mark"><span class="t-caption">Mark</span><b>0.9812</b></div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <div class="track" style="--e: 48%; --m: 60%">
+                      <span class="track__span"></span><i></i><b></b>
+                    </div>
+                    <div class="track-legend">
+                      <span class="down">3.6% to stop</span><span class="up">2.4% to target</span>
+                    </div>
+                  </div>
+
+                  <div class="why" style="margin-top: 14px">
+                    <span class="t-label">Why it's in</span>
+                    <p class="t-voice">
+                      MON keeps bouncing between 0.95 and 1.01, and spot is bid on Kuru while the
+                      perp sits flat. I bought the lower half and added once it held.
+                    </p>
+                    <span class="t-caption">Wrong if MON loses 0.9460: the floor is gone.</span>
+                  </div>
+                  <div class="next" style="margin-top: 12px">
+                    <svg class="i"><use href="icons.svg#i-clock" /></svg>
+                    <span
+                      ><b>Next check 9:45.</b> Checks every 15 min, and sells if 1.0050 or 0.9460 is
+                      reached at a check.</span
+                    >
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--soft">Change levels</button>
+                  <button class="btn btn--primary">Ask to close</button>
+                </div>
+              </div>
+            </div>
+            <h3>Range Hunter's MON long, live</h3>
+            <div class="backing">
+              <span class="b b--api">API · klines</span
+              ><span class="b b--live">Live · agent fills</span
+              ><span class="b b--api">API · spot uPnL (portfolio)</span
+              ><span class="b b--api">API · per-agent cadence</span
+              ><span class="b b--venue">Venue · native SL/TP</span>
+            </div>
+            <ul>
+              <li>
+                Purple stones on the line are the agent's two fills (120, then +60), so the chart
+                speaks the ledger's language. The price line is purple too: this is the agent's
+                position, not your own.
+              </li>
+              <li>
+                Target and stop are labelled "watched" on the chart, in the level tiles (◌) and in
+                one sentence under the chart. "Next check" says when it will actually look.
+              </li>
+              <li>
+                There is no close button. "Ask to close" composes a run instruction. "Change levels"
+                opens the same sheet pre-filled, because levels are the agent's instructions, not
+                orders.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 5. Basis Monk's MON-PERP short -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll" style="padding-bottom: 100px; padding-top: 0">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Basis Monk</span
+                    >
+                    <span class="pill pill--live">Live · as of 2s</span>
+                  </div>
+                  <div class="between" style="align-items: flex-end">
+                    <div>
+                      <div class="t-title">
+                        MON-PERP
+                        <span class="side side--short" style="vertical-align: 3px">Short</span>
+                        <span class="lev" style="vertical-align: 3px">2×</span>
+                      </div>
+                      <div class="t-caption num">400 MON · Perpl · AUSD</div>
+                    </div>
+                    <div class="fig">
+                      <span class="t-caption">Unrealised</span>
+                      <span class="big big--md up">+4<small>.44</small></span>
+                    </div>
+                  </div>
+                  <div class="between" style="margin-top: 4px">
+                    <span class="t-dim">Mark <span id="bm-mark" class="num">0.9809</span></span>
+                    <span class="t-dim up num">+2.24% on margin</span>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"candles","seed":"MON-PERP","start":0.98306,"drift":0.0003,"points":48,"height":190,"fit":false,"scrub":"#bm-mark","lines":[{"at":0.992,"kind":"entry","label":"ENTRY"},{"at":1.015,"kind":"sl","label":"STOP · WATCHED"},{"at":1.48,"kind":"liq","label":"LIQ EST"}],"markers":[{"i":-6,"kind":"agent","label":"−400"}],"label":"MON-PERP 4h with Basis Monk levels"}'
+                  ></div>
+
+                  <div class="levels levels--watched" style="margin-top: 10px">
+                    <div class="lv-entry"><span class="t-caption">Entry</span><b>0.9920</b></div>
+                    <div class="lv-sl"><span class="t-caption">Stop</span><b>1.0150</b></div>
+                    <div class="lv-liq"><span class="t-caption">Liq. est</span><b>1.4800</b></div>
+                    <div class="lv-mark"><span class="t-caption">Mark</span><b>0.9809</b></div>
+                  </div>
+
+                  <div style="margin-top: 14px">
+                    <div class="between" style="margin-bottom: 8px">
+                      <span class="t-dim">Room to liq. est</span>
+                      <span class="t-strong num">50.9%</span>
+                    </div>
+                    <div class="liq-meter" style="--p: 5%"><i></i><b></b></div>
+                    <div class="track-legend">
+                      <span>mark 0.9809</span><span class="down">liq. est 1.4800</span>
+                    </div>
+                  </div>
+
+                  <div class="kv" style="margin-top: 12px">
+                    <div><span class="t-caption">Margin · isolated</span><b>198.40 AUSD</b></div>
+                    <div>
+                      <span class="t-caption">Funding received</span><b class="up">+0.12 AUSD</b>
+                    </div>
+                  </div>
+                  <div class="t-caption" style="margin-top: 8px">
+                    Funding +0.0100% / 8h, paid to shorts. Liq. est is ours and excludes accrued
+                    funding.
+                  </div>
+
+                  <div class="why" style="margin-top: 12px">
+                    <p class="t-voice">
+                      Funding has paid shorts all week. Short the perp small and collect the carry.
+                    </p>
+                    <span class="t-caption"
+                      >Wrong if funding turns negative twice, or above 1.0150.</span
+                    >
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--soft">Change levels</button>
+                  <button class="btn btn--primary">Ask to close</button>
+                </div>
+              </div>
+            </div>
+            <h3>Basis Monk's MON-PERP short 2×</h3>
+            <div class="backing">
+              <span class="b b--api">API · positions: entry, mark, liq, uPnL</span
+              ><span class="b b--api">API · funding</span
+              ><span class="b b--api">API · klines 4h</span
+              ><span class="b b--venue">Venue · native SL/TP</span>
+            </div>
+            <ul>
+              <li>
+                Liquidation at 2× is far away: drawn to scale, it would squash the candles into a
+                flat band. The chart scales to price and pins it as an edge chip; the meter below
+                gives the distance.
+              </li>
+              <li>
+                The room-to-liquidation meter is purple, not mint: it's risk, not P&amp;L. Its cap
+                tick is berry because liquidation is a loss.
+              </li>
+              <li>
+                Every Perpl figure is AUSD. Margin says "isolated" because you can't add margin to
+                save it. The agent has to close and reopen.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════ Flow 3: asking, not closing ═══════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Asking, not closing</h2>
+          <p>The ask sheet · the run lands · alerts</p>
+        </header>
+        <div class="screens">
+          <!-- 6. Ask sheet -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll under" style="padding-top: 0">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Range Hunter</span
+                    >
+                    <span class="pill pill--live">Live · as of 3s</span>
+                  </div>
+                  <div class="between" style="align-items: flex-end">
+                    <div class="t-title">
+                      MON <span class="side side--long" style="vertical-align: 3px">Long</span>
+                    </div>
+                    <span class="big big--md up">+1<small>.22</small></span>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON-205","start":1.03265,"drift":0.0002,"points":72,"height":180,"tone":"purple","lines":[{"at":0.9744,"kind":"entry","label":"ENTRY"},{"at":1.005,"kind":"tp","label":"TARGET"},{"at":0.946,"kind":"sl","label":"STOP"}],"markers":[{"i":-21,"kind":"agent"},{"i":-14,"kind":"agent"}]}'
+                  ></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet" style="display: grid; gap: 14px">
+                  <div class="sheet__grip" style="margin-bottom: 0"></div>
+                  <div class="between">
+                    <span class="t-title">Ask Range Hunter</span>
+                    <span class="about"
+                      ><span class="tok tok--sm" style="--tok: var(--purple-soft)">M</span>MON long
+                      · 180</span
+                    >
+                  </div>
+                  <div class="t-caption" style="margin-top: -8px">
+                    It runs now with your words as its instruction, then decides what to do.
+                  </div>
+                  <div class="field__input field__input--focus composer">
+                    <span>Close half and move the stop to break-even<i class="caret"></i></span>
+                  </div>
+                  <div class="chips chips--sm">
+                    <span class="chip">Close it all</span
+                    ><span class="chip chip--on">Close half</span
+                    ><span class="chip chip--on">Stop to break-even</span
+                    ><span class="chip">Target 1.0000</span
+                    ><span class="chip">Why this entry?</span>
+                  </div>
+                  <div class="reminder">
+                    <svg class="i"><use href="icons.svg#i-shield" /></svg>
+                    <span
+                      >It can only act inside its mandate: MON-USDC on Kuru, up to 250 USDC an
+                      order. It may decline, and will say why.</span
+                    >
+                  </div>
+                  <div class="between t-caption">
+                    <span>One run · about $0.02 of model credits</span>
+                    <span>Starts now</span>
+                  </div>
+                  <button class="btn btn--primary btn--block">
+                    <svg class="i"><use href="icons.svg#i-send" /></svg>Run it now with this
+                  </button>
+                </div>
+              </div>
+            </div>
+            <h3>Ask sheet: a request, acted on at once</h3>
+            <div class="backing">
+              <span class="b b--live">Live · run with instruction</span
+              ><span class="b b--live">Live · mandate</span
+              ><span class="b b--api">API · credit estimate</span>
+            </div>
+            <ul>
+              <li>
+                "Ask to close" opens this sheet about the position. Chips fill the sentence, and you
+                can edit it. The button says what happens: a run starts now.
+              </li>
+              <li>
+                The mandate reminder sets expectations. The agent acts on your words, but only
+                inside its limits, and it may say no. That's why it's "ask", not "close".
+              </li>
+              <li>
+                A run spends your model credits, so the cost sits right above the button. The same
+                sheet opens from the cockpit's ask bar with no position attached.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 7. Run lands -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Range Hunter</span
+                    >
+                    <span class="pill pill--live">Running</span>
+                  </div>
+
+                  <div class="you-said" style="margin-top: 6px">
+                    <span class="t-caption">You asked · 9:41:02</span>
+                    Close half and move the stop to break-even
+                  </div>
+
+                  <div class="between" style="margin: 20px 0 12px">
+                    <span class="t-label">This run</span>
+                    <span class="pending"><i></i><i></i><i></i>updated 1s ago</span>
+                  </div>
+                  <div class="spine spine--tight">
+                    <div class="move move--new">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Sold 90.00 MON</span>
+                          <span class="move__time">09:41:14</span>
+                        </div>
+                        <div class="t-dim num">
+                          at 0.9809 · <span class="up">+0.59</span> realised
+                        </div>
+                        <div class="ramp ramp--live">
+                          <div class="ramp__track"><div class="ramp__fill"></div></div>
+                          <div class="ramp__stops">
+                            <span class="on">PROPOSED</span><span class="on">VOTED</span
+                            ><span>FINALIZED</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="move" style="animation-delay: 0.1s">
+                      <i class="stone stone--thesis"></i>
+                      <div style="display: grid; gap: 6px">
+                        <div class="move__meta">
+                          <span class="move__kind">Thesis · reduce MON long</span>
+                          <span class="move__time">09:41:09</span>
+                        </div>
+                        <p class="t-voice">
+                          Price is a little over my entry. Selling 90 banks half, and moving the
+                          stop to 0.9744 means the rest can't turn into a loss at a check.
+                        </p>
+                        <div class="t-dim num">
+                          Stop <s style="color: var(--text-faint)">0.9460</s> →
+                          <b style="font-weight: 500; color: var(--text)">0.9744</b> · watched
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="poscard" style="margin-top: 6px">
+                    <div class="between">
+                      <span class="t-label">Now</span>
+                      <span class="asof">as of 9:41:15</span>
+                    </div>
+                    <div class="poscard__top">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div style="display: grid; gap: 2px">
+                        <span class="t-strong">MON <span class="side side--long">Long</span></span>
+                        <span class="t-caption num">90 MON @ 0.9744 · Kuru</span>
+                      </div>
+                      <div class="fig">
+                        <span class="t-strong up">+0.59</span>
+                        <span class="t-caption">unrealised</span>
+                      </div>
+                    </div>
+                    <div class="levels levels--watched">
+                      <div class="lv-entry"><span class="t-caption">Entry</span><b>0.9744</b></div>
+                      <div class="lv-tp"><span class="t-caption">Target</span><b>1.0050</b></div>
+                      <div class="lv-sl"><span class="t-caption">Stop</span><b>0.9744</b></div>
+                      <div class="lv-mark"><span class="t-caption">Mark</span><b>0.9809</b></div>
+                    </div>
+                  </div>
+                  <div class="t-caption" style="margin-top: 12px; text-align: center">
+                    Checking every 2s until the run ends, then every 15 min as usual.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>The run lands, entry by entry</h3>
+            <div class="backing">
+              <span class="b b--live">Live · events, polled 1s</span
+              ><span class="b b--live">Live · consensus ramp</span
+              ><span class="b b--api">API · portfolio refresh</span>
+            </div>
+            <ul>
+              <li>
+                Your words stay on screen as a message bubble in Geist. Its answer comes back as a
+                thesis in Newsreader, then a trade. Two faces, two speakers.
+              </li>
+              <li>
+                It looks streamed but it's polled: new entries drop in with the stone placement
+                animation and an "updated 1s ago" line. There's no socket to promise.
+              </li>
+              <li>
+                The level change is part of the thesis, not a separate order: stop struck through,
+                new value beside it, still labelled watched.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 8. Alerts -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status">
+                  <span>9:41</span><span class="tn">Monad testnet</span><span>●●●</span>
+                </div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Home</span
+                    >
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-gear" /></svg
+                    ></span>
+                  </div>
+                  <div class="t-display" style="margin-top: 4px">Alerts</div>
+                  <div class="chips chips--sm" style="margin-top: 14px">
+                    <span class="chip chip--on">All</span><span class="chip">Range Hunter</span
+                    ><span class="chip">Basis Monk</span><span class="chip">Held</span>
+                  </div>
+
+                  <div class="t-label" style="margin-top: 18px">Today</div>
+                  <div style="padding-left: 12px; margin-left: -12px">
+                    <div class="alert alert--unread">
+                      <i class="stone stone--trade"></i>
+                      <div class="alert__body">
+                        <span
+                          ><b>Your agents are on both sides of MON.</b> Range Hunter is long 180,
+                          Basis Monk is short 400.</span
+                        >
+                        <div class="sides">
+                          <span class="side side--long">Long 180</span
+                          ><span class="side side--short">Short 400</span>
+                        </div>
+                      </div>
+                      <time>9:30</time>
+                    </div>
+                    <div class="alert alert--unread">
+                      <i class="stone stone--trade"></i>
+                      <div class="alert__body">
+                        <span><b>Range Hunter</b> added 60 MON at 0.9770</span>
+                        <span class="t-caption">Now long 180 MON · MON-USDC</span>
+                      </div>
+                      <time>8:31</time>
+                    </div>
+                    <div class="alert">
+                      <i class="stone stone--trade"></i>
+                      <div class="alert__body">
+                        <span><b>Range Hunter</b> opened a long on MON · 120 MON</span>
+                        <span class="t-caption">at 0.9731 · target 1.0050, stop 0.9460</span>
+                      </div>
+                      <time>7:56</time>
+                    </div>
+                    <div class="alert">
+                      <i class="stone stone--refusal"></i>
+                      <div class="alert__body">
+                        <span><b>Range Hunter</b> tried a 480 USDC order, over its 250 limit.</span>
+                        <span><span class="pill pill--held">Held</span></span>
+                      </div>
+                      <time>7:54</time>
+                    </div>
+                    <div class="alert">
+                      <i class="stone stone--loss"></i>
+                      <div class="alert__body">
+                        <span
+                          ><b>Basis Monk</b> closed a short:
+                          <span class="down">−4.10 AUSD</span></span
+                        >
+                      </div>
+                      <time>6:12</time>
+                    </div>
+                    <div class="alert">
+                      <i class="stone stone--win"></i>
+                      <div class="alert__body">
+                        <span
+                          ><b>Range Hunter</b> hit its target: closed
+                          <span class="up">+18.22 USDC</span></span
+                        >
+                      </div>
+                      <time>3:10</time>
+                    </div>
+                  </div>
+                  <div class="t-label" style="margin-top: 14px">Earlier</div>
+                  <div class="alert">
+                    <i class="stone stone--deposit"></i>
+                    <div class="alert__body">
+                      <span
+                        ><b>Night Shift</b> is revoked with 412.00 USDC still in its wallet.</span
+                      >
+                      <a
+                        href="#"
+                        style="color: var(--purple-hi); font-size: 13px; text-decoration: none"
+                        >Return 412.00 USDC to you</a
+                      >
+                    </div>
+                    <time>Sep 23</time>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Alerts: what your agents did while you weren't looking</h3>
+            <div class="backing">
+              <span class="b b--live">Live · events to derive from</span
+              ><span class="b b--api">API · push + alert feed</span>
+            </div>
+            <ul>
+              <li>
+                FOMO's crowd alerts, turned inward: "your agents are on both sides of MON" is the
+                one no single cockpit can show you.
+              </li>
+              <li>
+                Each alert leads with its ledger stone, so the feed and the spine read the same.
+                Held is lilac, never red: the boundary working isn't an error.
+              </li>
+              <li>
+                A target hit says when it was seen. A revoked agent with funds left offers the
+                return inline.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

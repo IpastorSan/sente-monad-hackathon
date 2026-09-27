@@ -19,6 +19,7 @@
  *   prev        true → dashed previous-close line at the first price
  *   last        true (default for line/candles) → pinned last-price tag on the right edge
  *   lines       [{ at: price | "+3%" | "-2%", kind: "entry"|"tp"|"sl"|"liq"|"limit", label }]
+ *   fit         false → scale to the price only; out-of-range lines become edge chips (↑/↓)
  *   markers     [{ i: sampleIndex (negative counts from the end), kind: "agent"|"you"|"buy"|"sell", label? }]
  *   scrub       CSS selector of an element that shows the price: set to the last price on
  *               draw and to the scrubbed price while dragging. `scrubChange` selector gets
@@ -126,13 +127,25 @@
 
     const W = host.clientWidth || 350;
     const H = cfg.height ?? (spark ? 28 : 200);
-    const padR = spark ? 4 : cfg.last === false && !cfg.axis ? 8 : 58;
+    const tagChars = fmt(
+      Math.max(...data.map((d) => d.h)),
+      cfg.decimals ?? (data[data.length - 1].c < 10 ? 4 : 2),
+    ).length;
+    const padR = spark
+      ? 4
+      : cfg.last === false && !cfg.axis
+        ? 8
+        : Math.max(58, tagChars * 6.4 + 22);
     const padT = spark ? 3 : 14;
     const padB = spark ? 3 : 14;
 
     const levels = (cfg.lines ?? []).map((l) => ({ ...l, price: resolveLevel(l.at, first, last) }));
-    let lo = Math.min(...(candles ? data.map((d) => d.l) : closes), ...levels.map((l) => l.price));
-    let hi = Math.max(...(candles ? data.map((d) => d.h) : closes), ...levels.map((l) => l.price));
+    // `fit: false` scales to the price only; a level outside it is pinned to
+    // the edge as a labelled chip with an arrow, so a far liquidation price
+    // can't flatten the chart.
+    const fitted = cfg.fit === false ? [] : levels.map((l) => l.price);
+    let lo = Math.min(...(candles ? data.map((d) => d.l) : closes), ...fitted);
+    let hi = Math.max(...(candles ? data.map((d) => d.h) : closes), ...fitted);
     if (cfg.prev) {
       lo = Math.min(lo, first);
       hi = Math.max(hi, first);
@@ -241,6 +254,14 @@
 
     for (const l of levels) {
       const s = LINE_STYLE[l.kind] ?? LINE_STYLE.entry;
+      if (l.price < lo || l.price > hi) {
+        const below = l.price < lo;
+        const ey = below ? H - 4 : 12;
+        const text = `${below ? '↓' : '↑'} ${l.label ?? l.kind.toUpperCase()} ${fmt(l.price, decimals)}`;
+        const t = el('text', { x: 6, y: ey, class: 'sc-level', fill: s.color }, svg);
+        t.textContent = text;
+        continue;
+      }
       el(
         'line',
         {

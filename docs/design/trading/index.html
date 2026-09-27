@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading-first Sente</title>
+    <link rel="stylesheet" href="../sente.css" />
+    <link rel="stylesheet" href="trading.css" />
+    <style>
+      .hero h1 em {
+        font-family: var(--f-voice);
+        font-weight: 400;
+        font-stretch: 100%;
+        color: var(--purple-hi);
+      }
+      .jobs {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 14px;
+        margin-top: 36px;
+      }
+      .jobs .board h3 {
+        margin: 10px 0 6px;
+        font: 600 18px var(--f-display);
+      }
+      .jobs .board p {
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      /* The map: four tabs + Trade, and the stack screens above them. */
+      .map {
+        display: grid;
+        gap: 18px;
+      }
+      .tabs-row {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .node {
+        display: grid;
+        gap: 4px;
+        padding: 14px;
+        border-radius: var(--r-well);
+        background: var(--board);
+        border: 1px solid var(--line);
+        text-decoration: none;
+        color: var(--text);
+      }
+      .node:hover {
+        border-color: var(--purple);
+      }
+      .node b {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: 600 15px var(--f-display);
+      }
+      .node span {
+        color: var(--text-dim);
+        font-size: 12.5px;
+        line-height: 1.45;
+      }
+      .node--fab {
+        background: rgb(131 110 249 / 0.14);
+        border-color: var(--purple);
+      }
+      .node--fab b svg {
+        color: var(--purple-hi);
+      }
+      .stack-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+      }
+      .stack-row .node {
+        background: transparent;
+        border-style: dashed;
+      }
+      @media (max-width: 760px) {
+        .tabs-row {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      .pages {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 14px;
+      }
+      .pages a {
+        display: grid;
+        gap: 6px;
+        padding: 18px;
+        border-radius: var(--r-board);
+        background: var(--board);
+        border: 1px solid var(--line);
+        color: var(--text);
+        text-decoration: none;
+      }
+      .pages a:hover {
+        border-color: var(--purple);
+      }
+      .pages a b {
+        font: 600 20px var(--f-display);
+      }
+      .pages a span {
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .pages a code {
+        color: var(--text-faint);
+        font: 400 12px var(--f-chain);
+      }
+
+      table.plan {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      .plan th,
+      .plan td {
+        text-align: left;
+        vertical-align: top;
+        padding: 12px 12px 12px 0;
+        border-bottom: 1px solid var(--line);
+        line-height: 1.5;
+      }
+      .plan th {
+        font: 500 11px var(--f-body);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+      }
+      .plan td:first-child,
+      .plan td:last-child {
+        white-space: nowrap;
+      }
+      .plan td span {
+        color: var(--text-dim);
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      .legend-list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .legend-list .b {
+        justify-self: start;
+      }
+      .flow > header a {
+        color: var(--purple-hi);
+      }
+      .legend-list li {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 12px;
+        align-items: baseline;
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .rules {
+        margin: 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 8px;
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .rules li::marker {
+        color: var(--purple);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head hero">
+        <div class="crumbs"><a href="../mockups.html">Goban</a> / Trading study (SEN-61)</div>
+        <span class="mark mark--lg">先</span>
+        <h1>Trade it yourself, <em>or hire it done.</em></h1>
+        <p>
+          A study for a trading-first Sente. People come in through markets and charts, trade spot
+          and perps themselves, hire preset agents to trade for them, and can step inside any agent
+          to watch a position live, with its entry, stop and target drawn on the chart. It extends
+          the Goban system; every screen is annotated with what backs it today and what it needs, so
+          the study doubles as a build plan.
+        </p>
+      </header>
+
+      <div class="jobs">
+        <div class="board">
+          <span class="t-label">Job 1</span>
+          <h3>Trading is the way in</h3>
+          <p>
+            Markets, a chart you can scrub, a quote before you commit, market and limit orders,
+            leverage on perps, and one honest screen for what filled.
+          </p>
+        </div>
+        <div class="board">
+          <span class="t-label">Job 2</span>
+          <h3>Preset agents</h3>
+          <p>
+            A gallery of strategies with a few friendly knobs, a suggested mandate, and live results
+            from agents already running them. No backtests, because none exist.
+          </p>
+        </div>
+        <div class="board">
+          <span class="t-label">Job 3</span>
+          <h3>Inside an agent</h3>
+          <p>
+            What it holds, what it did, what it made. Tap a position and see the agent's entry,
+            stop, target and liquidation on the chart, and its reasoning beside it.
+          </p>
+        </div>
+      </div>
+
+      <section class="flow">
+        <header>
+          <h2>The map</h2>
+          <p>A floating dock with four tabs and a Trade button; everything else stacks above it</p>
+        </header>
+        <div class="map">
+          <div class="tabs-row">
+            <a class="node" href="markets.html#home">
+              <b
+                ><svg class="i"><use href="icons.svg#i-home" /></svg>Home</b
+              >
+              <span>Total value, your agents at work, watchlist, a live ticker</span>
+            </a>
+            <a class="node" href="markets.html#markets">
+              <b
+                ><svg class="i"><use href="icons.svg#i-markets" /></svg>Markets</b
+              >
+              <span
+                >Kuru spot and Perpl perps, filters, themes, one search for markets and agents</span
+              >
+            </a>
+            <a class="node" href="agents.html">
+              <b
+                ><svg class="i"><use href="icons.svg#i-agents" /></svg>Agents</b
+              >
+              <span>Preset gallery, your agents, Top agents (was the Board)</span>
+            </a>
+            <a class="node" href="portfolio.html">
+              <b
+                ><svg class="i"><use href="icons.svg#i-portfolio" /></svg>Portfolio</b
+              >
+              <span>Holdings, positions, orders, history, capital with agents</span>
+            </a>
+            <a class="node node--fab" href="trade.html">
+              <b
+                ><svg class="i"><use href="icons.svg#i-trade" /></svg>Trade</b
+              >
+              <span>The floating button: pick a market, then the order ticket</span>
+            </a>
+          </div>
+          <div class="t-label">Stack screens</div>
+          <div class="stack-row">
+            <a class="node" href="markets.html"
+              ><b>Asset detail</b><span>Chart, your position, agents trading it</span></a
+            >
+            <a class="node" href="trade.html"
+              ><b>Order ticket</b
+              ><span>Bottom sheet: amount, type, review, hold to confirm</span></a
+            >
+            <a class="node" href="portfolio.html"
+              ><b>Your position</b><span>Levels, P&amp;L, close, protect</span></a
+            >
+            <a class="node" href="agents.html"
+              ><b>Preset → configure</b><span>Strategy knobs, mandate, review, hire</span></a
+            >
+            <a class="node" href="cockpit.html"
+              ><b>Agent cockpit</b><span>Equity, positions, history, mandate card</span></a
+            >
+            <a class="node" href="cockpit.html"
+              ><b>Agent position, live</b><span>Entry, stop, target, liq. on the chart</span></a
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="flow">
+        <header>
+          <h2>The pages</h2>
+          <p>Each is a set of annotated phones</p>
+        </header>
+        <div class="pages">
+          <a href="markets.html"
+            ><code>markets.html</code><b>Find something to trade</b
+            ><span>Home, the Markets tab and search, a spot asset and a perp asset.</span></a
+          >
+          <a href="trade.html"
+            ><code>trade.html</code><b>Place an order</b
+            ><span
+              >The ticket: market and limit, a leveraged long, review, execution steps, fills and
+              partial fills, first-time venue setup.</span
+            ></a
+          >
+          <a href="portfolio.html"
+            ><code>portfolio.html</code><b>What I own</b
+            ><span>The Portfolio tab, your position, open orders, history, privacy mode.</span></a
+          >
+          <a href="agents.html"
+            ><code>agents.html</code><b>Hire a strategy</b
+            ><span>Preset gallery, a preset in detail, configure and hire, Top agents.</span></a
+          >
+          <a href="cockpit.html"
+            ><code>cockpit.html</code><b>Inside an agent</b
+            ><span
+              >The cockpit, a live position with its levels, history, the mandate card, asking the
+              agent to act.</span
+            ></a
+          >
+          <a href="kit.html"
+            ><code>kit.html</code><b>Trading kit</b
+            ><span>The shared chart, rows, levels and dock the pages are built from.</span></a
+          >
+        </div>
+      </section>
+
+      <section class="flow">
+        <header>
+          <h2>Reading the annotations</h2>
+          <p>What backs each screen. The app itself never shows these labels</p>
+        </header>
+        <ul class="legend-list">
+          <li><span class="b b--live">Live</span>Exists in the app or API today.</li>
+          <li>
+            <span class="b b--api">API</span>The venue adapters already do it; it needs a read route
+            or a small server addition.
+          </li>
+          <li>
+            <span class="b b--signing">Signing</span>Needs you to trade from your own wallet:
+            phone-verified contract calls and venue onboarding. The biggest new build.
+          </li>
+          <li>
+            <span class="b b--venue">Venue</span>Needs something Kuru or Perpl don't offer on
+            testnet, like native stop-loss and take-profit orders.
+          </li>
+        </ul>
+      </section>
+
+      <section class="flow">
+        <header>
+          <h2>Rules the study keeps</h2>
+          <p>From the capability map (<a href="capabilities.md">capabilities.md</a>)</p>
+        </header>
+        <ul class="rules">
+          <li>
+            Stop-loss and take-profit are never shown as venue orders. On an agent's position they
+            are levels the agent checks each run, and the screen says so.
+          </li>
+          <li>
+            Market orders carry a max slippage and can partially fill; the result screen says what
+            filled and what was cancelled.
+          </li>
+          <li>Kuru is priced in USDC and Perpl in AUSD. Mixed totals say "≈ $".</li>
+          <li>
+            You can't close an agent's position yourself: you ask it to, amend its mandate, revoke
+            it, or take the funds back.
+          </li>
+          <li>
+            Prices poll every few seconds; screens show "as of" instead of pretending to stream.
+          </li>
+          <li>No backtests anywhere. Preset results are live agents, with the sample size.</li>
+        </ul>
+      </section>
+
+      <section class="flow">
+        <header>
+          <h2>Build order</h2>
+          <p>What each step unlocks, smallest first</p>
+        </header>
+        <div class="table-wrap">
+          <table class="plan">
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Backend</th>
+                <th>Unlocks</th>
+                <th>Size</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="b b--api">1 · Read</span></td>
+                <td>
+                  Market-data routes on the empty <code>VenuesModule</code>: markets, ticker, depth,
+                  klines, quote, with a shared Perpl subscription behind a cache.
+                </td>
+                <td><span>Home, Markets, asset detail with charts, quotes in the ticket</span></td>
+                <td>S–M</td>
+              </tr>
+              <tr>
+                <td><span class="b b--api">2 · Agents</span></td>
+                <td>
+                  <code>GET /agents/:id/portfolio</code> (balances, orders, Perpl positions with
+                  entry, mark, liq, uPnL); a durable event log.
+                </td>
+                <td><span>Agent cockpit, live position view, Portfolio's agent group</span></td>
+                <td>S–M</td>
+              </tr>
+              <tr>
+                <td><span class="b b--api">3 · Presets</span></td>
+                <td>
+                  A static strategy catalog rendered into the hire request; per-agent run cadence;
+                  <code>get_klines</code> and <code>quote</code> agent tools.
+                </td>
+                <td>
+                  <span>Preset gallery and configure flow; agent-watched stops and targets</span>
+                </td>
+                <td>S–M</td>
+              </tr>
+              <tr>
+                <td><span class="b b--signing">4 · Your trades</span></td>
+                <td>
+                  Manual trading from your Privy wallet: phone-verified calls, Kuru deposit and
+                  orders, Perpl onboarding (3 steps, 100 AUSD minimum) and orders.
+                </td>
+                <td><span>The order ticket, your positions and orders, fills</span></td>
+                <td>M–L</td>
+              </tr>
+              <tr>
+                <td><span class="b b--venue">5 · Later</span></td>
+                <td>
+                  An event and price stream (SSE); the indexer deployed for Top agents; native
+                  stop-loss and take-profit once the venues support them.
+                </td>
+                <td><span>Push alerts, live Top agents, hard stops</span></td>
+                <td>M–L</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

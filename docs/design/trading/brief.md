@@ -137,3 +137,18 @@ So the pages read as one app, every mockup uses the same user, balances, agents 
 - **Charts:** `chart.js` seeds. Use the market symbol as the seed (`"MON"`, `"ETH-PERP"`…) and
   set `start` near the price above so the scale is right (the chart writes its own last price
   into the headline through `scrub`).
+
+## Decisions made while building the study
+
+- **Markers say who, stones say what.** On a chart, a marker shows who traded: you are a white
+  stone, an agent a purple one. In a list (ledger, history), the stone shows what happened, using
+  Goban's five kinds (a trade is purple whoever made it, a deposit white).
+- **SL/TP on your own trades** is a disabled "Not on Perpl yet" row that points to hiring an agent
+  that trades with stops: an agent can't act on a position in your wallet, so "hand it to an
+  agent" would be a promise it can't keep.
+- **Guardian** is the preset answer to stops: you hand it an amount and levels, and it sells that
+  amount at a check when a level is crossed. Soft, and labelled so.
+- **Far levels** (a liquidation 30%+ away) use `chart.js`'s `fit: false`: an edge chip, not a
+  line that flattens the chart.
+- **The hire flow** is three steps (Strategy · Mandate · Review); a preset writes the
+  instructions, so naming moves into Review.

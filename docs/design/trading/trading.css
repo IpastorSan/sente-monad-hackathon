@@ -359,6 +359,10 @@ svg.i--lg {
   fill: #0d0a19;
 }
 .sc-level {
+  paint-order: stroke;
+  stroke: #0d0a19;
+  stroke-width: 3px;
+  stroke-linejoin: round;
   font: 500 9.5px var(--f-chain);
   letter-spacing: 0.02em;
 }

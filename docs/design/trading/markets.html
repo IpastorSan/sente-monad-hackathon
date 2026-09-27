@@ -1,0 +1,1587 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Markets and discovery</title>
+    <link rel="stylesheet" href="../sente.css" />
+    <link rel="stylesheet" href="trading.css" />
+    <script src="chart.js" defer></script>
+    <script src="../sigil.js" defer></script>
+    <style>
+      /* Page-only helpers, all on Goban tokens. */
+      .between {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .shot > ul a {
+        color: var(--purple-hi);
+      }
+      .app a {
+        text-decoration: none;
+      }
+      /* You are a white stone, like your fills on the chart. */
+      .me {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #fff, #d8d3ee 70%);
+        box-shadow: 0 1px 0 rgb(0 0 0 / 0.4);
+        flex: none;
+      }
+      .bell {
+        position: relative;
+      }
+      .bell::after {
+        content: '';
+        position: absolute;
+        top: 7px;
+        right: 8px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--purple);
+        box-shadow: 0 0 0 2px var(--ink);
+      }
+      .hero-row {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        margin-top: 14px;
+      }
+      .chart--flat {
+        margin: 4px -20px 0;
+      }
+      .ticker-wrap {
+        margin: 12px -20px 0;
+        padding: 9px 0;
+        border-block: 1px solid var(--line);
+      }
+      /* Horizontal strips bleed off the right edge: "there is more". */
+      .strip {
+        display: flex;
+        gap: 10px;
+        margin-right: -20px;
+        overflow: hidden;
+      }
+      .strip--chips {
+        gap: 6px;
+        mask-image: linear-gradient(90deg, #000 85%, transparent);
+      }
+      .strip--chips .chip {
+        flex: none;
+        padding: 7px 12px;
+      }
+      .mini {
+        flex: none;
+        width: 168px;
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        background: var(--board);
+        border: 1px solid var(--line);
+        border-radius: var(--r-well);
+      }
+      .mini__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .mini .sigil {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+      }
+      .mini .sigil svg {
+        width: 21px;
+        height: 21px;
+      }
+      .mini__move {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+        font: 400 12px/1.35 var(--f-body);
+        color: var(--text-dim);
+      }
+      .mini__move .stone {
+        --s: 10px;
+        margin-top: 3px;
+      }
+      .agents2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .agents2 .mini {
+        width: auto;
+        min-width: 0;
+      }
+      .tape {
+        display: grid;
+        gap: 10px;
+      }
+      .tape > div {
+        display: grid;
+        grid-template-columns: 14px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .mover {
+        flex: none;
+        width: 112px;
+        display: grid;
+        gap: 6px;
+        padding: 10px;
+        background: var(--well);
+        border-radius: var(--r-well);
+      }
+      .tok-stack {
+        display: flex;
+      }
+      .tok-stack .tok {
+        box-shadow: 0 0 0 2px var(--board);
+      }
+      .tok-stack .tok + .tok {
+        margin-left: -7px;
+      }
+      .theme {
+        flex: none;
+        width: 132px;
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border-radius: var(--r-well);
+        border: 1px solid var(--line);
+        background: var(--board);
+      }
+      .theme--on {
+        border-color: var(--purple);
+        background:
+          radial-gradient(120% 90% at 100% 0%, rgb(131 110 249 / 0.22), transparent 60%),
+          var(--board);
+      }
+      .search {
+        padding: 11px 14px;
+        font-size: 15px;
+      }
+      .search svg {
+        color: var(--text-faint);
+      }
+      .caret {
+        display: inline-block;
+        width: 2px;
+        height: 18px;
+        margin-left: -6px;
+        background: var(--purple-hi);
+        animation: blink 1s steps(2) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      .res {
+        display: grid;
+        grid-template-columns: 36px 1fr auto;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .res:last-child {
+        border-bottom: 0;
+      }
+      .res .sigil {
+        width: 36px;
+        height: 36px;
+        border-radius: 11px;
+      }
+      .res .sigil svg {
+        width: 27px;
+        height: 27px;
+      }
+      .hit {
+        color: var(--text);
+        background: rgb(131 110 249 / 0.28);
+        border-radius: 3px;
+      }
+      .mkt .mkt__main .t-caption,
+      .res .t-caption {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .price-line {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .unit {
+        font: 500 14px var(--f-body);
+        color: var(--text-faint);
+      }
+      .tf-grid .t-caption {
+        font-size: 11px;
+      }
+      .tf-grid b {
+        font: 500 13px var(--f-body);
+      }
+      .tf-grid > .tf-on {
+        box-shadow: 0 0 0 1px var(--line-strong) inset;
+      }
+      .card {
+        margin-top: 16px;
+        padding: 14px;
+        background: var(--board);
+        border: 1px solid var(--line);
+        border-radius: var(--r-board);
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .kv > div {
+        display: grid;
+        gap: 1px;
+        font-variant-numeric: tabular-nums;
+      }
+      .kv b {
+        font: 500 14px var(--f-body);
+      }
+      .order {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+        padding: 9px 10px 9px 12px;
+        border-radius: var(--r-well);
+        border: 1px dashed rgb(221 215 254 / 0.35);
+        font-size: 13px;
+      }
+      .order .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      /* Condensed header once the big price scrolls away. */
+      .minihead {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 -20px;
+        padding: 6px 20px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .minihead .grow {
+        flex: 1;
+      }
+      .thesis {
+        margin: 10px 0 0;
+        padding-left: 12px;
+        border-left: 2px solid var(--purple);
+        font-size: 15.5px;
+      }
+      .stat-rows .row {
+        padding: 9px 0;
+      }
+      .stat-rows .row > :last-child {
+        font-size: 14px;
+      }
+      .asof {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font: 400 11px var(--f-chain);
+        color: var(--text-faint);
+      }
+      .asof::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--mint);
+        animation: breathe 2.4s ease-in-out infinite;
+      }
+      .asof--paused::before {
+        animation: none;
+        background: transparent;
+        box-shadow: 0 0 0 1.5px var(--text-faint) inset;
+      }
+      .mark-index {
+        display: flex;
+        gap: 14px;
+        margin-top: 6px;
+      }
+      .funding {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 4px 12px;
+        margin-top: 14px;
+        padding: 12px 14px;
+        background: var(--well);
+        border-radius: var(--r-well);
+      }
+      .stale .mkt__px .t-strong,
+      .stale [data-chart] {
+        opacity: 0.45;
+      }
+      .banner {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        margin-top: 12px;
+        padding: 11px 12px;
+        border-radius: var(--r-well);
+        background: var(--well);
+        border: 1px solid var(--line-strong);
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--text-dim);
+      }
+      .banner svg {
+        color: var(--text-faint);
+        margin-top: 1px;
+      }
+      .testnet {
+        font: 500 10px var(--f-chain);
+        color: var(--text-faint);
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head">
+        <div class="crumbs"><a href="index.html">Trading study</a> / Markets</div>
+        <h1>Find something to trade</h1>
+        <p>
+          Home, the Markets tab, search, and the two asset pages (Kuru spot and Perpl perps). The
+          market set is small and blue-chip, so discovery is filters and themes over eleven markets
+          rather than a token firehose. Every screen puts the next step in reach: a row opens the
+          asset, the asset opens the ticket, and your agents' moves sit on the same charts as yours.
+        </p>
+      </header>
+
+      <!-- ═══════════════════════════════ HOME ═══════════════════════════════ -->
+      <section class="flow" id="home">
+        <header>
+          <h2>Home</h2>
+          <p>What you have, what moved, what your agents did</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="between" style="height: 44px">
+                    <div style="display: flex; align-items: center; gap: 10px">
+                      <span class="me" aria-label="Account"></span>
+                      <div>
+                        <div class="t-strong" style="line-height: 1.2">Good evening</div>
+                        <div class="t-chain" style="font-size: 11px">0x7a3f…c21e · testnet</div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 8px">
+                      <span class="icon-btn"
+                        ><svg class="i"><use href="icons.svg#i-eye" /></svg
+                      ></span>
+                      <span class="icon-btn bell"
+                        ><svg class="i"><use href="icons.svg#i-bell" /></svg
+                      ></span>
+                    </div>
+                  </div>
+
+                  <div class="hero-row">
+                    <div>
+                      <div class="t-label">Total value</div>
+                      <div style="margin-top: 6px">
+                        <span class="big big--xl"
+                          ><small style="margin-right: 6px">≈</small>$3,918<small>.40</small></span
+                        >
+                      </div>
+                      <div class="chg up" style="margin-top: 4px">+$84.12 (+2.19%) today</div>
+                    </div>
+                  </div>
+                  <div
+                    class="chart--flat"
+                    data-chart='{"type":"area","seed":"equity","start":3834.4383,"drift":-0.0006622,"height":64,"last":false}'
+                  ></div>
+
+                  <div class="ticker-wrap">
+                    <div class="ticker" aria-label="Majors">
+                      <div>
+                        <span><b>MON</b><span class="up">0.9812 +2.41%</span></span>
+                        <span><b>BTC-PERP</b><span class="up">64,188.5 +0.58%</span></span>
+                        <span><b>ETH-PERP</b><span class="down">2,544.10 −0.96%</span></span>
+                        <span><b>SOL-PERP</b><span class="down">148.62 −2.14%</span></span>
+                        <span><b>XAUt</b><span class="up">2,386.40 +0.11%</span></span>
+                        <span><b>WETH</b><span class="down">2,541.30 −1.08%</span></span>
+                        <span><b>MON</b><span class="up">0.9812 +2.41%</span></span>
+                        <span><b>BTC-PERP</b><span class="up">64,188.5 +0.58%</span></span>
+                        <span><b>ETH-PERP</b><span class="down">2,544.10 −0.96%</span></span>
+                        <span><b>SOL-PERP</b><span class="down">148.62 −2.14%</span></span>
+                        <span><b>XAUt</b><span class="up">2,386.40 +0.11%</span></span>
+                        <span><b>WETH</b><span class="down">2,541.30 −1.08%</span></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 20px">
+                    <div class="section__head">
+                      <span class="t-label">Your agents at work</span><a href="#">All 3</a>
+                    </div>
+                    <div class="agents2">
+                      <div class="mini">
+                        <div class="mini__head">
+                          <span class="sigil" data-sigil="range-hunter"></span>
+                          <span class="t-strong" style="font-size: 14px">Range Hunter</span>
+                        </div>
+                        <div class="mini__move">
+                          <i class="stone stone--trade"></i><span>Bought 180 MON at 0.9744</span>
+                        </div>
+                        <div class="between">
+                          <span class="t-caption">24h</span
+                          ><span class="up num" style="font-size: 13px">+18.22 USDC</span>
+                        </div>
+                      </div>
+                      <div class="mini">
+                        <div class="mini__head">
+                          <span class="sigil" data-sigil="basis-monk"></span>
+                          <span class="t-strong" style="font-size: 14px">Basis Monk</span>
+                        </div>
+                        <div class="mini__move">
+                          <i class="stone stone--thesis"></i><span>Short MON-PERP 2×</span>
+                        </div>
+                        <div class="between">
+                          <span class="t-caption">24h</span
+                          ><span class="down num" style="font-size: 13px">−4.10 AUSD</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 20px">
+                    <div class="section__head">
+                      <span class="t-label">Watchlist</span><a href="#">Edit</a>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">MON</span><span class="t-caption">Kuru spot</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"MON","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.9812</span><span class="t-dim up">+2.41%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #cfd6ff">E</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">ETH<span class="tag-perp">PERP 20×</span></span
+                        ><span class="t-caption">Perpl perps</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"ETH-PERP","drift":-0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">2,544.10</span><span class="t-dim down">−0.96%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #ffd9a8">B</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">cbBTC</span><span class="t-caption">Kuru spot</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"cbBTC","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">64,210.00</span><span class="t-dim up">+0.62%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="portfolio.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Home: the balance, then the board</h3>
+            <div class="backing">
+              <span class="b b--live">Live · agents, realised P&amp;L</span
+              ><span class="b b--api">API · prices, klines</span
+              ><span class="b b--api">API · positions → total</span>
+            </div>
+            <ul>
+              <li>
+                One hero: total value with dimmed cents and a sign-tinted area chart. It mixes USDC
+                and AUSD, so it reads "≈ $". The eye blurs every balance for trading in public.
+              </li>
+              <li>
+                The ticker marquee is the cheapest way to make the screen feel alive; it's
+                poll-backed (1–5 s), so it never pretends to tick.
+              </li>
+              <li>
+                "Your agents at work" shows each agent's last stone and one line, like the ledger. A
+                solid stone is a trade; a hollow ring is a held thesis. Tap opens the
+                <a href="cockpit.html">cockpit</a>.
+              </li>
+              <li>
+                Account lives behind the avatar (a white stone: you). The purple dot on the bell is
+                an event, so it earns purple.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="minihead" style="padding-top: 10px">
+                    <span class="grow t-title">Home</span>
+                    <span class="asof">as of 2s</span>
+                  </div>
+                  <div class="section" style="margin-top: 16px">
+                    <div class="section__head">
+                      <span class="t-label">What your agents are trading</span>
+                    </div>
+                    <div class="strip">
+                      <div class="mover">
+                        <div class="between">
+                          <span class="tok tok--sm" style="--tok: var(--purple-soft)">M</span
+                          ><span class="t-caption">2 agents</span>
+                        </div>
+                        <span class="t-strong">MON</span>
+                        <span class="t-dim up num">+2.41%</span>
+                      </div>
+                      <div class="mover">
+                        <div class="between">
+                          <span class="tok tok--sm" style="--tok: var(--purple-soft)">M</span
+                          ><span class="t-caption">1 agent</span>
+                        </div>
+                        <span class="t-strong">MON<span class="tag-perp">PERP</span></span>
+                        <span class="t-dim up num">+2.38%</span>
+                      </div>
+                      <div class="mover">
+                        <div class="between">
+                          <span class="tok tok--sm" style="--tok: #cfd6ff">E</span
+                          ><span class="t-caption">Tengen</span>
+                        </div>
+                        <span class="t-strong">ETH<span class="tag-perp">PERP</span></span>
+                        <span class="t-dim down num">−0.96%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 22px">
+                    <div class="section__head">
+                      <span class="t-label">Biggest moves today</span><a href="#">Markets</a>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #f0e0b8">D</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">DOGE<span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl perps</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"DOGE-PERP","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.1284</span><span class="t-dim up">+4.72%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #ffc2cc">A</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">AVAX<span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl perps</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"AVAX-PERP","drift":-0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">24.81</span><span class="t-dim down">−3.05%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">MON</span><span class="t-caption">Kuru spot</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"MON","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.9812</span><span class="t-dim up">+2.41%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="card board--goban" style="margin-top: 22px">
+                    <div class="t-label">Put cash to work</div>
+                    <p class="t-dim" style="margin: 8px 0 12px">
+                      1,284.50 AUSD and 500.00 USDC are sitting idle.
+                    </p>
+                    <div class="btn-row">
+                      <a class="btn btn--soft btn--sm" href="agents.html">Hire an agent</a>
+                      <a class="btn btn--primary btn--sm" href="trade.html">Trade</a>
+                    </div>
+                  </div>
+                  <div class="testnet" style="margin-top: 14px; text-align: center">
+                    MONAD TESTNET
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="portfolio.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Home, scrolled: movers and a nudge</h3>
+            <div class="backing">
+              <span class="b b--live">Live · agent positions</span
+              ><span class="b b--api">API · 24h change</span>
+            </div>
+            <ul>
+              <li>
+                "What your agents are trading" turns agent activity into discovery: a market two of
+                your agents hold is a market worth a look. Counts, not P&amp;L, so it reads as
+                interest, not advice.
+              </li>
+              <li>
+                Movers are the whole list sorted by |24h change|: with eleven markets, "trending"
+                would be theatre.
+              </li>
+              <li>
+                Idle cash gets one quiet card with two plain verbs. Trading is the primary action,
+                hiring the alternative.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════ MARKETS ═════════════════════════════ -->
+      <section class="flow" id="markets">
+        <header>
+          <h2>Markets tab</h2>
+          <p>Eleven markets, two venues, one list, one search</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="between" style="margin-top: 10px">
+                    <span class="t-display">Markets</span><span class="asof">as of 2s</span>
+                  </div>
+                  <div class="field__input search" style="margin-top: 14px">
+                    <svg class="i"><use href="icons.svg#i-search" /></svg>
+                    <span class="placeholder">Markets and agents</span>
+                  </div>
+                  <div class="strip strip--chips" style="margin-top: 12px">
+                    <span class="chip"
+                      ><svg class="i i--sm" style="vertical-align: -2px">
+                        <use href="icons.svg#i-star" /></svg
+                    ></span>
+                    <span class="chip chip--on">All</span>
+                    <span class="chip">Spot</span>
+                    <span class="chip">Perps</span>
+                    <span class="chip">Gainers</span>
+                    <span class="chip">Losers</span>
+                  </div>
+                  <div class="strip" style="margin-top: 14px">
+                    <div class="theme theme--on">
+                      <div class="tok-stack">
+                        <span class="tok tok--sm" style="--tok: var(--purple-soft)">M</span
+                        ><span class="tok tok--sm" style="--tok: var(--purple-hi)">M</span>
+                      </div>
+                      <div>
+                        <div class="t-strong">Monad natives</div>
+                        <div class="t-caption">2 markets · <span class="up">+2.4%</span></div>
+                      </div>
+                    </div>
+                    <div class="theme">
+                      <div class="tok-stack">
+                        <span class="tok tok--sm" style="--tok: #ffd9a8">B</span
+                        ><span class="tok tok--sm" style="--tok: #cfd6ff">E</span
+                        ><span class="tok tok--sm" style="--tok: #b8f0dc">S</span>
+                      </div>
+                      <div>
+                        <div class="t-strong">Majors</div>
+                        <div class="t-caption">6 markets · <span class="down">−0.3%</span></div>
+                      </div>
+                    </div>
+                    <div class="theme">
+                      <div class="tok-stack">
+                        <span class="tok tok--sm" style="--tok: #f5e3a0">X</span>
+                      </div>
+                      <div>
+                        <div class="t-strong">Gold</div>
+                        <div class="t-caption">1 market · <span class="up">+0.1%</span></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="section" style="margin-top: 18px">
+                    <div class="section__head">
+                      <span class="t-label">All markets · 11</span
+                      ><span class="t-caption">24h change ▾</span>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">MON</span
+                        ><span class="t-caption">Kuru spot · USDC</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"MON","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.9812</span><span class="t-dim up">+2.41%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: var(--purple-hi)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">MON<span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"MON-PERP","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.9809</span><span class="t-dim up">+2.38%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #ffd9a8">B</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">BTC<span class="tag-perp">PERP 20×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"BTC-PERP","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">64,188.5</span><span class="t-dim up">+0.58%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #ffd9a8">B</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">cbBTC</span
+                        ><span class="t-caption">Kuru spot · USDC</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"cbBTC","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">64,210.00</span><span class="t-dim up">+0.62%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #f5e3a0">X</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">XAUt</span
+                        ><span class="t-caption">Kuru spot · USDC</span>
+                      </div>
+                      <div
+                        data-chart='{"type":"spark","seed":"XAUt","drift":0.003,"vol":0.006}'
+                      ></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">2,386.40</span><span class="t-dim up">+0.11%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #cfd6ff">E</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">ETH<span class="tag-perp">PERP 20×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"ETH-PERP","drift":-0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">2,544.10</span><span class="t-dim down">−0.96%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="portfolio.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Markets: filters and themes over a short list</h3>
+            <div class="backing">
+              <span class="b b--api">API · /markets</span
+              ><span class="b b--api">API · 30d klines</span
+              ><span class="b b--live">Live · favourites (local)</span>
+            </div>
+            <ul>
+              <li>
+                One row for both venues: stone, symbol, venue + quote currency, a 30-day sparkline
+                with an end dot, then price and 24h Δ. Perps add a "PERP 20×" tag with that market's
+                max leverage.
+              </li>
+              <li>
+                Themes group only markets that exist: "Monad natives" is MON spot + MON-PERP. With
+                one gold market, "Gold" is honest; "Gold &amp; stables" would promise pairs we don't
+                have.
+              </li>
+              <li>
+                Four Kuru pairs are hard-coded; Perpl's list is dynamic. The count in the header
+                ("11") comes from the merged <code>/markets</code> route, never a guess.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px">
+                    <div class="field__input field__input--focus search" style="flex: 1">
+                      <svg class="i"><use href="icons.svg#i-search" /></svg>
+                      <span>mon</span><span class="caret"></span>
+                      <span class="suffix"
+                        ><svg class="i i--sm"><use href="icons.svg#i-close" /></svg
+                      ></span>
+                    </div>
+                    <span class="t-dim" style="color: var(--purple-hi)">Cancel</span>
+                  </div>
+                  <div
+                    style="display: flex; align-items: center; gap: 8px; margin-top: 12px"
+                    class="t-caption"
+                  >
+                    <svg class="i i--sm"><use href="icons.svg#i-clock" /></svg>
+                    <span>Recent</span>
+                    <span class="chip" style="padding: 4px 10px; font-size: 12px">ETH-PERP</span>
+                    <span class="chip" style="padding: 4px 10px; font-size: 12px">Tengen</span>
+                    <span class="chip" style="padding: 4px 10px; font-size: 12px">XAUt</span>
+                  </div>
+                  <div class="seg" style="margin-top: 14px">
+                    <button aria-pressed="true">All</button><button>Markets</button
+                    ><button>Agents</button>
+                  </div>
+
+                  <div class="section" style="margin-top: 16px">
+                    <div class="t-label" style="margin-bottom: 4px">Markets</div>
+                    <div class="res">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong"><span class="hit">MON</span></span
+                        ><span class="t-caption">Kuru spot · USDC · 0.9812</span>
+                      </div>
+                      <span class="t-dim up num">+2.41%</span>
+                    </div>
+                    <div class="res">
+                      <span class="tok" style="--tok: var(--purple-hi)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong"
+                          ><span class="hit">MON</span><span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl · AUSD · 0.9809</span>
+                      </div>
+                      <span class="t-dim up num">+2.38%</span>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 18px">
+                    <div class="section__head" style="margin-bottom: 4px">
+                      <span class="t-label">Agents trading MON</span
+                      ><a href="agents.html">Top agents</a>
+                    </div>
+                    <div class="res">
+                      <span class="sigil" data-sigil="range-hunter"></span>
+                      <div class="mkt__main">
+                        <span class="t-strong">Range Hunter</span
+                        ><span class="t-caption">Yours · Range Trader · 6 of 9</span>
+                      </div>
+                      <a class="btn btn--soft btn--sm" href="cockpit.html">View</a>
+                    </div>
+                    <div class="res">
+                      <span class="sigil" data-sigil="tengen-trader"></span>
+                      <div class="mkt__main">
+                        <span class="t-strong">Tengen <span class="up num">+24.1%</span></span
+                        ><span class="t-caption">Won 7 of 10 · Kuru + Perpl</span>
+                      </div>
+                      <a class="btn btn--primary btn--sm" href="agents.html">Hire</a>
+                    </div>
+                    <div class="res">
+                      <span class="sigil" data-sigil="gmonad-maxi"></span>
+                      <div class="mkt__main">
+                        <span class="t-strong"
+                          >g<span class="hit">mon</span>ad maxi
+                          <span class="down num">−2.6%</span></span
+                        ><span class="t-caption">Won 3 of 8 · Kuru</span>
+                      </div>
+                      <a class="btn btn--soft btn--sm" href="agents.html">View</a>
+                    </div>
+                  </div>
+                  <p class="t-caption" style="margin: 14px 0 0; text-align: center">
+                    No other tokens match. Sente lists the markets Kuru and Perpl run on Monad
+                    testnet.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <h3>Search focused: markets and agents in one box</h3>
+            <div class="backing">
+              <span class="b b--api">API · /markets</span
+              ><span class="b b--api">API · Top agents (indexer)</span
+              ><span class="b b--live">Live · hire</span>
+            </div>
+            <ul>
+              <li>
+                Recents stay as a chip row while you type, so the last market is one tap away. The
+                dock hides while search is focused.
+              </li>
+              <li>
+                Agents rank by what they trade, not just by name: "mon" finds Range Hunter because
+                it trades MON-USDC. Stats are the Board's (won 7 of 10), always with a sample size.
+              </li>
+              <li>
+                Inline actions: <b>View</b> on yours opens its <a href="cockpit.html">cockpit</a>;
+                <b>Hire</b> on a top agent opens its preset with the settings prefilled in
+                <a href="agents.html">Agents</a>. Nothing moves money from search.
+              </li>
+              <li>
+                Empty tail says why the list is short, instead of a "no results" shrug. Top agents
+                need the indexer; its <code>unconfigured</code> state hides this section.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═════════════════════════════ MON SPOT ═════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Spot asset: MON on Kuru</h2>
+          <p>Read the chart, see your stake and your agent's, then buy</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                    <span
+                      class="icon-btn"
+                      style="color: var(--purple-hi); border-color: var(--purple)"
+                      ><svg class="i" style="fill: currentColor">
+                        <use href="icons.svg#i-star" /></svg
+                    ></span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div style="flex: 1">
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                    <span class="asof">as of 2s</span>
+                  </div>
+                  <div class="price-line">
+                    <span class="big" id="mon-price">0.9812</span><span class="unit">USDC</span>
+                  </div>
+                  <div class="chg up" id="mon-chg" data-suffix=" past week">+5.00% past week</div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON·1W","start":0.93447293,"drift":0.000371,"height":200,"prev":true,"scrub":"#mon-price","scrubChange":"#mon-chg","lines":[{"at":0.95,"kind":"limit","label":"LIMIT"}],"markers":[{"i":19,"kind":"you"},{"i":38,"kind":"you"},{"i":91,"kind":"agent"}]}'
+                  ></div>
+                  <div class="ranges">
+                    <button>1H</button><button>1D</button><button aria-pressed="true">1W</button
+                    ><button>1M</button><button>1Y</button>
+                    <span class="icon-btn" style="width: 30px; height: 30px"
+                      ><svg class="i i--sm"><use href="icons.svg#i-candles" /></svg
+                    ></span>
+                  </div>
+                  <div class="tf-grid" style="margin-top: 12px">
+                    <div><span class="t-caption">5M</span><b class="up">+0.12%</b></div>
+                    <div><span class="t-caption">1H</span><b class="up">+0.64%</b></div>
+                    <div><span class="t-caption">4H</span><b class="down">−0.31%</b></div>
+                    <div class="tf-on">
+                      <span class="t-caption">1D</span><b class="up">+2.41%</b>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <div class="between">
+                      <span class="t-label">Your position</span>
+                      <a class="t-caption" href="portfolio.html" style="color: var(--purple-hi)"
+                        >Details</a
+                      >
+                    </div>
+                    <div class="between" style="margin-top: 8px; align-items: baseline">
+                      <span class="big big--md">412<small>.00 MON</small></span>
+                      <span class="t-strong up num">+16.15 USDC</span>
+                    </div>
+                    <div class="kv">
+                      <div><span class="t-caption">Value</span><b>404.25</b></div>
+                      <div><span class="t-caption">Avg price</span><b>0.9420</b></div>
+                      <div><span class="t-caption">Return</span><b class="up">+4.16%</b></div>
+                    </div>
+                    <div class="order">
+                      <span class="side side--long">Buy</span>
+                      <span class="grow">150 MON at 0.9500 · limit</span>
+                      <span class="t-caption" style="color: var(--berry)">Cancel</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <a class="btn btn--short" href="trade.html">Sell</a>
+                  <a class="btn btn--long" href="trade.html">Buy</a>
+                </div>
+              </div>
+            </div>
+            <h3>MON: price, chart, your stake</h3>
+            <div class="backing">
+              <span class="b b--api">API · klines</span
+              ><span class="b b--api">API · balances, open orders</span
+              ><span class="b b--signing">Signing · buy, sell, cancel</span>
+            </div>
+            <ul>
+              <li>
+                Drag the chart: the big price and "past week" change follow your finger, then snap
+                back. The headline is written by the chart, so the two can't disagree.
+              </li>
+              <li>
+                The ledger's language on the chart: two white stones are your fills (avg 0.9420),
+                the purple stone is Range Hunter buying at 0.9744. Your resting limit is a soft
+                purple dashed line; prev-close is the faint dashed one.
+              </li>
+              <li>
+                The change grid answers "how's it doing" at four horizons without switching range.
+                1D is outlined because it's the number used everywhere else.
+              </li>
+              <li>
+                Kuru has no amend, so the open order offers only <b>Cancel</b>. Sticky <b>Sell</b> /
+                <b>Buy</b> open the <a href="trade.html">order ticket</a> as a sheet.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="minihead">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg
+                    ></span>
+                    <span class="tok tok--sm" style="--tok: var(--purple-soft)">M</span>
+                    <span class="grow t-strong">MON</span>
+                    <span class="t-strong num">0.9812</span>
+                    <span class="t-dim up num">+2.41%</span>
+                  </div>
+
+                  <div class="section" style="margin-top: 16px">
+                    <div class="section__head">
+                      <span class="t-label">Agents trading MON</span><a href="#">1 of yours</a>
+                    </div>
+                    <a
+                      class="card"
+                      href="cockpit.html"
+                      style="display: block; margin-top: 0; text-decoration: none; color: inherit"
+                    >
+                      <div style="display: flex; align-items: center; gap: 10px">
+                        <span class="sigil" data-sigil="range-hunter"></span>
+                        <div style="flex: 1; min-width: 0">
+                          <div class="t-strong">Range Hunter</div>
+                          <div class="t-caption">Long 180 MON at 0.9744</div>
+                        </div>
+                        <div style="text-align: right">
+                          <div class="t-strong up num">+1.22</div>
+                          <div class="t-caption">USDC</div>
+                        </div>
+                      </div>
+                      <p class="t-voice thesis">
+                        MON keeps bouncing between 0.946 and 1.005. I bought the lower third; out at
+                        1.005, or if it closes under 0.946.
+                      </p>
+                      <div class="between t-caption" style="margin-top: 10px">
+                        <span>Thesis · 3h ago</span>
+                        <span style="color: var(--purple-hi)">Open cockpit ›</span>
+                      </div>
+                    </a>
+                  </div>
+
+                  <div class="section" style="margin-top: 22px">
+                    <div class="t-label" style="margin-bottom: 4px">Market</div>
+                    <div class="stat-rows">
+                      <div class="row"><span>24h range</span><span>0.9541 – 0.9932</span></div>
+                      <div class="row"><span>24h volume</span><span>184,210 USDC</span></div>
+                      <div class="row"><span>Spread</span><span>0.0004 (0.04%)</span></div>
+                      <div class="row"><span>Min order</span><span>1.00 USDC</span></div>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 18px">
+                    <div class="between" style="margin-bottom: 8px">
+                      <span class="t-label">Order book pressure</span
+                      ><span class="asof">top 10 levels · 2s</span>
+                    </div>
+                    <div class="pressure"><i style="--p: 58%"></i></div>
+                    <div class="between t-caption" style="margin-top: 6px">
+                      <span class="up">Bids 58% · 21,840 MON</span
+                      ><span class="down">Asks 42% · 15,760</span>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 22px">
+                    <div class="t-label" style="margin-bottom: 10px">Fills on MON</div>
+                    <div class="tape">
+                      <div>
+                        <i class="stone stone--trade"></i
+                        ><span>Range Hunter bought 180 at 0.9744</span
+                        ><span class="t-chain">3h</span>
+                      </div>
+                      <div>
+                        <i class="stone stone--deposit"></i><span>You bought 212 at 0.9459</span
+                        ><span class="t-chain">Sep 23</span>
+                      </div>
+                      <div>
+                        <i class="stone stone--deposit"></i><span>You bought 200 at 0.9380</span
+                        ><span class="t-chain">Sep 21</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <a class="btn btn--short" href="trade.html">Sell</a>
+                  <a class="btn btn--long" href="trade.html">Buy</a>
+                </div>
+              </div>
+            </div>
+            <h3>MON, scrolled: who else is in, and the market</h3>
+            <div class="backing">
+              <span class="b b--live">Live · agent thesis, fills</span
+              ><span class="b b--api">API · stats, book</span
+              ><span class="b b--signing">Signing · buy, sell</span>
+            </div>
+            <ul>
+              <li>
+                The price condenses into the header once the hero scrolls away, so Buy is never
+                pressed blind.
+              </li>
+              <li>
+                Theses are the "why" beside live P&amp;L: Range Hunter speaks in its own voice
+                (italic), and the card opens its <a href="cockpit.html">cockpit</a>. The unrealised
+                figure is marked from the polled price.
+              </li>
+              <li>
+                "Min order" is a notional (Kuru enforces min notional, not size). Volume is
+                quote-denominated because that's what the venue reports.
+              </li>
+              <li>
+                The pressure bar sums the top 10 levels at the last poll; we don't draw a depth
+                ladder we can't keep live.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═════════════════════════════ ETH PERP ═════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Perp asset: ETH-PERP on Perpl</h2>
+          <p>Candles, your levels, and what holding it costs</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                    <span
+                      class="icon-btn"
+                      style="color: var(--purple-hi); border-color: var(--purple)"
+                      ><svg class="i" style="fill: currentColor">
+                        <use href="icons.svg#i-star" /></svg
+                    ></span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: #cfd6ff">E</span>
+                    <div style="flex: 1">
+                      <div class="t-title">ETH<span class="tag-perp">PERP 20×</span></div>
+                      <div class="t-caption">ETH-AUSD · Perpl perps</div>
+                    </div>
+                    <span class="asof">as of 3s</span>
+                  </div>
+                  <div class="price-line">
+                    <span class="big" id="eth-price">2,544.10</span><span class="unit">AUSD</span>
+                  </div>
+                  <div class="between">
+                    <div class="chg down" id="eth-chg" data-suffix=" today">−0.96% today</div>
+                  </div>
+                  <div class="mark-index t-caption">
+                    <span>Mark <b class="num" style="color: var(--text-dim)">2,544.10</b></span>
+                    <span>Index <b class="num" style="color: var(--text-dim)">2,543.62</b></span>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"candles","seed":"ETH-PERP","start":2568.7643,"drift":-0.0017949,"height":210,"fit":false,"lines":[{"at":2498,"kind":"entry","label":"ENTRY LONG 3×"},{"at":1690,"kind":"liq","label":"LIQ EST"}],"markers":[{"i":44,"kind":"you"}],"scrub":"#eth-price","scrubChange":"#eth-chg"}'
+                  ></div>
+                  <div class="ranges">
+                    <button>1H</button><button aria-pressed="true">1D</button><button>1W</button
+                    ><button>1M</button>
+                    <span class="icon-btn" style="width: 30px; height: 30px"
+                      ><svg class="i i--sm"><use href="icons.svg#i-line" /></svg
+                    ></span>
+                  </div>
+                  <a
+                    class="order"
+                    href="#"
+                    style="color: inherit; border-style: solid; border-color: var(--line)"
+                  >
+                    <span class="side side--long">Long 3×</span>
+                    <span class="grow">0.25 ETH from 2,498.00</span>
+                    <span class="t-strong up num" style="font-size: 13px">+11.53 AUSD</span>
+                  </a>
+                  <div class="funding">
+                    <div>
+                      <div class="t-caption">Funding · longs pay shorts</div>
+                      <div class="t-strong num">+0.0100% / 8h</div>
+                    </div>
+                    <div style="text-align: right">
+                      <div class="t-caption">Next in</div>
+                      <div class="t-strong num">3h 12m</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <a class="btn btn--short" href="trade.html">Short</a>
+                  <a class="btn btn--long" href="trade.html">Long</a>
+                </div>
+              </div>
+            </div>
+            <h3>ETH-PERP: candles with your levels</h3>
+            <div class="backing">
+              <span class="b b--api">API · candles, mark, index</span
+              ><span class="b b--api">API · funding</span
+              ><span class="b b--signing">Signing · long, short</span>
+            </div>
+            <ul>
+              <li>
+                Perps open in candles (the line toggle is the icon). Your entry is a white dashed
+                line with a white stone where you filled, so the chart and the ledger agree.
+              </li>
+              <li>
+                At 3× the liquidation estimate sits 33% below; drawing it would squash the candles
+                into a strip. With <code>fit: false</code> the scale follows the price and
+                liquidation becomes a "↓ LIQ" edge chip: still on the chart, never flattening it. It
+                says "est." because it's our computation and excludes accrued funding.
+              </li>
+              <li>
+                Mark vs index side by side: mark drives P&amp;L and liquidation. Your position is
+                one row under the chart; funding says who pays in words, then the rate and
+                countdown.
+              </li>
+              <li>
+                Every figure is AUSD. The range pills skip 1Y: Perpl serves 1,024 candles and no
+                weekly interval.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="minihead">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg
+                    ></span>
+                    <span class="tok tok--sm" style="--tok: #cfd6ff">E</span>
+                    <span class="grow t-strong">ETH-PERP</span>
+                    <span class="t-strong num">2,544.10</span>
+                    <span class="t-dim down num">−0.96%</span>
+                  </div>
+
+                  <div class="card" style="margin-top: 16px">
+                    <div class="between">
+                      <span class="t-label">Your position</span>
+                      <span class="side side--long">Long 3×</span>
+                    </div>
+                    <div class="between" style="margin-top: 8px; align-items: baseline">
+                      <span class="big big--md">0.25<small> ETH</small></span>
+                      <div style="text-align: right">
+                        <div class="t-strong up num">+11.53 AUSD</div>
+                        <div class="t-caption">uPnL · +5.54% on margin</div>
+                      </div>
+                    </div>
+                    <div
+                      class="levels"
+                      style="margin-top: 12px; grid-template-columns: repeat(3, 1fr)"
+                    >
+                      <div class="lv-entry">
+                        <span class="t-caption">Entry</span><b>2,498.00</b>
+                      </div>
+                      <div><span class="t-caption">Margin</span><b>208.17</b></div>
+                      <div class="lv-liq">
+                        <span class="t-caption">Liq. est</span><b>1,690.00</b>
+                      </div>
+                    </div>
+                    <p class="t-caption" style="margin: 10px 0 0">
+                      Isolated margin. Target and stop aren't venue orders on Perpl yet.
+                    </p>
+                    <div class="btn-row" style="margin-top: 12px">
+                      <a class="btn btn--soft btn--sm" href="portfolio.html">Details</a>
+                      <a class="btn btn--sm btn--danger" href="trade.html">Close position</a>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 22px">
+                    <div class="between" style="margin-bottom: 8px">
+                      <span class="t-label">Open interest</span
+                      ><span class="t-caption num">18.4M AUSD</span>
+                    </div>
+                    <div class="pressure"><i style="--p: 61%"></i></div>
+                    <div class="between t-caption" style="margin-top: 6px">
+                      <span class="up">Longs 61%</span><span class="down">Shorts 39%</span>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 18px">
+                    <div class="t-label" style="margin-bottom: 4px">Market</div>
+                    <div class="stat-rows">
+                      <div class="row"><span>24h volume</span><span>41.2M AUSD</span></div>
+                      <div class="row"><span>Max leverage</span><span>20×</span></div>
+                      <div class="row">
+                        <span>To open an account</span><span>100 AUSD min.</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="section" style="margin-top: 18px">
+                    <div class="t-label" style="margin-bottom: 4px">Agents trading ETH-PERP</div>
+                    <div class="res">
+                      <span class="sigil" data-sigil="tengen-trader"></span>
+                      <div class="mkt__main">
+                        <span class="t-strong">Tengen <span class="up num">+24.1%</span></span
+                        ><span class="t-caption">Long ETH 2× · won 7 of 10</span>
+                      </div>
+                      <a class="btn btn--soft btn--sm" href="agents.html">View</a>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <a class="btn btn--short" href="trade.html">Short</a>
+                  <a class="btn btn--long" href="trade.html">Long</a>
+                </div>
+              </div>
+            </div>
+            <h3>ETH-PERP, scrolled: your position and the crowd</h3>
+            <div class="backing">
+              <span class="b b--api">API · position, OI</span
+              ><span class="b b--signing">Signing · close</span
+              ><span class="b b--venue">Venue · SL/TP</span>
+            </div>
+            <ul>
+              <li>
+                The position card leads with size and uPnL (on margin, since that's what you put
+                in), then entry, margin and liq. est. in the same level colours the chart uses.
+              </li>
+              <li>
+                No add-margin or amend on Perpl, so the card offers only <b>Close position</b> (a
+                reduce order in the <a href="trade.html">ticket</a>) and details. Stops are named as
+                missing rather than faked.
+              </li>
+              <li>
+                Open interest as a long/short pressure bar: the crowd's lean in one glance. Funding
+                already told you what the lean costs.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════ STALE ══════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Edge: prices stop updating</h2>
+          <p>The app polls, so it says how old a price is</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="between" style="margin-top: 10px">
+                    <span class="t-display">Markets</span
+                    ><span class="asof asof--paused">as of 12s ago</span>
+                  </div>
+                  <div class="banner">
+                    <svg class="i"><use href="icons.svg#i-clock" /></svg>
+                    <div>
+                      <b style="color: var(--text); font-weight: 500">Perpl prices paused.</b>
+                      Showing the last ones we got, 12 seconds ago. Retrying every 5 s; Kuru is
+                      live.
+                    </div>
+                  </div>
+                  <div class="strip strip--chips" style="margin-top: 14px">
+                    <span class="chip">All</span>
+                    <span class="chip">Spot</span>
+                    <span class="chip chip--on">Perps</span>
+                    <span class="chip">Gainers</span>
+                    <span class="chip">Losers</span>
+                  </div>
+                  <div class="section stale" style="margin-top: 16px">
+                    <div class="section__head">
+                      <span class="t-label">Perps · 7</span
+                      ><span class="asof asof--paused">12s</span>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #ffd9a8">B</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">BTC<span class="tag-perp">PERP 20×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"BTC-PERP","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">64,188.5</span><span class="t-caption">12s ago</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #cfd6ff">E</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">ETH<span class="tag-perp">PERP 20×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"ETH-PERP","drift":-0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">2,544.10</span><span class="t-caption">12s ago</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: var(--purple-hi)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">MON<span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"MON-PERP","drift":0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.9809</span><span class="t-caption">12s ago</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #b8f0dc">S</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">SOL<span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"SOL-PERP","drift":-0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">148.62</span><span class="t-caption">12s ago</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #bcd0ff">L</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">LINK<span class="tag-perp">PERP 10×</span></span
+                        ><span class="t-caption">Perpl · AUSD</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"LINK-PERP","drift":-0.003}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">11.42</span><span class="t-caption">12s ago</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="portfolio.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Stale data: say how old, don't pretend</h3>
+            <div class="backing">
+              <span class="b b--live">Live · polling</span
+              ><span class="b b--api">API · per-venue health</span>
+            </div>
+            <ul>
+              <li>
+                The breathing mint dot means "fresh from the last poll". After two missed polls it
+                becomes a hollow ring and the label counts up: "as of 12s ago".
+              </li>
+              <li>
+                Only the venue that's down dims. Prices stay readable, the 24h change is replaced by
+                their age, and the reason is one plain sentence.
+              </li>
+              <li>
+                Trading isn't blocked: the <a href="trade.html">ticket</a> re-quotes before you
+                confirm and every market order carries a worst price, so a stale list can't fill you
+                at a stale price.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
