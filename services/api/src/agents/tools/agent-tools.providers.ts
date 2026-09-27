@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { Logger, type Provider } from '@nestjs/common';
 
 import { stateDir } from '../../state/json-file';
+import { MarketDataService } from '../../venues/market-data.service';
+import { VenuesModule } from '../../venues/venues.module';
 
 import { AgentsService } from '../agents.service';
 import { AGENT_EVENTS, InMemoryAgentEventLog, type AgentEventLog } from '../events/agent-event-log';
@@ -92,17 +94,21 @@ export const agentToolsProviders: Provider[] = [
   agentEventsProvider,
   {
     provide: AgentTools,
-    inject: [AGENT_STORE, AgentVenues, AGENT_EVENTS, AGENT_TOOLS_CONFIG],
+    inject: [AGENT_STORE, AgentVenues, AGENT_EVENTS, AGENT_TOOLS_CONFIG, MarketDataService],
     useFactory: (
       store: AgentStore,
       venues: AgentVenues,
       events: AgentEventLog,
       config: AgentToolsConfig,
+      marketData: MarketDataService,
     ) =>
       new AgentTools({
         store,
         events,
         precheck: config.precheck,
+        // SEN-79: klines, quotes and Perpl depth through the phone's cached
+        // path, so N agents cost the venue what one screen does.
+        marketData,
         venuesFor: (agent) =>
           venues.forAgent({ agentId: agent.id, walletId: agent.walletId, address: agent.address }),
       }),
@@ -119,6 +125,9 @@ export const agentToolsProviders: Provider[] = [
 ];
 
 export const agentToolsControllers = [McpController];
+
+/** VenuesModule: the shared `MarketDataService` the read tools go through (SEN-79). */
+export const agentToolsImports = [VenuesModule];
 
 /** What AgentsModule exports for SEN-8 (the runner) and the future Agent Ledger. */
 export const agentToolsExports = [AgentTools, AGENT_EVENTS];

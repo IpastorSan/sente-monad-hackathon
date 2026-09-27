@@ -61,6 +61,11 @@ describe('Sente MCP server', () => {
     expect(market.inputSchema.required).toEqual(expect.arrayContaining(['slippageLimitPrice']));
     expect(market.annotations?.readOnlyHint).toBe(false);
     expect(tools.find((t) => t.name === 'get_mandate')!.annotations?.readOnlyHint).toBe(true);
+    // SEN-79: the market-data reads, listed read-only like every other read.
+    expect(tools).toHaveLength(16);
+    for (const name of ['get_klines', 'quote']) {
+      expect(tools.find((t) => t.name === name)!.annotations?.readOnlyHint).toBe(true);
+    }
   });
 
   it('returns a refusal as isError, and the order once the thesis is recorded', async () => {

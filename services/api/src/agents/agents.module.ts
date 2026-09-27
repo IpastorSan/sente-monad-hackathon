@@ -42,6 +42,7 @@ import { AgentStoreModule } from './store/agent-store.module';
 import {
   agentToolsControllers,
   agentToolsExports,
+  agentToolsImports,
   agentToolsProviders,
 } from './tools/agent-tools.providers';
 import { agentVenuesExports, agentVenuesProviders } from './venues/agent-venues.providers';
@@ -152,6 +153,7 @@ const authProvider: Provider = {
     AgentStoreModule,
     AlchemyModule,
     ...agentRunnerImports,
+    ...agentToolsImports,
   ],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   controllers: [AgentsController, ...agentToolsControllers],
