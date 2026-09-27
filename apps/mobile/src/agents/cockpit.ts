@@ -13,9 +13,10 @@
  * - The equity chart is CUMULATIVE REALISED P&L from verdicts, not wallet
  *   value: there is no equity history on the wire, and a line that mixed
  *   realised money with today's balance would draw a curve nobody earned.
- * - Stop and target are the agent's preset params applied to the entry, and
- *   they are WATCHED levels (checked each run, not venue orders). An agent
- *   with no preset, or a preset with no levels, gets no track at all.
+ * - Stop and target are the agent's preset params applied to the entry, read
+ *   from `levels.ts` (SEN-117), which also says which of them rest on the
+ *   venue and which are only watched. An agent with no preset, or a preset
+ *   without both a stop and a target, gets no track at all.
  */
 import { groupThousands } from './amounts.ts';
 import type {
@@ -26,6 +27,7 @@ import type {
   AgentSummary,
 } from './api.ts';
 import type { LedgerEntry, VerdictEntry } from './ledger.ts';
+import { levelsNote, presetLevels, stopAndTarget, type StopTarget } from './levels.ts';
 import { pnlLabel } from './leaderboard.ts';
 import { outcome, sumDecimals } from './ledgerView.ts';
 import { formatNotional, marketFor, tokenFor } from './mandate.ts';
@@ -219,50 +221,38 @@ export function equitySeries(
 // ---------------------------------------------------------------------------
 // Overview: open positions
 
-/** Stop and target, watched by the agent: its preset's params applied to the entry. */
-export type WatchedLevels = { stop: string; target: string };
+/**
+ * Stop and target as the track's pair. The name predates SEN-117: not every
+ * one is watched now (Range Trader's and Mean Reverter's targets rest on the
+ * venue), and `PositionRow.levelsNote` says which is which.
+ */
+export type WatchedLevels = StopTarget;
 
 /**
- * The presets whose params name a stop and a target, read the way their own
- * prompts phrase them: Range Trader's `target`/`stop` are percent from the
- * entry, Guardian's `sellAbove`/`sellBelow` are prices. Any other preset — or
- * a param that is not a number — has no levels, and the row draws no track.
+ * The preset's stop and target applied to the entry, `null` unless it has
+ * both. A thin wrapper: `levels.ts` is the one reader of preset params, so
+ * the cockpit and the position screen cannot drift apart.
  */
 export function watchedLevels(
-  preset: Pick<AgentPresetRef, 'id' | 'params'> | null | undefined,
+  preset: (Pick<AgentPresetRef, 'id' | 'params'> & { customized?: boolean }) | null | undefined,
   entry: string,
   side: 'long' | 'short',
 ): WatchedLevels | null {
-  if (!preset) return null;
-  const at = Number(entry);
-  const param = (key: string): number | null => {
-    const value = preset.params[key];
-    const parsed =
-      typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  };
-  if (preset.id === 'range-trader') {
-    const target = param('target');
-    const stop = param('stop');
-    if (target === null || stop === null || !Number.isFinite(at) || at <= 0) return null;
-    const up = side === 'long' ? 1 : -1;
-    const places = Math.max(4, decimalsOf(entry));
-    return {
-      target: (at * (1 + (up * target) / 100)).toFixed(places),
-      stop: (at * (1 - (up * stop) / 100)).toFixed(places),
-    };
-  }
-  if (preset.id === 'guardian') {
-    const above = param('sellAbove');
-    const below = param('sellBelow');
-    if (above === null || below === null) return null;
-    return { target: String(above), stop: String(below) };
-  }
-  return null;
+  return stopAndTarget(presetLevels(preset, { entry, side }));
 }
 
-function decimalsOf(value: string): number {
-  return value.split('.')[1]?.length ?? 0;
+/** The track's pair and the sentence qualifying it, from the same levels. */
+function levelsOf(
+  preset: AgentPresetRef | null | undefined,
+  entry: string | null,
+  side: 'long' | 'short',
+  venue: 'kuru' | 'perpl',
+): Pick<PositionRow, 'levels' | 'levelsNote'> {
+  if (entry === null) return { levels: null, levelsNote: null };
+  const levels = presetLevels(preset, { entry, side });
+  const pair = stopAndTarget(levels);
+  // The note qualifies the track, so it appears only where the track does.
+  return { levels: pair, levelsNote: pair ? levelsNote(levels, venue) : null };
 }
 
 /**
@@ -308,6 +298,8 @@ export type PositionRow = {
   /** Perpl's own estimate, excluding funding. */
   liq: string | null;
   levels: WatchedLevels | null;
+  /** Which of those levels rest on the venue and which are only watched; `null` with no track. */
+  levelsNote: string | null;
   /** The agent's latest thesis on this market, in its own words. */
   thesis: string | null;
 };
@@ -350,7 +342,7 @@ export function positionRows(
         entry: position.entryPrice,
         mark: position.markPrice,
         liq: position.liquidationPriceEst,
-        levels: watchedLevels(preset, position.entryPrice, position.side),
+        ...levelsOf(preset, position.entryPrice, position.side, 'perpl'),
         thesis: thesisFor(position.symbol),
       });
     }
@@ -375,7 +367,7 @@ export function positionRows(
       entry: avgPrice,
       mark: holding.markPrice,
       liq: null,
-      levels: avgPrice !== null ? watchedLevels(preset, avgPrice, 'long') : null,
+      ...levelsOf(preset, avgPrice, 'long', 'kuru'),
       thesis: thesisFor(holding.market),
     });
   }

@@ -506,7 +506,7 @@ function Overview({
           ) : (
             <View style={styles.positions}>
               {rows.map((row) => (
-                <PositionCard key={row.key} row={row} />
+                <PositionCard key={row.key} row={row} agentId={agent.id} />
               ))}
             </View>
           )}
@@ -520,80 +520,96 @@ function Overview({
   );
 }
 
-/** One open position: what it is, what it's worth, and where price sits between stop and target. */
-function PositionCard({ row }: { row: PositionRow }) {
+/**
+ * One open position: what it is, what it's worth, and where price sits between
+ * stop and target. Taps through to the live position screen (SEN-117).
+ */
+function PositionCard({ row, agentId }: { row: PositionRow; agentId: string }) {
+  const router = useRouter();
   const track =
     row.levels && row.entry && row.mark ? trackLayout(row.levels, row.entry, row.mark) : null;
   return (
-    <Card style={styles.position}>
-      <View style={styles.positionTop}>
-        <TokenGlyph symbol={row.base} />
-        <View style={styles.grow}>
-          <View style={styles.inline}>
-            <Text style={text.strong}>{row.base}</Text>
-            <SideTag side={row.side} />
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${row.base} ${row.side}, open the live position`}
+      onPress={() =>
+        router.push({
+          pathname: '/agents/[id]/position/[symbol]',
+          params: { id: agentId, symbol: row.symbol, venue: row.venue },
+        })
+      }
+      style={({ pressed }) => pressed && styles.pressed}
+    >
+      <Card style={styles.position}>
+        <View style={styles.positionTop}>
+          <TokenGlyph symbol={row.base} />
+          <View style={styles.grow}>
+            <View style={styles.inline}>
+              <Text style={text.strong}>{row.base}</Text>
+              <SideTag side={row.side} />
+            </View>
+            <Text style={[text.caption, text.num]} numberOfLines={1}>
+              {row.detail}
+            </Text>
           </View>
-          <Text style={[text.caption, text.num]} numberOfLines={1}>
-            {row.detail}
-          </Text>
-        </View>
-        <View style={styles.positionFig}>
-          <Text
-            style={[
-              text.strong,
-              text.num,
-              row.tone === 'up' && text.up,
-              row.tone === 'down' && text.down,
-            ]}
-          >
-            {row.pnl ?? '—'}
-          </Text>
-          {row.pct ? (
+          <View style={styles.positionFig}>
             <Text
               style={[
-                text.caption,
+                text.strong,
                 text.num,
                 row.tone === 'up' && text.up,
                 row.tone === 'down' && text.down,
               ]}
             >
-              {row.pct}
+              {row.pnl ?? '—'}
             </Text>
-          ) : null}
-        </View>
-      </View>
-      {track && row.levels ? (
-        <View>
-          <View style={styles.track}>
-            <View
-              style={[
-                styles.trackSpan,
-                {
-                  left: `${Math.min(track.entry, track.mark) * 100}%`,
-                  width: `${Math.abs(track.mark - track.entry) * 100}%`,
-                },
-              ]}
-            />
-            <View style={[styles.trackEntry, { left: `${track.entry * 100}%` }]} />
-            <View style={[styles.trackMark, { left: `${track.mark * 100}%` }]} />
+            {row.pct ? (
+              <Text
+                style={[
+                  text.caption,
+                  text.num,
+                  row.tone === 'up' && text.up,
+                  row.tone === 'down' && text.down,
+                ]}
+              >
+                {row.pct}
+              </Text>
+            ) : null}
           </View>
-          <View style={styles.trackLegend}>
-            <Text style={[text.caption, text.num]}>stop {row.levels.stop}</Text>
-            <Text style={[text.caption, text.num]}>target {row.levels.target}</Text>
-          </View>
-          <Text style={text.caption}>Watched: checked every run, not venue orders.</Text>
         </View>
-      ) : row.liq ? (
-        <Text style={[text.caption, text.num]}>
-          Mark {row.mark ?? '—'} · Liq. est {row.liq}
-        </Text>
-      ) : null}
-      {row.thesis ? (
-        <Text style={text.voice} numberOfLines={4}>
-          {row.thesis}
-        </Text>
-      ) : null}
-    </Card>
+        {track && row.levels ? (
+          <View>
+            <View style={styles.track}>
+              <View
+                style={[
+                  styles.trackSpan,
+                  {
+                    left: `${Math.min(track.entry, track.mark) * 100}%`,
+                    width: `${Math.abs(track.mark - track.entry) * 100}%`,
+                  },
+                ]}
+              />
+              <View style={[styles.trackEntry, { left: `${track.entry * 100}%` }]} />
+              <View style={[styles.trackMark, { left: `${track.mark * 100}%` }]} />
+            </View>
+            <View style={styles.trackLegend}>
+              <Text style={[text.caption, text.num]}>stop {row.levels.stop}</Text>
+              <Text style={[text.caption, text.num]}>target {row.levels.target}</Text>
+            </View>
+            {row.levelsNote ? <Text style={text.caption}>{row.levelsNote}</Text> : null}
+          </View>
+        ) : row.liq ? (
+          <Text style={[text.caption, text.num]}>
+            Mark {row.mark ?? '—'} · Liq. est {row.liq}
+          </Text>
+        ) : null}
+        {row.thesis ? (
+          <Text style={text.voice} numberOfLines={4}>
+            {row.thesis}
+          </Text>
+        ) : null}
+      </Card>
+    </Pressable>
   );
 }
 
