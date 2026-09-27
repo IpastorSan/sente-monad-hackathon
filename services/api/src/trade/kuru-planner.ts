@@ -398,8 +398,12 @@ async function planWithdraw(intent: KuruWithdrawIntent, deps: KuruPlannerDeps): 
  * `batch` step whose transaction is the wallet calling its own ERC-7579
  * `execute`. A lone leg is never wrapped: a direct call is what the phone
  * reads most simply, and there is nothing to make atomic.
+ *
+ * Exported for the phone's cross-side contract test (SEN-125), which repacks
+ * tampered legs through this same function so that each refusal it expects is
+ * caused by the tamper alone, never by a hand-rolled packing that drifted.
  */
-function packSteps(
+export function packSteps(
   legs: readonly { kind: StepKind; title: string; call: KuruCall }[],
   deps: KuruPlannerDeps,
   batchTitle: string,
