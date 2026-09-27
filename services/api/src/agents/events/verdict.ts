@@ -53,6 +53,27 @@
  * same arithmetic Kuru gets, and one verdict row no longer mixes two
  * definitions of PnL depending on which venue filled it.
  *
+ * ## The fee rule (SEN-128)
+ *
+ * The ONE rule for fees in realised PnL, shared by every ledger that realises
+ * PnL from Kuru fills — this file and `portfolio/cost-basis.ts`, which points
+ * here rather than restating it. It is this file's rule because it is what
+ * users already see on verdict cards, summaries and the leaderboard.
+ *
+ * 1. A fee is realised WHEN IT IS PAID, on the fill that paid it, opening and
+ *    closing fills alike. A buy's fee is a realised loss at once, not a cost
+ *    folded into its lot, so lots (and any entry price read off them) are fee
+ *    exclusive and `realised + (mark - entry) x open` counts every fee once.
+ * 2. The WHOLE fee of a fill is netted, however much of that fill matched a
+ *    lot. A sell that runs out of lots (an over-sell of base the ledger has no
+ *    cost for) realises nothing on its unmatched size, but the fee was still
+ *    paid in full.
+ * 3. A fee whose `feeAsset` is the PnL asset (the market's quote), or that
+ *    names no asset, is quote as it arrives. Any other asset is read as base
+ *    and priced at the fill that paid it.
+ *
+ * `feeInQuote` is that rule as code; both ledgers call it.
+ *
  * A position counts as closed the same way on both venues: its net size back to
  * zero — the thesis's own fills netting out, which is all a spot venue has to
  * offer. A close for MORE than the thesis opened counts too: the net is clamped
@@ -285,16 +306,8 @@ function settleSegment(
       if (isZero(net)) closingFillAt = event.at;
     }
 
-    const fee = decimalOf(event.detail['fee']);
-    if (fee !== undefined && !isZero(fee)) {
-      const feeAsset = stringOf(event.detail['feeAsset']);
-      // Quote-unit fee as it arrives; anything else is read as base and priced
-      // at the fill that paid it.
-      fees = addScaled(
-        fees,
-        feeAsset !== undefined && feeAsset !== pnlAsset ? mulScaled(fee, price) : fee,
-      );
-    }
+    const fee = feeInQuote(event.detail, price, pnlAsset);
+    if (fee !== undefined) fees = addScaled(fees, fee);
   }
 
   // Opened from the fills: the position is closed once nothing is left of it,
@@ -341,6 +354,23 @@ function settleSegment(
     ...(closed ? { closedAt: close?.at ?? closingFillAt } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
+}
+
+/**
+ * The fee a fill paid, in `quoteAsset`, per the fee rule in this file's header
+ * (SEN-128): quote as it arrives when `feeAsset` is `quoteAsset` or absent,
+ * otherwise read as base and priced at `price`, the fill that paid it.
+ * `undefined` when the fill carries no fee (or a zero one).
+ */
+export function feeInQuote(
+  detail: Readonly<Record<string, unknown>>,
+  price: Scaled,
+  quoteAsset: string,
+): Scaled | undefined {
+  const fee = decimalOf(detail['fee']);
+  if (fee === undefined || isZero(fee)) return undefined;
+  const feeAsset = stringOf(detail['feeAsset']);
+  return feeAsset !== undefined && feeAsset !== quoteAsset ? mulScaled(fee, price) : fee;
 }
 
 /** Kuru has no short, so a "short" thesis is the reverse trade: sell first, buy back. */
@@ -458,7 +488,7 @@ export function addScaled(a: Scaled, b: Scaled): Scaled {
   return { units: rescaled(a, scale) + rescaled(b, scale), scale };
 }
 
-function subScaled(a: Scaled, b: Scaled): Scaled {
+export function subScaled(a: Scaled, b: Scaled): Scaled {
   const scale = Math.max(a.scale, b.scale);
   return { units: rescaled(a, scale) - rescaled(b, scale), scale };
 }
