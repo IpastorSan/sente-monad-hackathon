@@ -9,6 +9,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import { AgentsApi } from '@/agents/api';
+import { MarketsApi } from '@/markets/api';
 import { useAccount, type UseAccount } from '@/auth';
 import {
   useSmartAccount,
@@ -44,6 +45,8 @@ export type Session = {
   readonly api: SessionAuth;
   /** `null` until signed in: agents are scoped to the owner address. */
   readonly agents: AgentsApi | null;
+  /** The `/markets` client (SEN-110); `null` until signed in, like `agents`. */
+  readonly markets: MarketsApi | null;
 };
 
 const SessionContext = createContext<Session | null>(null);
@@ -63,9 +66,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     () => (auth.address ? new AgentsApi({ auth: api }) : null),
     [auth.address, api],
   );
+  // One client for every market screen (SEN-110), gated like `agents`: the
+  // routes sit behind the session guard, so before sign-in there is nothing
+  // to ask and the hooks idle instead of collecting 401s.
+  const markets = useMemo(
+    () => (auth.address ? new MarketsApi({ auth: api }) : null),
+    [auth.address, api],
+  );
   const session = useMemo(
-    () => ({ auth, wallet, walletApi, smart, api, agents }),
-    [auth, wallet, walletApi, smart, api, agents],
+    () => ({ auth, wallet, walletApi, smart, api, agents, markets }),
+    [auth, wallet, walletApi, smart, api, agents, markets],
   );
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }
