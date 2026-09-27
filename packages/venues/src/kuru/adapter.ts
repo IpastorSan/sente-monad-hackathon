@@ -246,6 +246,16 @@ export class KuruVenue implements Venue {
     return [(await this.#prepareLimit(request)).call];
   }
 
+  /**
+   * A market order as calls, validated and encoded but not submitted: the
+   * same bounded IOC `placeMarket` sends. Lifted out of `placeMarket` (SEN-84)
+   * so a manual order the phone signs goes through exactly the code an
+   * agent's order does, unbounded refusal included.
+   */
+  async marketOrderCalls(request: MarketOrderRequest): Promise<KuruCall[]> {
+    return [(await this.#prepareMarket(request)).call];
+  }
+
   deposit(asset: string, amount: Decimal): Promise<KuruExecution> {
     return this.#submit(this.depositCalls(asset, amount));
   }
@@ -429,21 +439,7 @@ export class KuruVenue implements Venue {
    * `maxSlippage` applied to the live best price.
    */
   async placeMarket(request: MarketOrderRequest): Promise<Order> {
-    rejectReduceOnly(request);
-    const market = this.market(request.symbol);
-    const params = await this.marketParams(request.symbol);
-    const bound =
-      request.slippageLimitPrice ??
-      (request.maxSlippage === undefined
-        ? undefined
-        : await this.#slippageBound(market, params, request.side, request.maxSlippage));
-    if (bound === undefined) {
-      throw new KuruOrderError(
-        'refusing an unbounded market order: set slippageLimitPrice or maxSlippage',
-      );
-    }
-    const prepared = this.#prepare(market, params, request, bound, 'IOC');
-    return this.#place(prepared, 'market', undefined);
+    return this.#place(await this.#prepareMarket(request), 'market', undefined);
   }
 
   /**
@@ -541,6 +537,23 @@ export class KuruVenue implements Venue {
     const market = this.market(request.symbol);
     const params = await this.marketParams(request.symbol);
     return this.#prepare(market, params, request, request.price, request.timeInForce ?? 'GTC');
+  }
+
+  async #prepareMarket(request: MarketOrderRequest): Promise<PreparedOrder> {
+    rejectReduceOnly(request);
+    const market = this.market(request.symbol);
+    const params = await this.marketParams(request.symbol);
+    const bound =
+      request.slippageLimitPrice ??
+      (request.maxSlippage === undefined
+        ? undefined
+        : await this.#slippageBound(market, params, request.side, request.maxSlippage));
+    if (bound === undefined) {
+      throw new KuruOrderError(
+        'refusing an unbounded market order: set slippageLimitPrice or maxSlippage',
+      );
+    }
+    return this.#prepare(market, params, request, bound, 'IOC');
   }
 
   #prepare(
