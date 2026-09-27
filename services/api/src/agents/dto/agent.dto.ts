@@ -20,6 +20,8 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 
 import type { PreparedMandateChange } from '../agents.service';
@@ -28,11 +30,30 @@ import type { CommitTimes, ConsensusState } from '../../chain/consensus.service'
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
 import type { AgentMandateOwnerMode } from '../agents.config';
-import type { AgentRecord, AgentStatus } from '../store/agent-store';
+import {
+  AGENT_SCHEDULE_MAX_SECONDS,
+  AGENT_SCHEDULE_MIN_SECONDS,
+  type AgentRecord,
+  type AgentStatus,
+} from '../store/agent-store';
 
 export const AGENT_NAME_MAX_LENGTH = 64;
 export const AGENT_SYSTEM_PROMPT_MAX_LENGTH = 8_000;
 export const AGENT_STRATEGY_MAX_LENGTH = 2_000;
+
+/**
+ * `PATCH /agents/:id/schedule` (SEN-67), and the optional `schedule` of a hire.
+ * `null` clears the agent's own cadence (manual runs only, unless the global
+ * `AGENT_TICK_SECONDS` is set). The field itself is required: `{}` is a 400,
+ * so a client cannot clear a schedule by forgetting to send one.
+ */
+export class ScheduleDto {
+  @ValidateIf((body: ScheduleDto) => body.everySeconds !== null)
+  @IsInt()
+  @Min(AGENT_SCHEDULE_MIN_SECONDS)
+  @Max(AGENT_SCHEDULE_MAX_SECONDS)
+  everySeconds!: number | null;
+}
 
 /**
  * NOTE on identity, as in `wallet/dto`: there is deliberately no `userId`
@@ -82,6 +103,15 @@ export class CreateAgentDto {
   @IsOptional()
   @IsBoolean()
   'public'?: boolean;
+
+  /**
+   * Run on its own every `everySeconds` (SEN-67). Omitted, or `everySeconds:
+   * null`, hires it with no cadence of its own.
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ScheduleDto)
+  schedule?: ScheduleDto;
 }
 
 /** base64 DER, as `privy-authorization-signature` carries it. Room for P-256 plus slack. */
@@ -355,6 +385,8 @@ export interface AgentResponseDto {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /** The agent's own run cadence (SEN-67); `null` when it has none. */
+  schedule: { everySeconds: number } | null;
   /** Whether the server's gas drip sent this wallet MON at hire. If not, fund gas by hand. */
   gasFunded: boolean;
   /**
@@ -624,6 +656,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     ...(agent.revokedAt ? { revokedAt: agent.revokedAt.toISOString() } : {}),
+    schedule: agent.schedule ? { everySeconds: agent.schedule.everySeconds } : null,
     ...toGasFundingFields(agent),
   };
 }

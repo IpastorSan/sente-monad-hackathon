@@ -25,6 +25,7 @@ import {
   CreateAgentDto,
   ForkAgentDto,
   RevokeAgentDto,
+  ScheduleDto,
 } from './dto/agent.dto';
 import { AGENT_EVENTS, InMemoryAgentEventLog } from './events/agent-event-log';
 import { ReturnFundsService } from './recovery/return-funds.service';
@@ -813,6 +814,88 @@ describe('AgentsController', () => {
       await expect(pipe.transform({}, { type: 'body', metatype: RevokeAgentDto })).resolves.toEqual(
         {},
       );
+    });
+  });
+
+  describe('PATCH /agents/:id/schedule (SEN-67)', () => {
+    const schedule = (value: unknown) =>
+      pipe.transform(value, { type: 'body', metatype: ScheduleDto }) as Promise<ScheduleDto>;
+
+    it('sets, reads back and clears the cadence', async () => {
+      const { controller } = setup();
+      const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
+      expect(agent.schedule).toBeNull();
+
+      const set = await controller.setSchedule({ id: agent.id }, { everySeconds: 300 });
+      expect(set.schedule).toEqual({ everySeconds: 300 });
+      expect((await controller.get({ id: agent.id })).schedule).toEqual({ everySeconds: 300 });
+
+      const cleared = await controller.setSchedule({ id: agent.id }, { everySeconds: null });
+      expect(cleared.schedule).toBeNull();
+      expect((await controller.get({ id: agent.id })).schedule).toBeNull();
+    });
+
+    it("answers another user's agent with a 404 and a revoked one with a 409", async () => {
+      const { controller, service, as } = setup();
+      const { agent } = await controller.hire(body() as unknown as CreateAgentDto);
+
+      as('bob');
+      const stranger = await httpError(
+        controller.setSchedule({ id: agent.id }, { everySeconds: 60 }),
+      );
+      expect(stranger).toMatchObject({ status: 404, body: { reason: 'agent_not_found' } });
+
+      as('alice');
+      await service.revoke({ userId: 'alice' }, agent.id);
+      const revoked = await httpError(
+        controller.setSchedule({ id: agent.id }, { everySeconds: 60 }),
+      );
+      expect(revoked).toMatchObject({ status: 409, body: { reason: 'agent_revoked' } });
+    });
+
+    it('hires with a schedule, and a fork does not inherit it', async () => {
+      const { controller, as } = setup();
+      const hireBody = (await pipe.transform(body({ schedule: { everySeconds: 900 } }), {
+        type: 'body',
+        metatype: CreateAgentDto,
+      })) as CreateAgentDto;
+      const source = await controller.hire(hireBody);
+      expect(source.agent.schedule).toEqual({ everySeconds: 900 });
+
+      as('bob');
+      const forked = await controller.fork(
+        { id: source.agent.id },
+        { mandate: body()['mandate'] as Record<string, unknown> },
+      );
+      expect(forked.agent.schedule).toBeNull();
+    });
+
+    it('accepts the bounds and null', async () => {
+      for (const everySeconds of [60, 86_400, null]) {
+        await expect(schedule({ everySeconds })).resolves.toEqual({ everySeconds });
+      }
+    });
+
+    it.each([
+      ['59 s', { everySeconds: 59 }],
+      ['86,401 s', { everySeconds: 86_401 }],
+      ['a fraction', { everySeconds: 90.5 }],
+      ['a string', { everySeconds: '300' }],
+      ['a missing field', {}],
+      ['an extra field', { everySeconds: 300, userId: 'bob' }],
+    ])('rejects %s', async (_label, value) => {
+      await expect(schedule(value)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('validates a schedule on hire the same way', async () => {
+      const create = (value: unknown) =>
+        pipe.transform(value, { type: 'body', metatype: CreateAgentDto });
+      await expect(create(body({ schedule: { everySeconds: 59 } }))).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(
+        create(body({ schedule: { everySeconds: 60, extra: true } })),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 
