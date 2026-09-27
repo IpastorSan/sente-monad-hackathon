@@ -70,7 +70,9 @@ export interface TickerDto {
   change24h: Decimal | null;
   change24hPct: Decimal | null; // pct as a fraction
   quoteVolume24h: Decimal | null;
-  funding: { rate: Decimal; intervalHours: number; nextAt: number | null } | null; // null until wired from /pub/context (SEN-62)
+  // Positive rate = longs pay shorts, per interval. Perpl's comes from /pub/context (SEN-145),
+  // with a 43-minute interval on testnet; Kuru has none.
+  funding: { rate: Decimal; intervalHours: number; nextAt: number | null } | null;
   stale: boolean;
   asOf: number;
 }

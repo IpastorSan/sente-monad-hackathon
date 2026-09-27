@@ -19,7 +19,7 @@ import {
   toUnits,
   type KuruToken,
 } from '@sente/venues/kuru';
-import { PERPL_COLLATERAL_DECIMALS } from '@sente/venues/perpl';
+import { divRound, fromScaled, PERPL_COLLATERAL_DECIMALS, toScaled } from '@sente/venues/perpl';
 import { isAddressEqual } from 'viem';
 import * as z from 'zod/v4';
 
@@ -464,6 +464,59 @@ const getKlines = defineTool({
   },
 });
 
+/** Funding rates arrive as fractions with at most 6 places on Perpl; 18 keeps any venue's exact. */
+const RATE_DECIMALS = 18;
+/** The per-8h figure is a ratio of two intervals, so it cannot always be exact; 8 places is plenty. */
+const PER_8H_DECIMALS = 8;
+const EIGHT_HOURS_SEC = 8n * 3600n;
+
+const getFunding = defineTool({
+  name: 'get_funding',
+  kind: 'read',
+  description:
+    'The latest funding rate of one Perpl perp. ratePctPer8h is that rate as a % per 8 hours ' +
+    '(rounded to 8 places); positive means longs pay shorts, negative means shorts pay longs, ' +
+    'and payer says it in words. ratePct and intervalMinutes are the raw per-interval figures. ' +
+    'nextAt (Unix ms) is an estimate: Perpl counts the interval in blocks.',
+  input: z.strictObject({
+    market: market.describe('Perpl market symbol, e.g. "BTC-PERP".'),
+  }),
+  async handler(ctx, args) {
+    // SEN-145: from the shared ticker, whose funding rides the cached
+    // `/pub/context`, so a run's read costs Perpl nothing. There is no
+    // per-agent fallback: the venue adapter has no funding read.
+    const { marketData } = ctx;
+    if (!marketData) {
+      throw new VenueUnavailableError('funding is not available in this session');
+    }
+    const ticker = await marketRead(() => marketData.ticker('perpl', args.market));
+    const { funding } = ticker;
+    const intervalSec = funding ? BigInt(Math.round(funding.intervalHours * 3600)) : 0n;
+    if (funding === null || intervalSec <= 0n) {
+      // A null the model must read as "no rate", never as a zero rate.
+      return {
+        market: ticker.symbol,
+        funding: null,
+        reason: `Perpl has published no funding for ${ticker.symbol} yet`,
+      };
+    }
+    const rate = toScaled(funding.rate, RATE_DECIMALS, 'floor');
+    const per8h = divRound(
+      rate * 100n * EIGHT_HOURS_SEC * 10n ** BigInt(PER_8H_DECIMALS),
+      intervalSec * 10n ** BigInt(RATE_DECIMALS),
+    );
+    return {
+      market: ticker.symbol,
+      payer: rate === 0n ? 'nobody pays' : rate > 0n ? 'longs pay shorts' : 'shorts pay longs',
+      ratePctPer8h: fromScaled(per8h, PER_8H_DECIMALS),
+      ratePct: fromScaled(rate * 100n, RATE_DECIMALS),
+      intervalMinutes: Number(intervalSec) / 60,
+      nextAt: funding.nextAt,
+      stale: ticker.stale,
+    };
+  },
+});
+
 const MAX_QUOTE_SLIPPAGE = '0.05';
 const DEFAULT_QUOTE_SLIPPAGE = '0.005';
 
@@ -872,6 +925,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   listMarkets,
   getDepth,
   getKlines,
+  getFunding,
   quoteOrder,
   getBalances,
   getPositions,

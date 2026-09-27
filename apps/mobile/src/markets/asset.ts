@@ -337,9 +337,21 @@ export function fundingView(funding: TickerDto['funding'], now: number): Funding
   const sign = Number(pct) === 0 ? '' : rate > 0 ? '+' : MINUS;
   return {
     payer,
-    rate: `${sign}${pct}% / ${funding.intervalHours}h`,
+    rate: `${sign}${pct}% / ${intervalLabel(funding.intervalHours)}`,
     nextIn: funding.nextAt === null ? null : countdown(funding.nextAt, now),
   };
+}
+
+/**
+ * `8h`, `43m`, `1h 30m`. Perpl's testnet interval is 2,580 s (SEN-145), which
+ * as raw hours would print `0.7166666666666667h`.
+ */
+function intervalLabel(hours: number): string {
+  const minutes = Math.round(hours * 60);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
 /** `3h 12m`, `12m`, `under 1m`. */

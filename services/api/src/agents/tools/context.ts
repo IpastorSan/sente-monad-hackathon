@@ -22,9 +22,13 @@ export interface ToolVenues {
 /**
  * The shared, cached market-data reads (SEN-79): one Perpl socket and one TTL
  * cache for every agent and phone, instead of a socket per run per market.
- * `mark` values a sell whose book is empty (SEN-133).
+ * `mark` values a sell whose book is empty (SEN-133); `ticker` carries a
+ * perp's funding (SEN-145).
  */
-export type ToolMarketData = Pick<MarketDataService, 'klines' | 'quote' | 'depth' | 'mark'>;
+export type ToolMarketData = Pick<
+  MarketDataService,
+  'klines' | 'quote' | 'depth' | 'mark' | 'ticker'
+>;
 
 export interface RecordedThesis {
   readonly market: string;

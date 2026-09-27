@@ -71,6 +71,21 @@ export interface PerplMarketState {
   ask: number;
 }
 
+/**
+ * One funding interval's settlement (SEN-62, docs/perpl.md "Funding"). `rate`
+ * is micros per interval, so `30` is 0.003%; `idx` is the index price scaled by
+ * `price_decimals`, fixed once per interval.
+ */
+export interface PerplFundingEvent {
+  at: BlockTimestamp;
+  feb?: number;
+  rate: number;
+  idx?: number;
+  ppl?: number;
+  sum?: number;
+  div?: number;
+}
+
 export interface PerplMarket {
   id: number;
   instance_id: number;
@@ -83,6 +98,15 @@ export interface PerplMarket {
   order_max_neg_pnl_collat_bps: number;
   config: PerplMarketConfig;
   state: PerplMarketState;
+  /**
+   * The latest funding event and the interval length, both in `/pub/context`
+   * (SEN-62). Optional: a market with no funding history yet omits them. The
+   * interval is really counted in blocks (`funding_interval_blocks`), so the
+   * seconds figure is nominal.
+   */
+  funding?: PerplFundingEvent;
+  funding_interval_sec?: number;
+  funding_interval_blocks?: number;
 }
 
 export interface PerplContext {

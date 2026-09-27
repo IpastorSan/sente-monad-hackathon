@@ -19,7 +19,26 @@ import { PerplMarketReader } from './perpl-market-reader';
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
 
-/** BTC (1 price decimal, 5 size decimals), a closed ETH, AUSD collateral. */
+/** The live BTC event from SEN-62's probe (docs/perpl.md), on testnet's 2,580 s interval. */
+const FUNDING_AT = 1_790_548_247_000;
+const FUNDING = {
+  funding: {
+    at: { b: 66_245_259, t: FUNDING_AT },
+    feb: 66_245_259,
+    rate: 30,
+    idx: 844_713,
+    ppl: 25,
+    sum: 117_111,
+    div: 1,
+  },
+  funding_interval_sec: 2580,
+  funding_interval_blocks: 6450,
+};
+
+/**
+ * BTC (1 price decimal, 5 size decimals) with its latest funding event, a
+ * closed ETH, AUSD collateral.
+ */
 function context(): PerplContext {
   const market = (id: number, symbol: string, isOpen: boolean) => ({
     id,
@@ -52,6 +71,7 @@ function context(): PerplContext {
       bid: 1_000_000,
       ask: 1_000_100,
     },
+    ...FUNDING,
   });
   return {
     chain: { chain_id: 10143 },
@@ -149,7 +169,7 @@ describe('PerplMarketReader', () => {
   });
 
   describe('ticker', () => {
-    it('maps mrk/lst/orl/bid/ask from the context, with funding null', async () => {
+    it('maps mrk/lst/orl/bid/ask and the latest funding event from the context', async () => {
       const { reader } = setup();
       expect(await reader.ticker('BTC-PERP')).toEqual({
         venue: 'perpl',
@@ -167,7 +187,8 @@ describe('PerplMarketReader', () => {
         change24h: '10010',
         change24hPct: '0.111222222222222222',
         quoteVolume24h: '100',
-        funding: null,
+        // SEN-145: 30 micros per interval; the next one a nominal 2,580 s later.
+        funding: { rate: '0.00003', intervalHours: 2580 / 3600, nextAt: FUNDING_AT + 2_580_000 },
         stale: false,
         asOf: NOW - 1_000,
       });
@@ -182,6 +203,24 @@ describe('PerplMarketReader', () => {
       const ticker = await reader.ticker('BTC-PERP');
       expect(ticker).toMatchObject({ index: null, bid: null, mid: null, open24h: null });
       expect(ticker.mark).toBe('100000');
+    });
+
+    it('shows no funding for a market with no event yet, and keeps a negative rate exact', async () => {
+      const { reader, data } = setup();
+      const ctx = context();
+      delete ctx.markets[0].funding;
+      data.context.mockResolvedValue(ctx);
+      expect((await reader.ticker('BTC-PERP')).funding).toBeNull();
+
+      const paying = setup();
+      const shorts = context();
+      shorts.markets[0].funding = { at: { b: 1 }, rate: -125 };
+      paying.data.context.mockResolvedValue(shorts);
+      expect((await paying.reader.ticker('BTC-PERP')).funding).toEqual({
+        rate: '-0.000125',
+        intervalHours: 2580 / 3600,
+        nextAt: null,
+      });
     });
 
     it('serves every market from one context read within 3 s', async () => {
