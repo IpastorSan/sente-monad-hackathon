@@ -202,6 +202,11 @@ test('positionRows: explained Kuru holdings and Perpl positions, with the latest
   assert.equal(row?.pct, '+0.70%');
   assert.equal(row?.thesis, 'Range again.');
   assert.deepEqual(row?.levels, { target: '1.0036', stop: '0.9452' });
+  // SEN-117: Range Trader's target is a real order, so the track must not call it watched.
+  assert.equal(
+    row?.levelsNote,
+    'Target rests on Kuru as a limit order; stop is checked each run, not an order.',
+  );
 
   const perp = positionRows(
     portfolio({
