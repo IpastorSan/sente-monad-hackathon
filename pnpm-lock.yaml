@@ -286,6 +286,18 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  packages/presets:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.4.1
+        version: 26.4.1
+      eslint:
+        specifier: ^10.10.0
+        version: 10.10.0(supports-color@8.1.1)
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+
   packages/venues:
     dependencies:
       '@noble/ed25519':

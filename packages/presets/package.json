@@ -1,0 +1,32 @@
+{
+  "name": "@sente/presets",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The preset agent catalog: parameter schemas, their validation, and the deterministic render into strategy text.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "source": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --conditions=source --test 'src/**/*.test.ts'",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "eslint": "^10.10.0",
+    "typescript": "~6.0.3"
+  }
+}

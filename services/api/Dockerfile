@@ -47,6 +47,7 @@ WORKDIR /app
 # the image must install exactly what the repo pins.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/mandate/package.json packages/mandate/
+COPY packages/presets/package.json packages/presets/
 COPY packages/venues/package.json packages/venues/
 COPY services/api/package.json services/api/
 RUN pnpm install --frozen-lockfile --filter @sente/api... --filter .
