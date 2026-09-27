@@ -103,7 +103,27 @@ export class InMemoryAgentEventLog implements AgentEventLog {
   private readonly byAgent = new Map<string, AgentEvent[]>();
   private seq = 0;
 
-  constructor(private readonly maxPerAgent = AGENT_EVENTS_PER_AGENT) {}
+  /**
+   * `seed` is a log read back from disk (SEN-65, `file-agent-event-log.ts`):
+   * events that were already stamped and made JSON-safe before they were
+   * written, so they are loaded as they are rather than re-appended. `seq`
+   * carries on from the highest one, which keeps the phone's `afterSeq`
+   * cursors valid across a restart.
+   */
+  constructor(
+    private readonly maxPerAgent = AGENT_EVENTS_PER_AGENT,
+    seed: readonly AgentEvent[] = [],
+  ) {
+    for (const event of [...seed].sort((a, b) => a.seq - b.seq)) {
+      const events = this.byAgent.get(event.agentId) ?? [];
+      events.push(deepFreeze(event));
+      this.byAgent.set(event.agentId, events);
+      this.seq = Math.max(this.seq, event.seq);
+    }
+    for (const events of this.byAgent.values()) {
+      if (events.length > maxPerAgent) events.splice(0, events.length - maxPerAgent);
+    }
+  }
 
   append(event: NewAgentEvent): Promise<AgentEvent> {
     if ((event.kind === 'refusal') !== (event.layer !== undefined)) {
