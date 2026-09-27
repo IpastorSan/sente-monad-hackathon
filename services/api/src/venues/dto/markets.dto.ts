@@ -1,0 +1,298 @@
+/**
+ * The trading wire contract (SEN-70, plan B-T5a), pasted verbatim from
+ * `docs/design/trading/plan-backend.md` § "Wire contract" with `export` added.
+ * The mobile app codes against these shapes, so they change only together
+ * with that section.
+ *
+ * Types only: the class-validator query DTOs for `/markets` land in B-T6.
+ */
+export type Decimal = string; // exact decimal, never a float
+export type VenueId = 'kuru' | 'perpl';
+export type QuoteCurrency = 'USDC' | 'AUSD'; // Kuru Testnet USDC vs Agora AUSD — never interchangeable
+export interface ApiError {
+  statusCode: number;
+  reason: string;
+  message: string;
+  retryAfterMs?: number;
+}
+
+// GET /markets
+export interface MarketDto {
+  venue: VenueId;
+  symbol: string;
+  venueSymbol: string;
+  kind: 'spot' | 'perp';
+  base: string;
+  quote: QuoteCurrency;
+  tickSize: Decimal;
+  stepSize: Decimal;
+  minSize: Decimal;
+  minNotional: Decimal | null; // Kuru only (quote units)
+  maxLeverage: number | null; // perps only
+  marginMode: 'isolated' | null;
+  makerFee: Decimal;
+  takerFee: Decimal; // fractions: '0.0007' = 7 bps
+}
+export interface MarketsResponseDto {
+  markets: MarketDto[];
+  venues: { venue: VenueId; ok: boolean; error?: string }[]; // partial when a venue is down
+  asOf: number;
+}
+
+// GET /markets/tickers?venue=  and  GET /markets/:venue/:symbol/ticker
+export interface TickerDto {
+  venue: VenueId;
+  symbol: string;
+  quote: QuoteCurrency;
+  last: Decimal | null;
+  mark: Decimal | null;
+  index: Decimal | null; // mark/index: perps
+  bid: Decimal | null;
+  ask: Decimal | null;
+  mid: Decimal | null;
+  open24h: Decimal | null;
+  high24h: Decimal | null;
+  low24h: Decimal | null;
+  change24h: Decimal | null;
+  change24hPct: Decimal | null; // pct as a fraction
+  quoteVolume24h: Decimal | null;
+  funding: { rate: Decimal; intervalHours: number; nextAt: number | null } | null; // null until B-T1
+  stale: boolean;
+  asOf: number;
+}
+export interface TickersResponseDto {
+  tickers: TickerDto[];
+  asOf: number;
+}
+
+// GET /markets/:venue/:symbol/depth?limit=20  (1..50)
+export interface DepthDto {
+  venue: VenueId;
+  symbol: string;
+  bids: { price: Decimal; size: Decimal }[]; // best first
+  asks: { price: Decimal; size: Decimal }[];
+  sequence: number | null;
+  stale: boolean;
+  asOf: number;
+}
+
+// GET /markets/:venue/:symbol/klines?interval=1h&limit=200&endTime=
+export type KlineInterval = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w'; // perpl: no '1w'
+export interface KlineDto {
+  openTime: number;
+  closeTime: number;
+  open: Decimal;
+  high: Decimal;
+  low: Decimal;
+  close: Decimal;
+  volume: Decimal; // base units — an estimate on both venues
+  quoteVolume: Decimal | null;
+}
+export interface KlinesDto {
+  venue: VenueId;
+  symbol: string;
+  interval: KlineInterval;
+  klines: KlineDto[]; // oldest first
+  volumeIsEstimate: true;
+  asOf: number;
+}
+
+// GET /markets/:venue/:symbol/quote?side=buy&size=1.5&maxSlippage=0.005
+export interface QuoteDto {
+  venue: VenueId;
+  symbol: string;
+  side: 'buy' | 'sell';
+  size: Decimal;
+  fillableSize: Decimal;
+  averagePrice: Decimal | null;
+  notional: Decimal;
+  estimatedFee: Decimal;
+  feeAsset: QuoteCurrency;
+  slippageVsMid: Decimal;
+  maxSlippage: Decimal; // effective (Perpl clamps to venue bps)
+  worstPrice: Decimal | null; // pass as slippageLimitPrice when placing
+  fillableWithinWorstPrice: Decimal;
+  partial: boolean; // fillableWithinWorstPrice < size → "filled 62%, rest cancelled"
+  minNotionalOk: boolean | null; // Kuru only
+  bookAsOf: number;
+  stale: boolean;
+}
+
+// GET /agents/:id/portfolio   (owner-scoped, 404 for others)
+export type SectionResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+export interface BalanceDto {
+  asset: string;
+  available: Decimal;
+  locked: Decimal;
+  total: Decimal;
+}
+export interface OrderDto {
+  venue: VenueId;
+  id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  type: 'limit' | 'market';
+  status: string;
+  price: Decimal | null;
+  size: Decimal;
+  filledSize: Decimal;
+  leverage: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface PositionDto {
+  symbol: string;
+  side: 'long' | 'short';
+  size: Decimal;
+  entryPrice: Decimal;
+  markPrice: Decimal;
+  liquidationPriceEst: Decimal | null; // our formula, excludes accrued funding — label "est."
+  leverage: number;
+  margin: Decimal;
+  unrealizedPnl: Decimal;
+  realizedPnl: Decimal | null;
+  fundingPaid: Decimal | null;
+  quote: 'AUSD';
+  updatedAt: number;
+}
+export interface SpotHoldingDto {
+  asset: string;
+  market: string;
+  amount: Decimal;
+  inWallet: Decimal;
+  inAccount: Decimal;
+  lockedInOrders: Decimal;
+  markPrice: Decimal | null;
+  value: Decimal | null; // USDC
+  costBasis: {
+    avgPrice: Decimal | null;
+    coveredSize: Decimal;
+    uncoveredSize: Decimal;
+    unrealizedPnl: Decimal | null;
+    complete: boolean;
+    source: 'event-log-fifo';
+  };
+  note?: string;
+}
+export interface AgentPortfolioDto {
+  agentId: string;
+  address: string;
+  asOf: number;
+  wallet: SectionResult<{ balances: (BalanceDto & { decimals: number })[] }>;
+  kuru: SectionResult<{ accountId: string | null; balances: BalanceDto[]; openOrders: OrderDto[] }>;
+  perpl: SectionResult<
+    | {
+        status: 'ok';
+        accountId: string;
+        balances: BalanceDto[];
+        positions: PositionDto[];
+        openOrders: OrderDto[];
+      }
+    | {
+        status: 'not_enrolled';
+        accountId: string;
+        balances: BalanceDto[];
+        positions: null;
+        openOrders: null;
+      }
+    | { status: 'no_account' }
+    | { status: 'not_in_mandate' }
+  >;
+  holdings: SpotHoldingDto[];
+  totals: { approxUsd: Decimal; byQuote: { USDC: Decimal; AUSD: Decimal }; note: string };
+}
+
+// Schedule
+// PATCH /agents/:id/schedule  body { everySeconds: number | null } (60..86400; null = manual only) → AgentResponseDto
+// AgentResponseDto += { schedule: { everySeconds: number } | null }; CreateAgentDto += { schedule?: { everySeconds: number } }
+export interface AgentScheduleStatusDto {
+  // GET /agents/:id/schedule
+  everySeconds: number | null;
+  source: 'agent' | 'global' | null;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  paused: {
+    reason: 'credits_low' | 'credits_exhausted' | 'credits_unavailable' | 'daily_cap';
+    until: string | null;
+  } | null;
+}
+
+// Presets
+export type ParamSpec =
+  | {
+      key: string;
+      label: string;
+      type: 'number';
+      min: number;
+      max: number;
+      step: number;
+      unit?: '%' | 'x' | 'USDC' | 'AUSD' | 'min' | 'h';
+      default: number;
+      help?: string;
+    }
+  | {
+      key: string;
+      label: string;
+      type: 'enum';
+      options: { value: string; label: string }[];
+      default: string;
+      help?: string;
+    }
+  | { key: string; label: string; type: 'boolean'; default: boolean; help?: string }
+  | {
+      key: string;
+      label: string;
+      type: 'market';
+      venue: VenueId | 'any';
+      multiple: boolean;
+      default: string | string[];
+      help?: string;
+    };
+export interface SuggestedMandateDto {
+  tier: 'cautious' | 'standard' | 'wide'; // maps onto the app's mandate presets
+  venues: VenueId[];
+  kuruMarkets: string[];
+  perplMarkets: string[];
+  maxOrderNotional: Decimal;
+  maxLeverage: number | null;
+  depositCaps: { asset: string; amount: Decimal }[];
+  perplCollateral: Decimal | null;
+  expiryDays: number;
+  softRules: string[]; // e.g. 'sell-only' — NOT enforceable by the mandate
+}
+export interface PresetDto {
+  id: string;
+  version: number;
+  name: string;
+  tagline: string;
+  description: string;
+  venues: VenueId[];
+  params: ParamSpec[];
+  tools: string[];
+  defaults: {
+    params: Record<string, unknown>;
+    strategy: string;
+    systemPrompt: string;
+    suggestedMandate: SuggestedMandateDto;
+    suggestedCadenceSeconds: number;
+  };
+}
+// GET /presets → { presets: PresetDto[] }
+// CreateAgentDto += { preset?: { id: string; version?: number; params: Record<string, unknown> } }
+// AgentResponseDto += { preset: { id; version; name; params: Record<string, unknown>; customized: boolean } | null }
+// 400 'preset_invalid' carries { errors: { key: string; message: string }[] }
+export interface PresetStatsDto {
+  // GET /presets/:id/stats
+  presetId: string;
+  window: '30d';
+  running: number;
+  n: number;
+  minN: 5;
+  medianPnl30d: Decimal | null; // ≈$ (USDC+AUSD); null when n < minN
+  medianReturn30d: Decimal | null;
+  returnN: number;
+  customized: number;
+  definition: string;
+  notes: string[];
+  asOf: number;
+}
