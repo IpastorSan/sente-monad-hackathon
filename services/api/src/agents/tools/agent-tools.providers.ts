@@ -1,7 +1,12 @@
+import { join } from 'node:path';
+
 import { Logger, type Provider } from '@nestjs/common';
+
+import { stateDir } from '../../state/json-file';
 
 import { AgentsService } from '../agents.service';
 import { AGENT_EVENTS, InMemoryAgentEventLog, type AgentEventLog } from '../events/agent-event-log';
+import { AGENT_EVENTS_FILE, FileAgentEventLog } from '../events/file-agent-event-log';
 import {
   createErc8004Client,
   describeErc8004Config,
@@ -52,12 +57,21 @@ const erc8004Provider: Provider = {
  * AGENT_EVENTS with the SEN-27 hook on it: the log a verdict is appended to is
  * also what publishes it to the Reputation Registry, so the Tool Runner and the
  * MCP server both get it without a second call site (see `ReputationEventLog`).
+ *
+ * With `STATE_DIR` set the log is an append-only JSONL file there (SEN-65), so
+ * the Ledger and the cost basis it feeds survive a restart; unset, it stays in
+ * memory as before.
  */
 const agentEventsProvider: Provider = {
   provide: AGENT_EVENTS,
   inject: [ERC8004_WRITER],
-  useFactory: (reputation: Erc8004Reputation): AgentEventLog =>
-    new ReputationEventLog(new InMemoryAgentEventLog(), reputation),
+  useFactory: (reputation: Erc8004Reputation): AgentEventLog => {
+    const dir = stateDir();
+    if (!dir) return new ReputationEventLog(new InMemoryAgentEventLog(), reputation);
+    const log = new FileAgentEventLog(join(dir, AGENT_EVENTS_FILE));
+    Logger.log(`${log.size} agent event(s) loaded from ${log.path}`, 'AgentEventLog');
+    return new ReputationEventLog(log, reputation);
+  },
 };
 
 /**
