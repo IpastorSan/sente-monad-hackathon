@@ -28,6 +28,7 @@ import {
   findPosition,
   holdings,
   perpDetail,
+  sectionFailure,
   shown,
   type PerpRow,
   type SpotRow,
@@ -57,6 +58,7 @@ export default function PositionScreen() {
     [user.wallet, user.portfolio, tickers.data],
   );
   const found = held ? findPosition(held, venue, symbol) : null;
+  const failure = held?.unread.includes(venue) ? sectionFailure(venue) : null;
   // The chart's market: the perp itself, or the asset's USDC book on Kuru.
   const market = venue === 'perpl' ? symbol : `${baseOf(symbol)}-USDC`;
   const klines = useKlines(venue, market, INTERVAL[range], { limit: CANDLES });
@@ -88,13 +90,22 @@ export default function PositionScreen() {
         right={<HideToggle hidden={hidden} onToggle={toggleHidden} />}
       />
 
+      {/* This venue's section failed (SEN-123): what shows below may be partial. */}
+      {failure ? (
+        <View style={styles.failure}>
+          <Notice tone="error" title={failure.title} detail={failure.detail} />
+        </View>
+      ) : null}
       {waiting && found === null ? (
         <Loading />
       ) : found === null ? (
-        <Notice
-          title={`No open position on ${symbol}`}
-          detail="It may have closed or filled since you opened it. Pull down on Portfolio to refresh."
-        />
+        // Not "no open position": the venue that would list it didn't answer.
+        failure ? null : (
+          <Notice
+            title={`No open position on ${symbol}`}
+            detail="It may have closed or filled since you opened it. Pull down on Portfolio to refresh."
+          />
+        )
       ) : (
         <>
           {found.kind === 'perp' ? (
@@ -305,6 +316,7 @@ function Actions({
 
 const styles = StyleSheet.create({
   grow: { flex: 1 },
+  failure: { marginBottom: 12 },
   title: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headline: { marginTop: 14, gap: 4 },
   bigRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },

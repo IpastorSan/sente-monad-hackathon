@@ -192,7 +192,46 @@ export type Holdings = {
   unpriced: string[];
   /** `unlinked`: Perpl positions can't be read, so perps are unknown, not zero. */
   perpsUnknown: boolean;
+  /** `/portfolio` sections that failed: left out of every figure, and said so. */
+  unread: PortfolioSection[];
 };
+
+export type PortfolioSection = 'wallet' | 'kuru' | 'perpl';
+
+/**
+ * The sections of `/portfolio` that did not answer, in display order. Each
+ * failed on its own (SEN-123), so the rest of the response is still real.
+ */
+export function unreadSections(portfolio: Portfolio | null): PortfolioSection[] {
+  if (portfolio === null) return [];
+  return (['wallet', 'kuru', 'perpl'] as const).filter((section) => !portfolio[section].ok);
+}
+
+/**
+ * What a failed section says (SEN-123). The point is that its money is
+ * unknown, not gone: a Kuru outage must never read as an empty Kuru account.
+ */
+export function sectionFailure(section: PortfolioSection): { title: string; detail: string } {
+  switch (section) {
+    case 'wallet':
+      return {
+        title: 'Your wallet didn’t answer — pull to retry',
+        detail:
+          'Cash comes from a separate balance read; other tokens in your wallet are left out until it answers.',
+      };
+    case 'kuru':
+      return {
+        title: 'Kuru didn’t answer — pull to retry',
+        detail: 'Your Kuru balances and orders are left out until it does, not counted as zero.',
+      };
+    case 'perpl':
+      return {
+        title: 'Perpl didn’t answer — pull to retry',
+        detail:
+          'Your perps, Perpl cash and orders are left out until it does, not counted as zero.',
+      };
+  }
+}
 
 const CASH_PURPOSE: Record<string, string> = { AUSD: 'for perps', USDC: 'for spot' };
 
@@ -201,6 +240,10 @@ export function holdings(
   portfolio: Portfolio | null,
   tickers: readonly TickerDto[],
 ): Holdings {
+  // A failed section contributes nothing here and is named in `unread`, so
+  // the screen can say it is missing rather than sum it as zero (SEN-123).
+  const kuru = portfolio?.kuru.ok ? portfolio.kuru : null;
+  const perpl = portfolio?.perpl.ok ? portfolio.perpl : null;
   const cash = ['AUSD', 'USDC'].map((symbol) => ({
     symbol,
     amount: wallet.find((b) => b.symbol === symbol)?.amount ?? '0',
@@ -213,13 +256,12 @@ export function holdings(
     spotAmounts.set(asset, [...(spotAmounts.get(asset) ?? []), amount]);
 
   for (const b of wallet) if (!STABLES.includes(b.symbol)) addSpot(b.symbol, b.amount);
-  for (const b of portfolio?.kuru.balances ?? []) {
+  for (const b of kuru?.balances ?? []) {
     if (STABLES.includes(b.asset)) {
       if (isPositive(b.total)) venueCash.push({ venue: 'kuru', asset: b.asset, amount: b.total });
     } else addSpot(b.asset, b.total);
   }
 
-  const perpl = portfolio?.perpl;
   const positions = perpl?.status === 'ok' ? (perpl.positions ?? []) : [];
   const perps = positions.map((position) => ({
     position,
@@ -247,6 +289,7 @@ export function holdings(
     perps,
     unpriced,
     perpsUnknown: perpl?.status === 'unlinked',
+    unread: unreadSections(portfolio),
   };
 }
 
@@ -559,7 +602,11 @@ export function orderRows(
   now: number,
 ): OrderRow[] {
   if (portfolio === null) return [];
-  const orders = [...portfolio.kuru.openOrders, ...(portfolio.perpl.openOrders ?? [])];
+  // A failed venue lists no orders; the screen names it from `unreadSections`.
+  const orders = [
+    ...(portfolio.kuru.ok ? portfolio.kuru.openOrders : []),
+    ...(portfolio.perpl.ok ? (portfolio.perpl.openOrders ?? []) : []),
+  ];
   return orders
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((order) => orderRow(order, tickers, now));

@@ -19,10 +19,12 @@ import {
   mulDecimal,
   orderRows,
   perpDetail,
+  sectionFailure,
   seriesChange,
   shown,
   signedUsd,
   subDecimal,
+  unreadSections,
   usdPrice,
 } from './view.ts';
 
@@ -87,18 +89,23 @@ const MON_BUY: OrderDto = {
 function portfolio(overrides: Partial<Portfolio> = {}): Portfolio {
   return {
     asOf: NOW,
-    wallet: [
-      { symbol: 'MON', address: '0x0', decimals: 18, raw: '0', amount: '412.42' },
-      { symbol: 'USDC', address: '0x1', decimals: 6, raw: '0', amount: '500' },
-      { symbol: 'AUSD', address: '0x2', decimals: 6, raw: '0', amount: '1284.5' },
-      { symbol: 'XAUt', address: '0x3', decimals: 6, raw: '0', amount: '0' },
-    ],
+    wallet: {
+      ok: true,
+      balances: [
+        { symbol: 'MON', address: '0x0', decimals: 18, raw: '0', amount: '412.42' },
+        { symbol: 'USDC', address: '0x1', decimals: 6, raw: '0', amount: '500' },
+        { symbol: 'AUSD', address: '0x2', decimals: 6, raw: '0', amount: '1284.5' },
+        { symbol: 'XAUt', address: '0x3', decimals: 6, raw: '0', amount: '0' },
+      ],
+    },
     kuru: {
+      ok: true,
       accountId: '7',
       balances: [{ asset: 'USDC', available: '0', locked: '142.5', total: '142.5' }],
       openOrders: [MON_BUY],
     },
     perpl: {
+      ok: true,
       status: 'ok',
       accountId: '9',
       balances: [{ asset: 'AUSD', available: '100', locked: '0', total: '308.17' }],
@@ -107,6 +114,11 @@ function portfolio(overrides: Partial<Portfolio> = {}): Portfolio {
     },
     ...overrides,
   };
+}
+
+/** What `useUserPortfolio` hands `holdings`: the wallet section's balances. */
+function walletOf(p: Portfolio) {
+  return p.wallet.ok ? p.wallet.balances : [];
 }
 
 test('exact decimal maths never goes through a float', () => {
@@ -133,7 +145,7 @@ test('balances truncate to their token places, totals round and say ≈ $', () =
 });
 
 test('holdings: cash per currency, venue cash, spot at the Kuru price, perps as margin + uPnL', () => {
-  const held = holdings(portfolio().wallet, portfolio(), TICKERS);
+  const held = holdings(walletOf(portfolio()), portfolio(), TICKERS);
   assert.deepEqual(held.cash, [
     { symbol: 'AUSD', amount: '1284.5', purpose: 'for perps' },
     { symbol: 'USDC', amount: '500', purpose: 'for spot' },
@@ -154,9 +166,12 @@ test('holdings: cash per currency, venue cash, spot at the Kuru price, perps as 
 
 test('an unpriced asset is named and left out, never counted as zero', () => {
   const p = portfolio({
-    wallet: [{ symbol: 'WETH', address: '0x4', decimals: 18, raw: '0', amount: '1.5' }],
+    wallet: {
+      ok: true,
+      balances: [{ symbol: 'WETH', address: '0x4', decimals: 18, raw: '0', amount: '1.5' }],
+    },
   });
-  const held = holdings(p.wallet, p, TICKERS);
+  const held = holdings(walletOf(p), p, TICKERS);
   assert.deepEqual(held.unpriced, ['WETH']);
   assert.equal(held.spot[0]?.value, null);
   assert.equal(allocationParts(held, null).spot, '0');
@@ -165,15 +180,55 @@ test('an unpriced asset is named and left out, never counted as zero', () => {
 test('unlinked Perpl: the chain balance is cash and perps are unknown', () => {
   const p = portfolio({
     perpl: {
+      ok: true,
       status: 'unlinked',
       accountId: '9',
       balances: [{ asset: 'AUSD', available: '50', locked: '0', total: '50' }],
     },
   });
-  const held = holdings(p.wallet, p, TICKERS);
+  const held = holdings(walletOf(p), p, TICKERS);
   assert.equal(held.perpsUnknown, true);
   assert.deepEqual(held.perps, []);
   assert.deepEqual(held.venueCash.at(-1), { venue: 'perpl', asset: 'AUSD', amount: '50' });
+});
+
+test('a failed Kuru section is named, not counted as an empty account (SEN-123)', () => {
+  const p = portfolio({ kuru: { ok: false, error: 'Gateway 503' } });
+  const held = holdings(walletOf(p), p, TICKERS);
+  assert.deepEqual(held.unread, ['kuru']);
+  // The wallet and Perpl are still there, whole.
+  assert.equal(held.cash[1]?.amount, '500');
+  assert.equal(held.spot[0]?.amount, '412.42');
+  assert.equal(held.perps[0]?.value, '219.70');
+  assert.deepEqual(held.venueCash, [{ venue: 'perpl', asset: 'AUSD', amount: '100.00' }]);
+  // Its orders are unknown, so none are listed; Perpl's would be.
+  assert.deepEqual(orderRows(p, TICKERS, NOW), []);
+  assert.equal(sectionFailure('kuru').title, 'Kuru didn’t answer — pull to retry');
+});
+
+test('a failed Perpl section leaves perps unknown, not flat (SEN-123)', () => {
+  const p = portfolio({ perpl: { ok: false, error: 'socket refused' } });
+  const held = holdings(walletOf(p), p, TICKERS);
+  assert.deepEqual(held.unread, ['perpl']);
+  assert.deepEqual(held.perps, []);
+  assert.equal(findPosition(held, 'perpl', 'ETH-PERP'), null);
+  assert.deepEqual(held.venueCash, [{ venue: 'kuru', asset: 'USDC', amount: '142.5' }]);
+  assert.equal(orderRows(p, TICKERS, NOW).length, 1);
+  assert.match(sectionFailure('perpl').title, /^Perpl didn’t answer/u);
+});
+
+test('unreadSections lists every failed section in display order', () => {
+  assert.deepEqual(unreadSections(portfolio()), []);
+  assert.deepEqual(unreadSections(null), []);
+  assert.deepEqual(
+    unreadSections(
+      portfolio({
+        wallet: { ok: false, error: 'x' },
+        perpl: { ok: false, error: 'y' },
+      }),
+    ),
+    ['wallet', 'perpl'],
+  );
 });
 
 test('trading off: wallet cash alone, from the wallet session', () => {
@@ -344,6 +399,7 @@ test('orders: distance to the market, what cancelling returns, when it was place
   const [sell] = orderRows(
     portfolio({
       kuru: {
+        ok: true,
         accountId: '7',
         balances: [],
         openOrders: [{ ...MON_BUY, side: 'sell', price: '0.9', filledSize: '50' }],
@@ -425,7 +481,7 @@ test('your perp: P&L on margin, notional at the mark, liquidation est. with its 
 });
 
 test('findPosition looks up your perp by symbol and your spot by base asset', () => {
-  const held = holdings(portfolio().wallet, portfolio(), TICKERS);
+  const held = holdings(walletOf(portfolio()), portfolio(), TICKERS);
   assert.equal(findPosition(held, 'perpl', 'ETH-PERP')?.kind, 'perp');
   assert.equal(findPosition(held, 'kuru', 'MON')?.kind, 'spot');
   assert.equal(findPosition(held, 'kuru', 'MON-USDC')?.kind, 'spot');

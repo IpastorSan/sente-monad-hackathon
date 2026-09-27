@@ -50,10 +50,13 @@ import {
   fillDays,
   holdings,
   orderRows,
+  sectionFailure,
   seriesChange,
   shown,
   signedUsd,
+  type Holdings,
   type OrderRow,
+  type PortfolioSection,
 } from '@/portfolio/view';
 import { useSession } from '@/session';
 import { describeTradeError, kuruCancelDraft, runTrade, type TradeFlowState } from '@/trade/flow';
@@ -169,9 +172,7 @@ export default function PortfolioScreen() {
                 label="Portfolio value since the app opened"
               />
             ) : null}
-            <Text style={text.caption}>
-              {totalNote(held.unpriced, held.perpsUnknown, agentPortfolios === null)}
-            </Text>
+            <Text style={text.caption}>{totalNote(held, agentPortfolios === null)}</Text>
           </View>
 
           <AllocationBar split={split} hidden={hidden} />
@@ -205,7 +206,8 @@ export default function PortfolioScreen() {
                 <Text style={text.label}>Your positions</Text>
                 {user.portfolio ? <AsOf at={user.polled.asOf} paused={user.polled.stale} /> : null}
               </View>
-              {held.spot.length + held.perps.length === 0 ? (
+              <Unread sections={held.unread} />
+              {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
                 <Text style={[text.dim, styles.empty]}>
                   {user.portfolio
                     ? 'No open positions. Tap Trade to place your first order.'
@@ -247,7 +249,9 @@ export default function PortfolioScreen() {
             </View>
           ) : tab === 'orders' ? (
             <View style={styles.section}>
-              {orders.length === 0 ? (
+              {/* Both venues carry orders; the wallet does not (SEN-123). */}
+              <Unread sections={held.unread.filter((s) => s !== 'wallet')} />
+              {orders.length === 0 && !held.unread.some((s) => s !== 'wallet') ? (
                 <Text style={[text.dim, styles.empty]}>
                   No open orders. Limit orders you place rest here until they fill.
                 </Text>
@@ -288,12 +292,27 @@ export default function PortfolioScreen() {
 }
 
 /** What the ≈ $ leaves out, said under it rather than folded silently into the number. */
-function totalNote(unpriced: readonly string[], perpsUnknown: boolean, agentsLoading: boolean) {
+function totalNote(held: Holdings, agentsLoading: boolean) {
   const parts = ['USDC and AUSD counted as $1, other tokens at their Kuru price.'];
-  if (unpriced.length > 0) parts.push(`Leaves out ${unpriced.join(', ')}: no Kuru price.`);
-  if (perpsUnknown) parts.push('Perp positions are not readable until Perpl is linked.');
+  if (held.unpriced.length > 0) {
+    parts.push(`Leaves out ${held.unpriced.join(', ')}: no Kuru price.`);
+  }
+  const unread = held.unread.filter((s) => s !== 'wallet').map((s) => VENUE_NAME[s]);
+  if (unread.length > 0) parts.push(`Leaves out ${unread.join(' and ')}: it didn’t answer.`);
+  if (held.perpsUnknown) parts.push('Perp positions are not readable until Perpl is linked.');
   if (agentsLoading) parts.push('Still reading your agents.');
   return parts.join(' ');
+}
+
+const VENUE_NAME = { kuru: 'Kuru', perpl: 'Perpl' } as const;
+
+/** One notice per `/portfolio` section that failed: unknown, never drawn as empty (SEN-123). */
+function Unread({ sections }: { sections: readonly PortfolioSection[] }) {
+  return sections.map((section) => (
+    <View key={section} style={styles.unread}>
+      <Notice tone="error" {...sectionFailure(section)} />
+    </View>
+  ));
 }
 
 /**
@@ -596,6 +615,7 @@ const styles = StyleSheet.create({
   tabs: { marginTop: 20 },
   section: { marginTop: 16 },
   empty: { marginTop: 10 },
+  unread: { marginTop: 10 },
   coming: { marginTop: 20 },
   comingText: { marginTop: 6 },
   hire: { marginTop: 22, gap: 10, alignItems: 'flex-start' },

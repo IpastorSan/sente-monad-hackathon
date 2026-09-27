@@ -8,7 +8,7 @@
  */
 import type { Address, Hex } from 'viem';
 
-import type { BalanceDto, OrderDto, PositionDto } from '../agents/api.ts';
+import type { BalanceDto, OrderDto, PositionDto, SectionResult } from '../agents/api.ts';
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 
 export type KuruPlaceIntent = {
@@ -197,29 +197,36 @@ export type PortfolioTokenBalance = {
  */
 export type PerplPortfolioStatus = 'ok' | 'unlinked' | 'not_onboarded';
 
-/** `GET /portfolio`: the user's Privy wallet, its Kuru account and its Perpl account. */
+export type PerplPortfolioSection = {
+  readonly status: PerplPortfolioStatus;
+  /** Present whenever the account exists (`ok` and `unlinked`). */
+  readonly accountId?: string;
+  /** `unlinked`: the chain's collateral balance only, which excludes margin in positions. */
+  readonly balances?: readonly BalanceDto[];
+  /** Only with `ok`; absent means unknown, not none. */
+  readonly positions?: readonly PositionDto[];
+  readonly openOrders?: readonly OrderDto[];
+};
+
+/**
+ * `GET /portfolio`: the user's Privy wallet, its Kuru account and its Perpl
+ * account. Each section is a `SectionResult` (SEN-123), so one venue that
+ * does not answer costs only its own section; `{ ok: false }` is unknown and
+ * must never be drawn as empty.
+ */
 export type Portfolio = {
   /** Unix ms of the read. */
   readonly asOf: number;
   /** MON, every Kuru market token, and AUSD. */
-  readonly wallet: readonly PortfolioTokenBalance[];
-  readonly kuru: {
+  readonly wallet: SectionResult<{ readonly balances: readonly PortfolioTokenBalance[] }>;
+  readonly kuru: SectionResult<{
     /** `null` until the wallet's first Kuru deposit creates its AccountCore account. */
     readonly accountId: string | null;
     /** `available` is free, `locked` is reserved by resting orders. */
     readonly balances: readonly BalanceDto[];
     readonly openOrders: readonly OrderDto[];
-  };
-  readonly perpl: {
-    readonly status: PerplPortfolioStatus;
-    /** Present whenever the account exists (`ok` and `unlinked`). */
-    readonly accountId?: string;
-    /** `unlinked`: the chain's collateral balance only, which excludes margin in positions. */
-    readonly balances?: readonly BalanceDto[];
-    /** Only with `ok`; absent means unknown, not none. */
-    readonly positions?: readonly PositionDto[];
-    readonly openOrders?: readonly OrderDto[];
-  };
+  }>;
+  readonly perpl: SectionResult<PerplPortfolioSection>;
 };
 
 /** One of the user's own fills, from a `/trade` they placed. */
