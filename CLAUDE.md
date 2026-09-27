@@ -389,11 +389,11 @@ loading raw TypeScript out of `node_modules`.
 
 **`apps/mobile` (wired in SEN-10):**
 
-| Consumer                           | Resolves to         | Because                                                                                                                                                                                                 |
-| ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Metro (the app bundle)             | `src/` via an alias | Package exports are off (gotcha 2), so `metro.config.js` aliases each imported subpath to its `source` entry, read from the package's own exports map. `@sente/venues/kuru` and `@sente/presets` today. |
-| `tsc` / typecheck                  | `src/` via `types`  | `moduleResolution: bundler` plus `allowImportingTsExtensions`.                                                                                                                                          |
-| `node --test` (`src/**/*.test.ts`) | `src/` via `source` | The test script passes `--conditions=source`. `@sente/mandate` is a devDependency so specs can run the API's own `parseMandate`.                                                                        |
+| Consumer                           | Resolves to         | Because                                                                                                                                                                                                                        |
+| ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Metro (the app bundle)             | `src/` via an alias | Package exports are off (gotcha 2), so `metro.config.js` aliases each imported subpath to its `source` entry, read from the package's own exports map. `@sente/venues/kuru`, `@sente/venues/perpl` and `@sente/presets` today. |
+| `tsc` / typecheck                  | `src/` via `types`  | `moduleResolution: bundler` plus `allowImportingTsExtensions`.                                                                                                                                                                 |
+| `node --test` (`src/**/*.test.ts`) | `src/` via `source` | The test script passes `--conditions=source`. `@sente/mandate` is a devDependency so specs can run the API's own `parseMandate`.                                                                                               |
 
 One mobile spec reaches into the API on purpose: `src/trade/contract.test.ts` (SEN-125) runs the
 server's `trade/kuru-planner.ts`, `trade/idempotency-key.ts`, `wallet/send/sponsored-send.ts` and
@@ -405,10 +405,11 @@ would make its `tsc` reject a spec importing `apps/mobile/src`.
 Metro loads the TS sources, not `dist/`, so the app needs no package build first, and the `./x.ts`
 specifiers resolve literally (Metro tries the exact path before appending extensions). An alias
 bundles everything its subpath re-exports: `./kuru` brings the Kuru adapter and
-`@toxicflow-labs/ts-sdk` along with the tables the app wants. The app does **not** import
-`@sente/venues/perpl` or `@sente/mandate` at runtime. It mirrors the one Perpl constant it needs,
-AUSD, in `src/agents/mandate.ts`, and a spec pins it equal. Import another subpath and it needs its
-own alias line.
+`@toxicflow-labs/ts-sdk` along with the tables the app wants. `@sente/venues/perpl` is aliased
+for `src/trade/perplTrader.ts` (SEN-105), the phone's own Perpl order entry, and bundles the whole
+Perpl adapter plus `@noble/ed25519` once a screen imports the trader; `src/agents/mandate.ts` still
+mirrors AUSD rather than import it, and a spec pins it equal. The app does **not** import
+`@sente/mandate` at runtime. Import another subpath and it needs its own alias line.
 
 ### 11. Test vectors use publicly known keys — never fund what they derive
 
