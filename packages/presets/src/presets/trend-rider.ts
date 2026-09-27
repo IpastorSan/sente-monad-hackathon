@@ -3,16 +3,17 @@
  * trails a stop behind it. Promise and parameters from
  * docs/design/trading/agents.html, "The catalog".
  */
-import { formatNumber, num, str } from '../params.ts';
+import { type CandleWindow, formatNumber, klinesHint, num, QUOTE_RULE, str } from '../params.ts';
 import type { Params, PresetDefinition } from '../types.ts';
 
 const LOOKBACKS = {
-  // Candle sizes keep one read under 200 candles, the most the planned
-  // candles tool returns (B-T11).
-  '12h': { label: '12-hour', candles: '15-minute' },
-  '1d': { label: '1-day', candles: '15-minute' },
-  '3d': { label: '3-day', candles: '1-hour' },
-} as const;
+  // Candle sizes keep one read within get_klines' 200-candle limit. Each
+  // limit is one over the window because the newest candle is still open and
+  // the text leaves it out (SEN-121).
+  '12h': { label: '12-hour', candles: '15-minute', interval: '15m', limit: 49 },
+  '1d': { label: '1-day', candles: '15-minute', interval: '15m', limit: 97 },
+  '3d': { label: '3-day', candles: '1-hour', interval: '1h', limit: 73 },
+} satisfies Record<string, CandleWindow>;
 
 const CADENCE_SECONDS = { '5m': 300, '15m': 900 } as const;
 
@@ -34,17 +35,17 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
   // SEN-72: a trailing stop needs the best price since entry, and an agent
   // does not see its earlier runs. The venue remembers the entry
   // (get_positions) and the candles remember the high, so the trail hangs off
-  // the higher of the two: a chandelier exit, with no memory of its own. With
-  // no candles it falls back to the entry, so an open position is never left
-  // without a stop just because price history is missing.
+  // the higher of the two: a chandelier exit, with no memory of its own. If
+  // get_klines fails it falls back to the entry, so an open position is never
+  // left without a stop just because price history is missing.
   const strategy = [
     `Trade ${market} on Perpl perps only, ${both ? 'long or short' : 'long only'}. Join a breakout and trail a stop behind it.`,
     '',
     'Every run:',
     `1. Read your ${market} position. If you have one, go to step 4.`,
-    `2. Read the ${lookback.label} high and low of ${market} from ${lookback.candles} candles, leaving out the candle still open. If no tool gives you candles, do not open a position this run and say why.`,
+    `2. Read the ${lookback.label} high and low of ${market} from ${lookback.candles} candles ${klinesHint('perpl', lookback)}, leaving out the last one, which is still open. If the read fails, do not open a position this run and say why.`,
     `3. If the mid price is above that high${both ? ', or below that low' : ''}: record a thesis, then open a ${both ? 'long above the high, or a short below the low,' : 'long'} at market with ${size}% of your AUSD collateral as margin at ${leverage}x leverage (the market's maximum from list_markets, if lower), size = margin x leverage / price, slippage limit ${ENTRY_SLIPPAGE_PCT}% past the best price. Otherwise do nothing.`,
-    `4. Long: the stop is ${trail}% below the higher of your entry price and the ${lookback.label} high. ${both ? `Short: the stop is ${trail}% above the lower of your entry price and the ${lookback.label} low. ` : ''}With no candles, use your entry price alone. If the price has crossed the stop, close the whole position with close_position. Otherwise hold.`,
+    `4. Long: the stop is ${trail}% below the higher of your entry price and the ${lookback.label} high. ${both ? `Short: the stop is ${trail}% above the lower of your entry price and the ${lookback.label} low. ` : ''}If the candle read failed, use your entry price alone. If the price has crossed the stop, close the whole position with close_position. Otherwise hold.`,
     '',
     'The trailing stop is checked every run, not a venue order: between runs price can pass through it, and the close fills at the price when it is seen. The position is isolated margin: it can lose at most its margin, and a fast move can liquidate it before a run sees the stop.',
   ].join('\n');
@@ -56,6 +57,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
     `- Never use more than ${leverage}x leverage, and never more than the market allows.`,
     '- Never move the stop further away. A stop only ever tightens as the high (or low) moves in your favour.',
     '- Keep each thesis short: the breakout level, your entry, the leverage and the stop, in AUSD prices.',
+    QUOTE_RULE,
     '- When a read fails or the numbers are unclear, open nothing this run and say so in one sentence; still close a position whose stop is crossed.',
   ].join('\n');
 
@@ -64,7 +66,8 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
 
 export const trendRider: PresetDefinition = {
   id: 'trend-rider',
-  version: 1,
+  // SEN-121: the text now names get_klines and quote.
+  version: 2,
   name: 'Trend Rider',
   tagline: 'Joins a breakout on perps and trails a stop behind it.',
   description:
@@ -150,6 +153,8 @@ export const trendRider: PresetDefinition = {
   ],
   tools: [
     'list_markets',
+    'get_klines',
+    'quote',
     'get_depth',
     'get_balances',
     'get_positions',

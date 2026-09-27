@@ -3,15 +3,24 @@
  * average, betting on a snap back. Kuru spot or Perpl perps. Promise and
  * parameters from docs/design/trading/agents.html, "The catalog".
  */
-import { formatNumber, KURU_SPOT_MARKETS, marketAssets, num, str } from '../params.ts';
+import {
+  type CandleWindow,
+  formatNumber,
+  klinesHint,
+  KURU_SPOT_MARKETS,
+  marketAssets,
+  num,
+  QUOTE_RULE,
+  str,
+} from '../params.ts';
 import type { Params, PresetDefinition } from '../types.ts';
 
 const WINDOWS = {
-  // Coarser candles for the longer window keep one read under 200 candles,
-  // the most the planned candles tool returns (B-T11).
-  '1d': { label: '1-day', candles: '15-minute' },
-  '3d': { label: '3-day', candles: '30-minute' },
-} as const;
+  // Coarser candles for the longer window keep one read within get_klines'
+  // 200-candle limit (SEN-121).
+  '1d': { label: '1-day', candles: '15-minute', interval: '15m', limit: 96 },
+  '3d': { label: '3-day', candles: '30-minute', interval: '30m', limit: 144 },
+} satisfies Record<string, CandleWindow>;
 
 const CADENCE_SECONDS = { '5m': 300, '15m': 900, '1h': 3600 } as const;
 
@@ -45,7 +54,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
   const stop = formatNumber(num(p, 'stop'));
   const size = formatNumber(num(p, 'sizePct'));
   const spot = isSpot(market);
-  const read = `1. Read the ${window.label} average of ${market}: the mean close of its ${window.candles} candles. If no tool gives you candles, open nothing this run and say why; still manage what you hold.`;
+  const read = `1. Read the ${window.label} average of ${market}: the mean close of its ${window.candles} candles ${klinesHint(spot ? 'kuru' : 'perpl', window)}. If the read fails, open nothing this run and say why; still manage what you hold.`;
 
   // SEN-72: the target rests on the venue as a real limit order and only the
   // stop is agent-watched, as in Range Trader. On Kuru the resting sell's
@@ -90,6 +99,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
       ? `- If your ${marketAssets(market).quote} or ${marketAssets(market).base} sits in your wallet rather than your Kuru account, deposit it before you trade.`
       : `- Never use more than ${PERP_LEVERAGE}x leverage.`,
     '- Keep each thesis short: the average, how far price stretched, your entry, the target and the stop.',
+    QUOTE_RULE,
     '- When a read fails or the numbers are unclear, open nothing this run and say so in one sentence.',
   ].join('\n');
 
@@ -98,7 +108,8 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
 
 export const meanReverter: PresetDefinition = {
   id: 'mean-reverter',
-  version: 1,
+  // SEN-121: the text now names get_klines and quote.
+  version: 2,
   name: 'Mean Reverter',
   tagline: 'Fades sharp moves away from the average, betting on a snap back.',
   description:
@@ -183,6 +194,8 @@ export const meanReverter: PresetDefinition = {
     },
   ],
   tools: [
+    'get_klines',
+    'quote',
     'get_depth',
     'get_balances',
     'get_positions',

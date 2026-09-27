@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 
 import {
   getPreset,
+  QUOTE_RULE,
   listPresets,
   renderPreset,
   resolveParams,
@@ -170,12 +171,18 @@ for (const def of listPresets()) {
       }
     });
 
-    it('does not name a tool the agent does not have yet', () => {
-      // get_klines and quote land in B-T11; until then a render must not rely on them.
-      const result = renderPreset(def.id, {});
-      assert.ok(result.ok);
-      assert.doesNotMatch(result.strategy + result.systemPrompt, /get_klines|\bquote\b/);
-      assert.ok(!def.tools.includes('get_klines'));
+    it('names only tools it lists, and never falls back to a missing tool', () => {
+      // SEN-121: get_klines and quote exist now, so a render may call them by
+      // name, but only if the preset lists them: the list is what the agent gets.
+      for (const raw of extremes(def)) {
+        const result = renderPreset(def.id, raw);
+        if (!result.ok) continue;
+        const text = result.strategy + result.systemPrompt;
+        const named = new Set(text.match(/\b[a-z]+(?:_[a-z]+)+\b/g));
+        if (/\bcall quote\b/.test(text)) named.add('quote');
+        for (const tool of named) assert.ok(def.tools.includes(tool), `${def.id} names ${tool}`);
+        assert.doesNotMatch(text, /no tool gives you candles/, def.id);
+      }
     });
   });
 }
@@ -262,6 +269,55 @@ describe('resolveParams', () => {
   });
 });
 
+describe('SEN-121 price history and pricing', () => {
+  const rendered = (id: string, raw: Record<string, unknown>) => {
+    const result = renderPreset(id, raw);
+    assert.ok(result.ok, JSON.stringify(result));
+    return result;
+  };
+  const render = (id: string, raw: Record<string, unknown>): string => rendered(id, raw).strategy;
+
+  it('asks get_klines for at most the 200 candles it returns, at every extreme', () => {
+    for (const def of listPresets()) {
+      for (const raw of extremes(def)) {
+        const result = renderPreset(def.id, raw);
+        if (!result.ok) continue;
+        for (const [, limit] of result.strategy.matchAll(/get_klines [^)]*limit (\d+)\)/g)) {
+          assert.ok(Number(limit) >= 1 && Number(limit) <= 200, `${def.id} limit ${limit}`);
+        }
+      }
+    }
+  });
+
+  it('spells out the interval and count for each window', () => {
+    assert.match(
+      render('range-trader', { lookback: '1w' }),
+      /from 1-hour candles \(get_klines on kuru, interval 1h, limit 168\)/,
+    );
+    // One extra candle, because the still-open one is left out.
+    assert.match(
+      render('trend-rider', { lookback: '3d' }),
+      /\(get_klines on perpl, interval 1h, limit 73\), leaving out the last one/,
+    );
+    assert.match(
+      render('mean-reverter', { market: 'ETH-PERP', window: '3d' }),
+      /\(get_klines on perpl, interval 30m, limit 144\)/,
+    );
+    assert.match(
+      render('dca-stacker', { doubleOnDip: true }),
+      /\(get_klines on kuru, interval 15m, limit 96\)\. If the mid price/,
+    );
+  });
+
+  it('prices market orders with quote in every preset that lists it', () => {
+    for (const def of listPresets()) {
+      const { systemPrompt } = rendered(def.id, {});
+      assert.equal(systemPrompt.includes(QUOTE_RULE), def.tools.includes('quote'), def.id);
+    }
+    assert.match(QUOTE_RULE, /pass its worstPrice as slippageLimitPrice/);
+  });
+});
+
 describe('SEN-72 presets', () => {
   const render = (id: string, raw: Record<string, unknown>): string => {
     const result = renderPreset(id, raw);
@@ -317,7 +373,7 @@ describe('SEN-72 presets', () => {
     assert.doesNotMatch(render('dca-stacker', {}), /candles/);
     assert.match(
       render('dca-stacker', { doubleOnDip: true }),
-      /this buy is double: 20 USDC\. If no tool gives you candles, buy the normal amount/,
+      /this buy is double: 20 USDC\. If the candle read fails, buy the normal amount/,
     );
   });
 
@@ -506,7 +562,7 @@ const RANGE_TRADER_STRATEGY = [
   'Trade MON-USDC on Kuru spot only. Buy near the bottom of the recent range; sell at a target or a stop.',
   '',
   'Every run:',
-  '1. Read the 3-day high and low of MON-USDC from 30-minute candles. If no tool gives you candles, or the range is under 2% wide, do not buy this run and say why.',
+  '1. Read the 3-day high and low of MON-USDC from 30-minute candles (get_klines on kuru, interval 30m, limit 144). If the read fails, or the range is under 2% wide, do not buy this run and say why.',
   '2. If you hold no MON (dust under 1 USDC does not count) and have no open orders, and the mid price is within 1.5% of the range low: record a thesis, then buy at market with at most 40% of your USDC, slippage limit 0.5% above the best ask.',
   '3. Right after a buy, place a GTC limit sell of the MON you bought at 3% above your fill price. That order is the target, and its price tells later runs the entry: entry = its price ÷ 1.03.',
   '4. If you hold MON: the stop is 3% below the entry. If the best bid is at or below it, cancel the resting sell and sell all your MON at market. If you hold MON but no resting sell, you cannot know the entry: sell it at market.',
@@ -530,9 +586,9 @@ const TREND_RIDER_STRATEGY = [
   '',
   'Every run:',
   '1. Read your BTC-PERP position. If you have one, go to step 4.',
-  '2. Read the 1-day high and low of BTC-PERP from 15-minute candles, leaving out the candle still open. If no tool gives you candles, do not open a position this run and say why.',
+  '2. Read the 1-day high and low of BTC-PERP from 15-minute candles (get_klines on perpl, interval 15m, limit 97), leaving out the last one, which is still open. If the read fails, do not open a position this run and say why.',
   "3. If the mid price is above that high: record a thesis, then open a long at market with 25% of your AUSD collateral as margin at 2x leverage (the market's maximum from list_markets, if lower), size = margin x leverage / price, slippage limit 0.5% past the best price. Otherwise do nothing.",
-  '4. Long: the stop is 4% below the higher of your entry price and the 1-day high. With no candles, use your entry price alone. If the price has crossed the stop, close the whole position with close_position. Otherwise hold.',
+  '4. Long: the stop is 4% below the higher of your entry price and the 1-day high. If the candle read failed, use your entry price alone. If the price has crossed the stop, close the whole position with close_position. Otherwise hold.',
   '',
   'The trailing stop is checked every run, not a venue order: between runs price can pass through it, and the close fills at the price when it is seen. The position is isolated margin: it can lose at most its margin, and a fast move can liquidate it before a run sees the stop.',
 ].join('\n');
@@ -563,7 +619,7 @@ const MEAN_REVERTER_STRATEGY = [
   'Trade MON-USDC on Kuru spot only. Fade sharp moves away from the average, betting on a snap back.',
   '',
   'Every run:',
-  '1. Read the 1-day average of MON-USDC: the mean close of its 15-minute candles. If no tool gives you candles, open nothing this run and say why; still manage what you hold.',
+  '1. Read the 1-day average of MON-USDC: the mean close of its 15-minute candles (get_klines on kuru, interval 15m, limit 96). If the read fails, open nothing this run and say why; still manage what you hold.',
   '2. If you hold no MON (dust under 1 USDC does not count), have no open orders, and the mid price is 3% or more below the average: record a thesis, then buy at market with at most 40% of your USDC, slippage limit 0.5% above the best ask.',
   '3. Right after a buy, place a GTC limit sell of the MON you bought at 1.5% above your fill price (50% of the 3% stretch). Its price tells later runs the entry: entry = its price / 1.015.',
   '4. If you hold MON: the stop is 3% below the entry. If the best bid is at or below it, cancel the resting sell and sell all your MON at market. If you hold MON but no resting sell, you cannot know the entry: sell it at market.',

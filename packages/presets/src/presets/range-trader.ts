@@ -3,16 +3,24 @@
  * target or a stop. Kuru spot only. Promise and parameters from
  * docs/design/trading/agents.html, "The catalog" and "Configure · strategy".
  */
-import { formatNumber, marketAssets, num, str } from '../params.ts';
+import {
+  type CandleWindow,
+  formatNumber,
+  klinesHint,
+  marketAssets,
+  num,
+  QUOTE_RULE,
+  str,
+} from '../params.ts';
 import type { Params, PresetDefinition } from '../types.ts';
 
 const LOOKBACKS = {
-  '1d': { label: '1-day', candles: '15-minute' },
-  // Coarser candles for the longer windows keep one read under 200 candles,
-  // the most the planned candles tool returns (B-T11).
-  '3d': { label: '3-day', candles: '30-minute' },
-  '1w': { label: '1-week', candles: '1-hour' },
-} as const;
+  '1d': { label: '1-day', candles: '15-minute', interval: '15m', limit: 96 },
+  // Coarser candles for the longer windows keep one read within get_klines'
+  // 200-candle limit (SEN-121).
+  '3d': { label: '3-day', candles: '30-minute', interval: '30m', limit: 144 },
+  '1w': { label: '1-week', candles: '1-hour', interval: '1h', limit: 168 },
+} satisfies Record<string, CandleWindow>;
 
 const CADENCE_SECONDS = { '5m': 300, '15m': 900, '1h': 3600 } as const;
 
@@ -39,13 +47,14 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
   // "3% below the entry" would be unenforceable. The order's price is the
   // memory: entry = price ÷ (1 + target).
   //
-  // The candles are named, the tool is not: `get_klines` ships in B-T11, and
-  // until then the agent is told to do nothing rather than guess a range.
+  // SEN-121: the candles come from get_klines, named with its arguments, and
+  // a failed read still means "do not buy" rather than a range the agent
+  // guessed. Market orders are priced by QUOTE_RULE in the system prompt.
   const strategy = [
     `Trade ${market} on Kuru spot only. Buy near the bottom of the recent range; sell at a target or a stop.`,
     '',
     'Every run:',
-    `1. Read the ${lookback.label} high and low of ${market} from ${lookback.candles} candles. If no tool gives you candles, or the range is under ${MIN_RANGE_PCT}% wide, do not buy this run and say why.`,
+    `1. Read the ${lookback.label} high and low of ${market} from ${lookback.candles} candles ${klinesHint('kuru', lookback)}. If the read fails, or the range is under ${MIN_RANGE_PCT}% wide, do not buy this run and say why.`,
     `2. If you hold no ${base} (dust under 1 ${quote} does not count) and have no open orders, and the mid price is within ${band}% of the range low: record a thesis, then buy at market with at most ${size}% of your ${quote}, slippage limit 0.5% above the best ask.`,
     `3. Right after a buy, place a GTC limit sell of the ${base} you bought at ${formatNumber(target)}% above your fill price. That order is the target, and its price tells later runs the entry: entry = its price ÷ ${targetFactor}.`,
     `4. If you hold ${base}: the stop is ${stop}% below the entry. If the best bid is at or below it, cancel the resting sell and sell all your ${base} at market. If you hold ${base} but no resting sell, you cannot know the entry: sell it at market.`,
@@ -61,6 +70,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
     '- Never move the stop further away, never average down, never cancel the target except to sell at the stop.',
     `- Keep each thesis short: the range low and high, your entry, the target and the stop, as ${quote} prices.`,
     `- If your ${quote} or ${base} sits in your wallet rather than your Kuru account, deposit it before you trade.`,
+    QUOTE_RULE,
     '- When a read fails or the numbers are unclear, do nothing this run and say so in one sentence.',
   ].join('\n');
 
@@ -69,7 +79,8 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
 
 export const rangeTrader: PresetDefinition = {
   id: 'range-trader',
-  version: 1,
+  // SEN-121: the text now names get_klines and quote.
+  version: 2,
   name: 'Range Trader',
   tagline: 'Buys near the bottom of a recent range, sells near the top.',
   description:
@@ -153,6 +164,8 @@ export const rangeTrader: PresetDefinition = {
     },
   ],
   tools: [
+    'get_klines',
+    'quote',
     'get_depth',
     'get_balances',
     'get_open_orders',

@@ -152,6 +152,42 @@ export function formatNumber(value: number): string {
   return String(Number(value.toFixed(8)));
 }
 
+/**
+ * A candle window as the renders ask `get_klines` for it (SEN-121): the
+ * interval and count are spelled out so the agent does not pick its own, and
+ * every window stays within the tool's 200-candle limit.
+ */
+export interface CandleWindow {
+  /** "3-day": how the window reads in the text. */
+  label: string;
+  /** "30-minute": the candle width as the text reads it. */
+  candles: string;
+  /** The same width as a `get_klines` interval. */
+  interval: '15m' | '30m' | '1h';
+  /** Candles that cover the window, at most 200. */
+  limit: number;
+}
+
+/**
+ * "(get_klines on kuru, interval 30m, limit 144)". A parenthesis, because the
+ * phone shows the strategy's numbered steps to the owner verbatim
+ * (`decisionSteps` in apps/mobile): the sentence has to read without it.
+ */
+export function klinesHint(venue: 'kuru' | 'perpl', w: CandleWindow): string {
+  return `(get_klines on ${venue}, interval ${w.interval}, limit ${w.limit})`;
+}
+
+/**
+ * The system-prompt rule that prices every market order with `quote`
+ * (SEN-121). It lives in the system prompt, not the steps, so the steps keep
+ * the owner-readable "slippage limit 0.5% above the best ask" and this one
+ * line turns each of them into the tool call.
+ */
+export const QUOTE_RULE =
+  '- Before each market order, call quote with its side, its size in base units and the ' +
+  'slippage limit the strategy names as maxSlippage (0.5% is "0.005"; if none is named, leave ' +
+  'it out), then pass its worstPrice as slippageLimitPrice.';
+
 /** "MON-USDC" → MON and USDC. Kuru spot symbols are always base-quote. */
 export function marketAssets(market: string): { base: string; quote: string } {
   const [base = market, quote = 'USDC'] = market.split('-');
