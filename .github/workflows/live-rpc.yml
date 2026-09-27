@@ -1,0 +1,61 @@
+# Nightly live-RPC tests (SEN-143, test audit 2026-09-27 §4 item 20).
+#
+# `pnpm test` is fake-backed so checks.yml never depends on Monad testnet
+# being up. That leaves the tests gated on SENTE_LIVE_RPC_TESTS=1 running
+# nowhere, so a drift in the chain (a redeployed factory, a changed EntryPoint)
+# would go unseen until a user's smart account moved. This job runs them daily.
+#
+# Live gates in the repo today (grep `SENTE_LIVE_RPC_TESTS`; there is no
+# PERPL_LIVE or other env-gated test):
+#
+#   apps/mobile/src/wallet/kernel.test.ts
+#     "the counterfactual address on Monad testnet matches the pinned vectors"
+#     public RPC from viem's monadTestnet chain, no secrets.
+#
+# No secrets, on purpose: a scheduled job that needs one also needs someone to
+# rotate it. A live test that needs a key belongs in a probe script instead.
+
+name: live-rpc
+
+on:
+  schedule:
+    # 04:17 UTC: off the top of the hour, when GitHub's scheduler is busiest.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live-RPC tests (Monad testnet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same toolchain as checks.yml: versions come from mise.toml.
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Install (hoisted, exactly as the lockfile says)
+        run: pnpm install --frozen-lockfile
+
+      # Only the live tests: the fake-backed rest already runs in checks.yml.
+      # A gated test that is skipped (env var typo) or no longer matches the
+      # name pattern (renamed) would pass green without touching the chain,
+      # so the TAP summary must show at least one pass and zero skips.
+      - name: Live tests
+        working-directory: apps/mobile
+        # Explicit bash adds -o pipefail, so a failing test is not masked by tee.
+        shell: bash
+        env:
+          SENTE_LIVE_RPC_TESTS: '1'
+        run: |
+          node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --test \
+            --test-reporter=tap \
+            --test-name-pattern='on Monad testnet' \
+            src/wallet/kernel.test.ts | tee "${RUNNER_TEMP}/live.tap"
+          grep -Eq '^# pass [1-9]' "${RUNNER_TEMP}/live.tap"
+          grep -Eq '^# skipped 0$' "${RUNNER_TEMP}/live.tap"

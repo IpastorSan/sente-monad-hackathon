@@ -15,11 +15,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { getSenderAddress } from 'permissionless/actions';
 import { createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { monadTestnet } from 'viem/chains';
 
-import { kernelFactoryArgs, KERNEL_ADDRESSES, toSenteKernelAccount } from './kernel.ts';
+import {
+  ENTRY_POINT,
+  kernelFactoryArgs,
+  KERNEL_ADDRESSES,
+  toSenteKernelAccount,
+} from './kernel.ts';
 
 /**
  * Two fixed owner keys and the accounts they own. These are the well-known
@@ -121,12 +127,18 @@ test(
       });
       assert.equal(account.address, vector.address);
 
-      // permissionless must agree with our pure implementation, or the client
-      // would refuse a perfectly good deployment.
-      const args = await account.getFactoryArgs();
+      // Our pure init code must resolve to the same address on chain, or the
+      // client would refuse a perfectly good deployment. Asked of the
+      // EntryPoint directly, not via `account.getFactoryArgs()`: viem returns
+      // no factory args once an account is deployed, and these vectors are
+      // public anvil keys that anyone can (and someone did) deploy (SEN-143).
       const ours = kernelFactoryArgs(vector.owner);
-      assert.equal(lower(args.factory ?? ''), lower(ours.factory));
-      assert.equal(lower(args.factoryData ?? ''), lower(ours.factoryData));
+      const resolved = await getSenderAddress(client, {
+        factory: ours.factory,
+        factoryData: ours.factoryData,
+        entryPointAddress: ENTRY_POINT.address,
+      });
+      assert.equal(lower(resolved), lower(vector.address));
     }
   },
 );
