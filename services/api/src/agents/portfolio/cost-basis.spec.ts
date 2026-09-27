@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../events/agent-event-log';
+import { settle } from '../events/verdict';
 import { fifoCostBasis, reconcileHolding } from './cost-basis';
 
 const MON = 'MON-USDC';
@@ -75,7 +76,8 @@ describe('fifoCostBasis (SEN-66)', () => {
     });
   });
 
-  it('adds quote buy fees to cost and nets quote sell fees off the realised PnL', () => {
+  // SEN-128: the fee rule is `events/verdict.ts`'s, the one verdict cards show.
+  it('realises every quote fee when it is paid and keeps lots fee-exclusive', () => {
     const basis = fifoCostBasis(
       [
         fill('buy', '10', '2', { fee: '0.5', feeAsset: 'USDC' }),
@@ -83,18 +85,36 @@ describe('fifoCostBasis (SEN-66)', () => {
       ],
       MON,
     );
-    // Lot cost 20.5 for 10; half leaves at 10.25, sells for 15, less 0.1 fee.
+    // Half leaves at 2 for 3: +5 of price PnL, less BOTH fees paid so far.
     expect(basis).toMatchObject({
       openSize: '5',
-      costQuote: '10.25',
-      avgPrice: '2.05',
-      realisedPnl: '4.65',
+      costQuote: '10',
+      avgPrice: '2',
+      realisedPnl: '4.4',
     });
   });
 
-  it('leaves base-denominated fees out of the quote ledger', () => {
+  it('prices a base-denominated fee at the fill that paid it', () => {
     const basis = fifoCostBasis([fill('buy', '10', '2', { fee: '0.01', feeAsset: 'MON' })], MON);
-    expect(basis.costQuote).toBe('20');
+    // 0.01 MON at 2 is 0.02 USDC, realised at once; the lot stays at its fill.
+    expect(basis).toMatchObject({ costQuote: '20', realisedPnl: '-0.02' });
+  });
+
+  it('reads a fee that names no asset as quote, as the verdict does', () => {
+    const basis = fifoCostBasis(
+      [fill('buy', '1', '2'), fill('sell', '1', '3', { fee: '0.1' })],
+      MON,
+    );
+    expect(basis.realisedPnl).toBe('0.9');
+  });
+
+  it('nets the WHOLE fee of an over-sell, not only its matched part', () => {
+    const basis = fifoCostBasis(
+      [fill('buy', '1', '3'), fill('sell', '4', '2.5', { fee: '0.4', feeAsset: 'USDC' })],
+      MON,
+    );
+    // 1 matched at -0.5; 3 unmatched realise nothing, but the 0.4 fee was paid in full.
+    expect(basis).toMatchObject({ realisedPnl: '-0.9', unmatchedSellSize: '3' });
   });
 
   it('ignores Perpl fills, other markets and non-fill events', () => {
@@ -186,5 +206,75 @@ describe('reconcileHolding (SEN-66)', () => {
 
   it('rejects a held size that is not a decimal', () => {
     expect(() => reconcileHolding(fifoCostBasis([], MON), '-1', null)).toThrow(RangeError);
+  });
+});
+
+/**
+ * SEN-128: the portfolio's ledger and the verdict's realise the same fills, so
+ * on a single long thesis over one Kuru market they must report the same
+ * realised PnL, fees and over-sells included. No property-testing library is
+ * in the API's dev deps, so this is a seeded generator: a failure prints its
+ * seed and the history, and replays by that seed.
+ */
+describe('fifoCostBasis agrees with settle() on realised PnL (SEN-128)', () => {
+  /** mulberry32: small, seedable, deterministic. */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /** A positive decimal of up to 4 dp, built as a string so it is exact. */
+  function decimal(next: () => number, maxWhole: number): string {
+    const units = 1 + Math.floor(next() * maxWhole * 10_000);
+    const whole = Math.floor(units / 10_000);
+    const fraction = String(units % 10_000).padStart(4, '0');
+    return `${whole}.${fraction}`;
+  }
+
+  function history(next: () => number): AgentEvent[] {
+    seq += 1;
+    const thesis: AgentEvent = {
+      seq,
+      agentId: 'agent-1',
+      at: 1_700_000_000_000 + seq,
+      kind: 'thesis',
+      detail: { market: MON, direction: 'long', thesis: 't', invalidation: 'i' },
+    };
+    const events = [thesis];
+    const count = 1 + Math.floor(next() * 8);
+    for (let i = 0; i < count; i += 1) {
+      // Sells as often as buys, so over-sells (no lot left) are common.
+      const side = next() < 0.5 ? 'buy' : 'sell';
+      const feeRoll = next();
+      const fee =
+        feeRoll < 0.25
+          ? {}
+          : {
+              fee: decimal(next, 1),
+              ...(feeRoll < 0.5 ? {} : { feeAsset: feeRoll < 0.75 ? 'USDC' : 'MON' }),
+            };
+      events.push(fill(side, decimal(next, 20), decimal(next, 10), fee));
+    }
+    return events;
+  }
+
+  it('on 500 seeded single-thesis histories', () => {
+    for (let seed = 1; seed <= 500; seed += 1) {
+      seq = 0;
+      const events = history(rng(seed));
+      const verdicts = settle(events);
+      const basis = fifoCostBasis(events, MON);
+      expect({ seed, events, pnl: basis.realisedPnl }).toEqual({
+        seed,
+        events,
+        pnl: verdicts[0]!.realisedPnl,
+      });
+    }
   });
 });

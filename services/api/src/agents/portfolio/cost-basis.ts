@@ -13,6 +13,13 @@
  * `reconcileHolding` therefore sets the log against what the chain says is held
  * and reports how much of it the log explains, rather than pretending to know.
  *
+ * Fees follow THE fee rule, written once in `events/verdict.ts`'s header
+ * ("The fee rule (SEN-128)") and applied through its `feeInQuote`: a fee is
+ * realised on the fill that paid it, in full, base fees priced at that fill.
+ * This ledger used to fold buy fees into lots, ignore base fees and pro-rate a
+ * sell's fee over its matched part, so the portfolio and the verdict card
+ * disagreed about the same fills; they must not.
+ *
  * Arithmetic is exact bigint fixed point, never `Number`. Sizes and prices are
  * 18 dp (Kuru's `ratioToDecimal` scale, and no token has more decimals), so a
  * size x price product is exact at 36 dp; money is carried at 36 dp and only
@@ -21,16 +28,20 @@
 import type { Decimal } from '@sente/venues';
 
 import type { AgentEvent } from '../events/agent-event-log';
+import { addScaled, feeInQuote, type Scaled, subScaled } from '../events/verdict';
 
 export interface CostBasis {
   readonly market: string;
   /** Base still held from the logged buys, after FIFO sells. */
   readonly openSize: Decimal;
-  /** `costQuote / openSize`, 18 dp; `null` when nothing is open. */
+  /** `costQuote / openSize`, 18 dp: the fee-exclusive entry. `null` when nothing is open. */
   readonly avgPrice: Decimal | null;
-  /** Quote paid for `openSize`, quote-denominated buy fees included. */
+  /** Quote paid for `openSize` at its fills, fees EXCLUDED: they are in `realisedPnl` already. */
   readonly costQuote: Decimal;
-  /** Quote realised by the sells that matched a lot, net of quote-denominated sell fees. Signed. */
+  /**
+   * Quote realised by the sells that matched a lot, less every fee paid on
+   * every fill (the fee rule in `events/verdict.ts`). Signed.
+   */
   readonly realisedPnl: Decimal;
   /** Sold size with no logged lot behind it: base whose cost this log never saw. */
   readonly unmatchedSellSize: Decimal;
@@ -53,21 +64,25 @@ export interface HoldingReconciliation {
 
 const SCALE = 18n;
 const ONE = 10n ** SCALE;
+/** Money is size x price: 36 dp. */
+const MONEY_SCALE = SCALE * 2n;
 const UNSIGNED_DECIMAL = /^\d+(\.\d{1,18})?$/;
 
 interface Lot {
   /** Base, 18 dp. */
   size: bigint;
-  /** Quote paid for `size`, fee included, 36 dp. */
-  cost: bigint;
+  /** Fill price, 18 dp. Fees are not in the lot: they were realised when paid. */
+  readonly price: bigint;
 }
 
 export function fifoCostBasis(events: readonly AgentEvent[], market: string): CostBasis {
-  // The quote side of the symbol (`MON-USDC` -> USDC), the same reading
-  // `verdict.ts` uses: a fee is only money in this ledger when it is in quote.
-  const quote = market.split('-')[1];
+  // The quote side of the symbol (`MON-USDC` -> USDC), read exactly as
+  // `verdict.ts#pnlAssetOf` reads it, since the fee rule is keyed on it.
+  const quote = market.split('-')[1] ?? market;
   const lots: Lot[] = [];
-  let realised = 0n;
+  // 36 dp money; a fee off `feeInQuote` can carry more, so this stays Scaled
+  // and is only cut to 18 dp when written out.
+  let realised: Scaled = { units: 0n, scale: Number(MONEY_SCALE) };
   let unmatched = 0n;
   let fills = 0;
 
@@ -82,19 +97,18 @@ export function fifoCostBasis(events: readonly AgentEvent[], market: string): Co
     const side = event.detail['side'];
     const size = fixedOf(event.detail['filledSize']);
     const price = fixedOf(event.detail['averageFillPrice']);
-    if (size === undefined || price === undefined || size === 0n) continue;
+    if (size === undefined || price === undefined) continue;
     if (side !== 'buy' && side !== 'sell') continue;
 
-    const fee = fixedOf(event.detail['fee']);
-    // A fee in base (or an unnamed asset) is not quote spent, and pricing it
-    // would be a guess about which way the venue took it; only quote fees count.
-    const quoteFee =
-      fee !== undefined && quote !== undefined && event.detail['feeAsset'] === quote
-        ? fee * ONE
-        : 0n;
+    // The whole fee, on the fill that paid it, whatever the fill matched
+    // (SEN-128): a buy's fee does not wait for its lot to close, and an
+    // over-sell's fee is not pro-rated down to its matched part.
+    const fee = feeInQuote(event.detail, { units: price, scale: Number(SCALE) }, quote);
+    if (fee !== undefined) realised = subScaled(realised, fee);
+    if (size === 0n) continue;
 
     if (side === 'buy') {
-      lots.push({ size, cost: size * price + quoteFee });
+      lots.push({ size, price });
       continue;
     }
 
@@ -103,32 +117,27 @@ export function fifoCostBasis(events: readonly AgentEvent[], market: string): Co
     while (lots.length > 0 && remaining > 0n) {
       const lot = lots[0]!;
       const taken = lot.size <= remaining ? lot.size : remaining;
-      // A whole lot leaves with its exact cost; a partial one pro rata, so the
-      // rounding stays in the lot that is still open instead of piling up.
-      const cost = taken === lot.size ? lot.cost : (lot.cost * taken) / lot.size;
-      matchedCost += cost;
+      matchedCost += taken * lot.price;
       lot.size -= taken;
-      lot.cost -= cost;
       remaining -= taken;
       if (lot.size === 0n) lots.shift();
     }
-    const matched = size - remaining;
+    // Only the matched part realises a price PnL: the rest has no cost in this log.
     unmatched += remaining;
-    // Only the matched part realises anything: the rest has no cost in this
-    // log. The quote fee is split the same way, so an unmatched sell does not
-    // charge its whole fee to lots it never touched.
-    const matchedFee = matched === size ? quoteFee : (quoteFee * matched) / size;
-    realised += matched * price - matchedCost - matchedFee;
+    realised = addScaled(realised, {
+      units: (size - remaining) * price - matchedCost,
+      scale: Number(MONEY_SCALE),
+    });
   }
 
   const openSize = lots.reduce((sum, lot) => sum + lot.size, 0n);
-  const cost = lots.reduce((sum, lot) => sum + lot.cost, 0n);
+  const cost = lots.reduce((sum, lot) => sum + lot.size * lot.price, 0n);
   return {
     market,
     openSize: fixedString(openSize),
     avgPrice: openSize === 0n ? null : fixedString(cost / openSize),
     costQuote: moneyString(cost),
-    realisedPnl: moneyString(realised),
+    realisedPnl: fixedString(truncatedTo(realised, SCALE)),
     unmatchedSellSize: fixedString(unmatched),
     fills,
   };
@@ -183,6 +192,12 @@ function requireFixed(value: Decimal, name: string): bigint {
 function moneyString(units: bigint): Decimal {
   // BigInt division truncates towards zero, which is the rounding promised above.
   return fixedString(units / ONE);
+}
+
+/** `value` as units at `scale` dp, truncated towards zero like `moneyString`. */
+function truncatedTo(value: Scaled, scale: bigint): bigint {
+  const shift = BigInt(value.scale) - scale;
+  return shift >= 0n ? value.units / 10n ** shift : value.units * 10n ** -shift;
 }
 
 function fixedString(units: bigint): Decimal {
