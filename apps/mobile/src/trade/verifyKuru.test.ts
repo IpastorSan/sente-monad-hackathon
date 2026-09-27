@@ -43,6 +43,7 @@ const TRADE_ID = '4b1c2f3e-8d6a-4c3b-9e2f-1a2b3c4d5e6f';
 const ACCOUNT_CORE = KURU_TESTNET_CONTRACTS.accountCore;
 const USDC = KURU_TESTNET_TOKENS.USDC;
 const MON = KURU_TESTNET_TOKENS.MON;
+const WETH = KURU_TESTNET_TOKENS.WETH;
 const MON_USDC = KURU_TESTNET_MARKETS[0]!;
 const WETH_USDC = KURU_TESTNET_MARKETS[1]!;
 const STRANGER = getAddress('0x1111111111111111111111111111111111111111');
@@ -132,6 +133,19 @@ const place = (
   market: Address = MON_USDC.address,
   clientOrderId: Hex | undefined = CLIENT_ORDER_ID,
 ): Erc7579Call => placeOrderCall(market, { ...base, ...order } as never, clientOrderId);
+
+/** A cancel `batch` with any userId and slots, which no `@sente/venues` builder emits. */
+function cancelBatch(userId: number, slots: readonly number[]): Erc7579Call {
+  return {
+    to: MON_USDC.address,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: [KURU_LEG_ABI[3]],
+      functionName: 'batch',
+      args: [userId, [], slots as number[]],
+    }),
+  };
+}
 
 /** `batch` with a userId other than 0, which no `@sente/venues` builder emits. */
 function placeAsUser(userId: number): Erc7579Call {
@@ -465,6 +479,52 @@ test('a place without the phone’s market facts is refused', () => {
   );
 });
 
+// SEN-132: the funding rules below survived mutation testing (test audit
+// 2026-09-27, §2A). Each test pins the reason, so a different rule refusing
+// the same trade by accident does not count as coverage.
+
+test('approve on another token: a WETH approval funding a USDC deposit is refused', () => {
+  // Money-bearing: it would leave a standing WETH allowance to AccountCore.
+  const [approve] = depositCalls(ACCOUNT_CORE, WETH, BUY_CAP);
+  const [, deposit] = usdcFunding();
+  const steps = buyLimitSteps(place(), [approve!, deposit!]);
+  refused(verifyKuruTrade(steps, ctx(BUY_LIMIT)), /approval is for 0x[0-9a-fA-F]{40}, not USDC/);
+});
+
+test('native deposit: a MON deposit accompanied by an approval is refused', () => {
+  const [approve] = usdcFunding(SELL_CAP);
+  const steps = unbatched(
+    [approve!, ...monFunding(), place({}, SELL_ORDER)],
+    ['approve', 'deposit', 'place'],
+  );
+  refused(verifyKuruTrade(steps, ctx(SELL_MARKET)), /MON deposit needs no approval/);
+});
+
+test('deposit cap: a malformed maxDepositAtoms is refused', () => {
+  refused(
+    verifyKuruTrade(buyLimitSteps(), ctx({ ...BUY_LIMIT, maxDepositAtoms: '01' })),
+    /deposit cap is not an amount/,
+  );
+});
+
+test('deposit cap: a malformed maxDepositAtoms is refused even with no deposit', () => {
+  // Fail closed on the intent itself, not only when a deposit happens to read it.
+  const steps = unbatched([place()], ['place']);
+  refused(
+    verifyKuruTrade(steps, ctx({ ...BUY_LIMIT, maxDepositAtoms: '01' })),
+    /deposit cap is not an amount/,
+  );
+});
+
+test('side: an intent with an unknown side is refused', () => {
+  // Without the check, 'x' falls through to the sell branch and signs a sell.
+  const steps = unbatched([...monFunding(), place({}, SELL_ORDER)], ['deposit', 'place']);
+  refused(
+    verifyKuruTrade(steps, ctx({ ...SELL_MARKET, side: 'x' as never })),
+    /the order has no side/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Steps and envelopes.
 
@@ -536,6 +596,17 @@ test('cancel: an order placed instead is refused', () => {
   refused(verifyKuruTrade(unbatched([place()], ['place']), ctx(CANCEL)), /does not cancel/);
 });
 
+test('cancel: a batch cancelling the confirmed slot and another is refused', () => {
+  // SEN-132, money-bearing: slot 8 is a second resting order the user never chose.
+  const steps = unbatched([cancelBatch(0, [7, 8])], ['cancel']);
+  refused(verifyKuruTrade(steps, ctx(CANCEL)), /slot 7, 8, not 7/);
+});
+
+test('cancel: a cancel for another Kuru account is refused', () => {
+  const steps = unbatched([cancelBatch(1, [7])], ['cancel']);
+  refused(verifyKuruTrade(steps, ctx(CANCEL)), /cancel acts for Kuru account 1, not yours/);
+});
+
 // ---------------------------------------------------------------------------
 // Withdraw.
 
@@ -555,4 +626,12 @@ test('withdraw: an extra leg is refused', () => {
     withdrawCall(ACCOUNT_CORE, MON, 1n),
   ]);
   refused(verifyKuruTrade(steps, ctx(WITHDRAW)), /extra withdraw leg/);
+});
+
+test('withdraw: a zero amount in the intent is refused', () => {
+  const steps = unbatched([withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n)], ['withdraw']);
+  refused(
+    verifyKuruTrade(steps, ctx({ ...WITHDRAW, amountAtoms: '0' })),
+    /withdrawal amount is not an amount/,
+  );
 });

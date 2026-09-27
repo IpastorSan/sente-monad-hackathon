@@ -178,6 +178,10 @@ function verifyPlace(
 
   const expected = expectedOrder(intent, facts, ctx.slippageBps);
   if (!expected.ok) return expected;
+  // SEN-132: parsed before the legs so a malformed cap refuses every place,
+  // not only one that happens to carry a deposit (fail closed on the intent).
+  const maxDeposit = parseAtoms(intent.maxDepositAtoms);
+  if (maxDeposit === undefined) return refuse('the deposit cap is not an amount');
 
   // Walk the one allowed shape; anything left over or out of place is refused.
   let i = 0;
@@ -200,7 +204,7 @@ function verifyPlace(
   const orderProblem = checkOrder(place, intent, expected.order);
   if (orderProblem) return refuse(orderProblem, place.stepIndex);
 
-  return checkFunding(approve, deposit, intent, market, facts, expected.order);
+  return checkFunding(approve, deposit, intent, market, facts, expected.order, maxDeposit);
 }
 
 type ExpectedOrder = {
@@ -319,6 +323,7 @@ function checkFunding(
   market: KuruMarketConfig,
   facts: MarketFacts,
   order: ExpectedOrder,
+  maxDeposit: bigint,
 ): KuruVerifyResult {
   const funding = intent.side === 'buy' ? market.quote : market.base;
   const native = isAddressEqual(funding.address, NATIVE_TOKEN);
@@ -352,8 +357,6 @@ function checkFunding(
     }
   }
 
-  const maxDeposit = parseAtoms(intent.maxDepositAtoms);
-  if (maxDeposit === undefined) return refuse('the deposit cap is not an amount');
   let cap: bigint;
   try {
     cap = depositCapAtoms(
