@@ -97,7 +97,13 @@ export async function getAgentWallet(privy: PrivyClient, walletId: string): Prom
 export interface PrivyTransactionRequest {
   to: Address;
   data?: Hex;
-  value?: number | Hex;
+  /**
+   * Always present, `0x0` when the call carries no MON (SEN-146). Every rule of
+   * the compiled policy bounds `ethereum_transaction.value`; how Privy
+   * evaluates that condition against a request with no `value` at all is not
+   * something we have measured, so no request leaves it to chance.
+   */
+  value: number | Hex;
   chain_id: number;
   nonce: number;
   gas_limit: number | Hex;
@@ -123,7 +129,7 @@ export function privyTransaction(input: {
     // Checksummed: Privy compares `to` case-sensitively against the policy.
     to: getAddress(input.to),
     ...(input.data === undefined ? {} : { data: input.data }),
-    ...(input.value === undefined ? {} : { value: hex(input.value) }),
+    value: hex(input.value ?? 0n),
     chain_id: input.chainId,
     nonce: input.nonce,
     gas_limit: hex(input.gas),

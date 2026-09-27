@@ -151,7 +151,7 @@ export class AgentTransactionSender {
     const request = privyTransaction({
       to: tx.to,
       data: tx.data ?? '0x',
-      ...(tx.value !== undefined && tx.value > 0n ? { value: tx.value } : {}),
+      value: tx.value ?? 0n,
       chainId: this.#chainId,
       nonce,
       gas: tx.gas,

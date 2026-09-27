@@ -248,6 +248,45 @@ test('the mirrored revocation rules still agree with @sente/mandate', () => {
   }
 });
 
+// SEN-146: a rule that lets the call carry MON is more authority than the
+// mandate gave, whether the value pin is gone (the pre-SEN-146 shape) or raised.
+test('a rule that lets a non-native call carry MON is refused, on an amend and on a revoke', () => {
+  const m = mandate({ returnTo: OWNER });
+  const isValue = (c: PolicyCondition) =>
+    c.field_source === 'ethereum_transaction' && c.field === 'value';
+  const loosen = (payload: ReturnType<typeof payloadFor>, name: string, raise: boolean) => ({
+    ...payload,
+    body: {
+      rules: (payload.body.rules as PolicyRule[]).map((rule) =>
+        rule.name !== name
+          ? rule
+          : {
+              ...rule,
+              conditions: raise
+                ? rule.conditions.map((c) =>
+                    isValue(c) ? { ...c, value: '0xde0b6b3a7640000' } : c,
+                  )
+                : rule.conditions.filter((c) => !isValue(c)),
+            },
+      ),
+    },
+  });
+  for (const [payload, intent, name] of [
+    [payloadFor(m), amend(m), 'Kuru: approve USDC to AccountCore'],
+    [payloadFor(m), amend(m), 'Perpl: allow order forwarding'],
+    [payloadFor({ revoke: m }), revoke(m), 'Return USDC to the owner'],
+  ] as const) {
+    assert.deepEqual(verifyPolicyPatch(payload, intent), { ok: true });
+    for (const raise of [false, true]) {
+      assertRefused(
+        verifyPolicyPatch(loosen(payload, name, raise), intent),
+        new RegExp(`a rule this mandate does not: ${name}`),
+        `${name}, value ${raise ? 'raised' : 'unpinned'}`,
+      );
+    }
+  }
+});
+
 test('a raised cap the user did not type is refused', () => {
   const typed = mandate();
   // The API answers with a policy built from a LARGER cap: same shape, more

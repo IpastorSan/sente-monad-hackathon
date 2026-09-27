@@ -196,6 +196,13 @@ const calldataEq = (abi: Blob, field: string, value: string) =>
   condition('ethereum_calldata', field, 'eq', value, abi);
 const calldataLte = (abi: Blob, field: string, cap: bigint) =>
   condition('ethereum_calldata', field, 'lte', hexUint(cap), abi);
+/**
+ * The most native MON a transaction rule lets the call carry (SEN-146): the cap
+ * on the native deposit, 0 on everything else. Every transaction rule the
+ * compiler emits carries exactly one, so a policy missing it — one that would
+ * sign an approve with the wallet's MON riding along — fails the equality check.
+ */
+const valueLte = (max: bigint) => condition('ethereum_transaction', 'value', 'lte', hexUint(max));
 
 /** One rule as this module compares it: a method and an unordered set of conditions. */
 export type ExpectedRule = { method: string; conditions: string[] };
@@ -210,15 +217,15 @@ export type ExpectedRule = { method: string; conditions: string[] };
 export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
   const chain = condition('ethereum_transaction', 'chain_id', 'eq', hexUint(mandate.chainId));
   const expiry = condition('system', 'current_unix_timestamp', 'lte', String(mandate.expiresAt));
-  const tx = (conditions: string[]): ExpectedRule => ({
+  const tx = (conditions: string[], maxValue = 0n): ExpectedRule => ({
     method: 'eth_signTransaction',
-    conditions: [chain, expiry, ...conditions],
+    conditions: [chain, expiry, ...conditions, valueLte(maxValue)],
   });
   // The recovery rules carry no expiry: they can only move money toward the
   // owner, so an expired mandate must not strand collateral.
   const recovery = (conditions: string[]): ExpectedRule => ({
     method: 'eth_signTransaction',
-    conditions: [chain, ...conditions],
+    conditions: [chain, ...conditions, valueLte(0n)],
   });
 
   const rules: ExpectedRule[] = [];
@@ -232,9 +239,7 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
       ];
       if (isAddressEqual(token, NATIVE_TOKEN)) {
         // Native MON has no approval: the money is the transaction's value.
-        rules.push(
-          tx([...deposit, condition('ethereum_transaction', 'value', 'lte', hexUint(cap))]),
-        );
+        rules.push(tx(deposit, cap));
         continue;
       }
       rules.push(
@@ -316,7 +321,7 @@ function expectedRecoveryRules(
   const chain = condition('ethereum_transaction', 'chain_id', 'eq', hexUint(mandate.chainId));
   const recovery = (conditions: string[]): ExpectedRule => ({
     method: 'eth_signTransaction',
-    conditions: [chain, ...conditions],
+    conditions: [chain, ...conditions, valueLte(0n)],
   });
   const rules: ExpectedRule[] = [];
   if (options.withdraw && mandate.venues.includes('kuru')) {

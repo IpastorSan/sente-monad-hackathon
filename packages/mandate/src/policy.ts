@@ -33,6 +33,14 @@
  * these two and nothing else, so a revoked agent can be emptied but can no
  * longer take any risk.
  *
+ * Every transaction rule also pins `ethereum_transaction.value` (SEN-146):
+ * `lte cap` on the native-MON deposit, where the value IS the money, and
+ * `lte 0x0` — zero, for an unsigned field — on every other call. Without it
+ * the enclave would sign an approve, a `batch` or a return transfer carrying
+ * the wallet's MON along with it, to a contract the mandate never meant to pay.
+ * The builders take the value bound as an argument so a new rule cannot forget
+ * it.
+ *
  * Raw `eth_signTransaction` only, never Privy's Transfer API: Transfer
  * policies are evaluated at the API level, outside the enclave
  * (docs/privy-policy-enforcement.md).
@@ -97,7 +105,11 @@ function rule(name: string, method: PolicyMethod, conditions: PolicyCondition[])
   return { name, method, conditions, action: 'ALLOW' };
 }
 
-type TxRule = (name: string, conditions: PolicyCondition[]) => AllowRule;
+/**
+ * A transaction rule builder. `maxValue` is the most native MON the call may
+ * carry; 0 unless the call is the native deposit itself (SEN-146).
+ */
+type TxRule = (name: string, conditions: PolicyCondition[], maxValue?: bigint) => AllowRule;
 
 function kuruTokenSymbol(token: Address): string {
   return (
@@ -124,7 +136,7 @@ function kuruRules(mandate: Mandate, tx: TxRule): AllowRule[] {
     ];
     if (isAddressEqual(token, NATIVE_TOKEN)) {
       // Native MON has no approval; the money is the transaction's value.
-      rules.push(tx(`Kuru: deposit ${symbol}`, [...deposit, txValueLte(cap)]));
+      rules.push(tx(`Kuru: deposit ${symbol}`, deposit, cap));
       continue;
     }
     rules.push(
@@ -222,7 +234,8 @@ function kuruWithdrawRule(recovery: TxRule): AllowRule {
 /** A rule builder with the chain pinned and no expiry — see the module comment. */
 function recoveryRuleBuilder(mandate: Mandate): TxRule {
   const chain = txChainIdEq(mandate.chainId);
-  return (name, conditions) => rule(name, 'eth_signTransaction', [chain, ...conditions]);
+  return (name, conditions, maxValue = 0n) =>
+    rule(name, 'eth_signTransaction', [chain, ...conditions, txValueLte(maxValue)]);
 }
 
 /**
@@ -233,8 +246,8 @@ function recoveryRuleBuilder(mandate: Mandate): TxRule {
 export function compileMandate(mandate: Mandate): AllowRule[] {
   const chain = txChainIdEq(mandate.chainId);
   const expiry = unixTimestampLte(mandate.expiresAt);
-  const tx: TxRule = (name, conditions) =>
-    rule(name, 'eth_signTransaction', [chain, expiry, ...conditions]);
+  const tx: TxRule = (name, conditions, maxValue = 0n) =>
+    rule(name, 'eth_signTransaction', [chain, expiry, ...conditions, txValueLte(maxValue)]);
   const recovery = recoveryRuleBuilder(mandate);
 
   const rules: AllowRule[] = [];

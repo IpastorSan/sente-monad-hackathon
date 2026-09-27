@@ -101,7 +101,12 @@ function conditionMatches(c: Condition, tx: FakeTx, now: number): boolean {
       // `to` is compared case-sensitively, as Privy does (privyTransaction checksums).
       if (c.field === 'to') return c.operator === 'eq' && tx.to === c.value;
       if (c.field === 'chain_id') return compare(BigInt(tx.chain_id), c.operator, BigInt(c.value));
-      if (c.field === 'value') return compare(BigInt(tx.value ?? 0), c.operator, BigInt(c.value));
+      // An absent `value` fails the condition rather than reading as 0 (SEN-146):
+      // Privy's handling of a request without one is unmeasured, so the fake
+      // takes the stricter reading and a caller that omits it goes red here.
+      if (c.field === 'value') {
+        return tx.value !== undefined && compare(BigInt(tx.value), c.operator, BigInt(c.value));
+      }
       return false;
     case 'ethereum_calldata':
       return calldataMatches(c, tx.data);
@@ -265,7 +270,7 @@ export function fakeEnclave(options: FakeEnclaveOptions) {
         chainId: Number(tx.chain_id),
         to: tx.to,
         data: tx.data ?? '0x',
-        value: BigInt(tx.value ?? 0),
+        value: BigInt(tx.value),
         nonce: tx.nonce,
         gas: BigInt(tx.gas_limit),
         maxFeePerGas: BigInt(tx.max_fee_per_gas),

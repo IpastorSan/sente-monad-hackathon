@@ -13,10 +13,11 @@
  * Each `it` names the compiler mutation it was checked against (planted by
  * hand in packages/mandate/src/policy.ts, seen red, reverted).
  *
- * Deliberately NOT modelled: `value` on anything but a native-MON deposit is
- * always 0 here. The compiled rules pin `value` only on the native deposit, so
- * a policy would sign MON riding along an ERC-20 deposit or a `batch`; what
- * AccountCore does with that MON is a contract question, not a compiler one.
+ * `value` is modelled on every call (SEN-146). SEN-134 first held it at 0 off
+ * the native deposit, because the compiled rules pinned it only there — a
+ * policy would have signed MON riding along an approve, a `batch` or a return
+ * transfer. The oracle now says what a user would: MON moves only as a native
+ * deposit, within its cap.
  */
 import {
   compileMandate,
@@ -54,6 +55,7 @@ const CHAIN = 10143;
 const ACCOUNT_CORE = getAddress(KURU_TESTNET_CONTRACTS.accountCore);
 const EXCHANGE = getAddress(PERPL_TESTNET_CONTRACTS.exchange);
 const AUSD = getAddress(PERPL_TESTNET_CONTRACTS.collateral);
+const USDC = getAddress(KURU_TESTNET_TOKENS.USDC.address);
 const KURU_TOKENS = Object.values(KURU_TESTNET_TOKENS).map((t) => getAddress(t.address));
 const MARKETS = KURU_TESTNET_MARKETS.map((m) => getAddress(m.address));
 /**
@@ -66,7 +68,7 @@ const RETURNABLE = [...KURU_TOKENS.filter((t) => t !== NATIVE_TOKEN), AUSD];
 
 type Call =
   | { kind: 'approve'; token: Address; spender: Address; amount: bigint }
-  | { kind: 'deposit'; target: Address; token: Address; amount: bigint; value: bigint }
+  | { kind: 'deposit'; target: Address; token: Address; amount: bigint }
   | { kind: 'batch'; target: Address }
   | { kind: 'withdraw'; target: Address; token: Address; amount: bigint }
   | { kind: 'transfer'; token: Address; to: Address; amount: bigint }
@@ -77,9 +79,14 @@ type Call =
 interface Case {
   readonly mandate: Mandate;
   readonly call: Call;
+  /** Native MON the transaction carries, whatever the call. */
+  readonly value: bigint;
   readonly chainId: number;
   readonly now: number;
 }
+
+const isNativeDeposit = (call: Call): boolean =>
+  call.kind === 'deposit' && call.token === NATIVE_TOKEN;
 
 function kuruCap(m: Mandate, token: Address): bigint | undefined {
   const key = Object.keys(m.kuru.maxDepositAtoms).find((k) => getAddress(k) === token);
@@ -90,11 +97,15 @@ function kuruCap(m: Mandate, token: Address): bigint | undefined {
 function mandatePermits(
   m: Mandate,
   call: Call,
+  value: bigint,
   chainId: number,
   now: number,
   revoked = false,
 ): boolean {
   if (chainId !== CHAIN) return false;
+  // MON leaves the wallet only as a native deposit (SEN-146); on any other call
+  // it is money the mandate never allowed to move.
+  if (value > 0n && !isNativeDeposit(call)) return false;
   // Risk-taking needs a live, unrevoked mandate; recovery needs neither (SEN-15/17).
   const live = !revoked && now <= m.expiresAt;
   const kuru = m.venues.includes('kuru');
@@ -117,7 +128,7 @@ function mandatePermits(
       const cap = kuruCap(m, call.token);
       if (!live || !kuru || call.target !== ACCOUNT_CORE || cap === undefined) return false;
       // Native MON moves as `value`; the declared amount and the money both count.
-      if (call.token === NATIVE_TOKEN) return call.amount <= cap && call.value <= cap;
+      if (call.token === NATIVE_TOKEN) return call.amount <= cap && value <= cap;
       return call.amount <= cap;
     }
     case 'batch':
@@ -140,12 +151,11 @@ function mandatePermits(
   }
 }
 
-function encode(call: Call): { to: Address; data: Hex; value: bigint } {
+function encode(call: Call): { to: Address; data: Hex } {
   switch (call.kind) {
     case 'approve':
       return {
         to: call.token,
-        value: 0n,
         data: encodeFunctionData({
           abi: ERC20_APPROVE_ABI,
           functionName: 'approve',
@@ -155,7 +165,6 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
     case 'deposit':
       return {
         to: call.target,
-        value: call.value,
         data: encodeFunctionData({
           abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
           functionName: 'deposit',
@@ -165,7 +174,6 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
     case 'batch':
       return {
         to: call.target,
-        value: 0n,
         data: encodeFunctionData({
           abi: KURU_ORDERBOOK_BATCH_ABI,
           functionName: 'batch',
@@ -175,7 +183,6 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
     case 'withdraw':
       return {
         to: call.target,
-        value: 0n,
         data: encodeFunctionData({
           abi: KURU_ACCOUNT_CORE_WITHDRAW_ABI,
           functionName: 'withdraw',
@@ -185,7 +192,6 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
     case 'transfer':
       return {
         to: call.token,
-        value: 0n,
         data: encodeFunctionData({
           abi: ERC20_TRANSFER_ABI,
           functionName: 'transfer',
@@ -196,7 +202,6 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
     case 'depositCollateral':
       return {
         to: call.target,
-        value: 0n,
         data: encodeFunctionData({
           abi: PERPL_EXCHANGE_ABI,
           functionName: call.kind,
@@ -206,7 +211,6 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
     case 'allowOrderForwarding':
       return {
         to: call.target,
-        value: 0n,
         data: encodeFunctionData({
           abi: PERPL_EXCHANGE_ABI,
           functionName: 'allowOrderForwarding',
@@ -217,11 +221,11 @@ function encode(call: Call): { to: Address; data: Hex; value: bigint } {
 }
 
 function enclaveAllows(rules: readonly PolicyRule[], c: Case): boolean {
-  const { to, data, value } = encode(c.call);
+  const { to, data } = encode(c.call);
   const tx = privyTransaction({
     to,
     data,
-    value,
+    value: c.value,
     chainId: c.chainId,
     nonce: 0,
     gas: 300_000n,
@@ -328,7 +332,6 @@ function callArb(m: Mandate, family: Family): fc.Arbitrary<Call> {
             target: target(ACCOUNT_CORE),
             token: fc.constant(token),
             amount: near(cap),
-            value: token === NATIVE_TOKEN ? near(cap) : fc.constant(0n),
           }),
         );
       });
@@ -393,21 +396,42 @@ const chainArb = fc.oneof(
   { weight: 1, arbitrary: fc.constantFrom(1, 10142, 10144, 143) },
 );
 
-function caseArb(families: readonly Family[]): fc.Arbitrary<Case> {
+/** Mostly none; sometimes one wei, sometimes a whole balance. */
+const rideAlong = fc.oneof(
+  { weight: 3, arbitrary: fc.constant(0n) },
+  { weight: 1, arbitrary: fc.constant(1n) },
+  { weight: 1, arbitrary: fc.bigInt({ min: 1n, max: 10n ** 30n }) },
+);
+
+/** A native deposit's value sits around its cap; any other call's is {@link rideAlong}. */
+function valueArb(m: Mandate, call: Call): fc.Arbitrary<bigint> {
+  return isNativeDeposit(call) ? near(kuruCap(m, NATIVE_TOKEN)) : rideAlong;
+}
+
+function caseArb(
+  families: readonly Family[],
+  value: (m: Mandate, call: Call) => fc.Arbitrary<bigint> = valueArb,
+): fc.Arbitrary<Case> {
   return mandateArb.chain((mandate) =>
-    fc.record({
-      mandate: fc.constant(mandate),
-      call: fc.constantFrom(...families).chain((f) => callArb(mandate, f)),
-      chainId: chainArb,
-      now: nowArb(mandate),
-    }),
+    fc
+      .constantFrom(...families)
+      .chain((f) => callArb(mandate, f))
+      .chain((call) =>
+        fc.record({
+          mandate: fc.constant(mandate),
+          call: fc.constant(call),
+          value: value(mandate, call),
+          chainId: chainArb,
+          now: nowArb(mandate),
+        }),
+      ),
   );
 }
 
 function compiledAgreesWithMandate(families: readonly Family[]): void {
   fc.assert(
     fc.property(caseArb(families), (c) => {
-      const expected = mandatePermits(c.mandate, c.call, c.chainId, c.now);
+      const expected = mandatePermits(c.mandate, c.call, c.value, c.chainId, c.now);
       expect(enclaveAllows(compileMandate(c.mandate), c)).toBe(expected);
     }),
     RUNS,
@@ -451,10 +475,82 @@ describe('compileRevocationRules, as the fake enclave applies it (SEN-134)', () 
   it('allows exactly the recovery calls of the mandate, and nothing that takes risk, at any time', () => {
     fc.assert(
       fc.property(caseArb(['kuruFunding', 'kuruTrade', 'perpl', 'recovery']), (c) => {
-        const expected = mandatePermits(c.mandate, c.call, c.chainId, c.now, true);
+        const expected = mandatePermits(c.mandate, c.call, c.value, c.chainId, c.now, true);
         expect(enclaveAllows(compileRevocationRules(c.mandate), c)).toBe(expected);
       }),
       RUNS,
+    );
+  });
+});
+
+describe('value off the native deposit (SEN-146)', () => {
+  const ALL: readonly Family[] = ['kuruFunding', 'kuruTrade', 'perpl', 'recovery'];
+  const positive = () => fc.bigInt({ min: 1n, max: 10n ** 30n });
+
+  // Planted: compileMandate's `tx` builder without `txValueLte(maxValue)`;
+  // separately, recoveryRuleBuilder without it. Each red here.
+  it('refuses every non-native call carrying MON, live or revoked, even one the mandate allows at value 0', () => {
+    fc.assert(
+      fc.property(
+        caseArb(ALL, positive).filter((c) => !isNativeDeposit(c.call)),
+        (c) => {
+          expect(enclaveAllows(compileMandate(c.mandate), c)).toBe(false);
+          expect(enclaveAllows(compileRevocationRules(c.mandate), c)).toBe(false);
+          // The same call at value 0 is judged by the mandate alone, so the
+          // refusal above is the value's doing, not a coincidence.
+          const atZero = { ...c, value: 0n };
+          expect(enclaveAllows(compileMandate(c.mandate), atZero)).toBe(
+            mandatePermits(c.mandate, c.call, 0n, c.chainId, c.now),
+          );
+        },
+      ),
+      RUNS,
+    );
+  });
+
+  /** A live Kuru mandate with USDC and native MON caps, through the real parser. */
+  const kuruOnly = (usdcCap: bigint, monCap: bigint): Mandate =>
+    parseMandate({
+      version: 1,
+      chainId: CHAIN,
+      expiresAt: 1_800_000_000,
+      venues: ['kuru'],
+      kuru: {
+        markets: [],
+        maxDepositAtoms: { [USDC]: usdcCap.toString(), [NATIVE_TOKEN]: monCap.toString() },
+      },
+      perpl: { maxCollateralAtoms: '0', maxLeverage: 5, markets: ['BTC-PERP'] },
+      maxOrderNotional: '250',
+    });
+  const at = (mandate: Mandate, call: Call, value: bigint): Case => ({
+    mandate,
+    call,
+    value,
+    chainId: CHAIN,
+    now: mandate.expiresAt,
+  });
+
+  it('refuses an in-cap USDC approve with one wei on it, which signs at value 0', () => {
+    const m = kuruOnly(1_000n, 1_000n);
+    const call: Call = { kind: 'approve', token: USDC, spender: ACCOUNT_CORE, amount: 1_000n };
+    expect(enclaveAllows(compileMandate(m), at(m, call, 0n))).toBe(true);
+    expect(enclaveAllows(compileMandate(m), at(m, call, 1n))).toBe(false);
+  });
+
+  it('keeps the native deposit as it was: value up to the cap signs, one wei over does not', () => {
+    fc.assert(
+      fc.property(capAtoms, (cap) => {
+        const m = kuruOnly(0n, cap);
+        const call: Call = {
+          kind: 'deposit',
+          target: ACCOUNT_CORE,
+          token: NATIVE_TOKEN,
+          amount: cap,
+        };
+        expect(enclaveAllows(compileMandate(m), at(m, call, cap))).toBe(true);
+        expect(enclaveAllows(compileMandate(m), at(m, call, cap + 1n))).toBe(false);
+      }),
+      { ...RUNS, numRuns: 100 },
     );
   });
 });
