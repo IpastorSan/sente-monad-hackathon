@@ -124,9 +124,15 @@ function mandateMarket(venues: ToolVenues, id: ToolVenueId, symbol: string): str
  * Order notional in quote units, as the cap should see it. A buy never pays
  * more than `size × price` (the limit price, or the slippage ceiling). A sell's
  * price is a FLOOR, so `size × price` could be made arbitrarily small; it is
- * valued at the higher of that and the book's own price for the size.
+ * valued at the higher of that and a real price: the book's own price for the
+ * size, else the shared market data's mark.
+ *
+ * SEN-133: with neither, the sell is refused. Falling back to the floor alone
+ * fails open: on an empty book an agent could dump its whole balance at
+ * 0.0000001 and the cap would see almost nothing.
  */
 async function orderNotional(
+  ctx: ToolContext,
   venues: ToolVenues,
   id: ToolVenueId,
   args: { market: string; side: Side; size: Decimal },
@@ -139,9 +145,37 @@ async function orderNotional(
     side: 'sell',
     size: args.size,
   });
-  return isPositiveDecimal(quote.averagePrice)
-    ? maxDecimal(atPrice, mulDecimal(args.size, quote.averagePrice))
-    : atPrice;
+  const reference = isPositiveDecimal(quote.averagePrice)
+    ? quote.averagePrice
+    : await markOf(ctx, id, args.market);
+  if (reference === undefined) {
+    throw new SenteRefusal(
+      'unpriced_sell',
+      `the ${args.market} book has no bids and there is no mark price, so this sell cannot be ` +
+        'valued against your order cap; your own floor price does not count as a valuation. ' +
+        'Nothing was signed. Check get_depth and try again once the market has a price.',
+    );
+  }
+  return maxDecimal(atPrice, mulDecimal(args.size, reference));
+}
+
+/**
+ * The shared mark, or undefined when there is none. A failed read counts as
+ * no price: the caller then refuses, so an outage can block a sell but never
+ * let one through unvalued.
+ */
+async function markOf(
+  ctx: ToolContext,
+  id: ToolVenueId,
+  symbol: string,
+): Promise<Decimal | undefined> {
+  if (!ctx.marketData) return undefined;
+  try {
+    const mark = await ctx.marketData.mark(id, symbol);
+    return mark !== null && isPositiveDecimal(mark) ? mark : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function orderIntent(
@@ -608,7 +642,11 @@ const placeLimit = defineTool({
   async intent(ctx, args) {
     spotOnlyChecks(args);
     const venues = await ctx.venues();
-    return orderIntent(venues, args, await orderNotional(venues, args.venue, args, args.price));
+    return orderIntent(
+      venues,
+      args,
+      await orderNotional(ctx, venues, args.venue, args, args.price),
+    );
   },
   async handler(ctx, args) {
     spotOnlyChecks(args);
@@ -655,7 +693,7 @@ const placeMarket = defineTool({
   async intent(ctx, args) {
     spotOnlyChecks(args);
     const venues = await ctx.venues();
-    const notional = await orderNotional(venues, args.venue, args, args.slippageLimitPrice);
+    const notional = await orderNotional(ctx, venues, args.venue, args, args.slippageLimitPrice);
     return orderIntent(venues, args, notional);
   },
   async handler(ctx, args) {

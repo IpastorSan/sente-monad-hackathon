@@ -186,6 +186,19 @@ describe('gate', () => {
       ['market_not_allowed', 'place_limit', limit({ market: WETH_USDC }), WETH_USDC],
       ['market_not_allowed', 'place_limit', limit({ market: 'NOPE-USDC' }), 'NOPE-USDC'],
       [
+        'market_not_allowed', // Perpl's allowlist is by symbol, and BTC-PERP is the only one
+        'place_limit',
+        {
+          venue: 'perpl',
+          market: 'ETH-PERP',
+          side: 'buy',
+          size: '0.001',
+          price: '3000',
+          leverage: 2,
+        },
+        'ETH-PERP',
+      ],
+      [
         'leverage_over_cap',
         'place_limit',
         {
@@ -275,6 +288,106 @@ describe('gate', () => {
     expect(
       (await h.call('place_limit', limit({ side: 'sell', size: '40', price: '0.01' }))).ok,
     ).toBe(true);
+  });
+
+  describe('a sell with no book price (SEN-133)', () => {
+    /** Only `mark` is read on this path; the rest must not be reached. */
+    function markOnly(mark: () => Promise<string | null>) {
+      const unused = () => Promise.reject(new Error('not used on this path'));
+      const marks: unknown[][] = [];
+      const marketData: ToolMarketData = {
+        klines: unused,
+        quote: unused,
+        depth: unused,
+        mark: (...args) => {
+          marks.push(args);
+          return mark();
+        },
+      };
+      return { marketData, marks };
+    }
+
+    it('is refused, never valued at the floor the agent chose', async () => {
+      const h = await harness();
+      await h.thesis();
+      h.kuru.quotePrice = '0'; // what the venues report for an empty book
+
+      // 100 MON "at 0.0000001" is 0.00001 USDC on paper: under any cap.
+      const sell = refused(
+        await h.call('place_limit', limit({ side: 'sell', size: '100', price: '0.0000001' })),
+      );
+      expect(sell.refusal).toEqual({ layer: 'sente', code: 'unpriced_sell' });
+      expect(sell.message).toMatch(/no bids and there is no mark price/);
+      const market = refused(
+        await h.call('place_market', {
+          venue: 'kuru',
+          market: MON_USDC,
+          side: 'sell',
+          size: '100',
+          slippageLimitPrice: '0.0000001',
+        }),
+      );
+      expect(market.refusal?.code).toBe('unpriced_sell');
+      expect(h.kuru.writes()).toEqual([]);
+    });
+
+    it('on Perpl too, at a tiny floor', async () => {
+      const h = await harness();
+      await h.thesis(BTC_PERP);
+      h.perpl.quotePrice = '0';
+
+      const sell = refused(
+        await h.call('place_limit', {
+          venue: 'perpl',
+          market: BTC_PERP,
+          side: 'sell',
+          size: '1',
+          price: '0.01',
+          leverage: 2,
+        }),
+      );
+      expect(sell.refusal).toEqual({ layer: 'sente', code: 'unpriced_sell' });
+      expect(h.perpl.writes()).toEqual([]);
+    });
+
+    it('is valued at the shared mark when there is one', async () => {
+      const md = markOnly(() => Promise.resolve('60000'));
+      const h = await harness({ marketData: md.marketData });
+      await h.thesis(BTC_PERP);
+      h.perpl.quotePrice = '0';
+      const sell = (size: string) => ({
+        venue: 'perpl',
+        market: BTC_PERP,
+        side: 'sell',
+        size,
+        price: '0.01',
+        leverage: 2,
+      });
+
+      // 0.01 BTC at the 60,000 mark is 600 USDC, over the 250 cap.
+      const over = refused(await h.call('place_limit', sell('0.01')));
+      expect(over.refusal?.code).toBe('notional_over_cap');
+      expect(over.message).toContain('600');
+      expect(md.marks).toEqual([['perpl', BTC_PERP]]);
+      expect((await h.call('place_limit', sell('0.004'))).ok).toBe(true);
+      expect(h.perpl.writes().map((c) => c.method)).toEqual(['setLeverage', 'placeLimit']);
+    });
+
+    it.each([
+      ['no mark', () => Promise.resolve(null)],
+      ['a zero mark', () => Promise.resolve('0')],
+      ['a failed mark read', () => Promise.reject(new Error('socket down'))],
+    ])('is refused with %s', async (_, mark) => {
+      const h = await harness({ marketData: markOnly(mark).marketData });
+      await h.thesis();
+      h.kuru.quotePrice = '0';
+
+      const sell = refused(
+        await h.call('place_limit', limit({ side: 'sell', size: '100', price: '0.0000001' })),
+      );
+      expect(sell.refusal?.code).toBe('unpriced_sell');
+      expect(h.kuru.writes()).toEqual([]);
+    });
   });
 
   it('checks the mandate as it is now, and stops an agent revoked mid-run', async () => {
@@ -941,6 +1054,10 @@ describe('venue pre-flight (SEN-19)', () => {
             asOf: 2_000,
           };
           return Promise.resolve(dto);
+        },
+        mark: (venue, symbol) => {
+          calls.push({ method: 'mark', args: [venue, symbol] });
+          return Promise.resolve(null);
         },
       };
       return { marketData, calls };
