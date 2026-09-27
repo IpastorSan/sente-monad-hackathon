@@ -126,6 +126,28 @@ export function quoteAtoms(
   );
 }
 
+/**
+ * Quote-token atoms a BUY of `order` needs free in AccountCore: notional plus
+ * the fee at `feePps`, rounded up. The planner (SEN-84 → M-T12) deposits the
+ * shortfall against this, and short by one atom the whole batch reverts, so
+ * the rounding goes the account's way rather than the contract's.
+ *
+ * `feePps` is the market's maker rate for a resting order — Kuru locks
+ * maker-fee headroom, as the 10 → 10.004 USDC observation in docs/kuru.md
+ * shows — and the taker rate for an IOC that only takes.
+ */
+export function quoteReserveAtoms(
+  order: NativeOrderInput,
+  params: KuruMarketParams,
+  quoteDecimals: number,
+  feePps: bigint,
+): bigint {
+  const numerator =
+    order.price * order.quantity * 10n ** BigInt(quoteDecimals) * (PPS_DENOMINATOR + feePps);
+  const denominator = params.pricePrecision * params.sizePrecision * PPS_DENOMINATOR;
+  return (numerator + denominator - 1n) / denominator;
+}
+
 /** Kuru has no POST_ONLY time-in-force; it is GTC plus an execution instruction. */
 const NATIVE_TIF = { GTC: 'gtc', IOC: 'ioc', FOK: 'fok', POST_ONLY: 'gtc' } as const;
 

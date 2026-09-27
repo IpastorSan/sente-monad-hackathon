@@ -17,8 +17,10 @@ import {
   toBytes,
   toFunctionSelector,
   type Hex,
+  type PublicClient,
 } from 'viem';
 
+import { KuruVenue, type KuruSubmitter } from './adapter.ts';
 import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from './constants.ts';
 import {
   cancelOrderCall,
@@ -29,7 +31,9 @@ import {
   KuruOrderError,
   parseOrderId,
   placeOrderCall,
+  quoteReserveAtoms,
   toClientOrderId,
+  type KuruCall,
   type KuruMarketParams,
 } from './orders.ts';
 
@@ -193,4 +197,105 @@ test('order ids bind slot and order id, and reject anything else', () => {
   for (const bad of ['23818', '7:', ':1', '256:1', '0x7:1', '7:1:2']) {
     assert.throws(() => parseOrderId(bad), KuruOrderError, bad);
   }
+});
+
+test('quoteReserveAtoms: a 500 MON bid at 0.02 locks 10 + maker fee = 10.004 USDC', () => {
+  // docs/kuru.md: orders 0:3680 and 0:3683 each locked exactly 10.004 USDC —
+  // 10 of notional plus 0.04% maker-fee headroom (SEN-84).
+  const order = encodeNativeOrder({ side: 'buy', price: '0.02', size: '500' }, PARAMS, 6);
+  assert.equal(quoteReserveAtoms(order, PARAMS, 6, PARAMS.makerFeePps), 10_004_000n);
+  assert.equal(quoteReserveAtoms(order, PARAMS, 6, 0n), 10_000_000n);
+});
+
+test('quoteReserveAtoms rounds a fractional atom up, never down', () => {
+  // 0.019999 * 500 = 9.9995 USDC; + 0.04% = 10_003_499.8 atoms -> 10_003_500.
+  const order = encodeNativeOrder(
+    { side: 'buy', price: '0.019999', size: '500' },
+    { ...PARAMS, minQuoteNotional: 0n },
+    6,
+  );
+  assert.equal(quoteReserveAtoms(order, PARAMS, 6, PARAMS.makerFeePps), 10_003_500n);
+});
+
+/**
+ * A `KuruVenue` over a fake chain: `getMarketParams` and `bestBidAsk` are all
+ * a market order reads before it is encoded.
+ */
+function fakeVenue(
+  book: { bid: bigint; ask: bigint },
+  params: KuruMarketParams,
+  submitter?: KuruSubmitter,
+): KuruVenue {
+  const publicClient = {
+    readContract: ({ functionName }: { functionName: string }) => {
+      if (functionName === 'bestBidAsk') return Promise.resolve([book.bid, book.ask]);
+      if (functionName === 'getMarketParams') {
+        return Promise.resolve([
+          params.pricePrecision,
+          params.sizePrecision,
+          params.tickSize,
+          params.minQuoteNotional,
+          params.maxQuoteNotional,
+          params.takerFeePps,
+          params.makerFeePps,
+        ]);
+      }
+      return Promise.reject(new Error(`unexpected read ${functionName}`));
+    },
+  } as unknown as PublicClient;
+  return new KuruVenue({ publicClient, submitter, account: MON_USDC.address });
+}
+
+test('marketOrderCalls refuses an unbounded market order', async () => {
+  const venue = fakeVenue({ bid: 30_900n, ask: 30_974n }, PARAMS);
+  await assert.rejects(
+    venue.marketOrderCalls({ symbol: 'MON-USDC', side: 'buy', size: '388' }),
+    /refusing an unbounded market order/,
+  );
+});
+
+test('marketOrderCalls: an IOC at best ask + maxSlippage, floored onto the tick', async () => {
+  // 0.030974 * 1.02 = 0.03159348; a tick of 10 units floors it to 0.03159.
+  const params = { ...PARAMS, tickSize: 10n };
+  const venue = fakeVenue({ bid: 30_900n, ask: 30_974n }, params);
+  const calls = await venue.marketOrderCalls({
+    symbol: 'MON-USDC',
+    side: 'buy',
+    size: '388',
+    maxSlippage: '0.02',
+  });
+  const expected = encodeNativeOrder(
+    { side: 'buy', price: '0.03159', size: '388', timeInForce: 'IOC' },
+    params,
+    6,
+  );
+  assert.deepEqual(calls, [placeOrderCall(MON_USDC.address, expected)]);
+});
+
+test('placeMarket submits exactly what marketOrderCalls builds', async () => {
+  const submitted: (readonly KuruCall[])[] = [];
+  const submitter: KuruSubmitter = {
+    address: MON_USDC.address,
+    submit: (calls) => {
+      submitted.push(calls);
+      return Promise.reject(new Error('stop after capture'));
+    },
+  };
+  const venue = fakeVenue({ bid: 30_900n, ask: 30_974n }, PARAMS, submitter);
+  const request = {
+    symbol: 'MON-USDC',
+    side: 'sell',
+    size: '500',
+    slippageLimitPrice: '0.0301',
+  } as const;
+  const calls = await venue.marketOrderCalls(request);
+  const expected = encodeNativeOrder(
+    { side: 'sell', price: '0.0301', size: '500', timeInForce: 'IOC' },
+    PARAMS,
+    6,
+  );
+  assert.deepEqual(calls, [placeOrderCall(MON_USDC.address, expected)]);
+
+  await assert.rejects(venue.placeMarket(request), /stop after capture/);
+  assert.deepEqual(submitted, [calls]);
 });
