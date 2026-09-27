@@ -3,6 +3,10 @@
  * A card carries the agent's sigil, what it trades, its status, the balance in
  * its own wallet, today's P&L and its last move as a stone.
  *
+ * The header also carries the two screens that left the dock in SEN-109: the
+ * Board, until this tab folds it in as "Top" (U-8), and Account, until Home
+ * grows the avatar it moves behind (U-7).
+ *
  * A revoked agent that still holds funds says so and offers the return inline
  * (SEN-17): "how do I get my money back" has the same one-tap answer after the
  * agent has stopped, so the roster is where it is asked.
@@ -29,7 +33,7 @@ import { useWalletHoldings } from '@/agents/useWalletHoldings';
 import { useSession } from '@/session';
 import { isoDate } from '@/ui/format';
 import { Pill, Sigil } from '@/ui/goban';
-import { Button, Card, Loading, Notice, Screen, Segmented } from '@/ui/kit';
+import { Button, Card, IconButton, Loading, Notice, Screen, Segmented } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
 
 type Filter = 'all' | 'active' | 'revoked';
@@ -62,7 +66,11 @@ export default function AgentsScreen() {
     <Screen tabbed refreshing={refreshing} onRefresh={api ? () => void refresh() : undefined}>
       <View style={styles.header}>
         <Text style={text.display}>Agents</Text>
-        {api ? <Button label="Hire" kind="primary" size="sm" icon="plus" onPress={hire} /> : null}
+        <View style={styles.actions}>
+          <IconButton icon="board" label="Board" onPress={() => router.push('/leaderboard')} />
+          <IconButton icon="account" label="Account" onPress={() => router.push('/account')} />
+          {api ? <Button label="Hire" kind="primary" size="sm" icon="plus" onPress={hire} /> : null}
+        </View>
       </View>
 
       {!api ? (
@@ -222,6 +230,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 44,
   },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   filter: { marginTop: 18 },
   list: { marginTop: 16, gap: 12 },
   cta: { marginTop: 20 },

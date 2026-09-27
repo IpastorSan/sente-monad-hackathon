@@ -28,6 +28,10 @@ const PATHS = {
   copy: 'M10 8h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zM16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3',
   code: 'M8 7l-5 5 5 5M16 7l5 5-5 5',
   share: 'M12 15V3M7 8l5-5 5 5M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6',
+  // The trading dock (SEN-109), from `docs/design/trading/icons.svg`.
+  markets: 'M3 17l5-6 4 4 8-9M15 6h5v5',
+  portfolio: 'M12 3a9 9 0 1 0 9 9h-9zM15 3.5A9 9 0 0 1 20.5 9H15z',
+  trade: 'M7 4v16M7 4L3 8M7 4l4 4M17 20V4M17 20l-4-4M17 20l4-4',
 } as const;
 
 export type IconName = keyof typeof PATHS;

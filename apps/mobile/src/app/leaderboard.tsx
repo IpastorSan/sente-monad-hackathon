@@ -1,5 +1,7 @@
 /**
- * The Board (SEN-26), a tab since SEN-55 and in Goban since SEN-60.
+ * The Board (SEN-26), a tab since SEN-55 and in Goban since SEN-60. SEN-109
+ * took it out of the dock: it is a stack screen, opened from Agents, until the
+ * Agents tab folds it in as "Top".
  *
  * A board, not a scoreboard: every rate is printed with the sample it came
  * from ("won 7 of 10"), and the agents that have not traded enough to be
@@ -41,7 +43,7 @@ import {
 import { useSession } from '@/session';
 import { shortAddress } from '@/ui/format';
 import { Sigil } from '@/ui/goban';
-import { Button, Loading, Notice, Screen, Section } from '@/ui/kit';
+import { Button, Loading, Notice, Screen, Section, TopBar } from '@/ui/kit';
 import { color, font, text } from '@/ui/theme';
 
 type State =
@@ -98,16 +100,18 @@ export default function LeaderboardScreen() {
   );
 
   const board = state.kind === 'loaded' ? state.board : null;
+  const back = () => (router.canGoBack() ? router.back() : router.replace('/agents'));
 
   return (
-    <Screen tabbed refreshing={refreshing} onRefresh={api ? () => void refresh() : undefined}>
+    <Screen refreshing={refreshing} onRefresh={api ? () => void refresh() : undefined}>
+      <TopBar back={{ label: 'Agents', onPress: back }} />
       <Text style={[text.display, styles.title]}>Board</Text>
       {board !== null && board.source.kind === 'ok' ? (
         <Text style={[text.dim, styles.intro]}>{rankingLine(board.minTrades)}</Text>
       ) : null}
 
-      {/* The tab layout redirects a signed-out user, so a missing client is the
-          session still arriving, not a state to explain. */}
+      {/* Only reachable signed in, so a missing client is the session still
+          arriving, not a state to explain. */}
       {!api || state.kind === 'loading' ? (
         <Loading />
       ) : state.kind === 'failed' ? (
@@ -229,7 +233,7 @@ function Row({
 }
 
 const styles = StyleSheet.create({
-  title: { marginTop: 48 },
+  title: { marginTop: 4 },
   intro: { marginTop: 6 },
   cta: { marginTop: 20 },
   list: { marginTop: 12 },

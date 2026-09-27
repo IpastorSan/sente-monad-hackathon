@@ -30,6 +30,18 @@ import { groupThousands } from '@/agents/amounts';
 import { Icon, type IconName } from './icons';
 import { color, font, GUTTER, RADIUS, text } from './theme';
 
+/**
+ * The floating dock (SEN-109): a pill of tabs and the round Trade button that
+ * hover over the tab screens instead of taking a strip of their own. Shared
+ * here because `Screen tabbed` has to scroll its last row clear of it.
+ */
+export const DOCK = {
+  /** The pill's height; the Trade button is centred on it. */
+  height: 62,
+  /** Gap between the dock and the bottom safe-area inset. */
+  lift: 10,
+} as const;
+
 export function Screen({
   children,
   footer,
@@ -42,11 +54,11 @@ export function Screen({
   footer?: ReactNode;
   refreshing?: boolean;
   onRefresh?: () => void;
-  /** Inside the tab navigator, which owns the bottom inset. */
+  /** Inside the tab navigator: the floating dock covers the bottom inset. */
   tabbed?: boolean;
 }) {
   const insets = useSafeAreaInsets();
-  const bottom = tabbed ? 24 : insets.bottom + 40;
+  const bottom = tabbed ? insets.bottom + DOCK.lift + DOCK.height + 24 : insets.bottom + 40;
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { paddingTop: insets.top }]}
