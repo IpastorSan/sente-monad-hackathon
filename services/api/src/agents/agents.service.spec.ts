@@ -1,4 +1,5 @@
 import { compileMandate, compileRevocationRules, parseMandate } from '@sente/mandate';
+import { renderPreset } from '@sente/presets';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { getAddress, type Address, type Hash } from 'viem';
 
@@ -19,6 +20,7 @@ import {
   forkName,
   type AgentGasFunder,
   type HireAgentInput,
+  type HirePresetInput,
 } from './agents.service';
 import { toAgentResponse } from './dto/agent.dto';
 import { DeviceMandateOwners, ServerMandateOwners } from './mandate-owner';
@@ -171,6 +173,80 @@ describe('AgentsService', () => {
       await expect(service.hire(ALICE, hireInput())).rejects.toBeInstanceOf(
         AgentWalletsUnconfiguredError,
       );
+    });
+  });
+
+  describe('hire from a preset (SEN-73)', () => {
+    const GUARDIAN = renderPreset('guardian', { amount: 250 });
+    if (!GUARDIAN.ok) throw new Error('guardian must render');
+    /** A preset hire with no text of its own. */
+    const presetHire = (over: Partial<HireAgentInput> = {}): HireAgentInput => {
+      const { systemPrompt: _p, strategy: _s, ...rest } = hireInput();
+      return { ...rest, preset: { id: 'guardian', params: { amount: 250 } }, ...over };
+    };
+
+    it('fills the text from the render and records the resolved params', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, presetHire());
+      expect(agent.strategy).toBe(GUARDIAN.strategy);
+      expect(agent.systemPrompt).toBe(GUARDIAN.systemPrompt);
+      expect(agent.preset).toEqual({
+        id: 'guardian',
+        version: GUARDIAN.version,
+        params: GUARDIAN.params,
+        customized: false,
+      });
+      expect((await store.get(agent.id))?.preset).toEqual(agent.preset);
+    });
+
+    it('keeps edited text and marks the agent customized', async () => {
+      const { service } = setup();
+      const edited = await service.hire(ALICE, presetHire({ strategy: 'Sell only on Tuesdays.' }));
+      expect(edited.agent.strategy).toBe('Sell only on Tuesdays.');
+      expect(edited.agent.systemPrompt).toBe(GUARDIAN.systemPrompt);
+      expect(edited.agent.preset?.customized).toBe(true);
+
+      // Text identical to the render is not a customisation, whoever sent it.
+      const same = await service.hire(
+        ALICE,
+        presetHire({ strategy: GUARDIAN.strategy, systemPrompt: GUARDIAN.systemPrompt }),
+      );
+      expect(same.agent.preset?.customized).toBe(false);
+    });
+
+    it('refuses an unknown preset, bad params or a stale version before any Privy call', async () => {
+      const { service, wallets } = setup();
+      const cases: [HirePresetInput, string][] = [
+        [{ id: 'moon-bot', params: {} }, 'id'],
+        [{ id: 'guardian', params: { sellAbove: 0.01, sellBelow: 0.02 } }, 'sellBelow'],
+        [{ id: 'guardian', version: GUARDIAN.version + 1, params: {} }, 'version'],
+      ];
+      for (const [preset, key] of cases) {
+        const error = await refusal(service.hire(ALICE, presetHire({ preset })));
+        expect(error.reason).toBe('preset_invalid');
+        expect(error.errors?.map((e) => e.key)).toEqual([key]);
+      }
+      expect(wallets.provisioned).toHaveLength(0);
+    });
+
+    it('records no preset on a free-form hire', async () => {
+      const { service } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      expect(agent.preset).toBeUndefined();
+      expect(toAgentResponse(agent).preset).toBeNull();
+    });
+
+    it('carries the preset into a fork, customized when the prompt stayed behind', async () => {
+      const { service } = setup();
+      const shared = await service.hire(ALICE, presetHire({ public: true }));
+      const copied = await service.fork(BOB, shared.agent.id, { mandate: mandateInput() });
+      expect(copied.agent.preset).toEqual(shared.agent.preset);
+
+      const privateSource = await service.hire(ALICE, presetHire());
+      const withheld = await service.fork(BOB, privateSource.agent.id, {
+        mandate: mandateInput(),
+      });
+      expect(withheld.agent.preset).toEqual({ ...privateSource.agent.preset, customized: true });
     });
   });
 

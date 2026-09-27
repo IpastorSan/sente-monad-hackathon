@@ -346,6 +346,9 @@ importers:
       '@sente/mandate':
         specifier: workspace:*
         version: link:../../packages/mandate
+      '@sente/presets':
+        specifier: workspace:*
+        version: link:../../packages/presets
       '@sente/venues':
         specifier: workspace:*
         version: link:../../packages/venues

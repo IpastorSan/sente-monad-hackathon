@@ -93,6 +93,7 @@ export class AgentsController {
         strategy: body.strategy,
         model: body.model,
         mandate: body.mandate,
+        ...(body.preset ? { preset: body.preset } : {}),
         ...(body.public !== undefined ? { public: body.public } : {}),
         ...(typeof body.schedule?.everySeconds === 'number'
           ? { schedule: { everySeconds: body.schedule.everySeconds } }

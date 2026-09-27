@@ -6,6 +6,7 @@ import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
 
 import { MANDATE_CHAIN_ID, type AuthorizationPayload, type Mandate } from '@sente/mandate';
+import { getPreset, type ParamValue } from '@sente/presets';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -55,6 +56,33 @@ export class ScheduleDto {
   everySeconds!: number | null;
 }
 
+export const PRESET_ID_MAX_LENGTH = 64;
+
+/**
+ * A hire's `preset` (SEN-73): which catalog preset, and the params the user
+ * set. Only the shape is checked here; `renderPreset` is the params' validator,
+ * and the service refuses with `preset_invalid` and the failing keys.
+ */
+export class PresetRefDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(PRESET_ID_MAX_LENGTH)
+  id!: string;
+
+  /**
+   * The catalog version the client showed the user. Optional; when sent and no
+   * longer current, the hire is refused rather than rendered from a newer text
+   * the user never previewed.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  version?: number;
+
+  @IsObject()
+  params!: Record<string, unknown>;
+}
+
 /**
  * NOTE on identity, as in `wallet/dto`: there is deliberately no `userId`
  * field anywhere. The owner comes from the auth guard, and the global
@@ -73,13 +101,30 @@ export class CreateAgentDto {
   @Matches(/\S/, { message: 'name must not be blank' })
   name!: string;
 
+  /**
+   * Required without a `preset`; with one, omitted means the preset's render.
+   * Validated whenever present, so a preset hire cannot smuggle in an
+   * oversized prompt (SEN-73).
+   */
+  @ValidateIf((body: CreateAgentDto) => !body.preset || body.systemPrompt !== undefined)
   @IsString()
   @MaxLength(AGENT_SYSTEM_PROMPT_MAX_LENGTH)
-  systemPrompt!: string;
+  systemPrompt?: string;
 
+  /** As `systemPrompt`: required without a `preset`, the render's when omitted with one. */
+  @ValidateIf((body: CreateAgentDto) => !body.preset || body.strategy !== undefined)
   @IsString()
   @MaxLength(AGENT_STRATEGY_MAX_LENGTH)
-  strategy!: string;
+  strategy?: string;
+
+  /**
+   * Hire from a catalog preset (SEN-73). Text sent beside it overrides the
+   * render and marks the agent `customized`.
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PresetRefDto)
+  preset?: PresetRefDto;
 
   /**
    * An OpenRouter model id. The allowlist (`AGENT_MODELS`) is checked by the
@@ -387,6 +432,8 @@ export interface AgentResponseDto {
   revokedAt?: string;
   /** The agent's own run cadence (SEN-67); `null` when it has none. */
   schedule: { everySeconds: number } | null;
+  /** The preset it was hired (or forked) from (SEN-73); `null` for a free-form agent. */
+  preset: AgentPresetDto | null;
   /** Whether the server's gas drip sent this wallet MON at hire. If not, fund gas by hand. */
   gasFunded: boolean;
   /**
@@ -397,6 +444,16 @@ export interface AgentResponseDto {
   gasFundingReason?: string;
   /** The drip transaction, when one was broadcast. */
   gasFundingTxHash?: string;
+}
+
+export interface AgentPresetDto {
+  id: string;
+  version: number;
+  /** The catalog's display name; the id itself if the preset has left the catalog. */
+  name: string;
+  params: Record<string, ParamValue>;
+  /** The strategy or system prompt differs from the preset's render of `params`. */
+  customized: boolean;
 }
 
 export interface HireAgentResponseDto {
@@ -657,6 +714,15 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     updatedAt: agent.updatedAt.toISOString(),
     ...(agent.revokedAt ? { revokedAt: agent.revokedAt.toISOString() } : {}),
     schedule: agent.schedule ? { everySeconds: agent.schedule.everySeconds } : null,
+    preset: agent.preset
+      ? {
+          id: agent.preset.id,
+          version: agent.preset.version,
+          name: getPreset(agent.preset.id)?.name ?? agent.preset.id,
+          params: { ...agent.preset.params },
+          customized: agent.preset.customized,
+        }
+      : null,
     ...toGasFundingFields(agent),
   };
 }
