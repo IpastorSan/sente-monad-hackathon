@@ -30,9 +30,10 @@ export default function RootLayout() {
     <SessionProvider>
       <StatusBar style="light" />
       {fontsLoaded || fontError ? (
-        <Stack
-          screenOptions={{ headerShown: false, contentStyle: { backgroundColor: color.ink } }}
-        />
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: color.ink } }}>
+          {/* The dock's Trade button (SEN-109): a ticket over the tab you were on. */}
+          <Stack.Screen name="trade" options={{ presentation: 'modal' }} />
+        </Stack>
       ) : (
         <View style={{ flex: 1, backgroundColor: color.ink }} />
       )}

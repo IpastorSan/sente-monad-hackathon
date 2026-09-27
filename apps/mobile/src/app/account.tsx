@@ -1,5 +1,5 @@
 /**
- * Account (SEN-55, restyled in SEN-57): who you are to Sente, and the tools
+ * Account (SEN-55, restyled in SEN-57, a stack screen since SEN-109): who you are to Sente, and the tools
  * that are for us rather than for you. The passkey's signing key lives here,
  * not on Home — it authorises the wallet but does not hold funds, and showing
  * it next to the balance is how money gets sent to the wrong address. The
@@ -7,27 +7,37 @@
  * home screen, and so did the Chrome/PRF note, which Welcome now also gives as
  * a one-time tip right before the first passkey is made.
  *
- * Signing out needs no navigation: the tabs layout redirects to `/welcome` the
- * moment the session is no longer `ready`.
+ * It left the tabs in SEN-109 and now sits behind the avatar, above the dock.
+ * That costs it the tabs layout's gate: a screen stacked over the tabs keeps
+ * the focus, so the tabs' redirect would not fire while this is on top. Signing
+ * out therefore redirects from here, the moment the session is no longer
+ * `ready`.
  */
 import Constants from 'expo-constants';
+import { Redirect, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { RP_ID } from '@/auth';
 import { MONAD_NETWORK, monadChain } from '@/chain';
 import { useSession } from '@/session';
-import { ActionRow, Notice, Row, Screen, Section } from '@/ui/kit';
+import { ActionRow, Notice, Row, Screen, Section, TopBar } from '@/ui/kit';
 import { text } from '@/ui/theme';
 
 /** From `app.json`. Absent only in a bare test environment. */
 const APP_VERSION = Constants.expoConfig?.version ?? '—';
 
 export default function Account() {
+  const router = useRouter();
   const { auth, wallet } = useSession();
   const { address, error, signOut, forget } = auth;
 
+  if (auth.status !== 'ready') return <Redirect href="/welcome" />;
+
+  const back = () => (router.canGoBack() ? router.back() : router.replace('/'));
+
   return (
-    <Screen tabbed>
+    <Screen>
+      <TopBar back={{ label: 'Back', onPress: back }} />
       <View style={styles.head}>
         <Text style={text.display}>Account</Text>
       </View>
@@ -85,6 +95,6 @@ export default function Account() {
 }
 
 const styles = StyleSheet.create({
-  head: { height: 48, justifyContent: 'flex-end', marginTop: 24 },
+  head: { height: 48, justifyContent: 'flex-end' },
   note: { marginTop: 10 },
 });
