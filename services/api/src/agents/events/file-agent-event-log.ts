@@ -25,6 +25,16 @@
 // plus 1,000 lines, boot rewrites it atomically (temp, fsync, rename) with only
 // the kept ones.
 //
+// ## Remembering what was dropped (SEN-129)
+//
+// A compaction deletes events for good, and after it the file alone would look
+// like a whole history: a cost basis or a preset's capital read off it would be
+// wrong with nothing to say so. So the rewrite starts with one
+// `{"v":1,"truncated":{"<agentId>":{"evicted":n,"newestEvictedAt":ms}}}` line
+// carrying every agent's dropped count, and a load adds to it the events the
+// cap drops from what is still in the file. Old code reading a compacted file
+// fails on that line rather than starting with a history it thinks is whole.
+//
 // ## An append that fails to reach disk still resolves
 //
 // `FileAgentStore` rejects when a write fails, because a hire that is not on
@@ -53,11 +63,14 @@ import { dirname, resolve } from 'node:path';
 import { Logger } from '@nestjs/common';
 
 import {
+  addTruncation,
   AGENT_EVENTS_PER_AGENT,
   InMemoryAgentEventLog,
+  NOT_TRUNCATED,
   type AgentEvent,
   type AgentEventLog,
   type AgentEventQuery,
+  type AgentEventTruncation,
   type NewAgentEvent,
 } from './agent-event-log';
 
@@ -86,11 +99,14 @@ export class FileAgentEventLog implements AgentEventLog {
     this.#logger = opts.logger ?? new Logger('AgentEventLog');
     const maxPerAgent = opts.maxPerAgent ?? AGENT_EVENTS_PER_AGENT;
 
-    const { events, lines } = this.#load();
-    const kept = keepNewest(events, maxPerAgent);
-    if (lines > COMPACT_RATIO * kept.length + COMPACT_SLACK) this.#rewrite(kept);
+    const { events, lines, truncated } = this.#load();
+    const { kept, dropped } = keepNewest(events, maxPerAgent);
+    for (const [agentId, more] of dropped) {
+      truncated.set(agentId, addTruncation(truncated.get(agentId) ?? NOT_TRUNCATED, more));
+    }
+    if (lines > COMPACT_RATIO * kept.length + COMPACT_SLACK) this.#rewrite(kept, truncated);
 
-    this.#inner = new InMemoryAgentEventLog(maxPerAgent, kept);
+    this.#inner = new InMemoryAgentEventLog(maxPerAgent, kept, truncated);
     this.#size = kept.length;
     mkdirSync(dirname(this.#path), { recursive: true, mode: 0o700 });
     this.#fd = openSync(this.#path, 'a', 0o600);
@@ -127,6 +143,10 @@ export class FileAgentEventLog implements AgentEventLog {
     return this.#inner.list(agentId, query);
   }
 
+  truncation(agentId: string): Promise<AgentEventTruncation> {
+    return this.#inner.truncation(agentId);
+  }
+
   /** Closes the file. Appends after this stay in memory and log an error. */
   close(): void {
     if (this.#fd === undefined) return;
@@ -134,9 +154,13 @@ export class FileAgentEventLog implements AgentEventLog {
     this.#fd = undefined;
   }
 
-  /** Every event in the file and how many lines held them. Repairs a torn last line. */
-  #load(): { events: AgentEvent[]; lines: number } {
-    if (!existsSync(this.#path)) return { events: [], lines: 0 };
+  /**
+   * Every event in the file, how many lines held them, and what earlier
+   * compactions dropped. Repairs a torn last line.
+   */
+  #load(): { events: AgentEvent[]; lines: number; truncated: Map<string, AgentEventTruncation> } {
+    const truncated = new Map<string, AgentEventTruncation>();
+    if (!existsSync(this.#path)) return { events: [], lines: 0, truncated };
     const text = readFileSync(this.#path, 'utf8');
     const events: AgentEvent[] = [];
     let start = 0;
@@ -159,14 +183,20 @@ export class FileAgentEventLog implements AgentEventLog {
         this.#logger.warn(
           `${this.#path} ended in a torn line (a crash mid-append?); cut it off at line ${lineNo}`,
         );
-        return { events, lines: lineNo - 1 };
+        return { events, lines: lineNo - 1, truncated };
       }
       if (event === 'wrong-version') {
         throw new Error(
           `${this.#path} line ${lineNo} is not a v${LINE_VERSION} event. Refusing to start empty.`,
         );
       }
-      events.push(event);
+      if (event instanceof Map) {
+        for (const [agentId, more] of event) {
+          truncated.set(agentId, addTruncation(truncated.get(agentId) ?? NOT_TRUNCATED, more));
+        }
+      } else {
+        events.push(event);
+      }
       start = end + 1;
     }
     // A whole last line with no newline after it (only a hand edit does this):
@@ -179,15 +209,26 @@ export class FileAgentEventLog implements AgentEventLog {
         closeSync(fd);
       }
     }
-    return { events, lines: lineNo };
+    return { events, lines: lineNo, truncated };
   }
 
-  /** Replace the file with `events`, atomically — see `JsonRecordFile.save`. */
-  #rewrite(events: readonly AgentEvent[]): void {
+  /**
+   * Replace the file with `events`, atomically — see `JsonRecordFile.save` —
+   * led by the line that remembers what was dropped (SEN-129).
+   */
+  #rewrite(
+    events: readonly AgentEvent[],
+    truncated: ReadonlyMap<string, AgentEventTruncation>,
+  ): void {
     const temp = `${this.#path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
     const fd = openSync(temp, 'w', 0o600);
     try {
-      const text = events.map((e) => `${JSON.stringify({ v: LINE_VERSION, e })}\n`).join('');
+      const header =
+        truncated.size > 0
+          ? `${JSON.stringify({ v: LINE_VERSION, truncated: Object.fromEntries(truncated) })}\n`
+          : '';
+      const text =
+        header + events.map((e) => `${JSON.stringify({ v: LINE_VERSION, e })}\n`).join('');
       writeSync(fd, text);
       fsyncSync(fd);
     } finally {
@@ -202,17 +243,23 @@ export class FileAgentEventLog implements AgentEventLog {
   }
 }
 
-/** One line -> its event, `torn` when it does not parse as one, `wrong-version` for another `v`. */
-function parseLine(line: string): AgentEvent | 'torn' | 'wrong-version' {
+/**
+ * One line -> its event (or a compaction's truncation record), `torn` when it
+ * does not parse as one, `wrong-version` for another `v`.
+ */
+function parseLine(
+  line: string,
+): AgentEvent | Map<string, AgentEventTruncation> | 'torn' | 'wrong-version' {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
     return 'torn';
   }
-  const record = parsed as { v?: unknown; e?: Partial<AgentEvent> } | null;
+  const record = parsed as { v?: unknown; e?: Partial<AgentEvent>; truncated?: unknown } | null;
   if (typeof record !== 'object' || record === null) return 'torn';
   if (record.v !== LINE_VERSION) return 'wrong-version';
+  if (record.truncated !== undefined) return parseTruncated(record.truncated);
   const e = record.e;
   if (
     typeof e !== 'object' ||
@@ -226,15 +273,44 @@ function parseLine(line: string): AgentEvent | 'torn' | 'wrong-version' {
   return e as AgentEvent;
 }
 
-/** The newest `max` events of each agent, in `seq` order: what the in-memory log will hold. */
-function keepNewest(events: readonly AgentEvent[], max: number): AgentEvent[] {
+/** A `truncated` line's per-agent record, or `torn` when any entry is not one. */
+function parseTruncated(value: unknown): Map<string, AgentEventTruncation> | 'torn' {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'torn';
+  const truncated = new Map<string, AgentEventTruncation>();
+  for (const [agentId, entry] of Object.entries(value)) {
+    const { evicted, newestEvictedAt } = (entry ?? {}) as Partial<AgentEventTruncation>;
+    if (!Number.isInteger(evicted) || evicted! < 0) return 'torn';
+    if (newestEvictedAt !== null && typeof newestEvictedAt !== 'number') return 'torn';
+    truncated.set(agentId, { evicted: evicted!, newestEvictedAt: newestEvictedAt ?? null });
+  }
+  return truncated;
+}
+
+/**
+ * The newest `max` events of each agent, in `seq` order — what the in-memory
+ * log will hold — and, per agent, what that leaves out.
+ */
+function keepNewest(
+  events: readonly AgentEvent[],
+  max: number,
+): { kept: AgentEvent[]; dropped: Map<string, AgentEventTruncation> } {
   const perAgent = new Map<string, number>();
   const kept: AgentEvent[] = [];
+  const dropped = new Map<string, AgentEventTruncation>();
   for (const event of [...events].sort((a, b) => b.seq - a.seq)) {
     const count = perAgent.get(event.agentId) ?? 0;
-    if (count >= max) continue;
+    if (count >= max) {
+      dropped.set(
+        event.agentId,
+        addTruncation(dropped.get(event.agentId) ?? NOT_TRUNCATED, {
+          evicted: 1,
+          newestEvictedAt: event.at,
+        }),
+      );
+      continue;
+    }
     perAgent.set(event.agentId, count + 1);
     kept.push(event);
   }
-  return kept.reverse();
+  return { kept: kept.reverse(), dropped };
 }

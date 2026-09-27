@@ -2,7 +2,7 @@ import type { Balance, Order, Position } from '@sente/venues';
 import { getAddress, type Address } from 'viem';
 
 import type { TokenBalance } from '../../wallet/balances/token-balances';
-import type { AgentEvent } from '../events/agent-event-log';
+import { NOT_TRUNCATED, type AgentEvent } from '../events/agent-event-log';
 import type { AgentRecord } from '../store/agent-store';
 import type { PerplAccountInfo } from '../venues/perpl-agent';
 import {
@@ -109,7 +109,10 @@ function harness(over: Partial<AgentPortfolioReaders> = {}): Harness {
     perplVenue: () => Promise.resolve(undefined),
     perplAccountInfo: () =>
       Promise.resolve<PerplAccountInfo>({ accountId: 12n, balance: 150_000_000n, locked: 0n }),
-    events: { list: () => Promise.resolve([buy(1, '4', '2')]) },
+    events: {
+      list: () => Promise.resolve([buy(1, '4', '2')]),
+      truncation: () => Promise.resolve(NOT_TRUNCATED),
+    },
     marks: { mark: (_venue, symbol) => Promise.resolve(symbol === 'MON-USDC' ? '3' : null) },
     now: () => clock.now,
     ...over,
@@ -221,6 +224,29 @@ describe('AgentPortfolioService (SEN-78)', () => {
       },
       note: 'Wallet MON includes gas.',
     });
+  });
+
+  it("shows no cost basis once the log has dropped the agent's oldest events (SEN-129)", async () => {
+    // The same kept buy as above, but the log says older events are gone: one
+    // could have been a sell of this lot, so its 2.00 entry is not known.
+    const { service } = harness({
+      events: {
+        list: () => Promise.resolve([buy(5, '4', '2')]),
+        truncation: () => Promise.resolve({ evicted: 4, newestEvictedAt: 4 }),
+      },
+    });
+
+    const [mon] = (await service.portfolio(agent())).holdings;
+
+    expect(mon!.costBasis).toEqual({
+      avgPrice: null,
+      coveredSize: '0',
+      uncoveredSize: '10',
+      unrealizedPnl: null,
+      complete: false,
+      source: 'event-log-fifo',
+    });
+    expect(mon!.note).toContain('oldest 4 events; cost basis unknown');
   });
 
   it('falls back to the chain for a Perpl account without credentials', async () => {

@@ -1,4 +1,4 @@
-import type { AgentEvent } from './agent-event-log';
+import { InMemoryAgentEventLog, NOT_TRUNCATED, type AgentEvent } from './agent-event-log';
 import { latestEvents, summariseEvents, SUMMARY_DAY_MS } from './summary';
 import { settle } from './verdict';
 
@@ -104,7 +104,7 @@ function perplShort(): AgentEvent[] {
 
 describe('summariseEvents', () => {
   it('summarises an empty log as zeros, with no order and no last event', () => {
-    expect(summariseEvents([], NOW)).toEqual({
+    expect(summariseEvents([], NOW, NOT_TRUNCATED)).toEqual({
       trades: 0,
       held: 0,
       theses: 0,
@@ -126,7 +126,11 @@ describe('summariseEvents', () => {
       event('run', { stopReason: 'end_turn' }),
     ];
 
-    expect(summariseEvents(events, NOW)).toMatchObject({ trades: 1, held: 2, theses: 2 });
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED)).toMatchObject({
+      trades: 1,
+      held: 2,
+      theses: 2,
+    });
   });
 
   it("sums both venues' verdicts, Kuru's USDC and Perpl's AUSD as one unit", () => {
@@ -137,13 +141,16 @@ describe('summariseEvents', () => {
     expect(events[3]!.detail).toMatchObject({ realisedPnl: '4.95', pnlAsset: 'USDC' });
     expect(events[8]!.detail).toMatchObject({ realisedPnl: '-1.75', pnlAsset: 'AUSD' });
 
-    expect(summariseEvents(events, NOW).pnl).toEqual({ last24h: '3.2', allTime: '3.2' });
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl).toEqual({
+      last24h: '3.2',
+      allTime: '3.2',
+    });
   });
 
   it('reads the verdict, never the close: Perpl reports cumulative PnL there', () => {
     const perpl = perplShort();
     // Without its verdict, a close's `realizedPnl` counts for nothing.
-    expect(summariseEvents(perpl, NOW).pnl.allTime).toBe('0');
+    expect(summariseEvents(perpl, NOW, NOT_TRUNCATED).pnl.allTime).toBe('0');
   });
 
   it('puts a verdict exactly a day old in last24h, and one a millisecond older out of it', () => {
@@ -153,7 +160,10 @@ describe('summariseEvents', () => {
       event('verdict', { realisedPnl: '-0.5', pnlAsset: 'USDC' }, { at: NOW }),
     ];
 
-    expect(summariseEvents(events, NOW).pnl).toEqual({ last24h: '9.5', allTime: '109.5' });
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl).toEqual({
+      last24h: '9.5',
+      allTime: '109.5',
+    });
   });
 
   it('is exact where a float is not, and leaves out what it cannot sum', () => {
@@ -167,7 +177,7 @@ describe('summariseEvents', () => {
       event('verdict', { pnlAsset: 'USDC' }),
     ];
 
-    expect(summariseEvents(events, NOW).pnl.allTime).toBe('9007199254740993.300001');
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl.allTime).toBe('9007199254740993.300001');
   });
 
   it('nets a day of losses to a negative string', () => {
@@ -176,7 +186,10 @@ describe('summariseEvents', () => {
       event('verdict', { realisedPnl: '1', pnlAsset: 'AUSD' }),
     ];
 
-    expect(summariseEvents(events, NOW).pnl).toEqual({ last24h: '-2.25', allTime: '-2.25' });
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl).toEqual({
+      last24h: '-2.25',
+      allTime: '-2.25',
+    });
   });
 
   it('takes the largest notional of the orders that landed, compared exactly, not as text', () => {
@@ -192,12 +205,12 @@ describe('summariseEvents', () => {
       event('order', { status: 'ok', precheck: false, args: {}, result: {} }),
     ];
 
-    expect(summariseEvents(events, NOW).largestOrderNotional).toBe('120.000');
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).largestOrderNotional).toBe('120.000');
   });
 
   it('has no largest order when none carries a notional', () => {
     const events = [order('500', { status: 'failed' }), event('fill', {})];
-    expect(summariseEvents(events, NOW).largestOrderNotional).toBeNull();
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).largestOrderNotional).toBeNull();
   });
 
   it('takes the newest event that is not a run summary as the last one', () => {
@@ -205,8 +218,8 @@ describe('summariseEvents', () => {
     const fill = event('fill', { symbol: 'MON-USDC' });
     const events = [thesis, fill, event('run', {}), event('run', {})];
 
-    expect(summariseEvents(events, NOW).lastEvent).toBe(fill);
-    expect(summariseEvents([event('run', {})], NOW).lastEvent).toBeNull();
+    expect(summariseEvents(events, NOW, NOT_TRUNCATED).lastEvent).toBe(fill);
+    expect(summariseEvents([event('run', {})], NOW, NOT_TRUNCATED).lastEvent).toBeNull();
   });
 });
 
@@ -226,5 +239,31 @@ describe('latestEvents', () => {
     expect(latestEvents(logs, 2)).toEqual([b2, a3]);
     expect(latestEvents(logs, 0)).toEqual([]);
     expect(latestEvents([], 5)).toEqual([]);
+  });
+});
+
+describe('summariseEvents over a truncated log (SEN-129)', () => {
+  it('says allTime is partial when the log has dropped events, and only then', async () => {
+    const log = new InMemoryAgentEventLog(2);
+    for (const pnl of ['100', '1', '2']) {
+      await log.append({
+        agentId: 'a',
+        kind: 'verdict',
+        at: NOW,
+        detail: { realisedPnl: pnl, pnlAsset: 'USDC' },
+      });
+    }
+    await log.append({
+      agentId: 'b',
+      kind: 'verdict',
+      at: NOW,
+      detail: { realisedPnl: '5', pnlAsset: 'USDC' },
+    });
+
+    const a = summariseEvents(await log.list('a'), NOW, await log.truncation('a'));
+    const b = summariseEvents(await log.list('b'), NOW, await log.truncation('b'));
+
+    expect(a.pnl).toEqual({ last24h: '3', allTime: '3', allTimePartial: true });
+    expect(b.pnl).toEqual({ last24h: '5', allTime: '5' });
   });
 });

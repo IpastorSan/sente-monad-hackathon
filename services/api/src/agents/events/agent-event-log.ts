@@ -71,11 +71,51 @@ export interface AgentEventQuery {
   readonly limit?: number;
 }
 
+/**
+ * How much of an agent's history the log has dropped (SEN-129). The log keeps
+ * the newest `maxPerAgent` events per agent, so past that `list` is no longer
+ * the whole history — and every figure that sums or matches over the whole
+ * history (FIFO cost basis, deposited capital, all-time P&L) would silently be
+ * wrong. Readers of those figures ask this and say "unknown" instead.
+ */
+export interface AgentEventTruncation {
+  /** Events dropped, oldest first. `0` means `list` is the agent's whole history. */
+  readonly evicted: number;
+  /**
+   * The `at` of the newest dropped event, or `null` when none was dropped. A
+   * figure over `[since, now]` is still whole when this is before `since`:
+   * eviction is oldest-first, so nothing newer than it is gone.
+   */
+  readonly newestEvictedAt: number | null;
+}
+
+export const NOT_TRUNCATED: AgentEventTruncation = Object.freeze({
+  evicted: 0,
+  newestEvictedAt: null,
+});
+
 export interface AgentEventLog {
   /** Rejects a refusal without a `layer`, and a `layer` on anything else. */
   append(event: NewAgentEvent): Promise<AgentEvent>;
   /** The agent's events, oldest first. */
   list(agentId: string, query?: AgentEventQuery): Promise<AgentEvent[]>;
+  /** What `list` no longer holds for this agent: see {@link AgentEventTruncation}. */
+  truncation(agentId: string): Promise<AgentEventTruncation>;
+}
+
+/** Fold `more` dropped events into `base`. */
+export function addTruncation(
+  base: AgentEventTruncation,
+  more: AgentEventTruncation,
+): AgentEventTruncation {
+  if (more.evicted === 0) return base;
+  if (base.evicted === 0) return more;
+  const newest = Math.max(base.newestEvictedAt ?? -Infinity, more.newestEvictedAt ?? -Infinity);
+  return {
+    evicted: base.evicted + more.evicted,
+    // Both unknown stays unknown: `null` then reads as "maybe inside any window".
+    newestEvictedAt: newest === -Infinity ? null : newest,
+  };
 }
 
 /** A deep copy with bigints as decimal strings and `undefined` dropped: what JSON would keep. */
@@ -91,7 +131,8 @@ export const AGENT_EVENTS_PER_AGENT = 10_000;
 /**
  * PERSISTENCE: in memory, like every other store in this API until it has a
  * database. Bounded per agent (oldest dropped first) so a chatty agent cannot
- * grow it without limit.
+ * grow it without limit. What is dropped is counted per agent and answered by
+ * `truncation` (SEN-129), so money read off the log can say it is partial.
  *
  * An event is copied ONCE, on the way in (`toJsonSafe` already deep-copies it),
  * and then deep-frozen, so reads hand out the stored record itself. They used
@@ -101,6 +142,7 @@ export const AGENT_EVENTS_PER_AGENT = 10_000;
  */
 export class InMemoryAgentEventLog implements AgentEventLog {
   private readonly byAgent = new Map<string, AgentEvent[]>();
+  private readonly truncated = new Map<string, AgentEventTruncation>();
   private seq = 0;
 
   /**
@@ -108,21 +150,25 @@ export class InMemoryAgentEventLog implements AgentEventLog {
    * events that were already stamped and made JSON-safe before they were
    * written, so they are loaded as they are rather than re-appended. `seq`
    * carries on from the highest one, which keeps the phone's `afterSeq`
-   * cursors valid across a restart.
+   * cursors valid across a restart. `seedTruncation` is what was dropped
+   * before the seed was written (the file log's compaction), so a restart does
+   * not forget that an agent's history is partial.
    */
   constructor(
     private readonly maxPerAgent = AGENT_EVENTS_PER_AGENT,
     seed: readonly AgentEvent[] = [],
+    seedTruncation: ReadonlyMap<string, AgentEventTruncation> = new Map(),
   ) {
+    for (const [agentId, truncation] of seedTruncation) {
+      if (truncation.evicted > 0) this.truncated.set(agentId, truncation);
+    }
     for (const event of [...seed].sort((a, b) => a.seq - b.seq)) {
       const events = this.byAgent.get(event.agentId) ?? [];
       events.push(deepFreeze(event));
       this.byAgent.set(event.agentId, events);
       this.seq = Math.max(this.seq, event.seq);
     }
-    for (const events of this.byAgent.values()) {
-      if (events.length > maxPerAgent) events.splice(0, events.length - maxPerAgent);
-    }
+    for (const events of this.byAgent.values()) this.evictOverflow(events);
   }
 
   append(event: NewAgentEvent): Promise<AgentEvent> {
@@ -136,9 +182,28 @@ export class InMemoryAgentEventLog implements AgentEventLog {
     });
     const events = this.byAgent.get(event.agentId) ?? [];
     events.push(stored);
-    if (events.length > this.maxPerAgent) events.splice(0, events.length - this.maxPerAgent);
+    this.evictOverflow(events);
     this.byAgent.set(event.agentId, events);
     return Promise.resolve(stored);
+  }
+
+  truncation(agentId: string): Promise<AgentEventTruncation> {
+    return Promise.resolve(this.truncated.get(agentId) ?? NOT_TRUNCATED);
+  }
+
+  /** Drop one agent's oldest events past the cap, and remember that they were dropped. */
+  private evictOverflow(events: AgentEvent[]): void {
+    if (events.length <= this.maxPerAgent) return;
+    const dropped = events.splice(0, events.length - this.maxPerAgent);
+    const agentId = dropped[0]!.agentId;
+    this.truncated.set(
+      agentId,
+      addTruncation(this.truncated.get(agentId) ?? NOT_TRUNCATED, {
+        evicted: dropped.length,
+        // A loop, not `Math.max(...)`: a boot can drop more events than a call takes arguments.
+        newestEvictedAt: dropped.reduce((max, e) => Math.max(max, e.at), -Infinity),
+      }),
+    );
   }
 
   list(agentId: string, query: AgentEventQuery = {}): Promise<AgentEvent[]> {

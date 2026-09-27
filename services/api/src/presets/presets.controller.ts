@@ -118,18 +118,25 @@ export class PresetsController {
     // `listAll`, not `listActive`: revoked agents belong in the cohort (SEN-74).
     const agents = (await this.store.listAll()).filter((a) => a.preset?.id === presetId);
     const cohort = agents.filter((a) => activeInWindow(a, now));
-    const events = new Map(
-      await Promise.all(
-        cohort.map(async (agent) => {
-          // By kind, so a chatty agent's orders and runs are never copied just to be skipped.
-          const [verdicts, deposits] = await Promise.all([
-            this.events.list(agent.id, { kind: 'verdict' }),
-            this.events.list(agent.id, { kind: 'deposit' }),
-          ]);
-          return [agent.id, [...verdicts, ...deposits]] as const;
-        }),
-      ),
+    const reads = await Promise.all(
+      cohort.map(async (agent) => {
+        // By kind, so a chatty agent's orders and runs are never copied just to be skipped.
+        const [verdicts, deposits, truncation] = await Promise.all([
+          this.events.list(agent.id, { kind: 'verdict' }),
+          this.events.list(agent.id, { kind: 'deposit' }),
+          // What the cap dropped (SEN-129): without it an evicted deposit
+          // shrinks capital and inflates the return, with nothing to say so.
+          this.events.truncation(agent.id),
+        ]);
+        return { id: agent.id, events: [...verdicts, ...deposits], truncation };
+      }),
     );
-    return presetStats({ presetId, agents, events, now });
+    return presetStats({
+      presetId,
+      agents,
+      events: new Map(reads.map((r) => [r.id, r.events])),
+      truncation: new Map(reads.map((r) => [r.id, r.truncation])),
+      now,
+    });
   }
 }

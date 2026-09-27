@@ -4,6 +4,7 @@ import { HttpException } from '@nestjs/common';
 
 import {
   InMemoryAgentEventLog,
+  NOT_TRUNCATED,
   type AgentEvent,
   type AgentEventLog,
 } from '../agents/events/agent-event-log';
@@ -241,6 +242,7 @@ describe('WebhooksService.handleAlchemy', () => {
     const failing: AgentEventLog = {
       append: () => Promise.reject(new Error('log is full')),
       list: () => Promise.resolve([]),
+      truncation: () => Promise.resolve(NOT_TRUNCATED),
     };
     const { service } = setup(CONFIGURED, failing);
     const body = raw(delivery());
@@ -258,6 +260,7 @@ describe('WebhooksService.handleAlchemy', () => {
     const flaky: AgentEventLog = {
       append: (event) => (failing ? Promise.reject(new Error('log is full')) : log.append(event)),
       list: (agentId, query) => log.list(agentId, query),
+      truncation: (agentId) => log.truncation(agentId),
     };
     const { service } = setup(CONFIGURED, flaky);
     const body = raw(delivery());

@@ -13,11 +13,20 @@
  * - An agent that settled nothing in the window counts with a P&L of 0, not
  *   as missing: idling is an outcome too.
  * - Medians are null below `minN` rather than a figure from two agents.
+ * - An agent whose oldest events the log has dropped (SEN-129) is left out of
+ *   a median it could be wrong in, and a note says how many: dropped deposits
+ *   shrink its capital and so INFLATE its return, and dropped verdicts inside
+ *   the window would misstate its P&L. Left out, not counted as 0 — 0 would be
+ *   a number the log cannot vouch for either.
  * - Money stays exact decimal strings (BigInt with a scale). The one division,
  *   the return, is kept as an exact fraction until the median is picked and
  *   then FLOORED, so rounding can only ever make it look worse, never better.
  */
-import type { AgentEvent } from '../agents/events/agent-event-log';
+import {
+  NOT_TRUNCATED,
+  type AgentEvent,
+  type AgentEventTruncation,
+} from '../agents/events/agent-event-log';
 import { summariseEvents } from '../agents/events/summary';
 import {
   addScaled,
@@ -49,11 +58,17 @@ export interface PresetStatsDto {
   /** Agents in the cohort: on the preset and active at any point in the window. */
   n: number;
   minN: typeof PRESET_STATS_MIN_N;
-  /** ≈ $ (USDC + AUSD); null when `n < minN`. */
+  /**
+   * ≈ $ (USDC + AUSD); null when fewer than `minN` agents have a whole window
+   * in the log (`n` less any whose window was truncated — SEN-129).
+   */
   medianPnl30d: string | null;
   /** A fraction (0.05 = +5 %), floored; null when `returnN < minN`. */
   medianReturn30d: string | null;
-  /** Cohort agents with deposited capital > 0: the return's sample. */
+  /**
+   * Cohort agents with deposited capital > 0 and their whole history in the
+   * log: the return's sample.
+   */
   returnN: number;
   /** Cohort agents whose text differs from the preset's render. */
   customized: number;
@@ -74,7 +89,8 @@ export const PRESET_STATS_DEFINITION =
   'window, USDC and AUSD added as dollars; an agent that settled nothing counts as 0. ' +
   'Return: that P&L ÷ the USDC and AUSD deposited to the agent up to now, as a fraction ' +
   '(0.05 = 5%), floored, over the agents with deposits only (returnN). Medians are shown ' +
-  `from ${PRESET_STATS_MIN_N} agents.`;
+  `from ${PRESET_STATS_MIN_N} agents. Agents whose oldest events the server no longer holds are ` +
+  'left out of the medians their missing events could change.';
 
 /**
  * When the agent stopped, if it has. A revoked record should carry
@@ -99,7 +115,8 @@ export function windowPnl(events: readonly AgentEvent[], now: number): Scaled {
   const inWindow = events.filter((e) => e.kind === 'verdict' && e.at >= since && e.at <= now);
   // `summariseEvents` owns which verdicts count (USDC + AUSD, decimal
   // `realisedPnl`); over window-filtered events its `allTime` IS the window.
-  return decimalOf(summariseEvents(inWindow, now).pnl.allTime)!;
+  // Whether the window is whole is `presetStats`'s check, so none is passed here.
+  return decimalOf(summariseEvents(inWindow, now, NOT_TRUNCATED).pnl.allTime)!;
 }
 
 /**
@@ -182,6 +199,11 @@ export interface PresetStatsInput {
   agents: readonly CohortRecord[];
   /** Events of the cohort agents, by agent id: at least their verdicts and deposits. */
   events: ReadonlyMap<string, readonly AgentEvent[]>;
+  /**
+   * The log's `truncation` of each cohort agent (SEN-129); a missing entry is
+   * an agent the log dropped nothing of.
+   */
+  truncation: ReadonlyMap<string, AgentEventTruncation>;
   now: number;
 }
 
@@ -194,18 +216,26 @@ export function presetStats(input: PresetStatsInput): PresetStatsDto {
   const pnls: Scaled[] = [];
   const returns: Ratio[] = [];
   let customized = 0;
+  let truncated = 0;
   for (const agent of cohort) {
     if (agent.preset?.customized) customized += 1;
     const events = input.events.get(agent.id) ?? [];
+    const truncation = input.truncation.get(agent.id) ?? NOT_TRUNCATED;
+    if (truncation.evicted > 0) truncated += 1;
+    // Eviction is oldest-first, so the window's verdicts are all there when
+    // the newest dropped event is older than the window.
+    if (!windowIntact(truncation, now - PRESET_STATS_WINDOW_MS)) continue;
     const pnl = windowPnl(events, now);
     pnls.push(pnl);
+    // Capital sums EVERY deposit ever, so any eviction makes it a lower bound.
+    if (truncation.evicted > 0) continue;
     const capital = depositedCapital(events, now);
     if (capital.units > 0n) returns.push(ratioOf(pnl, capital));
   }
 
   const n = cohort.length;
   const returnN = returns.length;
-  const medianPnl = n >= PRESET_STATS_MIN_N ? medianScaled(pnls) : undefined;
+  const medianPnl = pnls.length >= PRESET_STATS_MIN_N ? medianScaled(pnls) : undefined;
   const medianReturn = returnN >= PRESET_STATS_MIN_N ? medianRatio(returns) : undefined;
 
   return {
@@ -219,17 +249,40 @@ export function presetStats(input: PresetStatsInput): PresetStatsDto {
     returnN,
     customized,
     definition: PRESET_STATS_DEFINITION,
-    notes: notesFor({ n, returnN, customized }),
+    notes: notesFor({ n, pnlN: pnls.length, returnN, customized, truncated }),
     asOf: now,
   };
 }
 
-function notesFor(s: { n: number; returnN: number; customized: number }): string[] {
+/** Whether every event at or after `since` is still in the log. */
+function windowIntact(truncation: AgentEventTruncation, since: number): boolean {
+  if (truncation.evicted === 0) return true;
+  return truncation.newestEvictedAt !== null && truncation.newestEvictedAt < since;
+}
+
+function notesFor(s: {
+  n: number;
+  pnlN: number;
+  returnN: number;
+  customized: number;
+  truncated: number;
+}): string[] {
   const notes = ['P&L adds USDC and AUSD as dollars (≈ $); they are different tokens.'];
+  if (s.truncated > 0) {
+    notes.push(
+      `The server no longer holds the oldest events of ${s.truncated} of ${s.n} agents; ` +
+        `${s.n - s.pnlN} are left out of the median P&L and all ${s.truncated} of the median return.`,
+    );
+  }
   if (s.n < PRESET_STATS_MIN_N) {
     notes.push(
       `Too new to rate: ${s.n} agent${s.n === 1 ? '' : 's'} in the window, ` +
         `medians need ${PRESET_STATS_MIN_N}.`,
+    );
+  } else if (s.pnlN < PRESET_STATS_MIN_N) {
+    notes.push(
+      `Only ${s.pnlN} of ${s.n} agents have their whole window on record, ` +
+        'so there is no median yet.',
     );
   } else if (s.returnN < PRESET_STATS_MIN_N) {
     notes.push(

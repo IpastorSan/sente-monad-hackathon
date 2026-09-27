@@ -64,10 +64,9 @@ function body(over: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 /** The controller as a caller sees it: `as` switches the authenticated user. */
-function setup(wallets = new FakeAgentWalletProvider()) {
+function setup(wallets = new FakeAgentWalletProvider(), events = new InMemoryAgentEventLog()) {
   let principal: Principal = { userId: 'alice' };
   const auth: Auth = { principal: () => principal };
-  const events = new InMemoryAgentEventLog();
   // SEN-21. A real ConsensusService, fed through its tag reader — the socket
   // path is consensus.service.spec.ts's. `settle(n)` is what a block that has
   // been finalized looks like to the decoration.
@@ -529,6 +528,25 @@ describe('AgentsController', () => {
       // The same item /events serves, byte for byte.
       const page = await controller.listEvents({ id: alpha.id }, {});
       expect(summaries[0]!.lastEvent).toEqual(page.events[3]);
+    });
+
+    it("marks allTime partial once the log has dropped the agent's oldest events (SEN-129)", async () => {
+      // A cap of 2: the +100 verdict is evicted, so allTime can only be a partial sum.
+      const h = setup(undefined, new InMemoryAgentEventLog(2));
+      const { agent } = await h.controller.hire(
+        body({ name: 'Chatty' }) as unknown as CreateAgentDto,
+      );
+      for (const pnl of ['100', '1', '2']) {
+        await h.events.append({
+          agentId: agent.id,
+          kind: 'verdict',
+          detail: { realisedPnl: pnl, pnlAsset: 'USDC' },
+        });
+      }
+
+      const [summary] = (await h.controller.summaries()).summaries;
+
+      expect(summary!.pnl).toEqual({ last24h: '3', allTime: '3', allTimePartial: true });
     });
 
     it('answers a user with no agents with empty lists, not an error', async () => {

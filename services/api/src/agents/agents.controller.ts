@@ -136,7 +136,8 @@ export class AgentsController {
    *
    * PERSISTENCE: the log keeps 10k events per agent (oldest dropped first), so
    * `allTime` means "over the log this server still holds" — for an agent past
-   * the cap, its oldest verdicts are no longer in it.
+   * the cap, its oldest verdicts are no longer in it, and `pnl.allTimePartial`
+   * says so (SEN-129).
    */
   @Get('summaries')
   async summaries(): Promise<AgentSummariesResponseDto> {
@@ -145,7 +146,11 @@ export class AgentsController {
       const agents = await this.agents.list(this.auth.principal());
       const summaries = await Promise.all(
         agents.map(async (agent) => {
-          const { lastEvent, ...figures } = summariseEvents(await this.events.list(agent.id), now);
+          const [events, truncation] = await Promise.all([
+            this.events.list(agent.id),
+            this.events.truncation(agent.id),
+          ]);
+          const { lastEvent, ...figures } = summariseEvents(events, now, truncation);
           return {
             agentId: agent.id,
             ...figures,

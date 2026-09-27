@@ -167,9 +167,43 @@ describe('FileAgentEventLog', () => {
     expect(lines()).toHaveLength(1_010);
 
     const second = fileLog(1);
-    expect(lines()).toHaveLength(1);
+    // The kept event, led by the line that remembers the 1,009 dropped (SEN-129).
+    expect(lines()).toHaveLength(2);
     expect((await second.list('a')).map((e) => e.seq)).toEqual([1_010]);
     expect((await second.append({ agentId: 'a', kind: 'fill', detail: {} })).seq).toBe(1_011);
+  });
+
+  it('reports what the cap dropped, across a restart (SEN-129)', async () => {
+    const first = fileLog(2);
+    for (let i = 1; i <= 4; i += 1) {
+      await first.append({ agentId: 'a', kind: 'order', detail: {}, at: i * 100 });
+    }
+    await first.append({ agentId: 'b', kind: 'order', detail: {}, at: 500 });
+    expect(await first.truncation('a')).toEqual({ evicted: 2, newestEvictedAt: 200 });
+    first.close();
+
+    const second = fileLog(2);
+    expect(await second.truncation('a')).toEqual({ evicted: 2, newestEvictedAt: 200 });
+    expect(await second.truncation('b')).toEqual({ evicted: 0, newestEvictedAt: null });
+  });
+
+  it('still reports what was dropped after compaction deleted it from disk (SEN-129)', async () => {
+    const first = fileLog(1);
+    for (let i = 1; i <= 1_010; i += 1) {
+      await first.append({ agentId: 'a', kind: 'order', detail: {}, at: i });
+    }
+    first.close();
+
+    fileLog(1).close(); // compacts: 1,009 events are gone from the file for good
+    const third = fileLog(1);
+    expect(await third.truncation('a')).toEqual({ evicted: 1_009, newestEvictedAt: 1_009 });
+    await third.append({ agentId: 'a', kind: 'order', detail: {}, at: 2_000 });
+    expect(await third.truncation('a')).toEqual({ evicted: 1_010, newestEvictedAt: 1_010 });
+  });
+
+  it('refuses to boot on a truncation line it cannot read', () => {
+    writeFileSync(path, '{"v":1,"truncated":{"a":{"evicted":-1}}}\n{"v":1,"e":1}\n');
+    expect(() => fileLog()).toThrow(/line 1 is not a readable event/);
   });
 
   it('resolves an append whose write fails, and logs it', async () => {
