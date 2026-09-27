@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../events/agent-event-log';
+import { InMemoryAgentEventLog, NOT_TRUNCATED, type AgentEvent } from '../events/agent-event-log';
 import { settle } from '../events/verdict';
 import { fifoCostBasis, reconcileHolding } from './cost-basis';
 
@@ -38,7 +38,7 @@ function fill(
 
 describe('fifoCostBasis (SEN-66)', () => {
   it('prices a single buy at its fill', () => {
-    expect(fifoCostBasis([fill('buy', '10', '3.25')], MON)).toEqual({
+    expect(fifoCostBasis([fill('buy', '10', '3.25')], MON, NOT_TRUNCATED)).toEqual({
       market: MON,
       openSize: '10',
       avgPrice: '3.25',
@@ -46,6 +46,7 @@ describe('fifoCostBasis (SEN-66)', () => {
       realisedPnl: '0',
       unmatchedSellSize: '0',
       fills: 1,
+      complete: true,
     });
   });
 
@@ -53,6 +54,7 @@ describe('fifoCostBasis (SEN-66)', () => {
     const basis = fifoCostBasis(
       [fill('buy', '10', '2'), fill('buy', '10', '4'), fill('sell', '15', '5')],
       MON,
+      NOT_TRUNCATED,
     );
     // 10 @ 2 and 5 @ 4 leave: (5-2)*10 + (5-4)*5 = 35; 5 @ 4 stays open.
     expect(basis).toMatchObject({
@@ -66,7 +68,11 @@ describe('fifoCostBasis (SEN-66)', () => {
   });
 
   it('books a sell with no lot behind it as unmatched, realising nothing for it', () => {
-    const basis = fifoCostBasis([fill('buy', '1', '3'), fill('sell', '4', '2.5')], MON);
+    const basis = fifoCostBasis(
+      [fill('buy', '1', '3'), fill('sell', '4', '2.5')],
+      MON,
+      NOT_TRUNCATED,
+    );
     expect(basis).toMatchObject({
       openSize: '0',
       avgPrice: null,
@@ -84,6 +90,7 @@ describe('fifoCostBasis (SEN-66)', () => {
         fill('sell', '5', '3', { fee: '0.1', feeAsset: 'USDC' }),
       ],
       MON,
+      NOT_TRUNCATED,
     );
     // Half leaves at 2 for 3: +5 of price PnL, less BOTH fees paid so far.
     expect(basis).toMatchObject({
@@ -95,7 +102,11 @@ describe('fifoCostBasis (SEN-66)', () => {
   });
 
   it('prices a base-denominated fee at the fill that paid it', () => {
-    const basis = fifoCostBasis([fill('buy', '10', '2', { fee: '0.01', feeAsset: 'MON' })], MON);
+    const basis = fifoCostBasis(
+      [fill('buy', '10', '2', { fee: '0.01', feeAsset: 'MON' })],
+      MON,
+      NOT_TRUNCATED,
+    );
     // 0.01 MON at 2 is 0.02 USDC, realised at once; the lot stays at its fill.
     expect(basis).toMatchObject({ costQuote: '20', realisedPnl: '-0.02' });
   });
@@ -104,6 +115,7 @@ describe('fifoCostBasis (SEN-66)', () => {
     const basis = fifoCostBasis(
       [fill('buy', '1', '2'), fill('sell', '1', '3', { fee: '0.1' })],
       MON,
+      NOT_TRUNCATED,
     );
     expect(basis.realisedPnl).toBe('0.9');
   });
@@ -112,6 +124,7 @@ describe('fifoCostBasis (SEN-66)', () => {
     const basis = fifoCostBasis(
       [fill('buy', '1', '3'), fill('sell', '4', '2.5', { fee: '0.4', feeAsset: 'USDC' })],
       MON,
+      NOT_TRUNCATED,
     );
     // 1 matched at -0.5; 3 unmatched realise nothing, but the 0.4 fee was paid in full.
     expect(basis).toMatchObject({ realisedPnl: '-0.9', unmatchedSellSize: '3' });
@@ -124,13 +137,17 @@ describe('fifoCostBasis (SEN-66)', () => {
       { ...fill('buy', '1', '100'), kind: 'close' },
       fill('buy', '2', '3'),
     ];
-    expect(fifoCostBasis(events, MON)).toMatchObject({ openSize: '2', costQuote: '6', fills: 1 });
+    expect(fifoCostBasis(events, MON, NOT_TRUNCATED)).toMatchObject({
+      openSize: '2',
+      costQuote: '6',
+      fills: 1,
+    });
   });
 
   it('reads the log in seq order, not array order', () => {
     const buy = fill('buy', '1', '2');
     const sell = fill('sell', '1', '3');
-    expect(fifoCostBasis([sell, buy], MON)).toMatchObject({
+    expect(fifoCostBasis([sell, buy], MON, NOT_TRUNCATED)).toMatchObject({
       realisedPnl: '1',
       unmatchedSellSize: '0',
     });
@@ -144,6 +161,7 @@ describe('fifoCostBasis (SEN-66)', () => {
         fill('buy', '3', '0.333333333333333333'),
       ],
       MON,
+      NOT_TRUNCATED,
     );
     expect(basis.openSize).toBe('3.3');
     expect(basis.costQuote).toBe('1.039999999999999999');
@@ -154,6 +172,7 @@ describe('fifoCostBasis (SEN-66)', () => {
     const basis = fifoCostBasis(
       [fill('buy', '1', '2'), fill('buy', 'lots', '2'), fill('buy', '1', undefined as never)],
       MON,
+      NOT_TRUNCATED,
     );
     expect(basis).toMatchObject({ openSize: '1', fills: 3 });
   });
@@ -161,7 +180,7 @@ describe('fifoCostBasis (SEN-66)', () => {
 
 describe('reconcileHolding (SEN-66)', () => {
   it('is complete when the log explains the whole holding', () => {
-    const basis = fifoCostBasis([fill('buy', '10', '2')], MON);
+    const basis = fifoCostBasis([fill('buy', '10', '2')], MON, NOT_TRUNCATED);
     expect(reconcileHolding(basis, '10', '2.5')).toEqual({
       coveredSize: '10',
       uncoveredSize: '0',
@@ -172,7 +191,7 @@ describe('reconcileHolding (SEN-66)', () => {
   });
 
   it('is incomplete when more is held than the log explains', () => {
-    const basis = fifoCostBasis([fill('buy', '10', '2')], MON);
+    const basis = fifoCostBasis([fill('buy', '10', '2')], MON, NOT_TRUNCATED);
     expect(reconcileHolding(basis, '25', '1.5')).toEqual({
       coveredSize: '10',
       uncoveredSize: '15',
@@ -183,7 +202,7 @@ describe('reconcileHolding (SEN-66)', () => {
   });
 
   it('covers only what is held when the log says more is open', () => {
-    const basis = fifoCostBasis([fill('buy', '10', '2')], MON);
+    const basis = fifoCostBasis([fill('buy', '10', '2')], MON, NOT_TRUNCATED);
     expect(reconcileHolding(basis, '4', null)).toEqual({
       coveredSize: '4',
       uncoveredSize: '0',
@@ -194,7 +213,7 @@ describe('reconcileHolding (SEN-66)', () => {
   });
 
   it('has no average or PnL for a holding the log has no lots for', () => {
-    const basis = fifoCostBasis([], MON);
+    const basis = fifoCostBasis([], MON, NOT_TRUNCATED);
     expect(reconcileHolding(basis, '7', '3')).toEqual({
       coveredSize: '0',
       uncoveredSize: '7',
@@ -205,7 +224,49 @@ describe('reconcileHolding (SEN-66)', () => {
   });
 
   it('rejects a held size that is not a decimal', () => {
-    expect(() => reconcileHolding(fifoCostBasis([], MON), '-1', null)).toThrow(RangeError);
+    expect(() => reconcileHolding(fifoCostBasis([], MON, NOT_TRUNCATED), '-1', null)).toThrow(
+      RangeError,
+    );
+  });
+});
+
+/**
+ * SEN-129: past `maxPerAgent` the log drops the agent's oldest events, and a
+ * FIFO over what is left matches sells against the wrong lots.
+ */
+describe('cost basis over a truncated log (SEN-129)', () => {
+  it('reports no entry and complete: false once the oldest buy was evicted', async () => {
+    const log = new InMemoryAgentEventLog(3);
+    // The true FIFO: the sell closes the 1.00 lot, leaving 10 @ 5 and 10 @ 2.
+    // Without the first buy it closes the 5.00 lot instead: 10 @ 2, covered and
+    // "complete" — an entry of 2 for base that cost 5.
+    for (const [side, price] of [
+      ['buy', '1'],
+      ['buy', '5'],
+      ['buy', '2'],
+      ['sell', '3'],
+    ] as const) {
+      const { seq: _seq, at: _at, ...event } = fill(side, '10', price);
+      await log.append(event);
+    }
+
+    const basis = fifoCostBasis(await log.list('agent-1'), MON, await log.truncation('agent-1'));
+    expect(basis.complete).toBe(false);
+    expect(reconcileHolding(basis, '10', '4')).toEqual({
+      coveredSize: '0',
+      uncoveredSize: '10',
+      avgPrice: null,
+      unrealizedPnl: null,
+      complete: false,
+    });
+  });
+
+  it('stays complete while nothing was evicted', async () => {
+    const log = new InMemoryAgentEventLog(3);
+    const { seq: _seq, at: _at, ...event } = fill('buy', '10', '2');
+    await log.append(event);
+    const basis = fifoCostBasis(await log.list('agent-1'), MON, await log.truncation('agent-1'));
+    expect(reconcileHolding(basis, '10', '4')).toMatchObject({ avgPrice: '2', complete: true });
   });
 });
 
@@ -269,7 +330,7 @@ describe('fifoCostBasis agrees with settle() on realised PnL (SEN-128)', () => {
       seq = 0;
       const events = history(rng(seed));
       const verdicts = settle(events);
-      const basis = fifoCostBasis(events, MON);
+      const basis = fifoCostBasis(events, MON, NOT_TRUNCATED);
       expect({ seed, events, pnl: basis.realisedPnl }).toEqual({
         seed,
         events,

@@ -625,8 +625,13 @@ export interface AgentSummaryDto {
    * units — Kuru's USDC and Perpl's AUSD summed as one unit, as the leaderboard
    * does. `'0'` when nothing has settled. `last24h` is the verdicts whose `at`
    * is within the last 24 hours.
+   *
+   * `allTimePartial` (SEN-129) is sent, as `true`, only when the server's log
+   * has dropped some of the agent's oldest events: `allTime` then covers only
+   * what is still held. OPTIONAL so a client that predates it keeps working;
+   * one that knows it should show `allTime` as "at least"/partial.
    */
-  pnl: { last24h: string; allTime: string };
+  pnl: { last24h: string; allTime: string; allTimePartial?: true };
   /** Max notional (quote units, decimal string) among the orders that landed; null if none. */
   largestOrderNotional: string | null;
   /** Epoch ms when the CURRENT mandate took effect: the hire, or the last committed amend. */

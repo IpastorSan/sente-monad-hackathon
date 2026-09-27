@@ -13,6 +13,12 @@
  * `reconcileHolding` therefore sets the log against what the chain says is held
  * and reports how much of it the log explains, rather than pretending to know.
  *
+ * The log also FORGETS (SEN-129): it keeps the newest 10k events per agent, so
+ * once an agent passes that its oldest buys are gone and FIFO would match its
+ * sells against the wrong lots — a wrong number with nothing to say so. The
+ * caller passes the log's `truncation`, and a truncated history yields
+ * `complete: false` and no figures from `reconcileHolding`.
+ *
  * Fees follow THE fee rule, written once in `events/verdict.ts`'s header
  * ("The fee rule (SEN-128)") and applied through its `feeInQuote`: a fee is
  * realised on the fill that paid it, in full, base fees priced at that fill.
@@ -27,7 +33,7 @@
  */
 import type { Decimal } from '@sente/venues';
 
-import type { AgentEvent } from '../events/agent-event-log';
+import type { AgentEvent, AgentEventTruncation } from '../events/agent-event-log';
 import { addScaled, feeInQuote, type Scaled, subScaled } from '../events/verdict';
 
 export interface CostBasis {
@@ -47,6 +53,11 @@ export interface CostBasis {
   readonly unmatchedSellSize: Decimal;
   /** Kuru fills on this market that were read, parsable or not. */
   readonly fills: number;
+  /**
+   * `false` when the log had dropped some of the agent's oldest events: then
+   * every figure above may be off by the dropped fills, and none may be shown.
+   */
+  readonly complete: boolean;
 }
 
 export interface HoldingReconciliation {
@@ -75,7 +86,16 @@ interface Lot {
   readonly price: bigint;
 }
 
-export function fifoCostBasis(events: readonly AgentEvent[], market: string): CostBasis {
+/**
+ * `truncation` is the log's answer for the agent the events are from. It is
+ * required, not defaulted, so no caller can forget that the list may not be
+ * the whole history.
+ */
+export function fifoCostBasis(
+  events: readonly AgentEvent[],
+  market: string,
+  truncation: AgentEventTruncation,
+): CostBasis {
   // The quote side of the symbol (`MON-USDC` -> USDC), read exactly as
   // `verdict.ts#pnlAssetOf` reads it, since the fee rule is keyed on it.
   const quote = market.split('-')[1] ?? market;
@@ -140,6 +160,9 @@ export function fifoCostBasis(events: readonly AgentEvent[], market: string): Co
     realisedPnl: fixedString(truncatedTo(realised, SCALE)),
     unmatchedSellSize: fixedString(unmatched),
     fills,
+    // Any dropped event could have been a fill on this market: they are not
+    // there to check, so ANY eviction makes the basis unknown.
+    complete: truncation.evicted === 0,
   };
 }
 
@@ -149,6 +172,10 @@ export function fifoCostBasis(events: readonly AgentEvent[], market: string): Co
  * makes the result incomplete. Holding LESS than the log says (a withdrawal,
  * a sell recorded nowhere) is still complete: every unit held is explained, at
  * the log's average entry.
+ *
+ * A basis from a truncated log explains nothing (SEN-129): every unit held is
+ * uncovered and there is no entry or unrealised PnL, rather than figures from
+ * lots that FIFO may have matched wrongly.
  */
 export function reconcileHolding(
   basis: CostBasis,
@@ -156,6 +183,15 @@ export function reconcileHolding(
   mark: Decimal | null,
 ): HoldingReconciliation {
   const held = requireFixed(heldSize, 'heldSize');
+  if (!basis.complete) {
+    return {
+      coveredSize: '0',
+      uncoveredSize: fixedString(held),
+      avgPrice: null,
+      unrealizedPnl: null,
+      complete: false,
+    };
+  }
   const open = requireFixed(basis.openSize, 'openSize');
   const covered = held < open ? held : open;
   const uncovered = held - covered;

@@ -137,7 +137,13 @@ describe('presetStats', () => {
       () => '5',
       () => true,
     );
-    const stats = presetStats({ presetId: 'guardian', agents, events, now: NOW });
+    const stats = presetStats({
+      presetId: 'guardian',
+      agents,
+      events,
+      truncation: new Map(),
+      now: NOW,
+    });
     expect(stats).toMatchObject({
       n: 4,
       returnN: 4,
@@ -154,7 +160,13 @@ describe('presetStats', () => {
       (i) => String(i),
       (i) => i < 3,
     );
-    const stats = presetStats({ presetId: 'guardian', agents, events, now: NOW });
+    const stats = presetStats({
+      presetId: 'guardian',
+      agents,
+      events,
+      truncation: new Map(),
+      now: NOW,
+    });
     expect(stats).toMatchObject({ n: 6, returnN: 3, medianPnl30d: '2.5', medianReturn30d: null });
   });
 
@@ -164,7 +176,13 @@ describe('presetStats', () => {
       (i) => String(i - 2),
       () => true,
     );
-    const stats = presetStats({ presetId: 'guardian', agents, events, now: NOW });
+    const stats = presetStats({
+      presetId: 'guardian',
+      agents,
+      events,
+      truncation: new Map(),
+      now: NOW,
+    });
     expect(stats).toMatchObject({ n: 5, returnN: 5, medianPnl30d: '0', medianReturn30d: '0' });
   });
 
@@ -186,7 +204,13 @@ describe('presetStats', () => {
       ['d', [verdict('d', '6')]],
       // e settled nothing: counts as 0
     ]);
-    const stats = presetStats({ presetId: 'guardian', agents, events, now: NOW });
+    const stats = presetStats({
+      presetId: 'guardian',
+      agents,
+      events,
+      truncation: new Map(),
+      now: NOW,
+    });
     expect(stats).toMatchObject({
       presetId: 'guardian',
       window: '30d',
@@ -198,5 +222,63 @@ describe('presetStats', () => {
       medianReturn30d: null,
       asOf: NOW,
     });
+  });
+});
+
+describe('presetStats over a truncated log (SEN-129)', () => {
+  /** `size` agents, each +10 on 100 deposited: a median return of 0.1. */
+  function cohort(size = 6) {
+    const agents: CohortRecord[] = [];
+    const events = new Map<string, AgentEvent[]>();
+    for (let i = 0; i < size; i += 1) {
+      const id = `g${i}`;
+      agents.push(agent(id));
+      events.set(id, [deposit(id, '100'), verdict(id, '10')]);
+    }
+    return { agents, events };
+  }
+
+  it('leaves an agent whose deposits may be gone out of the return, not in at a smaller capital', () => {
+    const { agents, events } = cohort();
+    // g0..g2's first deposit was evicted (long before the window); what is left
+    // is a second deposit of 10, so their "return" would read 10 / 10 = 1.0.
+    // Counted, they would drag the median from 0.1 to 0.55.
+    const truncation = new Map<string, { evicted: number; newestEvictedAt: number }>();
+    for (const id of ['g0', 'g1', 'g2']) {
+      events.set(id, [deposit(id, '10'), verdict(id, '10')]);
+      truncation.set(id, { evicted: 1, newestEvictedAt: NOW - 50 * DAY });
+    }
+
+    const stats = presetStats({ presetId: 'guardian', agents, events, truncation, now: NOW });
+
+    // Their window is whole (nothing dropped after NOW - 50d), so P&L still counts them.
+    expect(stats).toMatchObject({ n: 6, medianPnl30d: '10', returnN: 3, medianReturn30d: null });
+    expect(stats.notes.join(' ')).toContain('oldest events of 3 of 6 agents');
+  });
+
+  it('leaves an agent out of the P&L median when the eviction reached into the window', () => {
+    const { agents, events } = cohort(10);
+    // Half the cohort lost events from inside the window: what is left of it
+    // (a -500 whose winning trades were evicted, say) would pull the median to -245.
+    const truncation = new Map<string, { evicted: number; newestEvictedAt: number }>();
+    for (const id of ['g0', 'g1', 'g2', 'g3', 'g4']) {
+      events.set(id, [verdict(id, '-500')]);
+      truncation.set(id, { evicted: 7, newestEvictedAt: NOW - 2 * DAY });
+    }
+
+    const stats = presetStats({ presetId: 'guardian', agents, events, truncation, now: NOW });
+
+    expect(stats).toMatchObject({ n: 10, medianPnl30d: '10', returnN: 5, medianReturn30d: '0.1' });
+    expect(stats.notes.join(' ')).toContain('5 are left out of the median P&L');
+  });
+
+  it('withholds the P&L median when too few agents have a whole window', () => {
+    const { agents, events } = cohort();
+    const truncation = new Map([
+      ['g0', { evicted: 1, newestEvictedAt: NOW }],
+      ['g1', { evicted: 1, newestEvictedAt: NOW }],
+    ]);
+    const stats = presetStats({ presetId: 'guardian', agents, events, truncation, now: NOW });
+    expect(stats).toMatchObject({ n: 6, medianPnl30d: null, returnN: 4, medianReturn30d: null });
   });
 });

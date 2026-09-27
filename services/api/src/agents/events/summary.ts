@@ -40,7 +40,7 @@
 import { isDecimal } from '@sente/mandate';
 
 import { maxDecimal } from '../tools/decimal';
-import type { AgentEvent } from './agent-event-log';
+import type { AgentEvent, AgentEventTruncation } from './agent-event-log';
 import { addScaled, decimalOf, decimalString, PERPL_PNL_ASSET, type Scaled } from './verdict';
 
 /** "Today", for the card's P&L: a rolling day, not a calendar one — no timezone to guess. */
@@ -64,8 +64,17 @@ export interface AgentEventSummary {
   readonly held: number;
   /** `thesis` events. */
   readonly theses: number;
-  /** Exact decimal strings in quote units; `'0'` when nothing has settled. */
-  readonly pnl: { readonly last24h: string; readonly allTime: string };
+  /**
+   * Exact decimal strings in quote units; `'0'` when nothing has settled.
+   * `allTimePartial` is present, and `true`, only when the log has dropped
+   * some of the agent's oldest events (SEN-129): `allTime` then sums only the
+   * verdicts still held, and the true figure is unknown.
+   */
+  readonly pnl: {
+    readonly last24h: string;
+    readonly allTime: string;
+    readonly allTimePartial?: true;
+  };
   /** Quote units, decimal string; `null` when no landed order carries a notional. */
   readonly largestOrderNotional: string | null;
   /** The newest move (see `isMove`), or `null`. */
@@ -84,9 +93,14 @@ function isMove(event: AgentEvent): boolean {
 /**
  * One agent's summary, from its whole log (oldest first, as `list` returns it).
  * `now` is epoch ms; a verdict counts towards `last24h` when its `at` is at
- * most a day before it, the boundary included.
+ * most a day before it, the boundary included. `truncation` is the log's for
+ * the agent: required, so no caller can present a partial sum as all-time.
  */
-export function summariseEvents(events: readonly AgentEvent[], now: number): AgentEventSummary {
+export function summariseEvents(
+  events: readonly AgentEvent[],
+  now: number,
+  truncation: AgentEventTruncation,
+): AgentEventSummary {
   let trades = 0;
   let held = 0;
   let theses = 0;
@@ -131,7 +145,11 @@ export function summariseEvents(events: readonly AgentEvent[], now: number): Age
     trades,
     held,
     theses,
-    pnl: { last24h: decimalString(last24h), allTime: decimalString(allTime) },
+    pnl: {
+      last24h: decimalString(last24h),
+      allTime: decimalString(allTime),
+      ...(truncation.evicted > 0 ? { allTimePartial: true as const } : {}),
+    },
     largestOrderNotional: largest,
     lastEvent,
   };

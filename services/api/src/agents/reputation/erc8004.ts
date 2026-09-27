@@ -1046,4 +1046,8 @@ export class ReputationEventLog implements AgentEventLog {
   list(agentId: string, query?: Parameters<AgentEventLog['list']>[1]): Promise<AgentEvent[]> {
     return this.#inner.list(agentId, query);
   }
+
+  truncation(agentId: string): ReturnType<AgentEventLog['truncation']> {
+    return this.#inner.truncation(agentId);
+  }
 }

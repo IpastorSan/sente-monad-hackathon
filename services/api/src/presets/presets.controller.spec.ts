@@ -128,4 +128,48 @@ describe('PresetsController', () => {
       spy.mockRestore();
     }
   });
+
+  it("says when the log has dropped an agent's oldest events, rather than dividing by what is left (SEN-129)", async () => {
+    const now = Date.UTC(2026, 8, 27);
+    const spy = jest.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      // A cap of 2: the 100 USDC deposit is evicted by the two events after it.
+      const events = new InMemoryAgentEventLog(2);
+      await events.append({
+        agentId: 'a',
+        kind: 'deposit',
+        at: now - 40 * 86_400_000,
+        detail: { asset: 'USDC', amount: '100' },
+      });
+      await events.append({
+        agentId: 'a',
+        kind: 'deposit',
+        at: now - 35 * 86_400_000,
+        detail: { asset: 'USDC', amount: '1' },
+      });
+      await events.append({
+        agentId: 'a',
+        kind: 'verdict',
+        at: now - 1000,
+        detail: { realisedPnl: '2', pnlAsset: 'USDC' },
+      });
+      const store = storeOf([
+        {
+          id: 'a',
+          status: 'active',
+          createdAt: new Date(now - 50 * 86_400_000),
+          updatedAt: new Date(now - 50 * 86_400_000),
+          preset: { id: 'guardian', version: 1, params: {}, customized: false },
+        },
+      ]);
+
+      const stats = await new PresetsController(store, events).presetStats('guardian');
+
+      // 2 on 1 deposited would be a 200 % return; the agent is left out instead.
+      expect(stats.returnN).toBe(0);
+      expect(stats.notes.join(' ')).toContain('oldest events of 1 of 1 agents');
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

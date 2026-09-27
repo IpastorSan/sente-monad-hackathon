@@ -86,4 +86,32 @@ describe('InMemoryAgentEventLog', () => {
     await log.append({ agentId: 'a', kind: 'order', detail: {} });
     expect((await log.list('a')).map((e) => e.seq)).toEqual([2, 3]);
   });
+
+  it('counts what the cap drops, per agent, with the newest dropped time (SEN-129)', async () => {
+    const log = new InMemoryAgentEventLog(2);
+    for (let at = 1; at <= 5; at += 1)
+      await log.append({ agentId: 'a', kind: 'order', detail: {}, at });
+    await log.append({ agentId: 'b', kind: 'order', detail: {}, at: 9 });
+
+    expect((await log.list('a')).map((e) => e.at)).toEqual([4, 5]);
+    expect(await log.truncation('a')).toEqual({ evicted: 3, newestEvictedAt: 3 });
+    expect(await log.truncation('b')).toEqual({ evicted: 0, newestEvictedAt: null });
+    expect(await log.truncation('nobody')).toEqual({ evicted: 0, newestEvictedAt: null });
+  });
+
+  it('counts a seed trimmed to the cap on top of what the seed says was dropped', async () => {
+    const seed = [1, 2, 3].map((at) => ({
+      seq: at,
+      agentId: 'a',
+      at,
+      kind: 'order' as const,
+      detail: {},
+    }));
+    const log = new InMemoryAgentEventLog(
+      1,
+      seed,
+      new Map([['a', { evicted: 4, newestEvictedAt: 0 }]]),
+    );
+    expect(await log.truncation('a')).toEqual({ evicted: 6, newestEvictedAt: 2 });
+  });
 });

@@ -362,9 +362,11 @@ export type AgentSummary = {
   /**
    * Realised P&L from the agent's verdicts, as exact decimal strings in quote
    * units — USDC and AUSD summed as one unit, as the leaderboard does. `"0"`
-   * when nothing has settled.
+   * when nothing has settled. `allTimePartial` (SEN-129) is `true` when the
+   * server's event log has dropped the agent's oldest events, so `allTime`
+   * covers only what it still holds; absent otherwise. Not shown yet.
    */
-  pnl: { last24h: string; allTime: string };
+  pnl: { last24h: string; allTime: string; allTimePartial?: true };
   /** The largest notional among orders that landed, in quote units, as recorded; `null` if none. */
   largestOrderNotional: string | null;
   /** Epoch ms the current mandate took effect: the hire or the last amend. */

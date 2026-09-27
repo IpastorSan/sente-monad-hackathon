@@ -27,7 +27,13 @@ import type {
   SectionResult,
   SpotHoldingDto,
 } from '../../venues/dto/markets.dto';
-import { AGENT_EVENTS, type AgentEvent, type AgentEventLog } from '../events/agent-event-log';
+import {
+  AGENT_EVENTS,
+  type AgentEvent,
+  type AgentEventLog,
+  type AgentEventTruncation,
+  NOT_TRUNCATED,
+} from '../events/agent-event-log';
 import { addScaled, decimalOf, decimalString, type Scaled } from '../events/verdict';
 import type { AgentRecord } from '../store/agent-store';
 import { mulDecimal } from '../tools/decimal';
@@ -47,6 +53,12 @@ import {
   type PerplAccountVenue,
 } from './venue-reads';
 
+/** An agent's log as read, and what it has dropped. */
+interface AgentHistory {
+  readonly events: readonly AgentEvent[];
+  readonly truncation: AgentEventTruncation;
+}
+
 /** How long one agent's portfolio is served from memory. */
 export const AGENT_PORTFOLIO_TTL_MS = 3_000;
 
@@ -57,7 +69,7 @@ export interface AgentPortfolioReaders {
   /** The agent's credentialed Perpl venue; `undefined` when it holds no API key. */
   readonly perplVenue: (agent: AgentIdentity) => Promise<PerplAccountVenue | undefined>;
   readonly perplAccountInfo: PerplAccountInfoReader;
-  readonly events: Pick<AgentEventLog, 'list'>;
+  readonly events: Pick<AgentEventLog, 'list' | 'truncation'>;
   readonly marks: Pick<MarketDataService, 'mark'>;
   readonly now?: () => number;
 }
@@ -155,7 +167,7 @@ export class AgentPortfolioService {
   #holdings(
     wallet: AgentPortfolioDto['wallet'],
     kuru: AgentPortfolioDto['kuru'],
-    events: readonly AgentEvent[] | null,
+    history: AgentHistory | null,
     marks: readonly (Decimal | null)[],
   ): SpotHoldingDto[] {
     const rows = KURU_TESTNET_MARKETS.map((market, i) => {
@@ -178,7 +190,12 @@ export class AgentPortfolioService {
     return rows.map((row) => {
       const { markPrice } = row;
       const basis = reconcileHolding(
-        fifoCostBasis(events ?? [], row.market.symbol),
+        // An unread log is an empty one: it explains none of a non-zero holding.
+        fifoCostBasis(
+          history?.events ?? [],
+          row.market.symbol,
+          history?.truncation ?? NOT_TRUNCATED,
+        ),
         row.amount,
         markPrice,
       );
@@ -187,7 +204,14 @@ export class AgentPortfolioService {
       if (!wallet.ok || !kuru.ok) {
         notes.push(`The ${!wallet.ok ? 'wallet' : 'Kuru'} read failed; amount leaves it out.`);
       }
-      if (events === null) notes.push('Event log unavailable; cost basis unknown.');
+      if (history === null) {
+        notes.push('Event log unavailable; cost basis unknown.');
+      } else if (history.truncation.evicted > 0) {
+        notes.push(
+          `The event log no longer holds this agent's oldest ${history.truncation.evicted} ` +
+            'events; cost basis unknown.',
+        );
+      }
       return {
         asset: row.asset,
         market: row.market.symbol,
@@ -203,10 +227,17 @@ export class AgentPortfolioService {
     });
   }
 
-  /** The whole log: FIFO needs every buy, however old. `null` when unreadable. */
-  async #events(agentId: string): Promise<AgentEvent[] | null> {
+  /**
+   * The whole log: FIFO needs every buy, however old — and so it also needs to
+   * know when the log has dropped some (SEN-129). `null` when unreadable.
+   */
+  async #events(agentId: string): Promise<AgentHistory | null> {
     try {
-      return await this.#readers.events.list(agentId);
+      const [events, truncation] = await Promise.all([
+        this.#readers.events.list(agentId),
+        this.#readers.events.truncation(agentId),
+      ]);
+      return { events, truncation };
     } catch (error) {
       this.#logger.warn(`Agent ${agentId}: event log read failed: ${messageOf(error)}`);
       return null;
