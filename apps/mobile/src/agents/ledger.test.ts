@@ -460,6 +460,19 @@ test('a deposit with no exact integer falls back to Alchemy’s own figure, unga
   assert.equal(depositAmount(deposit({ rawAmount: null, amount: '' })), '—');
 });
 
+test('a negative deposit is never printed as `+-`', () => {
+  // SEN-141: pins `exactAtoms`' refusal of a negative `rawAmount` — without it
+  // the row reads `+-250.50`. The fallback shows a negative figure as it came.
+  for (const rawAmount of ['-250500000', '-0xee6b280']) {
+    const shown = depositAmount(deposit({ rawAmount, amount: '-250.5' }));
+    assert.equal(shown, '-250.5');
+    assert.doesNotMatch(shown, /\+\s*[-−]/);
+  }
+  assert.equal(depositAmount(deposit({ rawAmount: null, amount: '-3' })), '-3');
+  // A negative raw integer does not override a sane scaled figure.
+  assert.equal(depositAmount(deposit({ rawAmount: '-250500000', amount: '250.5' })), '+250.5');
+});
+
 test('a malformed deposit renders, invents nothing and throws nothing', () => {
   const entry = only('deposit', [
     event(1, 'deposit', {

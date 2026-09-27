@@ -10,7 +10,7 @@ import { Canvas, Circle, Path } from '@shopify/react-native-skia';
 import { useMemo } from 'react';
 
 import { color } from '../theme';
-import { isUp, linePath, pointsXY, scaleFor, type Decimal } from './geometry';
+import { isUp, linePath, pointsXY, scaleFor, toPrice, type Decimal } from './geometry';
 
 const PAD = 3;
 /** Room on the right for the end dot. */
@@ -29,7 +29,7 @@ export function Sparkline({
   height?: number;
 }) {
   const model = useMemo(() => {
-    const closes = points.map(Number);
+    const closes = points.map(toPrice);
     if (closes.length === 0) return null;
     const scale = scaleFor(closes, [], { height, padTop: PAD, padBottom: PAD });
     const plotWidth = width - PAD_RIGHT;

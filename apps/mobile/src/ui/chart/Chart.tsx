@@ -60,6 +60,7 @@ import {
   pointsXY,
   priceDecimals,
   scaleFor,
+  toPrice,
   yOf,
   type ChartKline,
   type ChartLevel,
@@ -166,16 +167,18 @@ export function Chart({
 
   const model = useMemo(() => {
     const bars = candles ? (klines ?? []) : [];
-    const closes = candles ? bars.map((k) => Number(k.close)) : (points ?? []).map(Number);
+    const closes = candles ? bars.map((k) => toPrice(k.close)) : (points ?? []).map(toPrice);
     if (closes.length === 0 || width <= 0) return null;
 
     const first = candles ? Number(bars[0]?.open) : (closes[0] ?? 0);
     const last = closes[closes.length - 1] ?? 0;
-    const prev = prevClose === undefined ? null : Number(prevClose);
+    // A blank or garbled previous close is no reference at all, not a zero (SEN-141).
+    const prevPrice = prevClose === undefined ? Number.NaN : toPrice(prevClose);
+    const prev = Number.isFinite(prevPrice) ? prevPrice : null;
     const up = isUp(prev ?? first, last);
     const decimals = priceDecimals(last);
 
-    const extent = candles ? bars.flatMap((k) => [Number(k.high), Number(k.low)]) : closes;
+    const extent = candles ? bars.flatMap((k) => [toPrice(k.high), toPrice(k.low)]) : closes;
     const lastText = candles
       ? (bars[bars.length - 1]?.close ?? String(last))
       : (points?.[points.length - 1] ?? String(last));
@@ -208,7 +211,10 @@ export function Chart({
         const price = formatPrice(level.price, decimals) ?? level.price;
         return { ...place, kind: level.kind, text: `${level.label} ${price}` };
       }),
-      stones: markers.map((m) => ({ ...m, at: xy[markerIndex(m.index, closes.length)] })),
+      stones: markers.map((m) => {
+        const at = markerIndex(m.index, closes.length);
+        return { ...m, at: at === null ? undefined : xy[at] };
+      }),
       end: xy[xy.length - 1] ?? { x: plotWidth, y: height / 2 },
       lastLabel,
       xs: xy.map((p) => p.x),

@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import fc from 'fast-check';
+
 import {
   areaPath,
   candleRects,
@@ -12,7 +14,9 @@ import {
   markerIndex,
   nearestIndex,
   priceDecimals,
+  pointsXY,
   scaleFor,
+  toPrice,
   xOf,
   yOf,
   EDGE_STEP,
@@ -167,4 +171,168 @@ test('markerIndex counts negatives from the end and clamps', () => {
   assert.equal(markerIndex(3, 10), 3);
   assert.equal(markerIndex(40, 10), 9);
   assert.equal(markerIndex(-40, 10), 0);
+});
+
+// ── Hardening (SEN-141) ─────────────────────────────────────────────────────
+
+test('toPrice: a blank or non-finite wire price is NaN, never 0', () => {
+  // `Number('')` is 0: a blank close used to draw as a crash to zero.
+  for (const bad of ['', '   ', 'abc', 'NaN', 'Infinity', '-Infinity', '1e999']) {
+    assert.ok(Number.isNaN(toPrice(bad)), JSON.stringify(bad));
+  }
+  assert.equal(toPrice('0'), 0);
+  assert.equal(toPrice(' 0.9744 '), 0.9744);
+});
+
+test('linePath drops a sample that is not a price instead of emitting NaN', () => {
+  const s = scaleFor([0, 10], [], { height: 100, padTop: 0, padBottom: 0 });
+  const clean = linePath([1, 2], s, 100);
+  // The audit's case: `linePath([1, NaN, 2])` emitted `L50,NaN`, and Skia
+  // draws nothing for a path with a NaN in it.
+  const holed = linePath([1, Number.NaN, 2], s, 100);
+  assert.doesNotMatch(holed, /NaN|Infinity/);
+  assert.equal(holed, clean);
+  assert.doesNotMatch(linePath([1, Infinity, -Infinity, 2], s, 100), /NaN|Infinity/);
+  // A leading bad sample: the path still opens with `M`, at the first good one.
+  assert.match(linePath([Number.NaN, 1, 2], s, 100), /^M50,[\d.]+L100,[\d.]+$/);
+  assert.equal(linePath([Number.NaN, Number.NaN], s, 100), '');
+});
+
+test('areaPath closes under the samples the line actually draws', () => {
+  const s = scaleFor([0, 10], [], { height: 100, padTop: 0, padBottom: 0 });
+  const area = areaPath([Number.NaN, 5, 6, Number.NaN, Number.NaN], s, 100, 100);
+  assert.doesNotMatch(area, /NaN|Infinity/);
+  assert.match(area, /L50,100L25,100Z$/);
+  assert.equal(areaPath([Number.NaN], s, 100, 100), '');
+});
+
+test('pointsXY holds the last good y for a bad sample, so the scrub dot is never NaN', () => {
+  const s = scaleFor([0, 10], [], BOX);
+  const xy = pointsXY([Number.NaN, 2, Number.NaN, 8, Infinity], s, 100);
+  assert.deepEqual(
+    xy.map((p) => p.y),
+    [yOf(s, 2), yOf(s, 2), yOf(s, 2), yOf(s, 8), yOf(s, 8)],
+  );
+  const none = pointsXY([Number.NaN], s, 100);
+  assert.equal(none[0]?.y, (s.top + s.bottom) / 2);
+});
+
+test('candleRects skips a kline with a price that is not one', () => {
+  const s = scaleFor([90, 110], [], BOX);
+  const rects = candleRects(
+    [
+      { open: '95', high: '110', low: '90', close: '105' },
+      { open: '100', high: '', low: '96', close: '100' },
+      { open: '100', high: '108', low: '96', close: 'Infinity' },
+      { open: '100', high: '108', low: '96', close: '101' },
+    ],
+    s,
+    300,
+  );
+  assert.deepEqual(
+    rects.map((r) => r.x),
+    [0, 300],
+    'the good candles keep their own slots',
+  );
+});
+
+test('markerIndex has nothing to point at in an empty series', () => {
+  // Clamping into `[0, -1]` gave 0: a sample that does not exist.
+  assert.equal(markerIndex(0, 0), null);
+  assert.equal(markerIndex(-1, 0), null);
+  assert.equal(markerIndex(Number.NaN, 5), null);
+  assert.equal(markerIndex(1.7, 5), 1);
+  assert.equal(markerIndex(-1.2, 5), 4);
+});
+
+// ── Invariants (SEN-141) ────────────────────────────────────────────────────
+
+// Why a fixed seed: a red run in CI must reproduce locally from the same numbers.
+const RUNS = { numRuns: 400, seed: 141 };
+
+/** A wire price as the API might send it, garbage included. */
+const wirePrice = fc.oneof(
+  { weight: 6, arbitrary: fc.double({ min: -1e9, max: 1e9, noNaN: true }).map(String) },
+  { weight: 2, arbitrary: fc.integer({ min: 0, max: 100_000 }).map(String) },
+  { weight: 1, arbitrary: fc.constantFrom('', ' ', 'NaN', 'Infinity', '-Infinity', 'abc') },
+);
+const box = fc.record({
+  width: fc.integer({ min: 1, max: 1000 }),
+  height: fc.integer({ min: 40, max: 600 }),
+  padTop: fc.integer({ min: 0, max: 16 }),
+  padBottom: fc.integer({ min: 0, max: 16 }),
+});
+
+/** Every `x,y` pair in an `M…L…Z` path. */
+function coords(path: string): [number, number][] {
+  return [...path.matchAll(/[ML]([^,MLZ]+),([^MLZ]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+}
+
+test('property: every drawn point lies inside the plot box, and no path has a NaN', () => {
+  fc.assert(
+    fc.property(fc.array(wirePrice, { maxLength: 60 }), box, (wire, b) => {
+      const closes = wire.map(toPrice);
+      const scale = scaleFor(closes, [], b);
+      // Rounded to 0.1 px in the path, so half of that is slack.
+      const inside = ([x, y]: [number, number]) =>
+        x >= -0.05 && x <= b.width + 0.05 && y >= scale.top - 0.05 && y <= scale.bottom + 0.05;
+
+      const line = linePath(closes, scale, b.width);
+      assert.doesNotMatch(line, /NaN|Infinity/);
+      for (const c of coords(line)) assert.ok(inside(c), `${c} outside in ${line}`);
+
+      const area = areaPath(closes, scale, b.width, b.height);
+      assert.doesNotMatch(area, /NaN|Infinity/);
+
+      for (const p of pointsXY(closes, scale, b.width)) assert.ok(inside([p.x, p.y]));
+    }),
+    RUNS,
+  );
+});
+
+test('property: yOf is monotone — a higher price is never drawn lower', () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.double({ min: -1e9, max: 1e9, noNaN: true }), { minLength: 2, maxLength: 20 }),
+      box,
+      (prices, b) => {
+        const scale = scaleFor(prices, [], b);
+        const sorted = [...prices].sort((p, q) => p - q);
+        const ys = sorted.map((p) => yOf(scale, p));
+        for (let i = 1; i < ys.length; i++) assert.ok((ys[i] as number) <= (ys[i - 1] as number));
+      },
+    ),
+    RUNS,
+  );
+});
+
+test('property: candle rects are finite and inside the plot box', () => {
+  const kline = fc.record({ open: wirePrice, high: wirePrice, low: wirePrice, close: wirePrice });
+  fc.assert(
+    fc.property(fc.array(kline, { maxLength: 40 }), box, (klines, b) => {
+      const scale = scaleFor(
+        klines.flatMap((k) => [toPrice(k.high), toPrice(k.low), toPrice(k.open), toPrice(k.close)]),
+        [],
+        b,
+      );
+      for (const r of candleRects(klines, scale, b.width)) {
+        const ys = [r.wick.top, r.wick.bottom, r.body.y, r.body.y + r.body.height];
+        for (const y of ys)
+          assert.ok(Number.isFinite(y) && y >= scale.top - 1 && y <= scale.bottom + 1);
+        assert.ok(Number.isFinite(r.x) && r.x >= 0 && r.x <= b.width);
+      }
+    }),
+    RUNS,
+  );
+});
+
+test('property: markerIndex lands on a real sample or on nothing', () => {
+  fc.assert(
+    fc.property(fc.integer({ min: -100, max: 100 }), fc.integer({ min: 0, max: 50 }), (i, n) => {
+      const at = markerIndex(i, n);
+      if (n === 0) assert.equal(at, null);
+      else assert.ok(at !== null && Number.isInteger(at) && at >= 0 && at < n);
+    }),
+    RUNS,
+  );
 });
