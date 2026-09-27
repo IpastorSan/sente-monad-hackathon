@@ -464,6 +464,10 @@ correctly against a stale constant. Consequences:
   constant first.
 - After changing the constant, every existing agent policy must be re-PATCHed (via
   `AgentsService.amendMandate` or the mandate-owner key), or those agents can never enroll.
+- The phone pins that descriptor too, by hash (`BLOB` in `apps/mobile/src/agents/approval.ts`,
+  SEN-142), along with every ABI a policy rule carries. Changing the constant fails
+  `approval.test.ts` until the hash follows it, and an app build without the new hash refuses to
+  sign amends and revokes that carry the new shape — ship the app with the constant.
 - A probe that signs only our own constant proves nothing about the live shape (SEN-3 missed this
   for exactly that reason); the SEN-6 live script signs the payload Perpl actually serves.
 
