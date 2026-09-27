@@ -36,6 +36,7 @@ import { reactNativeWebAuthnClient } from '@category-labs/mera/react-native-weba
 import { toViemAccount } from '@category-labs/mera/viem';
 import type { Address, LocalAccount } from 'viem';
 
+import { RP_ID } from './constants';
 import { deriveDeviceKey, deriveEvmKey, prfSaltFor, zeroize } from './derive';
 import {
   devicePublicKeySpki,
@@ -43,14 +44,9 @@ import {
   type AuthorizationPayload,
 } from './deviceKey';
 
-/**
- * The WebAuthn relying-party ID. PERMANENT — see CLAUDE.md.
- *
- * This is not configurable and must never be read from the environment. It is
- * an input to the PRF, and therefore to every user's wallet address: change it
- * and every existing account becomes unreachable rather than migrated.
- */
-export const RP_ID = 'sente.lol';
+// PERMANENT (CLAUDE.md). Defined in the React-Native-free `./constants` so a
+// node test can pin it (SEN-138); re-exported so every existing import holds.
+export { RP_ID };
 
 /** Name the authenticator shows in its UI. Cosmetic; safe to change. */
 export const RP_NAME = 'Sente';
