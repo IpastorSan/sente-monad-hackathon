@@ -174,6 +174,20 @@ export interface TradeCapabilitiesDto {
   venues: { kuru: boolean; perpl: boolean };
 }
 
+/**
+ * `GET /trade/perpl/account` (SEN-99): what onboarding still needs. Amounts
+ * are AUSD atoms. `apiKey` and `readKey: 'linked'` arrive with enrollment
+ * (M-T18); until then the key is always `'unlinked'`.
+ */
+export interface PerplAccountDto {
+  accountId: string | null;
+  /** Known to be on. False also when unknown: re-allowing it is harmless. */
+  forwarding: boolean;
+  minOpenAtoms: string;
+  apiKey?: string;
+  readKey: 'linked' | 'unlinked';
+}
+
 export interface PreparedStepDto {
   index: number;
   kind: StepKind;

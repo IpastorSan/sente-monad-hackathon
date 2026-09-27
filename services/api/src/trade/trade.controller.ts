@@ -20,6 +20,7 @@ import {
   ListTradesQueryDto,
   TradeIdParamDto,
   TradeIntentDto,
+  type PerplAccountDto,
   type PreparedTradeDto,
   type TradeCapabilitiesDto,
   type TradeViewDto,
@@ -68,6 +69,16 @@ export class TradeController {
   @Get('capabilities')
   capabilities(): TradeCapabilitiesDto {
     return this.trades.capabilities();
+  }
+
+  /**
+   * The caller's Perpl account and what onboarding still needs (SEN-99).
+   * Declared before `:tradeId`, like `capabilities`, so `perpl` is not an id.
+   */
+  @Get('perpl/account')
+  @UseGuards(TradingEnabledGuard)
+  async perplAccount(): Promise<PerplAccountDto> {
+    return this.guard(() => this.trades.perplAccount(this.auth.principal()));
   }
 
   /** Composes the trade's steps for the device key. Sends nothing. */

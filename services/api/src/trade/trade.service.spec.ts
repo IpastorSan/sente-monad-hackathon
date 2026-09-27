@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { HttpException, Logger } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
-import { getAddress, type Hash, type Hex, type PublicClient } from 'viem';
+import {
+  ContractFunctionRevertedError,
+  getAddress,
+  type Hash,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 import type { UserOperationReceipt } from 'viem/account-abstraction';
 
 import { PrivyClient } from '../agents/privy/privy.client';
@@ -15,6 +21,12 @@ import { WalletRefusedError } from '../wallet/wallet.errors';
 import { CommitTradeDto, TradeIntentDto } from './dto/trade.dto';
 import { KuruPlanRefusedError, planKuru, type KuruPlan } from './kuru-planner';
 import type { TradeOutcomes } from './outcome';
+import {
+  PerplPlanRefusedError,
+  planPerplOnboard,
+  type PerplPlan,
+  type PerplPlanRefusalReason,
+} from './perpl-planner';
 import type { StepExecutor } from './step-executor';
 import { TRADE_CHAIN_ID, type TradeConfig } from './trade.config';
 import { TradingEnabledGuard } from './trade.controller';
@@ -35,6 +47,39 @@ jest.mock('./kuru-planner', () => {
   return { ...actual, planKuru: jest.fn() };
 });
 const planKuruMock = planKuru as jest.MockedFunction<typeof planKuru>;
+jest.mock('./perpl-planner', () => {
+  const actual: Record<string, unknown> = jest.requireActual('./perpl-planner');
+  return { ...actual, planPerplOnboard: jest.fn() };
+});
+const planPerplMock = planPerplOnboard as jest.MockedFunction<typeof planPerplOnboard>;
+
+const EXCHANGE = '0x1964C32f0bE608E7D29302AFF5E61268E72080cc';
+const AUSD = '0xa9012a055bd4e0eDfF8Ce09f960291C09D5322dC';
+/** The slice of the live testnet `/pub/context` onboarding reads. */
+const PERPL_CONTEXT_FIXTURE = {
+  chain: { chain_id: 10143 },
+  instances: [
+    {
+      id: 12,
+      address: EXCHANGE.toLowerCase(),
+      collateral_token_id: 1,
+      min_account_open_amount: '100000000',
+      min_deposit_amount: '10000000',
+      min_withdraw_amount: '10000',
+    },
+  ],
+  tokens: [
+    { id: 1, address: AUSD, symbol: 'AUSD', name: 'AUSD', decimals: 6, display_precision: 2 },
+  ],
+  markets: [],
+};
+
+const PERPL_THREE_STEPS: PerplPlan = {
+  steps: (['perpl.approve', 'perpl.createAccount', 'perpl.allowForwarding'] as const).map(
+    (kind) => ({ kind, title: kind, calls: [], transaction: { to: EXCHANGE, data: '0x01' } }),
+  ),
+  summary: { venue: 'perpl' },
+};
 
 beforeAll(() => Logger.overrideLogger(false));
 
@@ -97,6 +142,15 @@ function intent(fields: Record<string, unknown> = {}): TradeIntentDto {
   return plainToInstance(TradeIntentDto, { ...PLACE, ...fields });
 }
 
+function onboardIntent(fields: Record<string, unknown> = {}): TradeIntentDto {
+  return plainToInstance(TradeIntentDto, {
+    kind: 'perpl.onboard',
+    clientTradeId: CLIENT_ID,
+    amountAtoms: '100000000',
+    ...fields,
+  });
+}
+
 function hash(n: number): Hash {
   return `0x${n.toString(16).padStart(64, '0')}`;
 }
@@ -121,6 +175,12 @@ function harness(config: Partial<TradeConfig> = {}) {
   const txReceipt = jest.fn<Promise<unknown>, [{ hash: Hash }]>(() =>
     Promise.reject(new Error('not found')),
   );
+  // `getAccountByAddr`: the account tuple, or a revert for none (the default).
+  const readContract = jest.fn<Promise<unknown>, [unknown]>(() =>
+    Promise.reject(
+      new ContractFunctionRevertedError({ abi: [], functionName: 'getAccountByAddr' }),
+    ),
+  );
   const bindings = new Map([[ALICE.userId, BINDING]]);
   const service = new FixedClockTradeService(
     { enabled: true, atomicBatch: false, chainId: TRADE_CHAIN_ID, ...config },
@@ -131,10 +191,11 @@ function harness(config: Partial<TradeConfig> = {}) {
     new PrivyUserWalletProvider(new PrivyClient({ appId: 'app-id', appSecret: 'secret' })),
     { find: (userId: string) => Promise.resolve(bindings.get(userId)) },
     { receipt } as Pick<Bundler, 'receipt'>,
-    { getTransactionReceipt: txReceipt } as unknown as PublicClient,
+    { getTransactionReceipt: txReceipt, readContract } as unknown as PublicClient,
     { placeResult } as unknown as TradeOutcomes,
+    () => Promise.resolve(PERPL_CONTEXT_FIXTURE),
   );
-  return { service, store, execute, receipt, placeResult, txReceipt };
+  return { service, store, execute, receipt, placeResult, txReceipt, readContract };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -152,6 +213,8 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
 beforeEach(() => {
   planKuruMock.mockReset();
   planKuruMock.mockResolvedValue(THREE_STEPS);
+  planPerplMock.mockReset();
+  planPerplMock.mockResolvedValue(PERPL_THREE_STEPS);
 });
 
 describe('TradeService.prepare', () => {
@@ -243,16 +306,56 @@ describe('TradeService.prepare', () => {
     expect(await refusal(service.prepare(BOB, intent()))).toBe('account_not_registered');
   });
 
-  it('refuses perpl.onboard with not_supported_yet', async () => {
+  it('plans perpl.onboard with the live context, forwarding unknown', async () => {
     const { service } = harness();
-    const onboard = plainToInstance(TradeIntentDto, {
-      kind: 'perpl.onboard',
-      clientTradeId: CLIENT_ID,
-      amountAtoms: '100000000',
-    });
-    expect(await refusal(service.prepare(ALICE, onboard))).toBe('not_supported_yet');
+    const prepared = await service.prepare(ALICE, onboardIntent());
     expect(planKuruMock).not.toHaveBeenCalled();
+    expect(planPerplMock).toHaveBeenCalledWith(
+      { kind: 'perpl.onboard', clientTradeId: CLIENT_ID, amountAtoms: '100000000' },
+      expect.objectContaining({
+        wallet: ADDRESS,
+        atomicBatch: false,
+        context: PERPL_CONTEXT_FIXTURE,
+        forwarding: null,
+      }),
+    );
+    expect(prepared.steps.map((s) => [s.index, s.kind])).toEqual([
+      [0, 'perpl.approve'],
+      [1, 'perpl.createAccount'],
+      [2, 'perpl.allowForwarding'],
+    ]);
+    expect(prepared.steps[2]!.payload.headers['privy-idempotency-key']).toBe(
+      tradeIdempotencyKey(CLIENT_ID, 2),
+    );
   });
+
+  it('plans with forwarding on once an onboarding of its own completed', async () => {
+    const { service, store } = harness();
+    const first = await service.prepare(ALICE, onboardIntent());
+    store.claimForCommit(ALICE.userId, first.tradeId, T0);
+    store.update(first.tradeId, { status: 'completed' });
+    await service.prepare(ALICE, onboardIntent({ clientTradeId: CLIENT_ID.replace('0b', '1c') }));
+    expect(planPerplMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ forwarding: true }),
+    );
+  });
+
+  it.each([
+    ['below_min_account_open', 422],
+    ['perpl_already_onboarded', 409],
+    ['insufficient_balance', 422],
+  ] as const)(
+    'maps the Perpl planner refusal %s to HTTP %i',
+    async (reason: PerplPlanRefusalReason, status) => {
+      const { service } = harness();
+      planPerplMock.mockRejectedValue(new PerplPlanRefusedError(reason, 'no'));
+      const error = await service.prepare(ALICE, onboardIntent()).catch((e: unknown) => e);
+      const http = tradeRefusalToHttpException(error) as HttpException;
+      expect(http.getStatus()).toBe(status);
+      expect(http.getResponse()).toMatchObject({ reason });
+    },
+  );
 
   it.each([
     ['below_min_notional', 422],
@@ -495,6 +598,38 @@ describe('TradeService — reconcile on read', () => {
     store.claimForCommit(ALICE.userId, first.tradeId, T0);
     store.update(first.tradeId, { status: 'completed' });
     expect((await service.prepare(ALICE, intent())).summary).toEqual(first.summary);
+  });
+});
+
+describe('TradeService.perplAccount', () => {
+  it('reports no account, the live minimum and an unlinked read key', async () => {
+    const { service } = harness();
+    expect(await service.perplAccount(ALICE)).toEqual({
+      accountId: null,
+      forwarding: false,
+      minOpenAtoms: '100000000',
+      readKey: 'unlinked',
+    });
+  });
+
+  it('reports an open account, forwarding on only after its own onboarding', async () => {
+    const { service, store, readContract } = harness();
+    readContract.mockResolvedValue({ accountId: 493n, balanceCNS: 0n, lockedBalanceCNS: 0n });
+    expect(await service.perplAccount(ALICE)).toMatchObject({
+      accountId: '493',
+      forwarding: false,
+    });
+
+    const onboard = await service.prepare(ALICE, onboardIntent());
+    store.claimForCommit(ALICE.userId, onboard.tradeId, T0);
+    store.update(onboard.tradeId, { status: 'completed' });
+    expect(await service.perplAccount(ALICE)).toMatchObject({ accountId: '493', forwarding: true });
+  });
+
+  it('refuses a user with no wallet and answers 404 with the flag off', async () => {
+    expect(await refusal(harness().service.perplAccount(BOB))).toBe('account_not_registered');
+    const off = harness({ enabled: false }).service;
+    expect(await refusal(off.perplAccount(ALICE))).toBe('trading_disabled');
   });
 });
 

@@ -11,6 +11,7 @@ import { SEND_SPACER } from '../wallet/user-wallet.service';
 import { WALLET_CONFIG, type WalletConfig } from '../wallet/wallet.config';
 import { MONAD_PUBLIC_CLIENT, WalletModule } from '../wallet/wallet.module';
 import { TradeOutcomes } from './outcome';
+import { cachedPerplContext, PERPL_CONTEXT } from './perpl-context';
 import { StepExecutor } from './step-executor';
 import { loadTradeConfig, TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeController, TradingEnabledGuard } from './trade.controller';
@@ -96,6 +97,8 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
     { provide: TradeStore, useFactory: () => new TradeStore() },
     outcomesProvider,
     stepExecutorProvider,
+    // Perpl's live context for onboarding (SEN-99); one cache for the process.
+    { provide: PERPL_CONTEXT, useFactory: () => cachedPerplContext() },
   ],
   exports: [TRADE_CONFIG, TradeStore, StepExecutor, TradeService],
 })
