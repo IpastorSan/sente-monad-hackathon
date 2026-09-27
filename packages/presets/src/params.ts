@@ -110,10 +110,38 @@ function checkOneMarket(spec: MarketParamSpec, value: unknown): string | undefin
   return ok ? undefined : `${value} is not a ${spec.venue === 'any' ? '' : `${spec.venue} `}market`;
 }
 
-/** Tolerant to binary fractions: 0.1 steps from 0.5 must accept 1.5. */
+/**
+ * Whether `value` sits on the `min + k·step` grid, decided in integers.
+ *
+ * Dividing floats (`(value - min) / step`) broke for fine steps: with a step of
+ * 0.000001 a price like 4000 is four billion steps, where float error is far
+ * above any fixed tolerance, so ordinary values (12.5, 4000, most whole numbers
+ * near 2750) were refused and Guardian could not be hired on WETH or cbBTC.
+ * Scaling everything by the step's own decimal places turns the question into
+ * integer divisibility, exact at any magnitude. A value with more decimals than
+ * the step is off the grid by construction.
+ */
 function onStep(value: number, min: number, step: number): boolean {
-  const steps = (value - min) / step;
-  return Math.abs(steps - Math.round(steps)) < 1e-9;
+  const places = decimalPlaces(step);
+  const scaled = (n: number): bigint | undefined => {
+    const x = n * 10 ** places;
+    const rounded = Math.round(x);
+    // Float noise from the scaling itself is tiny relative to x; anything
+    // larger means the value has more decimals than the step allows.
+    return Math.abs(x - rounded) <= 1e-9 * Math.max(1, Math.abs(x)) ? BigInt(rounded) : undefined;
+  };
+  const v = scaled(value);
+  const m = scaled(min);
+  const s = scaled(step);
+  if (v === undefined || m === undefined || s === undefined || s === 0n) return false;
+  return (v - m) % s === 0n;
+}
+
+/** Decimal places of a step as written: 0.25 → 2, 1e-6 → 6, 5 → 0. */
+function decimalPlaces(n: number): number {
+  const [mantissa = '', exponent] = String(n).toLowerCase().split('e');
+  const fraction = mantissa.split('.')[1]?.length ?? 0;
+  return Math.max(0, fraction - (exponent ? Number(exponent) : 0));
 }
 
 /**

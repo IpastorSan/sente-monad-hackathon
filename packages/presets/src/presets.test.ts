@@ -237,6 +237,21 @@ describe('resolveParams', () => {
     assert.ok(resolveParams(def, { entryBand: 0.7, target: 1.5 }).ok);
   });
 
+  // SEN-116 found fine steps refusing plain prices: with a 0.000001 step, 4000
+  // is 4e9 steps and float division drifts past any fixed tolerance.
+  it('keeps fine steps exact at large magnitudes (Guardian on WETH / cbBTC)', () => {
+    const guardian = getPreset('guardian');
+    assert.ok(guardian);
+    const fine = guardian.params.find((p) => p.type === 'number' && p.step < 0.001);
+    assert.ok(fine && fine.type === 'number', 'guardian has a fine-step number param');
+    for (const value of [12.5, 4000, 2701, 2750, 2799, 64210.123456]) {
+      if (value < fine.min || value > fine.max) continue;
+      const result = resolveParams(guardian, { [fine.key]: value });
+      const keyErrors = result.ok ? [] : result.errors.filter((e) => e.key === fine.key);
+      assert.deepEqual(keyErrors, [], `${value} should be on a ${fine.step} step`);
+    }
+  });
+
   it('runs a preset’s cross-field rule after the per-key checks', () => {
     assert.deepEqual(renderPreset('guardian', { sellAbove: 0.01, sellBelow: 0.02 }), {
       ok: false,
