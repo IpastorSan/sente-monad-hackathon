@@ -27,7 +27,13 @@ export type SenteRefusalCode =
    */
   | 'insufficient_balance'
   /** Venue pre-flight (SEN-19): below Kuru's minimum order notional for the market. */
-  | 'below_min_notional';
+  | 'below_min_notional'
+  /**
+   * SEN-133: a sell with no real price to value it at (empty book, no mark).
+   * Its floor is the agent's own number, so valuing at it would let the agent
+   * dump a balance past the notional cap at a near-zero floor.
+   */
+  | 'unpriced_sell';
 
 /** A refusal by Sente's own gate. The message is model-facing. */
 export class SenteRefusal extends Error {
