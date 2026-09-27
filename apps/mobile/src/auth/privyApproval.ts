@@ -30,7 +30,12 @@ export const ALLOWED_HEADERS = ['privy-app-id', 'privy-idempotency-key'];
 /** `ok` or a sentence a person can act on. Never "invalid". */
 export type VerifyResult = { ok: true } | { ok: false; problem: string };
 
-export const refuse = (problem: string): VerifyResult => ({ ok: false, problem });
+// Typed as the refusal branch alone (not `VerifyResult`) so verifiers whose
+// success carries data, like `trade/envelope.ts` (SEN-86), can return it too.
+export const refuse = (problem: string): { ok: false; problem: string } => ({
+  ok: false,
+  problem,
+});
 
 /** Signs one Privy authorization payload with the device key, or `null` when signed out. */
 export type Approver = (payload: AuthorizationPayload) => string;
