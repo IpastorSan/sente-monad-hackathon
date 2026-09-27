@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { parseMandate } from '@sente/mandate';
+import { renderPreset } from '@sente/presets';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
 import { Auth, type Principal } from '../auth/principal';
@@ -977,6 +978,78 @@ describe('AgentsController', () => {
       await expect(
         pipe.transform({ id: '../admin' }, { type: 'param', metatype: AgentIdParamDto }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('hire from a preset (SEN-73)', () => {
+    const create = (value: unknown) =>
+      pipe.transform(value, { type: 'body', metatype: CreateAgentDto }) as Promise<CreateAgentDto>;
+    /** A preset hire: no text of its own. */
+    const presetBody = (preset: unknown) => {
+      const { systemPrompt: _p, strategy: _s, ...rest } = body();
+      return { ...rest, preset };
+    };
+
+    it('hires with the render and answers the preset on the wire', async () => {
+      const { controller } = setup();
+      const { agent } = await controller.hire(
+        await create(presetBody({ id: 'guardian', version: 1, params: {} })),
+      );
+      const rendered = renderPreset('guardian', {});
+      if (!rendered.ok) throw new Error('guardian defaults must render');
+      expect(agent.strategy).toBe(rendered.strategy);
+      expect(agent.systemPrompt).toBe(rendered.systemPrompt);
+      expect(agent.preset).toEqual({
+        id: 'guardian',
+        version: rendered.version,
+        name: 'Guardian',
+        params: rendered.params,
+        customized: false,
+      });
+    });
+
+    it('answers a free-form agent with preset null', async () => {
+      const { controller } = setup();
+      const { agent } = await controller.hire(await create(body()));
+      expect(agent.preset).toBeNull();
+    });
+
+    it('refuses bad params with 400 preset_invalid and the failing keys', async () => {
+      const { controller } = setup();
+      const refused = await httpError(
+        controller.hire(
+          await create(
+            presetBody({ id: 'guardian', params: { sellAbove: 0.01, sellBelow: 0.02 } }),
+          ),
+        ),
+      );
+      expect(refused).toMatchObject({
+        status: 400,
+        body: {
+          reason: 'preset_invalid',
+          errors: [{ key: 'sellBelow', message: 'must be below the sell-above line' }],
+        },
+      });
+      const unknown = await httpError(
+        controller.hire(await create(presetBody({ id: 'moon-bot', params: {} }))),
+      );
+      expect(unknown).toMatchObject({
+        status: 400,
+        body: { reason: 'preset_invalid', errors: [{ key: 'id' }] },
+      });
+    });
+
+    it.each([
+      ['neither preset nor strategy', () => presetBody(undefined)],
+      ['a strategy but no prompt, without a preset', () => body({ systemPrompt: undefined })],
+      ['a preset without params', () => presetBody({ id: 'guardian' })],
+      ['a preset with an extra field', () => presetBody({ id: 'guardian', params: {}, x: 1 })],
+      [
+        'an oversized prompt beside a preset',
+        () => ({ ...presetBody({ id: 'guardian', params: {} }), systemPrompt: 'x'.repeat(8_001) }),
+      ],
+    ])('rejects %s', async (_label, value) => {
+      await expect(create(value())).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });

@@ -10,6 +10,7 @@ import {
   type Mandate,
   type PolicyRule,
 } from '@sente/mandate';
+import { renderPreset } from '@sente/presets';
 import { isAddressEqual, type Address } from 'viem';
 
 import type { Principal } from '../auth/principal';
@@ -38,6 +39,7 @@ import {
   AGENT_STORE,
   type AgentGasFunding,
   type AgentPatch,
+  type AgentPreset,
   type AgentRecord,
   type AgentSchedule,
   type AgentStore,
@@ -48,8 +50,12 @@ import { ALCHEMY_NOTIFY, type AlchemyNotifyAddresses } from '../webhooks/alchemy
 
 export interface HireAgentInput {
   name: string;
-  systemPrompt: string;
-  strategy: string;
+  /** Required without `preset`; with one, absent means the preset's render. */
+  systemPrompt?: string;
+  /** As `systemPrompt`. */
+  strategy?: string;
+  /** Hire from a catalog preset (SEN-73). `renderPreset` validates the params. */
+  preset?: HirePresetInput;
   model: string;
   /** Untrusted; `parseMandate` validates it. */
   mandate: unknown;
@@ -63,6 +69,59 @@ export interface HireAgentInput {
    * `AGENT_SCHEDULE_MIN_SECONDS`.
    */
   schedule?: AgentSchedule;
+}
+
+export interface HirePresetInput {
+  id: string;
+  /** The version the client previewed; a stale one is refused, not re-rendered. */
+  version?: number;
+  /** Untrusted; `renderPreset` validates them. */
+  params: Record<string, unknown>;
+}
+
+/**
+ * A hire's text and preset record. Without a preset, the caller's text as
+ * sent. With one, the render fills whatever the caller left out, and
+ * `customized` says whether what they sent differs from it — compared against
+ * the render rather than trusted from the client, so the flag cannot lie.
+ */
+function resolveHireText(input: HireAgentInput): {
+  systemPrompt: string;
+  strategy: string;
+  preset?: AgentPreset;
+} {
+  if (!input.preset) {
+    if (input.systemPrompt === undefined || input.strategy === undefined) {
+      // The DTO refuses this over HTTP; this guards the service's other callers.
+      throw new Error('a hire without a preset needs both systemPrompt and strategy');
+    }
+    return { systemPrompt: input.systemPrompt, strategy: input.strategy };
+  }
+  const { id, version, params } = input.preset;
+  const rendered = renderPreset(id, params);
+  if (!rendered.ok) {
+    throw new AgentRefusedError(
+      'preset_invalid',
+      `preset ${id} refused: ${rendered.errors.map((e) => `${e.key} ${e.message}`).join('; ')}`,
+      rendered.errors,
+    );
+  }
+  if (version !== undefined && version !== rendered.version) {
+    const message = `preset ${id} is at version ${rendered.version}, not ${version}; reload it`;
+    throw new AgentRefusedError('preset_invalid', message, [{ key: 'version', message }]);
+  }
+  const systemPrompt = input.systemPrompt ?? rendered.systemPrompt;
+  const strategy = input.strategy ?? rendered.strategy;
+  return {
+    systemPrompt,
+    strategy,
+    preset: {
+      id: rendered.id,
+      version: rendered.version,
+      params: { ...rendered.params },
+      customized: systemPrompt !== rendered.systemPrompt || strategy !== rendered.strategy,
+    },
+  };
 }
 
 /**
@@ -266,6 +325,8 @@ export class AgentsService {
         `model is not offered; choose one of ${AGENT_MODELS.join(', ')}`,
       );
     }
+    // Before the mandate, like the model: a local refusal never creates a Privy object.
+    const text = resolveHireText(input);
     const mandate = await this.parseFor(principal, input.mandate);
     const rules = compileMandate(mandate);
     const id = randomUUID();
@@ -277,8 +338,9 @@ export class AgentsService {
       id,
       userId: principal.userId,
       name: input.name,
-      systemPrompt: input.systemPrompt,
-      strategy: input.strategy,
+      systemPrompt: text.systemPrompt,
+      strategy: text.strategy,
+      ...(text.preset ? { preset: text.preset } : {}),
       model: input.model,
       mandate,
       walletId: wallet.walletId,
@@ -346,12 +408,13 @@ export class AgentsService {
 
     const mcpToken = generateMcpToken();
     const now = new Date();
+    const systemPrompt = source.public ? source.systemPrompt : '';
     const agent: AgentRecord = {
       id,
       userId: principal.userId,
       name:
         input.name !== undefined ? clampAgentName(input.name, source.name) : forkName(source.name),
-      systemPrompt: source.public ? source.systemPrompt : '',
+      systemPrompt,
       strategy: source.strategy,
       model: source.model,
       mandate,
@@ -365,6 +428,16 @@ export class AgentsService {
       // The fork inherits the strategy, never the source's sharing choice.
       public: false,
       forkedFrom: source.id,
+      // The fork runs the same preset (SEN-73), but a withheld prompt means it
+      // is not running the preset's text, so its results are not the preset's.
+      ...(source.preset
+        ? {
+            preset: {
+              ...source.preset,
+              customized: source.preset.customized || systemPrompt !== source.systemPrompt,
+            },
+          }
+        : {}),
       // No `schedule` (SEN-67): every scheduled run spends the FORKER's credits,
       // so the cadence is theirs to opt into, never the source's to impose.
       createdAt: now,

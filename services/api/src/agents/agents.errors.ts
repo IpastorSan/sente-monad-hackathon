@@ -86,6 +86,12 @@ export const AGENT_REFUSAL_REASONS = [
   'mandate_invalid',
   /** The model is not in `AGENT_MODELS`. */
   'model_not_allowed',
+  /**
+   * A hire's `preset` names no catalog preset, a version the catalog no longer
+   * renders, or params it refuses (SEN-73). The body's `errors` lists each
+   * failing key, so the app can mark the field rather than show one message.
+   */
+  'preset_invalid',
   /** The agent is revoked. Revocation is permanent; hire a new agent. */
   'agent_revoked',
   /** The wallet provider failed to create the wallet or its policy. Nothing was stored. */
@@ -172,12 +178,21 @@ export type AgentRefusalReason = (typeof AGENT_REFUSAL_REASONS)[number];
  */
 export class AgentRefusedError extends Error {
   readonly reason: AgentRefusalReason;
+  /** Per-field detail, for refusals that have it (`preset_invalid`, SEN-73). */
+  readonly errors: readonly AgentFieldError[] | undefined;
 
-  constructor(reason: AgentRefusalReason, message: string) {
+  constructor(reason: AgentRefusalReason, message: string, errors?: readonly AgentFieldError[]) {
     super(message);
     this.name = 'AgentRefusedError';
     this.reason = reason;
+    this.errors = errors;
   }
+}
+
+/** One refused field: the param key (or `id`/`version`) and why. */
+export interface AgentFieldError {
+  key: string;
+  message: string;
 }
 
 /** Every reason an agents route answers with: the refusals above plus the two wallet errors. */
@@ -191,6 +206,7 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   agent_not_found: 404,
   mandate_invalid: 400,
   model_not_allowed: 400,
+  preset_invalid: 400,
   // 409: the request is well-formed; the agent's state forbids it, for good.
   agent_revoked: 409,
   wallet_provision_failed: 502,
@@ -236,6 +252,8 @@ export interface AgentErrorBody {
   statusCode: number;
   reason: AgentErrorReason;
   message: string;
+  /** Only on refusals with per-field detail, e.g. `preset_invalid`. */
+  errors?: AgentFieldError[];
 }
 
 /**
@@ -255,5 +273,8 @@ export function agentErrorToHttpBody(error: unknown): AgentErrorBody | undefined
     statusCode: agentErrorStatus(error.reason),
     reason: error.reason,
     message: error.message,
+    ...(error instanceof AgentRefusedError && error.errors
+      ? { errors: error.errors.map((e) => ({ key: e.key, message: e.message })) }
+      : {}),
   };
 }

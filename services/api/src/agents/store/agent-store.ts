@@ -1,4 +1,5 @@
 import type { Mandate } from '@sente/mandate';
+import type { ParamValue } from '@sente/presets';
 import type { Address, Hash } from 'viem';
 
 import type { AgentDripRefusalReason } from '../../gas/gas.errors';
@@ -134,6 +135,26 @@ export interface AgentRecord {
    * and `AGENT_SCHEDULE_MAX_SECONDS`, which the DTO enforces.
    */
   readonly schedule?: AgentSchedule;
+  /**
+   * The preset this agent was hired from (SEN-73), if any. Absent for a
+   * free-form hire. Recorded so the preset's cohort stats can find its agents,
+   * and so the app can say "Guardian, customised" rather than guess from text.
+   */
+  readonly preset?: AgentPreset;
+}
+
+export interface AgentPreset {
+  readonly id: string;
+  /** The catalog version the text was rendered from; a later bump does not rewrite this agent. */
+  readonly version: number;
+  /** Resolved params, defaults filled in: what the render actually used. */
+  readonly params: Record<string, ParamValue>;
+  /**
+   * Whether the agent's strategy or system prompt differs from the preset's
+   * render of `params`. A customised agent still counts in the preset's
+   * cohort, but its results are not the preset's alone.
+   */
+  readonly customized: boolean;
 }
 
 /** Bounds of `AgentSchedule.everySeconds`: once a minute to once a day (SEN-67). */
