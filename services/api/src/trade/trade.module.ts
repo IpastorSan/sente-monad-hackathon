@@ -1,5 +1,7 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
+import { Auth, RequestContextAuth } from '../auth/principal';
+import { SessionAuthGuard } from '../auth/session-auth.guard';
 import type { WriteSpacer } from '../spacing/write-spacer';
 import { BUNDLER, type Bundler } from '../wallet/bundler/bundler';
 import { USER_WALLETS, type UserWalletProvider } from '../wallet/user-wallet.provider';
@@ -8,6 +10,8 @@ import { WALLET_CONFIG, type WalletConfig } from '../wallet/wallet.config';
 import { WalletModule } from '../wallet/wallet.module';
 import { StepExecutor } from './step-executor';
 import { loadTradeConfig, TRADE_CONFIG, type TradeConfig } from './trade.config';
+import { TradeController, TradingEnabledGuard } from './trade.controller';
+import { TradeService } from './trade.service';
 import { TradeStore } from './trade-store';
 
 const configProvider: Provider = {
@@ -48,20 +52,31 @@ const stepExecutorProvider: Provider = {
 };
 
 /**
+ * AUTH: the same seam `wallet/` and `agents/` use — `Auth` reads back the
+ * principal `SessionAuthGuard` verified for this request.
+ */
+const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
+
+/**
  * The user's own manual trades (SEN-83, plan M-T1): the feature flag, the
- * in-memory trade store and the step executor. No controller yet — the routes,
- * and the `trading_disabled` 404 they answer with the flag off, are M-T14.
+ * in-memory trade store and the step executor, and since SEN-96 (M-T14) the
+ * `/trade` routes, which answer 404 `trading_disabled` with the flag off.
  *
  * TradeStore is a plain class provided as a singleton for the same reason the
  * executor is: prepare and commit must see the same trades.
  */
 @Module({
   imports: [WalletModule],
+  controllers: [TradeController],
   providers: [
     configProvider,
+    authProvider,
+    SessionAuthGuard,
+    TradingEnabledGuard,
+    TradeService,
     { provide: TradeStore, useFactory: () => new TradeStore() },
     stepExecutorProvider,
   ],
-  exports: [TRADE_CONFIG, TradeStore, StepExecutor],
+  exports: [TRADE_CONFIG, TradeStore, StepExecutor, TradeService],
 })
 export class TradeModule {}
