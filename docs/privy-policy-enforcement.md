@@ -720,6 +720,58 @@ never open the app to stay unable to enroll. `AGENT_MANDATE_OWNER=server` agents
 are still re-PATCHable with `PRIVY_MANDATE_OWNER_KEY`
 (`scripts/migrate-agent-wallets.ts`).
 
+## Value is pinned on every transaction rule (SEN-146)
+
+Until SEN-146 only the native-MON deposit named `ethereum_transaction.value`
+(`lte` its cap). Every other ALLOW rule — the ERC-20 approves and deposits to
+AccountCore, the OrderBook `batch` rules, Perpl's approve / `createAccount` /
+`allowOrderForwarding`, and the two recovery rules — said nothing about value,
+so the enclave would sign any of them with the wallet's MON riding along, to a
+contract the mandate never meant to pay. The SEN-134 property suite found it.
+
+Now every `eth_signTransaction` rule carries exactly one value condition, added
+by the rule builders in `packages/mandate/src/policy.ts` so a new rule cannot
+leave it out:
+
+```json
+{ "field_source": "ethereum_transaction", "field": "value", "operator": "lte", "value": "0x0" }
+```
+
+`lte 0x0` rather than `eq`: it is the field and operator the native deposit
+already used (`lte <cap>`), a shape Privy has accepted on every hire since
+SEN-3, and for an unsigned field it means exactly zero. The native deposit rule
+is unchanged, byte for byte. The typed-data enrollment rule has no transaction
+and so no value.
+
+**Unmeasured:** how Privy evaluates a value condition against a request with no
+`value` key at all. The API used to omit `value` when it was zero, so
+`privyTransaction` now always sends it (`0x0` when the call carries no MON), and
+the fake enclave refuses a value condition on a request without one, so a caller
+that drops it goes red in the specs rather than on chain. The next live run on
+10143 should confirm that an ordinary approve still signs.
+
+**Existing agents keep their old, unpinned policy** until it is re-PATCHed — the
+gotcha 13 pattern, with the same owner split:
+
+- `ownerKind: 'server'` agents: amend them with the mandate they already have
+  (`PATCH /agents/:id/mandate`, `AgentsService.amendMandate`), which recompiles.
+  `agent-venues-live` and `agent-run-live` re-PATCH their wallets on every run
+  anyway.
+- `ownerKind: 'device'` agents: the owner approves an amend from the phone, **on
+  an app build that carries this change**. The phone's mirror
+  (`expectedPolicyRules` in `apps/mobile/src/agents/approval.ts`) now expects the
+  value pin on every rule and an older build expects it absent, so an older build
+  refuses both the amends and the revokes the new API composes — fail closed, as
+  with a drifted blob hash. Ship the app with the API. The pinned blob hashes
+  (SEN-142) did not change: a value condition carries no ABI.
+- Already-revoked agents cannot be amended, and a cleared revoke does not run
+  again, so their recovery rules stay unpinned unless someone PATCHes them by
+  hand with the mandate-owner key. Those rules reach only `AccountCore.withdraw`
+  and the ERC-20 `transfer`s to `returnTo`.
+
+There is no bulk re-PATCH path: nothing lists every policy (`GET /v1/policies`
+answers 405), and a device-owned one needs its owner's phone.
+
 ## Recipient pinning (SEN-15)
 
 Two rules that move money out of the agent's hands, each pinned to one

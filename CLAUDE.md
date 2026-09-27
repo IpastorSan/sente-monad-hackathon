@@ -466,6 +466,13 @@ correctly against a stale constant. Consequences:
   constant first.
 - After changing the constant, every existing agent policy must be re-PATCHed (via
   `AgentsService.amendMandate` or the mandate-owner key), or those agents can never enroll.
+- The same holds for ANY change to what `compileMandate` emits: a live policy is whatever was last
+  PATCHed, never the current compiler. SEN-146 (every transaction rule now pins `value lte 0x0`,
+  the native deposit `lte cap`) is the worked example: a server-owned agent is fixed by amending
+  it with its own mandate; a device-owned one only when its owner approves an amend on an app build
+  whose `expectedPolicyRules` mirror matches (an older build refuses the new rules, amends and
+  revokes alike); an already-revoked one only by hand with the owner key. There is no bulk path —
+  see "Value is pinned" in `docs/privy-policy-enforcement.md`.
 - The phone pins that descriptor too, by hash (`BLOB` in `apps/mobile/src/agents/approval.ts`,
   SEN-142), along with every ABI a policy rule carries. Changing the constant fails
   `approval.test.ts` until the hash follows it, and an app build without the new hash refuses to

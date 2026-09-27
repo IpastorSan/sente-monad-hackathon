@@ -167,7 +167,7 @@ test('Kuru withdraw: AccountCore.withdraw only, which pays the signer and names 
     fn.abi.map((e) => (e.type === 'function' ? e.name : e.type)),
     ['withdraw'],
   );
-  assert.equal(withdraw.conditions.length, 3); // chain, to, function — nothing else
+  assert.equal(withdraw.conditions.length, 4); // chain, to, function, value 0 (SEN-146) — nothing else
 
   const own = withdrawCall(accountCore, KURU_TESTNET_TOKENS.USDC, 14_000_000n);
   assert.deepEqual(decode(KURU_ACCOUNT_CORE_WITHDRAW_ABI, own.data).args, [USDC, 14_000_000n]);
@@ -213,7 +213,7 @@ test('return to owner: one transfer rule per token, transfer.to pinned to return
   for (const r of rules) {
     assert.equal(find(r, 'ethereum_calldata', 'transfer.to')?.value, OWNER, r.name);
     assert.equal(find(r, 'ethereum_calldata', 'transfer.to')?.operator, 'eq', r.name);
-    assert.equal(r.conditions.length, 3, r.name); // chain, to (the token), transfer.to
+    assert.equal(r.conditions.length, 4, r.name); // chain, to (the token), transfer.to, value 0 (SEN-146)
   }
 
   const call = erc20TransferCall(USDC, OWNER, 14_000_000n);
@@ -325,6 +325,28 @@ test('Kuru funding: approve AccountCore and deposit, both capped; native MON by 
   assert.ok(!rules.some((r) => toOf(r) === MON));
   const mon = rules.find((r) => r.name === 'Kuru: deposit MON')!;
   assert.equal(find(mon, 'ethereum_transaction', 'value')?.value, '0x4563918244f40000'); // 5e18
+});
+
+// SEN-146: before this, only the native deposit named `value`, so an approve,
+// a `batch` or a return transfer carrying the wallet's MON was signed too.
+test('every transaction rule pins value: the native deposit to its cap, everything else to 0', () => {
+  const mandate = demoMandate({ returnTo: OWNER });
+  for (const rules of [compileMandate(mandate), compileRevocationRules(mandate)]) {
+    const txRules = rules.filter((r) => r.method === 'eth_signTransaction');
+    assert.ok(txRules.length > 0);
+    for (const r of txRules) {
+      const values = r.conditions.filter(
+        (c) => c.field_source === 'ethereum_transaction' && c.field === 'value',
+      );
+      assert.equal(values.length, 1, `${r.name} pins value exactly once`);
+      const expected = r.name === 'Kuru: deposit MON' ? '0x4563918244f40000' : '0x0';
+      assert.deepEqual(
+        { operator: values[0]!.operator, value: values[0]!.value },
+        { operator: 'lte', value: expected },
+        r.name,
+      );
+    }
+  }
 });
 
 test('Perpl: AUSD approve to the Exchange, createAccount and forwarding, plus API-key enrollment', () => {

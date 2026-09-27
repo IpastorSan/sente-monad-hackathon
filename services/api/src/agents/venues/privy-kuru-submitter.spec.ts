@@ -179,8 +179,10 @@ describe('PrivyKuruSubmitter', () => {
       expect(tx.max_fee_per_gas).toBe(`0x${FEES.maxFeePerGas.toString(16)}`);
       expect(tx.max_priority_fee_per_gas).toBe(`0x${FEES.maxPriorityFeePerGas.toString(16)}`);
     }
-    // A zero-value call carries no value; the native deposit carries it as hex.
-    expect('value' in h.signed[0]!.tx).toBe(false);
+    // A zero-value call still names its value, as 0x0 (SEN-146): every policy
+    // rule bounds it, and a request without one is not something to leave to
+    // Privy. The native deposit carries its amount as hex.
+    expect(h.signed[0]!.tx.value).toBe('0x0');
     expect(h.signed[2]!.tx.value).toBe('0xde0b6b3a7640000');
   });
 
