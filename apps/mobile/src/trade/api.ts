@@ -7,10 +7,11 @@
  * error body surfaced as a typed error. The wire types live in `./types.ts`,
  * shared with the verifiers, so there is one copy of each shape on the phone.
  *
- * `/portfolio` (M-T19) is not built yet. An API without it answers Nest's own
- * 404 with no `reason`, which `isUnavailable` reports so a screen hides the
- * section. A 404 that carries `trading_disabled` or `trade_not_found` is a real
- * answer and stays an error.
+ * `/portfolio` (M-T19, SEN-101) sits behind the same trading flag as `/trade`,
+ * so with it off it answers 404 `trading_disabled`. An older API without the
+ * route answers Nest's own 404 with no `reason`, which `isUnavailable`
+ * reports so a screen hides the section. A 404 that carries
+ * `trading_disabled` or `trade_not_found` is a real answer and stays an error.
  *
  * Perpl enrollment (`perplAccount`, `enrollPrepare`, `enrollCommit`) is left to
  * M-T18 / M-T21b, which build the routes and the phone-side checks together: a
@@ -78,7 +79,8 @@ export type TradeApiOptions = {
   fetchImpl?: typeof fetch;
 };
 
-export type FillsQuery = { venue?: PortfolioVenue; cursor?: string };
+/** `cursor` is the previous page's `next`; `limit` is 1..100 (the API's default is 50). */
+export type FillsQuery = { venue?: PortfolioVenue; cursor?: string; limit?: number };
 
 type Query = Record<string, string | number | undefined>;
 
@@ -125,12 +127,12 @@ export class TradeApi {
     return this.request('GET', '/trade', { query: { limit } });
   }
 
-  /** `GET /portfolio` (M-T19, not built yet: expect `isUnavailable`). */
+  /** `GET /portfolio` (M-T19): wallet, Kuru account and Perpl account, read fresh. */
   portfolio(): Promise<Portfolio> {
     return this.request('GET', '/portfolio');
   }
 
-  /** `GET /portfolio/fills?venue=&cursor=` (M-T19, not built yet: expect `isUnavailable`). */
+  /** `GET /portfolio/fills?venue=&cursor=&limit=` (M-T19): the user's own fills, newest first. */
   fills(query: FillsQuery = {}): Promise<PortfolioFills> {
     return this.request('GET', '/portfolio/fills', { query });
   }
