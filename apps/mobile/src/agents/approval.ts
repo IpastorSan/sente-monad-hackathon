@@ -22,8 +22,9 @@
  * 2. `url` is `https://api.privy.io/v1/policies/<this agent's policyId>`,
  *    character for character. A different policy id would change someone
  *    else's agent; a different host would be a different API.
- * 3. `headers` carries only `privy-app-id` (and, if present, an idempotency
- *    key), because the headers are signed too.
+ * 3. `headers` is an object carrying only `privy-app-id` (and, if present, an
+ *    idempotency key), because the headers are signed too — and the app id is
+ *    a non-empty string, not merely something truthy (SEN-142).
  * 4. `body` has exactly one key, `rules`.
  * 5. For a revoke, `rules` is exactly the mandate's RECOVERY rules and nothing
  *    else (SEN-17): the Kuru withdraw, which pays the agent's own wallet, and one
@@ -44,12 +45,10 @@
  *    wallet as the session registered it with this phone's device key — and the
  *    transfer rules are then built from that address, never from the mandate's
  *    copy. See {@link pinReturnTo}.
- *
- * The comparison ignores each condition's `abi` and `typed_data` blobs, which
- * say how Privy decodes calldata to evaluate a condition. A wrong one can only
- * stop a rule matching, never widen it, and mirroring the ABIs here would mean
- * mirroring Perpl's drifting enrollment struct (CLAUDE.md gotcha 13) on the
- * security path.
+ * 8. Every condition's `abi` or `typed_data` blob is the canonical one (SEN-142):
+ *    its keccak256, over the RFC 8785 form, equals the hash pinned in
+ *    {@link BLOB} for that condition, and a condition that names none carries
+ *    none. See {@link BLOB} for why.
  *
  * ## Why the expected rules are mirrored rather than imported
  *
@@ -71,9 +70,9 @@
  * Plain TS, no React Native: `approval.test.ts` runs under plain node.
  */
 import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
-import { getAddress, isAddressEqual, type Address } from 'viem';
+import { getAddress, isAddressEqual, keccak256, stringToBytes, type Address } from 'viem';
 
-import type { AuthorizationPayload } from '../auth/deviceKey.ts';
+import { canonicalize, type AuthorizationPayload } from '../auth/deviceKey.ts';
 import {
   ALLOWED_HEADERS,
   NoDeviceKeyError,
@@ -121,25 +120,82 @@ const RETURNABLE = [
   getAddress(AUSD.address),
 ];
 
+/**
+ * The decoding blobs a compiled policy carries, pinned by hash (SEN-142).
+ *
+ * A calldata condition is only as good as the ABI Privy decodes it with. The
+ * phone used to compare `function_name eq withdraw` and ignore the `abi` beside
+ * it — but the server writes that ABI, and one naming `withdraw` over the
+ * 4-byte selector of `transferBetweenAccounts` (or any other function) would
+ * make the same condition match a call the user never allowed. Likewise a
+ * `typed_data` descriptor decides which struct `statement` is read out of. So
+ * each blob is checked, not trusted: keccak256 of its canonical JSON must be
+ * exactly the one this table names for that condition.
+ *
+ * Literal hashes rather than the ABIs themselves, because `PERPL_ENROLL_TYPED_DATA`
+ * lives in `@sente/mandate`, which the app does not import at runtime (gotchas
+ * 2 and 10), and a hash is the one form that cannot be half-mirrored.
+ * `approval.test.ts` pins every entry to the real constants through the
+ * compiler; when one changes — Perpl's enrollment struct drifts (gotcha 13) —
+ * that test fails and the hash here must change in the same commit. Until the
+ * app ships it, an old build refuses the new shape: fail closed, by design.
+ */
+const BLOB = {
+  erc20Approve: 'abi:0x490c886ad5215051b719391097d15dd8f2fdfe72ded3158a8de693237aea96bc',
+  erc20Transfer: 'abi:0x59cc12fde94ff40f94cd755f0c06e5724ec762b3ae71e9f62f0c370b60661569',
+  kuruDeposit: 'abi:0x4c3ae6c5cb499c7e14be5485e4c866d5a0cf9fd376d6d417b87b8bee09882c0a',
+  kuruWithdraw: 'abi:0x1f8d34385430b9e8700a82ce0363bf308d2b912ba7d83c2157eaa25ec0b79245',
+  kuruBatch: 'abi:0x52a7f0313269da737b4e09ca73c491c3cdf7b0e95e255446f74c8d6d95e4b3a4',
+  perplExchange: 'abi:0x707f79244b442e26e2ddef60d36184989f95f4438fb3bca7f8b7f403ba2aa6e7',
+  perplEnroll: 'typed_data:0x7686763c1dc183308e3eb0edecd9f61a0e10f57747fb5dab2c77674e9911c575',
+  /** A condition Privy evaluates without decoding anything. */
+  none: '-',
+} as const;
+
+type Blob = (typeof BLOB)[keyof typeof BLOB];
+
+/**
+ * A blob as the fingerprint names it: which key carried it and the hash of its
+ * canonical form. Canonical, so key order and whitespace on the wire cannot
+ * turn the right ABI into a refusal.
+ */
+function blobDigest(key: 'abi' | 'typed_data', blob: unknown): string {
+  return `${key}:${keccak256(stringToBytes(canonicalize(blob)))}`;
+}
+
 /** A non-negative integer as Privy compares it: `0x`, lowercase, unpadded. */
 function hexUint(value: bigint | number): string {
   return `0x${BigInt(value).toString(16)}`;
 }
 
 /**
- * One condition, reduced to what it means. `abi` and `typed_data` are dropped;
- * see the module header.
+ * One condition, reduced to what it means — including, since SEN-142, the
+ * {@link BLOB} it decodes with.
  */
-function condition(source: string, field: string, operator: string, value: string): string {
-  return `${source}|${field}|${operator}|${value}`;
+function condition(
+  source: string,
+  field: string,
+  operator: string,
+  value: string,
+  blob: string = BLOB.none,
+): string {
+  return `${source}|${field}|${operator}|${value}|${blob}`;
+}
+
+/** A fingerprint with every blob dropped: only to word a refusal, never to accept one. */
+function withoutBlobs(fingerprinted: string): string {
+  return fingerprinted
+    .split('&&')
+    .map((c) => c.slice(0, c.lastIndexOf('|')))
+    .join('&&');
 }
 
 const txTo = (address: Address) =>
   condition('ethereum_transaction', 'to', 'eq', getAddress(address));
-const calldataEq = (field: string, value: string) =>
-  condition('ethereum_calldata', field, 'eq', value);
-const calldataLte = (field: string, cap: bigint) =>
-  condition('ethereum_calldata', field, 'lte', hexUint(cap));
+const calldataEq = (abi: Blob, field: string, value: string) =>
+  condition('ethereum_calldata', field, 'eq', value, abi);
+const calldataLte = (abi: Blob, field: string, cap: bigint) =>
+  condition('ethereum_calldata', field, 'lte', hexUint(cap), abi);
 
 /** One rule as this module compares it: a method and an unordered set of conditions. */
 export type ExpectedRule = { method: string; conditions: string[] };
@@ -171,8 +227,8 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
       const token = getAddress(key);
       const deposit = [
         txTo(ACCOUNT_CORE),
-        calldataEq('deposit.token', token),
-        calldataLte('deposit.amount', cap),
+        calldataEq(BLOB.kuruDeposit, 'deposit.token', token),
+        calldataLte(BLOB.kuruDeposit, 'deposit.amount', cap),
       ];
       if (isAddressEqual(token, NATIVE_TOKEN)) {
         // Native MON has no approval: the money is the transaction's value.
@@ -184,16 +240,18 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
       rules.push(
         tx([
           txTo(token),
-          calldataEq('approve.spender', ACCOUNT_CORE),
-          calldataLte('approve.amount', cap),
+          calldataEq(BLOB.erc20Approve, 'approve.spender', ACCOUNT_CORE),
+          calldataLte(BLOB.erc20Approve, 'approve.amount', cap),
         ]),
       );
       rules.push(tx(deposit));
     }
     for (const market of mandate.kuru.markets) {
-      rules.push(tx([txTo(market), calldataEq('function_name', 'batch')]));
+      rules.push(tx([txTo(market), calldataEq(BLOB.kuruBatch, 'function_name', 'batch')]));
     }
-    rules.push(recovery([txTo(ACCOUNT_CORE), calldataEq('function_name', 'withdraw')]));
+    rules.push(
+      recovery([txTo(ACCOUNT_CORE), calldataEq(BLOB.kuruWithdraw, 'function_name', 'withdraw')]),
+    );
   }
 
   if (mandate.venues.includes('perpl')) {
@@ -201,12 +259,16 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
     rules.push(
       tx([
         txTo(COLLATERAL),
-        calldataEq('approve.spender', EXCHANGE),
-        calldataLte('approve.amount', cap),
+        calldataEq(BLOB.erc20Approve, 'approve.spender', EXCHANGE),
+        calldataLte(BLOB.erc20Approve, 'approve.amount', cap),
       ]),
     );
-    rules.push(tx([txTo(EXCHANGE), calldataLte('createAccount.amountCNS', cap)]));
-    rules.push(tx([txTo(EXCHANGE), calldataEq('function_name', 'allowOrderForwarding')]));
+    rules.push(
+      tx([txTo(EXCHANGE), calldataLte(BLOB.perplExchange, 'createAccount.amountCNS', cap)]),
+    );
+    rules.push(
+      tx([txTo(EXCHANGE), calldataEq(BLOB.perplExchange, 'function_name', 'allowOrderForwarding')]),
+    );
     rules.push({
       method: 'eth_signTypedData_v4',
       conditions: [
@@ -220,7 +282,13 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
           'eq',
           ENROLL_VERIFYING_CONTRACT,
         ),
-        condition('ethereum_typed_data_message', 'statement', 'eq', PERPL_ENROLL_STATEMENT),
+        condition(
+          'ethereum_typed_data_message',
+          'statement',
+          'eq',
+          PERPL_ENROLL_STATEMENT,
+          BLOB.perplEnroll,
+        ),
       ],
     });
   }
@@ -252,12 +320,14 @@ function expectedRecoveryRules(
   });
   const rules: ExpectedRule[] = [];
   if (options.withdraw && mandate.venues.includes('kuru')) {
-    rules.push(recovery([txTo(ACCOUNT_CORE), calldataEq('function_name', 'withdraw')]));
+    rules.push(
+      recovery([txTo(ACCOUNT_CORE), calldataEq(BLOB.kuruWithdraw, 'function_name', 'withdraw')]),
+    );
   }
   if (!mandate.returnTo) return rules;
   const owner = getAddress(mandate.returnTo);
   for (const token of RETURNABLE) {
-    rules.push(recovery([txTo(token), calldataEq('transfer.to', owner)]));
+    rules.push(recovery([txTo(token), calldataEq(BLOB.erc20Transfer, 'transfer.to', owner)]));
   }
   return rules;
 }
@@ -354,11 +424,18 @@ export function verifyPolicyPatch(
     return refuse(`it changes ${payload.url}, not this agent's policy`);
   }
 
-  const headers = Object.keys(payload.headers ?? {});
-  const unexpected = headers.filter((name) => !ALLOWED_HEADERS.includes(name));
+  // SEN-142: the payload comes off the wire, so its type is a claim. Headers
+  // that were not an object used to throw here instead of refusing, and any
+  // truthy app id passed; `trade/envelope.ts` already held this line.
+  const headers: unknown = payload.headers;
+  if (typeof headers !== 'object' || headers === null || Array.isArray(headers)) {
+    return refuse('it carries no headers');
+  }
+  const unexpected = Object.keys(headers).filter((name) => !ALLOWED_HEADERS.includes(name));
   if (unexpected.length > 0)
     return refuse(`it carries unexpected headers: ${unexpected.join(', ')}`);
-  if (!payload.headers['privy-app-id']) return refuse('it names no Privy app');
+  const appId = (headers as Record<string, unknown>)['privy-app-id'];
+  if (typeof appId !== 'string' || appId === '') return refuse('it names no Privy app');
 
   const body = payload.body;
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -403,7 +480,17 @@ function compareRules(actual: unknown[], expected: ExpectedRule[]): VerifyResult
     const read = readRule(rule);
     if (!read.ok) return refuse(read.problem);
     const left = remaining.get(read.fingerprint) ?? 0;
-    if (left === 0) return refuse(`it contains a rule this mandate does not: ${read.label}`);
+    if (left === 0) {
+      // SEN-142: a rule that would match but for its ABI or typed data is still
+      // refused; it only gets a sentence that says which part is wrong.
+      const bare = withoutBlobs(read.fingerprint);
+      if (expected.some((rule) => withoutBlobs(fingerprint(rule)) === bare)) {
+        return refuse(
+          `rule “${read.label}” decodes with an ABI or typed data this app does not know`,
+        );
+      }
+      return refuse(`it contains a rule this mandate does not: ${read.label}`);
+    }
     remaining.set(read.fingerprint, left - 1);
   }
   return { ok: true };
@@ -440,7 +527,14 @@ function readRule(value: unknown): ReadRule {
     if (typeof raw !== 'object' || raw === null) {
       return { ok: false, problem: `rule “${label}” has a condition that is not an object` };
     }
-    const { field_source: source, field, operator, value: bound } = raw as Record<string, unknown>;
+    const {
+      field_source: source,
+      field,
+      operator,
+      value: bound,
+      abi,
+      typed_data: typedData,
+    } = raw as Record<string, unknown>;
     if (
       typeof source !== 'string' ||
       typeof field !== 'string' ||
@@ -449,7 +543,23 @@ function readRule(value: unknown): ReadRule {
     ) {
       return { ok: false, problem: `rule “${label}” has a condition this app cannot read` };
     }
-    conditions.push(condition(source, field, operator, bound));
+    // SEN-142: the blob is part of what the condition means, so it goes into
+    // the fingerprint. The compiler never emits both on one condition, nor a
+    // blob that cannot be canonicalized (a float, say), so neither is guessed at.
+    if (abi !== undefined && typedData !== undefined) {
+      return {
+        ok: false,
+        problem: `rule “${label}” has a condition with both an ABI and typed data`,
+      };
+    }
+    let blob: string = BLOB.none;
+    try {
+      if (abi !== undefined) blob = blobDigest('abi', abi);
+      else if (typedData !== undefined) blob = blobDigest('typed_data', typedData);
+    } catch {
+      return { ok: false, problem: `rule “${label}” has a condition this app cannot read` };
+    }
+    conditions.push(condition(source, field, operator, bound, blob));
   }
   // The same fingerprint function as the expected side, so a difference in how
   // the two are reduced can never be mistaken for a difference in the rules.
