@@ -280,6 +280,24 @@ test('an approval to anyone but AccountCore is refused', () => {
   refused({ to: USDC.address, value: 0n, data }, /not Kuru's AccountCore/);
 });
 
+// SEN-132: the zero-amount rules survived mutation testing (test audit
+// 2026-09-27, §2A); a zero leg is signable noise the server never emits.
+test('a zero approve, deposit or withdraw is refused', () => {
+  // Encoded by hand: the `@sente/venues` builders already refuse a zero amount.
+  const zero = (to: Address, functionName: 'approve' | 'deposit' | 'withdraw', value = 0n) => ({
+    to,
+    value,
+    data: encodeFunctionData({
+      abi: KURU_LEG_ABI,
+      functionName,
+      args: [functionName === 'approve' ? ACCOUNT_CORE : USDC.address, 0n],
+    } as never),
+  });
+  refused(zero(USDC.address, 'approve'), /approval is for nothing/);
+  refused(zero(ACCOUNT_CORE, 'deposit'), /deposit is for nothing/);
+  refused(zero(ACCOUNT_CORE, 'withdraw'), /withdrawal is for nothing/);
+});
+
 test('empty calldata is refused', () => {
   refused({ to: USDC.address, value: 0n }, /no function selector/);
 });
