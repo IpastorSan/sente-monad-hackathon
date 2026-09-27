@@ -102,6 +102,19 @@ test('orderUsage reads the largest order against the cap, and says when it is pa
   assert.equal(over.value, '1,480 / 250');
 });
 
+test('orderUsage at exactly the cap is full but not over', () => {
+  // SEN-141: `over` is strictly past the cap. An order of exactly the cap is
+  // allowed by the mandate, so the gauge must not flag it — in any spelling.
+  for (const largest of ['250', '250.00', '0250']) {
+    const reading = orderUsage(summary({ largestOrderNotional: largest }), mandate);
+    assert.equal(reading.used, 1, largest);
+    assert.equal(reading.over, false, largest);
+    assert.equal(reading.value, '250 / 250', largest);
+  }
+  const past = orderUsage(summary({ largestOrderNotional: '250.000001' }), mandate);
+  assert.equal(past.over, true, 'one atom past the cap is over');
+});
+
 test('formatDuration keeps two units at most', () => {
   assert.equal(formatDuration(5 * DAY + 14 * HOUR + 59 * 60_000), '5d 14h');
   assert.equal(formatDuration(2 * DAY), '2d');

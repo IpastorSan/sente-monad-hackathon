@@ -47,6 +47,17 @@ export type Scale = {
   readonly bottom: number;
 };
 
+/**
+ * A wire price as a number, or `NaN` when it is not one. `Number('')` is `0`,
+ * which would draw a blank close as a crash to zero; `NaN` instead lets the
+ * geometry below drop the sample (SEN-141). Infinities are not prices either.
+ */
+export function toPrice(value: Decimal): number {
+  if (value.trim() === '') return Number.NaN;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : Number.NaN;
+}
+
 /** Fraction of the price span added above and below, so the line never touches an edge. */
 export const SCALE_PADDING = 0.06;
 
@@ -101,20 +112,38 @@ export function nearestIndex(x: number, n: number, width: number): number {
   return Math.max(0, Math.min(n - 1, i));
 }
 
-/** Each sample as a point, for the scrub dot and the markers. */
+/**
+ * Each sample as a point, for the scrub dot and the markers. A sample that is
+ * not a finite price holds the last good y (or the next one, before any) so the
+ * scrub dot never lands on `NaN`; with no good sample at all it sits mid-plot
+ * (SEN-141).
+ */
 export function pointsXY(
   points: readonly number[],
   scale: Scale,
   width: number,
 ): { x: number; y: number }[] {
-  return points.map((p, i) => ({ x: xOf(i, points.length, width), y: yOf(scale, p) }));
+  const firstGood = points.find(Number.isFinite);
+  let held = firstGood === undefined ? (scale.top + scale.bottom) / 2 : yOf(scale, firstGood);
+  return points.map((p, i) => {
+    if (Number.isFinite(p)) held = yOf(scale, p);
+    return { x: xOf(i, points.length, width), y: held };
+  });
 }
 
-/** The series as an SVG path (`M x,y L x,y …`), which Skia parses as is. */
+/**
+ * The series as an SVG path (`M x,y L x,y …`), which Skia parses as is. A
+ * sample that is not a finite price is dropped, so the line runs straight
+ * between its neighbours: one `NaN` in a path makes Skia draw nothing (SEN-141).
+ */
 export function linePath(points: readonly number[], scale: Scale, width: number): string {
-  return pointsXY(points, scale, width)
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${round1(p.x)},${round1(p.y)}`)
-    .join('');
+  const n = points.length;
+  let path = '';
+  points.forEach((p, i) => {
+    if (!Number.isFinite(p)) return;
+    path += `${path === '' ? 'M' : 'L'}${round1(xOf(i, n, width))},${round1(yOf(scale, p))}`;
+  });
+  return path;
 }
 
 /** The line closed down to the bottom of the canvas: what the gradient fills. */
@@ -124,9 +153,12 @@ export function areaPath(
   width: number,
   height: number,
 ): string {
-  if (points.length === 0) return '';
-  const lastX = round1(xOf(points.length - 1, points.length, width));
-  const firstX = round1(xOf(0, points.length, width));
+  // Closed under the first and last samples the line actually draws (SEN-141).
+  const first = points.findIndex(Number.isFinite);
+  if (first === -1) return '';
+  const last = points.findLastIndex(Number.isFinite);
+  const lastX = round1(xOf(last, points.length, width));
+  const firstX = round1(xOf(first, points.length, width));
   return `${linePath(points, scale, width)}L${lastX},${height}L${firstX},${height}Z`;
 }
 
@@ -146,7 +178,9 @@ export type CandleRect = {
 /**
  * One body and one wick per kline. The body is 62 % of a slot and never
  * thinner than 2 px or shorter than 1 px, so a doji is still a visible tick.
- * A candle that closed at its open counts as up, as chart.js has it.
+ * A candle that closed at its open counts as up, as chart.js has it. A kline
+ * with any price that is not a finite number is skipped, its slot left empty,
+ * rather than drawn as a `NaN` rect or a bar to zero (SEN-141).
  */
 export function candleRects(
   klines: readonly ChartKline[],
@@ -155,16 +189,19 @@ export function candleRects(
 ): CandleRect[] {
   const n = klines.length;
   const bodyWidth = Math.max(2, (width / Math.max(n, 1)) * 0.62);
-  return klines.map((k, i) => {
-    const open = Number(k.open);
-    const close = Number(k.close);
+  return klines.flatMap((k, i) => {
+    const open = toPrice(k.open);
+    const close = toPrice(k.close);
+    const high = toPrice(k.high);
+    const low = toPrice(k.low);
+    if (![open, close, high, low].every(Number.isFinite)) return [];
     const x = xOf(i, n, width);
     const yOpen = yOf(scale, open);
     const yClose = yOf(scale, close);
     return {
       x,
       up: close >= open,
-      wick: { top: yOf(scale, Number(k.high)), bottom: yOf(scale, Number(k.low)) },
+      wick: { top: yOf(scale, high), bottom: yOf(scale, low) },
       body: {
         x: x - bodyWidth / 2,
         y: Math.min(yOpen, yClose),
@@ -253,9 +290,16 @@ export function isUp(first: number, last: number): boolean {
   return last >= first;
 }
 
-/** Resolves a marker index: negative counts back from the end; clamped to the series. */
-export function markerIndex(index: number, n: number): number {
-  const i = index < 0 ? n + index : index;
+/**
+ * Resolves a marker index: negative counts back from the end; clamped to the
+ * series. `null` when there is no sample to point at — an empty series, or an
+ * index that is not a number — because clamping into `[0, -1]` gave `0`, a
+ * sample that does not exist (SEN-141). A fractional index truncates.
+ */
+export function markerIndex(index: number, n: number): number | null {
+  if (n <= 0 || !Number.isFinite(index)) return null;
+  const whole = Math.trunc(index);
+  const i = whole < 0 ? n + whole : whole;
   return Math.max(0, Math.min(n - 1, i));
 }
 
