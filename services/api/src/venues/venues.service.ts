@@ -1,18 +1,22 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-// Proves the shared interface resolves from the API side too. Types only —
-// the Kuru and Perpl adapters land in their own issues.
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Venue } from '@sente/venues';
+import { KuruVenue } from '@sente/venues/kuru';
 
 @Injectable()
 export class VenuesService {
   private readonly logger = new Logger(VenuesService.name);
 
   /**
-   * TODO(MOV-250): stub. Register the Kuru (spot) and Perpl (perps) adapters
-   * here once they exist; the registry is what lets a strategy address a venue
-   * by id without knowing which implementation answers.
+   * The read-only venues, by id (SEN-75). Only Kuru is here: its adapter reads
+   * without an account, while `PerplVenue` needs an agent's credentials even
+   * to read, so Perpl's credential-free reads go through `MarketDataService`
+   * instead of a `Venue`.
    */
   private readonly registry = new Map<string, Venue>();
+
+  constructor(@Inject(KuruVenue) kuru: KuruVenue) {
+    this.registry.set('kuru', kuru);
+  }
 
   list(): string[] {
     return [...this.registry.keys()];
@@ -28,6 +32,6 @@ export class VenuesService {
   }
 
   describe(): { module: string; implemented: boolean; venues: string[] } {
-    return { module: 'venues', implemented: false, venues: this.list() };
+    return { module: 'venues', implemented: true, venues: this.list() };
   }
 }

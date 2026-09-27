@@ -16,6 +16,9 @@
  * | klines                            | Data Source candles        | 10/30/60 s      |
  * | quote book                        | chain `getL2Book` snapshot | 1.5 s per market|
  *
+ * Perpl's reads and TTLs live in `PerplMarketReader` (SEN-75): one 3 s
+ * `/pub/context` for every price, the held book socket for depth and quotes.
+ *
  * The quote reads the CHAIN, not the Gateway, because its `worstPrice` is what
  * the app passes as `slippageLimitPrice` when it places — it has to be the
  * same book the order will meet (SEN-63).
@@ -72,9 +75,10 @@ export interface KuruReader {
 }
 
 /**
- * Perpl's side, already in wire shapes. B-T5b implements it over
- * `PerplMarketData` (context cached 3 s) and `PerplBookFeed`, with its own
- * caching; this service only merges and dispatches. Every method throws
+ * Perpl's side, already in wire shapes. `PerplMarketReader`
+ * (`perpl/perpl-market-reader.ts`, SEN-75) implements it over `PerplMarketData`
+ * and `PerplBookFeed`, with its own caching; this service only merges and
+ * dispatches. Every method throws
  * `MarketNotFoundError`, `IntervalNotSupportedError` or `VenueUnavailableError`
  * for the cases those name.
  */
@@ -94,9 +98,10 @@ export interface PerplReader {
 }
 
 /**
- * Until B-T5b wires the real reader, Perpl reports itself down rather than
- * empty, so `/markets` says `{ venue: 'perpl', ok: false }` instead of
- * pretending Perpl lists nothing.
+ * A Perpl that reports itself down rather than empty, so `/markets` says
+ * `{ venue: 'perpl', ok: false }` instead of pretending Perpl lists nothing.
+ * `VenuesModule` wires the real reader (SEN-75); this one is for specs that
+ * only exercise the Kuru side.
  */
 export class UnavailablePerplReader implements PerplReader {
   #down(): Promise<never> {
@@ -171,7 +176,7 @@ export class VenueUnavailableError extends Error {
 export type MarketDataError =
   MarketNotFoundError | IntervalNotSupportedError | InvalidSizeError | VenueUnavailableError;
 
-function isMarketDataError(error: unknown): error is MarketDataError {
+export function isMarketDataError(error: unknown): error is MarketDataError {
   return (
     error instanceof MarketNotFoundError ||
     error instanceof IntervalNotSupportedError ||
@@ -213,7 +218,7 @@ const STALE_IF_ERROR = {
   book: 5 * SECOND,
 } as const;
 
-const KLINE_WIDTH_MS: Record<KlineInterval, number> = {
+export const KLINE_WIDTH_MS: Record<KlineInterval, number> = {
   '1m': MINUTE,
   '5m': 5 * MINUTE,
   '15m': 15 * MINUTE,
@@ -224,7 +229,7 @@ const KLINE_WIDTH_MS: Record<KlineInterval, number> = {
   '1w': 7 * DAY,
 };
 
-function klineTtl(interval: KlineInterval): number {
+export function klineTtl(interval: KlineInterval): number {
   if (interval === '1m') return 10 * SECOND;
   if (interval === '5m') return 30 * SECOND;
   return 60 * SECOND;
@@ -235,7 +240,7 @@ const SCALE = 18;
 const x18 = (value: Decimal): bigint => toUnits(value, SCALE);
 const fromX18 = (value: bigint): Decimal => fromUnits(value, SCALE);
 
-type DayStats = {
+export type DayStats = {
   open: Decimal;
   high: Decimal;
   low: Decimal;
@@ -490,8 +495,6 @@ export class MarketDataService {
       const ask = depth.value.asks[0]?.price ?? null;
       const stats = day?.value ?? null;
       const lastPrice = last?.value ?? stats?.close ?? null;
-      const change = lastPrice !== null && stats !== null ? x18(lastPrice) - x18(stats.open) : null;
-      const openX18 = stats ? x18(stats.open) : 0n;
       return {
         venue: 'kuru',
         symbol: market.symbol,
@@ -502,12 +505,7 @@ export class MarketDataService {
         bid,
         ask,
         mid: midOf(bid, ask),
-        open24h: stats?.open ?? null,
-        high24h: stats?.high ?? null,
-        low24h: stats?.low ?? null,
-        change24h: change === null ? null : fromX18(change),
-        change24hPct: change === null || openX18 === 0n ? null : ratioToDecimal(change, openX18),
-        quoteVolume24h: stats?.quoteVolume ?? null,
+        ...dayFields(lastPrice, stats),
         funding: null,
         stale: depth.stale || Boolean(last?.stale) || Boolean(day?.stale),
         asOf: Math.min(depth.loadedAt, last?.loadedAt ?? Infinity, day?.loadedAt ?? Infinity),
@@ -628,7 +626,7 @@ function kuruMarketDto(market: Market): MarketDto {
   };
 }
 
-function dayStats(klines: readonly Kline[]): DayStats | null {
+export function dayStats(klines: readonly Kline[]): DayStats | null {
   const first = klines[0];
   const newest = klines.at(-1);
   if (!first || !newest) return null;
@@ -652,13 +650,33 @@ function dayStats(klines: readonly Kline[]): DayStats | null {
   };
 }
 
-function midOf(bid: Decimal | null, ask: Decimal | null): Decimal | null {
+/** The ticker's 24h fields from a window's stats and the current `last`; all null without stats. */
+export function dayFields(
+  last: Decimal | null,
+  stats: DayStats | null,
+): Pick<
+  TickerDto,
+  'open24h' | 'high24h' | 'low24h' | 'change24h' | 'change24hPct' | 'quoteVolume24h'
+> {
+  const change = last !== null && stats !== null ? x18(last) - x18(stats.open) : null;
+  const openX18 = stats ? x18(stats.open) : 0n;
+  return {
+    open24h: stats?.open ?? null,
+    high24h: stats?.high ?? null,
+    low24h: stats?.low ?? null,
+    change24h: change === null ? null : fromX18(change),
+    change24hPct: change === null || openX18 === 0n ? null : ratioToDecimal(change, openX18),
+    quoteVolume24h: stats?.quoteVolume ?? null,
+  };
+}
+
+export function midOf(bid: Decimal | null, ask: Decimal | null): Decimal | null {
   if (bid === null || ask === null) return null;
   return ratioToDecimal(x18(bid) + x18(ask), 2n * 10n ** BigInt(SCALE));
 }
 
 /** USDC (Kuru) and AUSD (Perpl) are never interchangeable, so anything else is a bug, not a guess. */
-function quoteCurrency(symbol: string): QuoteCurrency {
+export function quoteCurrency(symbol: string): QuoteCurrency {
   if (symbol === 'USDC' || symbol === 'AUSD') return symbol;
   throw new Error(`unexpected quote currency ${symbol}`);
 }
@@ -673,6 +691,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
