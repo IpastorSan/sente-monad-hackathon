@@ -11,6 +11,7 @@ import { monadTestnet } from 'viem/chains';
 
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { KURU_READER, MarketDataService, PERPL_READER } from './market-data.service';
+import { MarketsController } from './markets.controller';
 import { PerplBookFeed } from './perpl/perpl-book-feed';
 import { PerplMarketReader } from './perpl/perpl-market-reader';
 import { VenuesController } from './venues.controller';
@@ -88,7 +89,7 @@ const marketDataProviders: Provider[] = [
  * This module imports nothing from agents, so `AgentsModule` can import it.
  */
 @Module({
-  controllers: [VenuesController],
+  controllers: [VenuesController, MarketsController],
   providers: [...marketDataProviders, SessionAuthGuard, VenuesService],
   exports: [MarketDataService, VenuesService],
 })
