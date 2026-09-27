@@ -51,6 +51,7 @@ const EXECUTE_ABI = [
 type World = {
   tickSize?: bigint;
   minQuote?: bigint;
+  maxQuote?: bigint;
   /** Free Kuru balance per token address (lowercase). */
   kuruFree?: Record<string, bigint>;
   walletMon?: bigint;
@@ -76,7 +77,7 @@ function fakeClient(world: World = {}): PublicClient {
         market.sizePrecision,
         world.tickSize ?? 1n,
         world.minQuote ?? 1_000_000n,
-        10n ** 30n,
+        world.maxQuote ?? 10n ** 30n,
         700n, // taker 0.07%
         4_000n, // maker 0.04%: 10 USDC -> 10.004 locked, as in docs/kuru.md
       ]);
@@ -297,6 +298,20 @@ describe('planKuru — place', () => {
     expect(await refusal(planKuru(buy(), deps({ minQuote: 10_000_001n })))).toBe(
       'below_min_notional',
     );
+  });
+
+  // SEN-135: the minimum is inclusive — an order of exactly the minimum
+  // notional is a valid order on Kuru. Kills `<` -> `<=` at the min check.
+  it('accepts an order of exactly the market minimum notional', async () => {
+    await expect(planKuru(buy(), deps({ minQuote: 10_000_000n }))).resolves.toBeDefined();
+  });
+
+  // SEN-135: nothing else stood between an oversize order and the chain's own
+  // revert. Kills deleting the max check, and `>` -> `>=` (the exact maximum
+  // must still plan).
+  it('refuses an order above the market maximum notional, accepting exactly the maximum', async () => {
+    expect(await refusal(planKuru(buy(), deps({ maxQuote: 9_999_999n })))).toBe('invalid_intent');
+    await expect(planKuru(buy(), deps({ maxQuote: 10_000_000n }))).resolves.toBeDefined();
   });
 
   it('refuses a market that is not allowlisted', async () => {
