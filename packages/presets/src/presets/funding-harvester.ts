@@ -59,7 +59,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
 
   // SEN-72: no agent tool reports funding yet (TickerDto.funding stays null
   // until B-T1 finds the endpoint), so the text makes a missing read mean
-  // "open nothing", the same way Range Trader treats missing candles.
+  // "open nothing", the same way the candle presets treat a failed get_klines.
   const steps = [
     `1. Read the funding rate of ${market} as a % per 8 hours (convert if the venue reports another interval). If no tool gives you the funding rate, open nothing this run and say why; keep any position you hold.`,
     `2. If you have no ${market} short and funding is at or above +${min}% / 8h (shorts are paid): record a thesis, then short at market with ${MARGIN_SHARE_PCT}% of your AUSD collateral as margin at ${leverage}x leverage, size = margin x leverage / price, slippage limit ${SLIPPAGE_PCT}% below the best bid.${hedge ? ` Then buy the same size of ${coin} on ${hedge} at market with USDC, slippage limit ${SLIPPAGE_PCT}% above the best ask.` : ''}`,

@@ -3,7 +3,15 @@
  * whatever the price. Kuru spot only. Promise and parameters from
  * docs/design/trading/agents.html, "The catalog".
  */
-import { formatNumber, marketAssets, num, str } from '../params.ts';
+import {
+  type CandleWindow,
+  formatNumber,
+  klinesHint,
+  marketAssets,
+  num,
+  QUOTE_RULE,
+  str,
+} from '../params.ts';
 import type { Params, PresetDefinition } from '../types.ts';
 
 const EVERY = {
@@ -13,6 +21,13 @@ const EVERY = {
 
 /** The catalog's "buy double after a 5% drop", measured from the 1-day high. */
 const DIP_PCT = 5;
+
+const DIP_WINDOW: CandleWindow = {
+  label: '1-day',
+  candles: '15-minute',
+  interval: '15m',
+  limit: 96,
+};
 
 const SLIPPAGE_PCT = 1;
 
@@ -36,7 +51,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
     `Every run (you are run once a ${every}):`,
     `1. Read the ${quote} in your Kuru account and your wallet. If you hold less than ${formatNumber(amount)} ${quote} in all, your ${budget} ${quote} budget is spent: say so and end the run.`,
     dip
-      ? `2. Read the 1-day high of ${market} from 15-minute candles. If the mid price is at least ${DIP_PCT}% below it, this buy is double: ${formatNumber(amount * 2)} ${quote}. If no tool gives you candles, buy the normal amount.`
+      ? `2. Read the ${DIP_WINDOW.label} high of ${market} from ${DIP_WINDOW.candles} candles ${klinesHint('kuru', DIP_WINDOW)}. If the mid price is at least ${DIP_PCT}% below it, this buy is double: ${formatNumber(amount * 2)} ${quote}. If the candle read fails, buy the normal amount.`
       : '2. The buy is the same size every run.',
     `3. Record a thesis, then buy ${formatNumber(amount)} ${quote}${dip ? ' (or the double)' : ''} of ${base} at market, all you hold if less, slippage limit ${SLIPPAGE_PCT}% above the best ask. Buy once per run, never more.`,
     '',
@@ -49,7 +64,8 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
     `- One market only: ${market}. Buy only. Never sell ${base}, never time the market, never skip a buy because of the price.`,
     `- If your ${quote} sits in your wallet rather than your Kuru account, deposit it before you buy.`,
     '- Keep each thesis to one sentence: the scheduled buy, its size, and whether it was doubled.',
-    '- When a read fails, buy nothing this run and say so in one sentence.',
+    QUOTE_RULE,
+    '- When any other read fails, buy nothing this run and say so in one sentence.',
   ].join('\n');
 
   return { strategy, systemPrompt };
@@ -57,7 +73,8 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
 
 export const dcaStacker: PresetDefinition = {
   id: 'dca-stacker',
-  version: 1,
+  // SEN-121: the text now names quote, and get_klines for the dip.
+  version: 2,
   name: 'DCA Stacker',
   tagline: 'Buys the same amount on a schedule, whatever the price.',
   description:
@@ -113,7 +130,17 @@ export const dcaStacker: PresetDefinition = {
       default: 100,
     },
   ],
-  tools: ['get_depth', 'get_balances', 'record_thesis', 'deposit', 'place_market'],
+  // SEN-121: get_klines only backs the optional dip rule; the list is fixed
+  // per preset, and a tool the text does not name is simply unused.
+  tools: [
+    'get_klines',
+    'quote',
+    'get_depth',
+    'get_balances',
+    'record_thesis',
+    'deposit',
+    'place_market',
+  ],
   suggestedCadenceSeconds: (p) => EVERY[str(p, 'every') as keyof typeof EVERY].seconds,
   suggestedMandate(p) {
     const market = str(p, 'market');
