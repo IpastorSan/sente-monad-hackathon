@@ -159,7 +159,10 @@ describe('PerplBookFeed', () => {
     feed.book(16);
     feed.book(16);
     expect(last().subscribes()).toHaveLength(2);
-    expect(last().subscribes()[1].subs).toEqual([{ stream: 'order-book@16', subscribe: true }]);
+    expect(last().subscribes()[1].subs).toEqual([
+      { stream: 'order-book@16', subscribe: false },
+      { stream: 'order-book@16', subscribe: true },
+    ]);
     feed.close();
   });
 
@@ -258,6 +261,68 @@ describe('PerplBookFeed', () => {
     expect(applyDelta).toHaveBeenCalledTimes(1);
     expect(feed.book(32)?.book.bid).toEqual([]);
     feed.close();
+  });
+
+  it('folds mt:16 deltas into the book by default: replace by price, drop o:0 (SEN-62)', async () => {
+    const { feed, last, openAndAck } = setup();
+    feed.book(16);
+    await openAndAck();
+    last().emit(book(16, 100)); // bid 99, ask 101
+
+    last().emit({
+      mt: 16,
+      sid: 16,
+      sn: 2,
+      at: { b: 2 },
+      bid: [
+        { p: 99, s: 0, o: 0 },
+        { p: 98, s: 7, o: 2 },
+      ],
+      ask: [{ p: 101, s: 3, o: 1 }],
+    });
+    expect(feed.book(16)?.book).toMatchObject({
+      at: { b: 2 },
+      sn: 2,
+      bid: [{ p: 98, s: 7, o: 2 }],
+      ask: [{ p: 101, s: 3, o: 1 }],
+    });
+    expect(feed.status().ignoredFrames).toEqual({});
+    feed.close();
+  });
+
+  it("keeps a quiet market's book fresh while its stream is live, not after a drop", async () => {
+    const { feed, last, openAndAck } = setup({ staleMs: 15_000 });
+    feed.book(16);
+    await openAndAck();
+    last().emit(book(16));
+    last().emit(book(32));
+
+    // Only market 32 moves; 16's book is unchanged but still current.
+    for (let i = 0; i < 4; i++) {
+      jest.advanceTimersByTime(10_000);
+      last().emit({ mt: 16, sid: 32, at: { b: i }, bid: [], ask: [] });
+    }
+    expect(feed.book(16)?.stale).toBe(false);
+
+    last().drop();
+    expect(feed.book(16)?.stale).toBe(true);
+    feed.close();
+  });
+
+  it('sends no pings unless asked to: they would spend the request budget (SEN-62)', async () => {
+    const { feed, last, openAndAck } = setup();
+    feed.book(16);
+    await openAndAck();
+    jest.advanceTimersByTime(120_000);
+    expect(last().sent.filter((f) => f.mt === 1)).toEqual([]);
+    feed.close();
+
+    const pinging = setup({ pingIntervalMs: 30_000 });
+    pinging.feed.book(16);
+    await pinging.openAndAck();
+    jest.advanceTimersByTime(60_000);
+    expect(pinging.last().sent.filter((f) => f.mt === 1)).toHaveLength(2);
+    pinging.feed.close();
   });
 
   it('asks for market ids on every connect', async () => {

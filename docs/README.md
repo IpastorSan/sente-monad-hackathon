@@ -15,6 +15,7 @@ Start with `privy-policy-enforcement.md` if you only read one.
 | [user-wallet.md](user-wallet.md)                           | What the user's Privy wallet is, and why this server can never sign for it             |
 | [privy-sponsorship.md](privy-sponsorship.md)               | Whether a user-owned Privy wallet can send with Privy paying the gas                   |
 | [kuru.md](kuru.md)                                         | Which Kuru Spot V2 addresses, APIs and SDK are real, and how the adapter places orders |
+| [perpl.md](perpl.md)                                       | What Perpl's market-data socket and funding REST really send (probed live)             |
 | [monad-testnet-assets.md](monad-testnet-assets.md)         | Which Monad testnet addresses are real, what gas costs, and how to get funded          |
 | [erc8004.md](erc8004.md)                                   | How an agent gets an on-chain ERC-8004 identity and a reputation entry per verdict     |
 | [indexer.md](indexer.md)                                   | What the Envio HyperIndex indexes, and how to run and verify it                        |

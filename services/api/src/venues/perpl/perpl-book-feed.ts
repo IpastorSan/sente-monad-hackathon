@@ -16,15 +16,20 @@
  *   buy a fresh allowance, since we cannot tell whether Perpl counts per
  *   connection or per client IP.
  * - **Reconnect** with exponential backoff and jitter, capped at 60 s.
- * - **Updates are unverified** (B-T1 has not probed the socket yet). We keep the
- *   latest `mt:15` snapshot per market. Other `mt` values go to pluggable
- *   `deltaHandlers` if one is registered, else they are counted and ignored.
- *   If Perpl turns out to send only one snapshot per subscribe, a read that
- *   finds a stale book re-subscribes that market (at most every
- *   `refreshMinMs`, within the budget), so depth is still that fresh.
+ * - **Snapshot, then deltas** (probed in SEN-62, docs/perpl.md). Perpl sends
+ *   one `mt:15` snapshot per subscribe and then only `mt:16` updates carrying
+ *   the changed levels, which `applyL2BookUpdate` folds in by default. Other
+ *   `mt` values go to pluggable `deltaHandlers`, else are counted and ignored.
+ * - **Freshness is the stream's, not the book's.** A quiet market sends no
+ *   `mt:16` for minutes, yet its book is current while the socket is live. So
+ *   a subscribed book counts as fresh as the socket's last frame; only a book
+ *   whose stream went quiet ages into `stale`, and a read of one re-subscribes
+ *   that market (at most every `refreshMinMs`, within the budget) for a fresh
+ *   snapshot.
  */
 import type { Logger } from '@nestjs/common';
 import {
+  applyL2BookUpdate,
   defaultWebSocket,
   MT,
   type PerplL2Book,
@@ -41,8 +46,8 @@ export type PerplMarketFrame = {
 
 /**
  * Applies one non-snapshot frame to a market's current book and returns the
- * new book (or `undefined` to leave it unchanged). Registered per `mt` once
- * B-T1 finds out what Perpl's incremental frames look like.
+ * new book (or `undefined` to leave it unchanged). Registered per `mt`;
+ * `mt:16` has a default (`DEFAULT_DELTA_HANDLERS`).
  */
 export type PerplBookDeltaHandler = (
   current: PerplL2Book,
@@ -53,8 +58,18 @@ export type PerplBookEntry = {
   readonly book: PerplL2Book;
   /** Epoch ms the frame that produced this book arrived. */
   readonly receivedAt: number;
-  /** Older than `staleMs`: the caller should fall back or say so. */
+  /**
+   * No frame for this book in `staleMs` — neither its own, nor, while its
+   * stream is subscribed, any frame on the socket: the caller should fall
+   * back or say so.
+   */
   readonly stale: boolean;
+};
+
+/** `mt:16` is a delta of changed levels, `o: 0` removing one (SEN-62). */
+export const DEFAULT_DELTA_HANDLERS: Readonly<Record<number, PerplBookDeltaHandler>> = {
+  [MT.L2BookUpdate]: (current, frame) =>
+    applyL2BookUpdate(current, frame as unknown as PerplL2Book),
 };
 
 export type PerplBookFeedStatus = {
@@ -64,7 +79,7 @@ export type PerplBookFeedStatus = {
   readonly lastFrameAt: number | null;
   readonly reconnects: number;
   readonly requestsLastMin: number;
-  /** Frames with an `mt` we have no handler for, by `mt` — B-T1 evidence. */
+  /** Frames with an `mt` we have no handler for, by `mt`: a new frame kind shows up here first. */
   readonly ignoredFrames: Readonly<Record<number, number>>;
   /** Per-subscription refusals from the last `mt:6`, by market id. */
   readonly subscriptionErrors: Readonly<Record<number, string>>;
@@ -80,6 +95,10 @@ export type PerplBookFeedOptions = {
   readonly staleMs?: number;
   /** Below the server's 10/min so a miscount on our side still stays under it. */
   readonly maxRequestsPerMin?: number;
+  /**
+   * Off (0) by default: a market-data socket that sent nothing for 23 min was
+   * never idled out (SEN-62), and each ping costs one of the 10 requests/min.
+   */
   readonly pingIntervalMs?: number;
   /** Minimum gap between re-subscribes of a stale market. */
   readonly refreshMinMs?: number;
@@ -155,9 +174,9 @@ export class PerplBookFeed {
     this.idleCloseMs = o.idleCloseMs ?? 300_000;
     this.staleMs = o.staleMs ?? 15_000;
     this.maxRequestsPerMin = o.maxRequestsPerMin ?? 8;
-    this.pingIntervalMs = o.pingIntervalMs ?? 30_000;
+    this.pingIntervalMs = o.pingIntervalMs ?? 0;
     this.refreshMinMs = o.refreshMinMs ?? 10_000;
-    this.deltaHandlers = o.deltaHandlers ?? {};
+    this.deltaHandlers = { ...DEFAULT_DELTA_HANDLERS, ...o.deltaHandlers };
     this.now = o.now ?? Date.now;
     this.random = o.random ?? Math.random;
     this.logger = o.logger;
@@ -250,7 +269,9 @@ export class PerplBookFeed {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.open = true;
-      this.pingTimer = setInterval(() => this.ping(), this.pingIntervalMs);
+      if (this.pingIntervalMs > 0) {
+        this.pingTimer = setInterval(() => this.ping(), this.pingIntervalMs);
+      }
       void this.subscribeAll(ws);
     };
     ws.onmessage = (event) => {
@@ -333,7 +354,11 @@ export class PerplBookFeed {
     }
   }
 
-  /** Re-subscribes a stale market, in case Perpl only sends one snapshot per subscribe. */
+  /**
+   * Asks again for a stale market's snapshot. Unsubscribe + subscribe in ONE
+   * frame: a bare re-subscribe of a held stream is acked with no new `mt:15`,
+   * while the pair brings one and keeps the sid (both probed in SEN-62).
+   */
   private refresh(marketId: number): void {
     if (!this.open) return;
     const last = this.lastRefreshAt.get(marketId) ?? -Infinity;
@@ -342,7 +367,10 @@ export class PerplBookFeed {
     this.lastRefreshAt.set(marketId, this.now());
     this.send({
       mt: MT.SubscriptionRequest,
-      subs: [{ stream: streamOf(marketId), subscribe: true }],
+      subs: [
+        { stream: streamOf(marketId), subscribe: false },
+        { stream: streamOf(marketId), subscribe: true },
+      ],
     });
   }
 
@@ -456,7 +484,11 @@ export class PerplBookFeed {
   private entry(marketId: number): PerplBookEntry | undefined {
     const held = this.books.get(marketId);
     if (!held) return undefined;
-    return { ...held, stale: this.now() - held.receivedAt > this.staleMs };
+    // Deltas only arrive on change, so a live subscription vouches for a quiet
+    // book: any recent frame on the socket proves the stream is still flowing.
+    const live = this.open && [...this.sidToMarket.values()].includes(marketId);
+    const heardAt = live ? Math.max(held.receivedAt, this.lastFrameAt ?? 0) : held.receivedAt;
+    return { ...held, stale: this.now() - heardAt > this.staleMs };
   }
 
   private rejectWaiters(match: (marketId: number) => boolean, error: Error): void {

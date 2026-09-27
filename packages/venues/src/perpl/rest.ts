@@ -2,8 +2,10 @@
  * Perpl REST: public reads plus API-key-signed requests.
  *
  * Perpl's REST surface is thin — context, candles, funding, and paginated
- * history. There is no order-book endpoint and no "current positions"
- * endpoint; live state comes from the trading WebSocket (`trading.ts`).
+ * history; live account state comes from the trading WebSocket (`trading.ts`).
+ * Funding (`/v1/market-data/funding/…`), tickers and a one-shot book
+ * (`/v1/market-data/:id/book`, truncated: 100 of 113 BTC bid levels) also exist but are
+ * not wrapped here yet (SEN-62, docs/perpl.md).
  */
 import { ServerClock, newNonce, signRequest, type PerplCredentials } from './signing.ts';
 import type { PerplCandleSeries, PerplContext } from './wire.ts';

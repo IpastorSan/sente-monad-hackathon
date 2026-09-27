@@ -198,6 +198,7 @@ export const MT = {
   SubscriptionRequest: 5,
   SubscriptionResponse: 6,
   L2BookSnapshot: 15,
+  L2BookUpdate: 16,
   WalletSnapshot: 19,
   WalletUpdate: 20,
   AccountUpdate: 21,
