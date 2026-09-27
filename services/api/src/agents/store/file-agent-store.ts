@@ -81,6 +81,10 @@ export class FileAgentStore implements AgentStore {
     return Promise.resolve(this.#sorted((record) => record.status === 'active'));
   }
 
+  listAll(): Promise<AgentRecord[]> {
+    return Promise.resolve(this.#sorted(() => true));
+  }
+
   findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined> {
     const id = this.#idByTokenHash.get(hash);
     return id === undefined ? Promise.resolve(undefined) : this.get(id);

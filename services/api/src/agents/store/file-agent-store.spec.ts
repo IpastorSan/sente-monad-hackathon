@@ -87,6 +87,23 @@ describe.each([
     expect((await store.listByUser('bob')).map((a) => a.id)).toEqual([second().id]);
   });
 
+  it('lists every agent oldest first, revoked included (SEN-74)', async () => {
+    // Inserted newest first, so the order comes from `createdAt`, not insertion.
+    const store = create();
+    await store.insert(second({ userId: 'bob' }));
+    await store.insert(testAgent());
+    await store.update(testAgent().id, { status: 'revoked', policyCleared: true });
+
+    const all = await store.listAll();
+    expect(all.map((a) => a.id)).toEqual([testAgent().id, second().id]);
+    expect(all.map((a) => a.status)).toEqual(['revoked', 'active']);
+    expect((await store.listActive()).map((a) => a.id)).toEqual([second().id]);
+  });
+
+  it('lists nothing when there are no agents', async () => {
+    expect(await create().listAll()).toEqual([]);
+  });
+
   it('patches an agent and refuses an unknown id', async () => {
     const store = create();
     await store.insert(testAgent());
@@ -159,6 +176,7 @@ describe('FileAgentStore persistence', () => {
     const after = new FileAgentStore(path);
     expect((await after.get(testAgent().id))!.status).toBe('revoked');
     expect(await after.listActive()).toEqual([]);
+    expect((await after.listAll()).map((a) => a.status)).toEqual(['revoked']);
   });
 
   it('keeps a schedule across a restart, and a cleared one stays cleared (SEN-67)', async () => {

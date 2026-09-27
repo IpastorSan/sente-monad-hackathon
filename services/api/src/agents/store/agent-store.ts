@@ -190,6 +190,12 @@ export interface AgentStore {
   /** Every active agent, oldest first: what the run scheduler ticks (SEN-8). */
   listActive(): Promise<AgentRecord[]>;
   /**
+   * Every agent, revoked included, oldest first (SEN-74). For the preset cohort
+   * stats: counting only the agents still active would drop the ones revoked
+   * after losing, and flatter the preset (survivorship bias).
+   */
+  listAll(): Promise<AgentRecord[]>;
+  /**
    * The agent whose MCP token hashes to `hash`, WHATEVER its status — the
    * caller decides what a revoked agent's token means. Callers holding a raw
    * token should use `AgentsService.findByMcpToken`, which hashes it and
@@ -256,19 +262,15 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   listByUser(userId: string): Promise<AgentRecord[]> {
-    const records = [...this.byId.values()]
-      .filter((record) => record.userId === userId)
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      .map((record) => structuredClone(record));
-    return Promise.resolve(records);
+    return Promise.resolve(this.sorted((record) => record.userId === userId));
   }
 
   listActive(): Promise<AgentRecord[]> {
-    const records = [...this.byId.values()]
-      .filter((record) => record.status === 'active')
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      .map((record) => structuredClone(record));
-    return Promise.resolve(records);
+    return Promise.resolve(this.sorted((record) => record.status === 'active'));
+  }
+
+  listAll(): Promise<AgentRecord[]> {
+    return Promise.resolve(this.sorted(() => true));
   }
 
   findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined> {
@@ -287,5 +289,12 @@ export class InMemoryAgentStore implements AgentStore {
     const next: AgentRecord = { ...existing, ...structuredClone(patch) };
     this.byId.set(id, next);
     return Promise.resolve(structuredClone(next));
+  }
+
+  private sorted(keep: (record: AgentRecord) => boolean): AgentRecord[] {
+    return [...this.byId.values()]
+      .filter(keep)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((record) => structuredClone(record));
   }
 }
