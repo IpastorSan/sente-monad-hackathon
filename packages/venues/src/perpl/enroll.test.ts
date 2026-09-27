@@ -7,10 +7,19 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import * as ed from '@noble/ed25519';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { hashTypedData, hexToBytes, recoverTypedDataAddress, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { PerplEnrollmentError, enrollApiKey, toViemTypedData } from './enroll.ts';
+import {
+  PerplEnrollmentError,
+  SCOPE,
+  enrollApiKey,
+  requestEnrollPayload,
+  submitEnrollment,
+  toViemTypedData,
+} from './enroll.ts';
+import { newSecretKey, publicKeyOf } from './signing.ts';
 import type { PerplTypedData } from './wire.ts';
 
 const wallet = privateKeyToAccount(`0x${'42'.repeat(32)}`);
@@ -138,5 +147,144 @@ test('a 400 on enroll explains the ERC-1271 trap', async () => {
       error instanceof PerplEnrollmentError &&
       error.status === 400 &&
       /ERC-1271/.test(error.message),
+  );
+});
+
+// SEN-91: the two halves on their own, as a caller whose wallet signs elsewhere uses them.
+
+function hexKey(secretKey: Uint8Array): Hex {
+  return `0x${bytesToHex(publicKeyOf(secretKey))}`;
+}
+
+test('requestEnrollPayload: posts the request, returns the payload verbatim plus what to sign', async () => {
+  const { fetchImpl, calls } = fakePerpl();
+  const publicKeyHex = hexKey(newSecretKey());
+  const payload = await requestEnrollPayload({
+    restUrl: 'https://testnet.perpl.xyz/api/',
+    chainId: 10143,
+    address: wallet.address,
+    publicKeyHex,
+    scope: SCOPE.read,
+    label: 'agent-1',
+    fetchImpl,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, 'https://testnet.perpl.xyz/api/v1/api-key/payload');
+  assert.equal(calls[0]!.headers.get('origin'), null);
+  assert.deepEqual(calls[0]!.body, {
+    chain_id: 10143,
+    address: wallet.address,
+    public_key: publicKeyHex,
+    scope_mask: 1,
+    label: 'agent-1',
+  });
+  assert.equal(payload.mac, '0xmac');
+  assert.deepEqual(payload.typed_data, payloadFor(wallet.address, 'b64-of-key'));
+  assert.deepEqual(payload.typedData, toViemTypedData(payload.typed_data));
+  assert.equal(
+    payload.digest,
+    hashTypedData(payload.typedData as Parameters<typeof hashTypedData>[0]),
+  );
+});
+
+test('requestEnrollPayload: refuses a payload naming another signer', async () => {
+  const other = privateKeyToAccount(`0x${'43'.repeat(32)}`);
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({ typed_data: payloadFor(other.address, 'k'), mac: '0xmac' }),
+    )) as typeof fetch;
+  await assert.rejects(
+    requestEnrollPayload({
+      restUrl: 'https://x/api',
+      chainId: 10143,
+      address: wallet.address,
+      publicKeyHex: hexKey(newSecretKey()),
+      scope: SCOPE.all,
+      label: 't',
+      fetchImpl,
+    }),
+    /names signer/,
+  );
+});
+
+test('requestEnrollPayload: a non-200 is a payload-step PerplEnrollmentError', async () => {
+  const fetchImpl = (async () => new Response('nope', { status: 404 })) as typeof fetch;
+  await assert.rejects(
+    requestEnrollPayload({
+      restUrl: 'https://x/api',
+      chainId: 10143,
+      address: wallet.address,
+      publicKeyHex: hexKey(newSecretKey()),
+      scope: SCOPE.all,
+      label: 't',
+      fetchImpl,
+    }),
+    (error: unknown) =>
+      error instanceof PerplEnrollmentError &&
+      error.status === 404 &&
+      error.message.startsWith('Perpl payload failed with 404 ('),
+  );
+});
+
+test('submitEnrollment: signatures made outside the module enroll, returning the key info', async () => {
+  const { fetchImpl, calls } = fakePerpl();
+  const secretKey = newSecretKey();
+  const { typed_data, mac, typedData, digest } = await requestEnrollPayload({
+    restUrl: 'https://x/api',
+    chainId: 10143,
+    address: wallet.address,
+    publicKeyHex: hexKey(secretKey),
+    scope: SCOPE.all,
+    label: 'test',
+    fetchImpl,
+  });
+  // Stand-in for a remote signer: it sees only `typedData`, never the Perpl wire shape.
+  const signature = await wallet.signTypedData(
+    typedData as Parameters<typeof wallet.signTypedData>[0],
+  );
+  const popSignature: Hex = `0x${bytesToHex(ed.sign(hexToBytes(digest), secretKey))}`;
+
+  const info = await submitEnrollment({
+    restUrl: 'https://x/api/',
+    chainId: 10143,
+    address: wallet.address,
+    typed_data,
+    mac,
+    signature,
+    popSignature,
+    fetchImpl,
+  });
+
+  assert.equal(info.api_key, 'token-1');
+  assert.equal(calls[1]!.url, 'https://x/api/v1/api-key/enroll');
+  assert.equal(calls[1]!.headers.get('origin'), null);
+  assert.deepEqual(calls[1]!.body, {
+    chain_id: 10143,
+    address: wallet.address,
+    typed_data,
+    mac,
+    signature,
+    pop_signature: popSignature,
+  });
+});
+
+test('submitEnrollment: a non-200 is an enroll-step error with its hint', async () => {
+  const fetchImpl = (async () => new Response('dup', { status: 409 })) as typeof fetch;
+  await assert.rejects(
+    submitEnrollment({
+      restUrl: 'https://x/api',
+      chainId: 10143,
+      address: wallet.address,
+      typed_data: payloadFor(wallet.address, 'k'),
+      mac: '0xmac',
+      signature: '0x00',
+      popSignature: '0x00',
+      fetchImpl,
+    }),
+    (error: unknown) =>
+      error instanceof PerplEnrollmentError &&
+      error.status === 409 &&
+      /already registered/.test(error.message),
   );
 });

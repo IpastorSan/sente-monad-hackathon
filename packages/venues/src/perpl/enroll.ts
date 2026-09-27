@@ -141,18 +141,53 @@ async function postJson(
   return { status: response.status, text: await response.text() };
 }
 
-export async function enrollApiKey(options: EnrollOptions): Promise<EnrolledKey> {
-  const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
-  const restUrl = options.restUrl.replace(/\/+$/, '');
-  const secretKey = options.secretKey ?? newSecretKey();
-  const address = options.signer.address;
+function endpoint(restUrl: string, path: string): string {
+  return `${restUrl.replace(/\/+$/, '')}/v1/api-key/${path}`;
+}
 
-  const payload = await postJson(fetchImpl, `${restUrl}/v1/api-key/payload`, {
-    chain_id: options.chainId,
-    address,
-    public_key: `0x${bytesToHex(publicKeyOf(secretKey))}`,
-    scope_mask: options.scope ?? SCOPE.all,
-    label: options.label,
+function fetchOrGlobal(fetchImpl: typeof fetch | undefined): typeof fetch {
+  return fetchImpl ?? ((input, init) => fetch(input, init));
+}
+
+export interface EnrollPayloadRequest {
+  /** e.g. `https://testnet.perpl.xyz/api`. */
+  readonly restUrl: string;
+  readonly chainId: number;
+  /** The EOA that owns the Perpl account. NOT a smart account — see above. */
+  readonly address: Address;
+  /** The new API key's Ed25519 public key, `0x`-prefixed hex. */
+  readonly publicKeyHex: Hex;
+  /** `scope_mask`, see `SCOPE`. */
+  readonly scope: number;
+  readonly label: string;
+  readonly fetchImpl?: typeof fetch;
+}
+
+export interface EnrollPayload {
+  /** Perpl's typed data verbatim: `/enroll` wants it back unchanged, alongside `mac`. */
+  readonly typed_data: PerplTypedData;
+  readonly mac: string;
+  /**
+   * What the wallet signs. Pass exactly this to the signer — its `types` are what
+   * a Privy policy pins (CLAUDE.md gotcha 13).
+   */
+  readonly typedData: PerplEip712;
+  /** The EIP-712 digest the API key's proof-of-possession signs. */
+  readonly digest: Hex;
+}
+
+/**
+ * Step one of enrollment: fetch the payload to sign. Split from `submitEnrollment`
+ * (SEN-91) so a caller whose wallet signs somewhere else — a Privy agent wallet —
+ * can carry `typedData` to that signer between the two HTTP calls.
+ */
+export async function requestEnrollPayload(o: EnrollPayloadRequest): Promise<EnrollPayload> {
+  const payload = await postJson(fetchOrGlobal(o.fetchImpl), endpoint(o.restUrl, 'payload'), {
+    chain_id: o.chainId,
+    address: o.address,
+    public_key: o.publicKeyHex,
+    scope_mask: o.scope,
+    label: o.label,
   });
   if (payload.status !== 200)
     throw new PerplEnrollmentError('payload', payload.status, payload.text);
@@ -160,24 +195,71 @@ export async function enrollApiKey(options: EnrollOptions): Promise<EnrolledKey>
 
   const typedData = toViemTypedData(typed_data);
   // Sign only what we asked for: the server fills `signer` from our request.
-  if (String(typedData.message['signer']).toLowerCase() !== address.toLowerCase()) {
+  // Checked here rather than at signing so no caller of the split API skips it.
+  if (String(typedData.message['signer']).toLowerCase() !== o.address.toLowerCase()) {
     throw new Error(`Perpl payload names signer ${String(typedData.message['signer'])}`);
   }
-  const signature = await options.signer.signTypedData(typedData);
   const digest = hashTypedData(typedData as Parameters<typeof hashTypedData>[0]);
-  const popSignature = `0x${bytesToHex(ed.sign(hexToBytes(digest), secretKey))}`;
+  return { typed_data, mac, typedData, digest };
+}
 
-  const enrolled = await postJson(fetchImpl, `${restUrl}/v1/api-key/enroll`, {
-    chain_id: options.chainId,
-    address,
-    typed_data,
-    mac,
-    signature,
-    pop_signature: popSignature,
+export interface EnrollSubmission {
+  readonly restUrl: string;
+  readonly chainId: number;
+  readonly address: Address;
+  /** Both straight from `requestEnrollPayload`. */
+  readonly typed_data: PerplTypedData;
+  readonly mac: string;
+  /** The wallet's secp256k1 signature over `typedData`. */
+  readonly signature: Hex;
+  /** The API key's Ed25519 signature over `digest`. */
+  readonly popSignature: Hex;
+  readonly fetchImpl?: typeof fetch;
+}
+
+/** Step two of enrollment (SEN-91): register the key with both signatures. */
+export async function submitEnrollment(o: EnrollSubmission): Promise<ApiKeyInfo> {
+  const enrolled = await postJson(fetchOrGlobal(o.fetchImpl), endpoint(o.restUrl, 'enroll'), {
+    chain_id: o.chainId,
+    address: o.address,
+    typed_data: o.typed_data,
+    mac: o.mac,
+    signature: o.signature,
+    pop_signature: o.popSignature,
   });
   if (enrolled.status !== 200) {
     throw new PerplEnrollmentError('enroll', enrolled.status, enrolled.text);
   }
-  const info = (JSON.parse(enrolled.text) as { api_key: ApiKeyInfo }).api_key;
+  return (JSON.parse(enrolled.text) as { api_key: ApiKeyInfo }).api_key;
+}
+
+/** Both steps, signing locally with `signer` and a fresh (or given) API key. */
+export async function enrollApiKey(options: EnrollOptions): Promise<EnrolledKey> {
+  const { restUrl, chainId, fetchImpl } = options;
+  const secretKey = options.secretKey ?? newSecretKey();
+  const address = options.signer.address;
+
+  const { typed_data, mac, typedData, digest } = await requestEnrollPayload({
+    restUrl,
+    chainId,
+    address,
+    publicKeyHex: `0x${bytesToHex(publicKeyOf(secretKey))}`,
+    scope: options.scope ?? SCOPE.all,
+    label: options.label,
+    fetchImpl,
+  });
+  const signature = await options.signer.signTypedData(typedData);
+  const popSignature: Hex = `0x${bytesToHex(ed.sign(hexToBytes(digest), secretKey))}`;
+
+  const info = await submitEnrollment({
+    restUrl,
+    chainId,
+    address,
+    typed_data,
+    mac,
+    signature,
+    popSignature,
+    fetchImpl,
+  });
   return { credentials: { apiKey: info.api_key, secretKey }, info };
 }
