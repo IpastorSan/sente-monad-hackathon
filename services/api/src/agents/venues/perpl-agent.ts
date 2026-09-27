@@ -22,6 +22,8 @@ import {
   type PerplNetwork,
 } from '@sente/venues/perpl';
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   isAddressEqual,
   type Address,
   type Hex,
@@ -65,6 +67,51 @@ export function perplAccountReader(
     } catch {
       return null;
     }
+  };
+}
+
+/** An address's Perpl account as the Exchange holds it: collateral atoms (AUSD, 6 dp). */
+export interface PerplAccountInfo {
+  readonly accountId: bigint;
+  /** `balanceCNS`: the account's collateral, resting-order reservations included. */
+  readonly balance: bigint;
+  /** `lockedBalanceCNS`: what resting orders reserve out of `balance`. */
+  readonly locked: bigint;
+}
+
+/**
+ * The full `getAccountByAddr` tuple, for reading an account WITHOUT API
+ * credentials (SEN-78, plan finding #1): almost no agent has an enrolled key,
+ * so the portfolio falls back to this for a balance. Positions are not
+ * readable from it (they are packed into opaque bank words). `null` for no
+ * account, which the Exchange signals by reverting or by id 0; any other read
+ * failure throws.
+ */
+export async function perplAccountInfo(
+  client: PublicClient,
+  address: Address,
+  exchange: Address = PERPL_TESTNET_CONTRACTS.exchange,
+): Promise<PerplAccountInfo | null> {
+  let account;
+  try {
+    account = await client.readContract({
+      address: exchange,
+      abi: PERPL_EXCHANGE_ABI,
+      functionName: 'getAccountByAddr',
+      args: [address],
+    });
+  } catch (error) {
+    // Only a revert means "no account". An RPC failure must surface as one,
+    // or a flaky node would show a funded account as never opened.
+    if (error instanceof BaseError && error.walk((e) => e instanceof ContractFunctionRevertedError))
+      return null;
+    throw error;
+  }
+  if (account.accountId === 0n) return null;
+  return {
+    accountId: account.accountId,
+    balance: account.balanceCNS,
+    locked: account.lockedBalanceCNS,
   };
 }
 
