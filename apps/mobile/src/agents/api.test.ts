@@ -431,3 +431,47 @@ test('a 401 that re-authentication cannot fix surfaces as the original error', a
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.headers.authorization, undefined);
 });
+
+test('portfolio and schedule read their routes, and a missing route reads as null (SEN-115)', async () => {
+  const status = {
+    everySeconds: 900,
+    source: 'agent',
+    lastRunAt: null,
+    nextRunAt: '2026-09-27T10:15:00.000Z',
+    paused: null,
+  };
+  const { api, calls } = recordingApi(
+    { status: 200, body: status },
+    { status: 404, body: { statusCode: 404, message: 'Cannot GET', error: 'Not Found' } },
+  );
+  assert.deepEqual(await api.schedule(AGENT_ID), status);
+  assert.equal(await api.portfolio(AGENT_ID), null);
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.url}`),
+    [`GET ${BASE}/agents/${AGENT_ID}/schedule`, `GET ${BASE}/agents/${AGENT_ID}/portfolio`],
+  );
+});
+
+test('portfolio still throws a 404 that is about the agent', async () => {
+  const { api } = recordingApi({
+    status: 404,
+    body: { statusCode: 404, reason: 'agent_not_found', message: 'no such agent' },
+  });
+  await assert.rejects(api.portfolio(AGENT_ID), AgentsApiError);
+});
+
+test('setSchedule PATCHes everySeconds, null included, and returns the agent', async () => {
+  const { api, calls } = recordingApi(
+    { status: 200, body: { ...WIRE_AGENT, schedule: { everySeconds: 3600 } } },
+    { status: 200, body: { ...WIRE_AGENT, schedule: null } },
+  );
+  const set = await api.setSchedule(AGENT_ID, 3600);
+  const cleared = await api.setSchedule(AGENT_ID, null);
+
+  assert.equal(calls[0]?.method, 'PATCH');
+  assert.equal(calls[0]?.url, `${BASE}/agents/${AGENT_ID}/schedule`);
+  assert.deepEqual(calls[0]?.body, { everySeconds: 3600 });
+  assert.deepEqual(calls[1]?.body, { everySeconds: null });
+  assert.deepEqual(set.schedule, { everySeconds: 3600 });
+  assert.equal(cleared.schedule, null);
+});
