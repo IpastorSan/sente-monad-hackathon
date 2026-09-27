@@ -39,12 +39,13 @@
   "devDependencies": {
     "@types/node": "^26.4.1",
     "eslint": "^10.10.0",
+    "fast-check": "^4.10.2",
     "typescript": "~6.0.3"
   },
   "dependencies": {
-    "@toxicflow-labs/ts-sdk": "0.0.4",
-    "viem": "^2.56.3",
     "@noble/ed25519": "^3.2.0",
-    "@noble/hashes": "^2.4.0"
+    "@noble/hashes": "^2.4.0",
+    "@toxicflow-labs/ts-sdk": "0.0.4",
+    "viem": "^2.56.3"
   }
 }
