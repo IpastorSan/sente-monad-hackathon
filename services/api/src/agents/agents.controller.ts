@@ -50,8 +50,10 @@ import {
   type ReturnFundsResponseDto,
   type AgentSummariesResponseDto,
 } from './dto/agent.dto';
+import type { AgentPortfolioDto } from '../venues/dto/markets.dto';
 import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
 import { latestEvents, summariseEvents } from './events/summary';
+import { AgentPortfolioService } from './portfolio/portfolio.service';
 import { ReturnFundsService } from './recovery/return-funds.service';
 import { AgentRunScheduler, type AgentScheduleStatusDto } from './runner/agent-run.scheduler';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
@@ -87,6 +89,8 @@ export class AgentsController {
      * build this controller by hand for other routes need not know it.
      */
     @Optional() private readonly scheduler?: AgentRunScheduler,
+    /** SEN-80: `GET /agents/:id/portfolio`. Optional for the same reason. */
+    @Optional() private readonly portfolios?: AgentPortfolioService,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -323,6 +327,25 @@ export class AgentsController {
       const agent = await this.agents.get(this.auth.principal(), params.id);
       if (!this.scheduler) throw new Error('AgentRunScheduler is not provided');
       return this.scheduler.status(agent);
+    });
+  }
+
+  /**
+   * What the agent holds — wallet, Kuru and Perpl, each section read on its own
+   * so one venue being down costs only its section (SEN-80, plan B-T10). The
+   * service caches each agent's read for 3 s, so a polling cockpit is cheap.
+   *
+   * Ownership first: another user's agent is a 404 before any venue is read. A
+   * revoked agent still answers 200 — revoking stops the agent, not the money
+   * sitting in its wallet and venue accounts, and this is how the owner sees
+   * what `POST /agents/:id/return` has left to bring home.
+   */
+  @Get(':id/portfolio')
+  async portfolio(@Param() params: AgentIdParamDto): Promise<AgentPortfolioDto> {
+    return this.guard(async () => {
+      const agent = await this.agents.get(this.auth.principal(), params.id);
+      if (!this.portfolios) throw new Error('AgentPortfolioService is not provided');
+      return this.portfolios.portfolio(agent);
     });
   }
 

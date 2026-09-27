@@ -9,8 +9,11 @@ import { parseMandate } from '@sente/mandate';
 import { renderPreset } from '@sente/presets';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
-import { Auth, type Principal } from '../auth/principal';
+import { authConfig, resetAuthConfig } from '../auth/auth.config';
+import { Auth, RequestContextAuth, type Principal } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import { mintSessionToken } from '../auth/session-token';
+import type { AgentPortfolioDto } from '../venues/dto/markets.dto';
 import { ConsensusService, type PollTag, type TaggedBlock } from '../chain/consensus.service';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
 import { AgentsController } from './agents.controller';
@@ -29,6 +32,7 @@ import {
   ScheduleDto,
 } from './dto/agent.dto';
 import { AGENT_EVENTS, InMemoryAgentEventLog } from './events/agent-event-log';
+import { AgentPortfolioService } from './portfolio/portfolio.service';
 import { ReturnFundsService } from './recovery/return-funds.service';
 import { AgentRunnerService } from './runner/agent-runner.service';
 import { InMemoryAgentStore, mandateSinceOf } from './store/agent-store';
@@ -1050,6 +1054,125 @@ describe('AgentsController', () => {
       ],
     ])('rejects %s', async (_label, value) => {
       await expect(create(value())).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  /**
+   * SEN-80 (plan B-T10). The portfolio itself is portfolio.service.spec.ts's;
+   * this covers who may read it. Over HTTP with the REAL guard and the real
+   * request-scoped `Auth`, because a 401 only exists in front of the router.
+   */
+  describe('GET /agents/:id/portfolio (SEN-80)', () => {
+    const SECRET = 'ab'.repeat(32);
+    const ALICE = `0x${'a'.repeat(40)}`;
+    const ORIGINAL = { ...process.env };
+    let app: INestApplication | undefined;
+
+    afterEach(async () => {
+      await app?.close();
+      app = undefined;
+      process.env = { ...ORIGINAL };
+      resetAuthConfig();
+    });
+
+    function portfolioOf(agentId: string, address: string): AgentPortfolioDto {
+      return {
+        agentId,
+        address,
+        asOf: 1,
+        wallet: { ok: true, balances: [] },
+        kuru: { ok: false, error: 'kuru is down' },
+        perpl: { ok: true, status: 'not_in_mandate' },
+        holdings: [],
+        totals: { approxUsd: '0', byQuote: { USDC: '0', AUSD: '0' }, note: '' },
+      };
+    }
+
+    async function boot() {
+      process.env['AUTH_SESSION_SECRET'] = SECRET;
+      delete process.env['AUTH_PLACEHOLDER'];
+      resetAuthConfig();
+      const token = mintSessionToken(authConfig().sessionSecret, {
+        sub: ALICE,
+        exp: Math.floor(Date.now() / 1000) + 600,
+      });
+
+      const service = new AgentsService(
+        new InMemoryAgentStore(),
+        new FakeAgentWalletProvider(),
+        new ServerMandateOwners(),
+      );
+      const hire = (userId: string) =>
+        service.hire({ userId }, body() as unknown as Parameters<AgentsService['hire']>[1]);
+      const mine = (await hire(ALICE)).agent;
+      const revoked = (await hire(ALICE)).agent;
+      await service.revoke({ userId: ALICE }, revoked.id);
+      const theirs = (await hire('0x' + 'b'.repeat(40))).agent;
+
+      const reads: string[] = [];
+      const portfolios = {
+        portfolio: (agent: { id: string; address: string }) => {
+          reads.push(agent.id);
+          return Promise.resolve(portfolioOf(agent.id, agent.address));
+        },
+      };
+
+      const moduleRef = await Test.createTestingModule({
+        controllers: [AgentsController],
+        providers: [
+          { provide: AgentsService, useValue: service },
+          { provide: Auth, useClass: RequestContextAuth },
+          SessionAuthGuard,
+          { provide: AgentRunnerService, useValue: {} },
+          { provide: AGENT_EVENTS, useValue: new InMemoryAgentEventLog() },
+          { provide: ConsensusService, useValue: { stateOf: () => undefined } },
+          { provide: ReturnFundsService, useValue: {} },
+          { provide: AgentPortfolioService, useValue: portfolios },
+        ],
+      }).compile();
+      app = moduleRef.createNestApplication({ logger: false });
+      app.useGlobalPipes(pipe);
+      await app.listen(0, '127.0.0.1');
+      const base = await app.getUrl();
+      const get = async (path: string, auth = true) => {
+        const response = await fetch(new URL(path, base), {
+          headers: auth ? { authorization: `Bearer ${token}` } : {},
+        });
+        return { status: response.status, body: (await response.json()) as unknown };
+      };
+      return { get, mine, revoked, theirs, reads };
+    }
+
+    it("answers the owner with the service's portfolio, a failed section and all", async () => {
+      const h = await boot();
+      expect(await h.get(`/agents/${h.mine.id}/portfolio`)).toEqual({
+        status: 200,
+        body: portfolioOf(h.mine.id, h.mine.address),
+      });
+    });
+
+    it('still answers for a revoked agent: its funds can still sit there', async () => {
+      const h = await boot();
+      expect(await h.get(`/agents/${h.revoked.id}/portfolio`)).toMatchObject({
+        status: 200,
+        body: { agentId: h.revoked.id },
+      });
+    });
+
+    it("answers another user's agent with a 404, before reading any venue", async () => {
+      const h = await boot();
+      expect(await h.get(`/agents/${h.theirs.id}/portfolio`)).toMatchObject({
+        status: 404,
+        body: { reason: 'agent_not_found' },
+      });
+      expect(h.reads).toEqual([]);
+    });
+
+    it('answers 401 without a session, and 400 for an id that is not a UUID', async () => {
+      const h = await boot();
+      expect(await h.get(`/agents/${h.mine.id}/portfolio`, false)).toMatchObject({ status: 401 });
+      expect(await h.get('/agents/not-a-uuid/portfolio')).toMatchObject({ status: 400 });
+      expect(h.reads).toEqual([]);
     });
   });
 });
