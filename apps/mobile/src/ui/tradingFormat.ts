@@ -9,10 +9,9 @@
  * through a float.
  */
 import { formatPrice as formatPlaces, priceDecimals, type Decimal } from './chart/geometry.ts';
+import { MINUS, signedFigure } from './money.ts';
 
 const DECIMAL = /^([+-]?)(\d+)(?:\.(\d+))?$/;
-/** A true minus, as the chart pill prints it; a hyphen reads as a dash. */
-const MINUS = '−';
 
 /**
  * A price split for `BigNumber`: the part at full weight and the dimmed
@@ -80,17 +79,16 @@ export type Direction = 'up' | 'down' | 'flat';
  * change that prints as zero is never painted mint or berry.
  */
 export function formatPct(pct: number | null, places = 2): string {
-  if (pct === null || !Number.isFinite(pct)) return '—';
-  const shown = Math.abs(pct).toFixed(places);
-  const direction = pctDirection(pct, places);
-  return `${direction === 'up' ? '+' : direction === 'down' ? MINUS : ''}${shown}%`;
+  // Through the one signed formatter (SEN-136): `toFixed` rounds the binary
+  // value, so `2.675` came out `2.67`, and past 1e21 it printed `1e+21`.
+  const figure = pct === null ? null : signedFigure(pct, places);
+  return figure === null ? '—' : `${figure.text}%`;
 }
 
 /** The direction colour for a change: mint, berry, or neither when it rounds to zero. */
 export function pctDirection(pct: number | null, places = 2): Direction {
-  if (pct === null || !Number.isFinite(pct)) return 'flat';
-  if (Number(Math.abs(pct).toFixed(places)) === 0) return 'flat';
-  return pct > 0 ? 'up' : 'down';
+  const tone = pct === null ? null : (signedFigure(pct, places)?.tone ?? null);
+  return tone ?? 'flat';
 }
 
 /**

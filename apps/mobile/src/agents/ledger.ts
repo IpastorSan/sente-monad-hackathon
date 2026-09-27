@@ -24,6 +24,7 @@
  */
 import { formatAtoms, formatFixedAtoms, groupThousands, normalizeDecimal } from './amounts.ts';
 import { BALANCE_PLACES } from '../ui/format.ts';
+import { signedFigure } from '../ui/money.ts';
 
 /** The five things the Ledger shows. */
 export type LedgerEntryKind = 'thesis' | 'trade' | 'refusal' | 'verdict' | 'deposit';
@@ -441,21 +442,17 @@ export function shortHash(hash: string): string {
   return hash.length > 16 ? `${hash.slice(0, 8)}…${hash.slice(-4)}` : hash;
 }
 
+/** The Ledger's P&L precision; `pnlTone` defaults to it so a tone matches its label. */
+export const SIGNED_PNL_PLACES = 6;
+
 /**
- * `+12.4` / `−12.4`, with a real minus sign. Grouped by hand, not through
- * `Intl`: Hermes ships a partial `Intl` and this must read the same everywhere.
+ * `+12.4` / `−12.4` / `0`: the venue's precision up to six decimals, trailing
+ * zeros dropped. Through `signedFigure` (SEN-136), so it stays exact past 1e21
+ * and a figure that rounds away (`-0.0000001`) reads `0`, never `−0` or `+0`.
  */
 export function signedPnl(pnl: string | null): string {
   if (pnl === null || pnl === '') return '—';
-  const value = Number(pnl);
-  if (!Number.isFinite(value)) return pnl;
-  // Keep the venue's precision, up to six decimals, without float noise from
-  // the multiply. Past 1e21 `String` goes exponential, so hand that back as-is.
-  const rounded = Math.round(Math.abs(value) * 1e6) / 1e6;
-  const plain = String(rounded);
-  if (plain.includes('e') || plain.includes('E')) return pnl;
-  const [whole = '0', fraction = ''] = plain.split('.');
-  return `${value < 0 ? '−' : '+'}${groupThousands(whole)}${fraction ? `.${fraction}` : ''}`;
+  return signedFigure(pnl, SIGNED_PNL_PLACES, { trim: true })?.text ?? pnl;
 }
 
 /**

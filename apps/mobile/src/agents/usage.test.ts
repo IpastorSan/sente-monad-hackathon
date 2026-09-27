@@ -67,6 +67,14 @@ test('pnlTone reads the sign of a decimal string and treats zero as neither', ()
   assert.equal(pnlTone(null), null);
 });
 
+test('pnlTone judges the figure at the places it is shown (SEN-136)', () => {
+  // Pre-fix: `down`, so the agents tab printed `−0 today` in berry.
+  assert.equal(pnlTone('-0.0000001'), null);
+  // Pre-fix: `down` beside a `pnlLabel` of `0.00`.
+  assert.equal(pnlTone('-0.001', 2), null);
+  assert.equal(pnlTone('-0.005', 2), 'down', 'half away from zero, so it prints −0.01');
+});
+
 test('usedFraction clamps to 0..1 and treats no usage as empty', () => {
   assert.equal(usedFraction('180', '250'), 0.72);
   assert.equal(usedFraction(null, '250'), 0);

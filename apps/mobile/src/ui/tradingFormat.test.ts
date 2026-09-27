@@ -55,6 +55,15 @@ test('pctChange measures from the base, null without one', () => {
   assert.equal(pctChange('x', '1'), null);
 });
 
+test('formatPct rounds the decimal it was given, not its binary neighbour (SEN-136)', () => {
+  // Pre-fix `toFixed` read 2.675 and 1.005 as 2.67499… and 1.00499….
+  assert.equal(formatPct(2.675), '+2.68%');
+  assert.equal(formatPct(-1.005), '−1.01%');
+  assert.equal(pctDirection(1.005), 'up');
+  // Pre-fix: `+1e+21%`.
+  assert.equal(formatPct(1e21), '+1,000,000,000,000,000,000,000.00%');
+});
+
 test('formatPct and pctDirection agree on the rounded figure', () => {
   assert.equal(formatPct(2.4149), '+2.41%');
   assert.equal(formatPct(-1.12), '−1.12%');

@@ -17,10 +17,17 @@
  */
 import { formatFixedAtoms, normalizeDecimal } from './amounts.ts';
 import type { AgentMandate, AgentSummary, WireAgentEvent } from './api.ts';
-import { depositAmount, signedPnl, toLedgerEntries, venueLabel } from './ledger.ts';
+import {
+  depositAmount,
+  SIGNED_PNL_PLACES,
+  signedPnl,
+  toLedgerEntries,
+  venueLabel,
+} from './ledger.ts';
 import { stoneFor, type LedgerStone } from './ledgerView.ts';
 import { formatNotional } from './mandate.ts';
 import { BALANCE_PLACES } from '../ui/format.ts';
+import { signedFigure } from '../ui/money.ts';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -46,14 +53,17 @@ export function compareDecimals(a: string, b: string): -1 | 0 | 1 | null {
   return l < r ? -1 : l > r ? 1 : 0;
 }
 
-/** Which way a signed P&L string points. `null` for zero or for no figure. */
-export function pnlTone(pnl: string | null | undefined): 'up' | 'down' | null {
-  if (pnl === null || pnl === undefined) return null;
-  const trimmed = pnl.trim();
-  const negative = trimmed.startsWith('-') || trimmed.startsWith('−');
-  const magnitude = normalizeDecimal(trimmed.replace(/^[-+−]/, ''));
-  if (magnitude === null || magnitude === '0') return null;
-  return negative ? 'down' : 'up';
+/**
+ * Which way a signed P&L string points, AT THE PLACES IT IS SHOWN: `null` for
+ * no figure or one that rounds to zero. SEN-136: judged on the exact figure,
+ * `-0.001` was painted berry beside a label reading `0.00`; so a caller showing
+ * `pnlLabel` passes its 2 places, and the default is `signedPnl`'s.
+ */
+export function pnlTone(
+  pnl: string | null | undefined,
+  places = SIGNED_PNL_PLACES,
+): 'up' | 'down' | null {
+  return signedFigure(pnl, places)?.tone ?? null;
 }
 
 // ---------------------------------------------------------------------------

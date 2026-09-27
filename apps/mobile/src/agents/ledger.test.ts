@@ -529,13 +529,22 @@ test('a malformed event invents nothing and throws nothing', () => {
   assert.equal(venueLabel(entry.venue), '—');
 });
 
+test('signedPnl rounds on the digits and never prints −0 (SEN-136)', () => {
+  // Each fails on the float version: `−0` for a figure that rounds away, and
+  // an 18+ digit figure float-rounded to `+1,234,567,890,123,456,800`.
+  assert.equal(signedPnl('-0.0000001'), '0');
+  assert.equal(signedPnl('-0.0000005'), '−0.000001', 'half away from zero');
+  assert.equal(signedPnl('1234567890123456789.25'), '+1,234,567,890,123,456,789.25');
+});
+
 test('the display formatters are pure and device-independent', () => {
   assert.equal(clockTime(Date.parse('2026-09-17T12:34:56.000Z')), '12:34:56');
   assert.equal(clockTime(Date.parse('2026-09-17T00:00:07.000Z')), '00:00:07');
 
   assert.equal(signedPnl('12.4'), '+12.4');
   assert.equal(signedPnl('-3.25'), '−3.25', 'a real minus sign, not a hyphen');
-  assert.equal(signedPnl('0'), '+0');
+  // SEN-136: zero is unsigned; `+0` claimed a gain that isn't there.
+  assert.equal(signedPnl('0'), '0');
   assert.equal(signedPnl('1234.5'), '+1,234.5');
   assert.equal(signedPnl(null), '—');
   assert.equal(signedPnl('nonsense'), 'nonsense');

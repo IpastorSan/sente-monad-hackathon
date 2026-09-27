@@ -30,6 +30,12 @@ import {
 
 const NOW = Date.UTC(2026, 8, 27, 9, 41);
 
+test('the change line reads a delta in exponent form as zero, not a dash (SEN-136)', () => {
+  // Pre-fix: `$—`, because the price formatter refused `1e-7`.
+  assert.equal(signedUsd('1e-7'), '$0.00');
+  assert.equal(signedUsd('-0.005'), '−$0.01', 'half away from zero');
+});
+
 function ticker(symbol: string, last: string, venue: 'kuru' | 'perpl' = 'kuru'): TickerDto {
   return {
     venue,

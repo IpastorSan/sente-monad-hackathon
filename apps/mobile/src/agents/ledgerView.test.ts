@@ -217,6 +217,23 @@ test('a ledger with nothing settled has no P&L rather than a zero', () => {
   assert.equal(countLabel(1204), '1,204');
 });
 
+test('a P&L that prints as 0.00 is neither a win nor a loss (SEN-136)', () => {
+  // Pre-fix: `−0.00` in berry for both.
+  assert.deepEqual(ledgerStats([verdict({ pnl: '-0.001' })]), {
+    trades: 0,
+    held: 0,
+    pnl: '0.00',
+    tone: null,
+  });
+  assert.deepEqual(verdictHeadline(verdict({ pnl: '-0.001', held: null })), {
+    lead: 'Closed long',
+    pnl: '0.00',
+    tone: null,
+  });
+  // Pre-fix: the float's `−2.67`.
+  assert.equal(verdictHeadline(verdict({ pnl: '-2.675' })).pnl, '−2.68');
+});
+
 test('decimals sum exactly, signs and scales mixed, and garbage is left out', () => {
   assert.equal(sumDecimals(['0.1', '0.2']), '0.3');
   assert.equal(sumDecimals(['-3.25', '1']), '-2.25');

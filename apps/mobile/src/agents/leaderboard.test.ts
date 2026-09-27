@@ -57,6 +57,15 @@ test('money is grouped and rounded to the cent, and the sign is a real minus', (
   assert.equal(pnlLabel('twelve'), 'twelve');
 });
 
+test('pnlLabel rounds on the digits, half away from zero, and never prints −0.00 (SEN-136)', () => {
+  // Each of these fails on the float version.
+  assert.equal(pnlLabel('-0.001'), '0.00');
+  assert.equal(pnlLabel('-2.675'), '−2.68');
+  assert.equal(pnlLabel('2.675'), '+2.68');
+  assert.equal(pnlLabel('123456789012345678.905'), '+123,456,789,012,345,678.91');
+  assert.equal(amountLabel('123456789012345678.905'), '123,456,789,012,345,678.91');
+});
+
 test('capital deployed has no sign', () => {
   assert.equal(amountLabel('100'), '100.00');
   assert.equal(amountLabel('0.5'), '0.50');
