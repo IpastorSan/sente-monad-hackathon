@@ -8,6 +8,7 @@ import { ChainModule } from './chain/chain.module';
 import { CreditsModule } from './credits/credits.module';
 import { GasModule } from './gas/gas.module';
 import { HealthModule } from './health/health.module';
+import { PresetsModule } from './presets/presets.module';
 import { TradeModule } from './trade/trade.module';
 import { VenuesModule } from './venues/venues.module';
 import { WalletModule } from './wallet/wallet.module';
@@ -30,6 +31,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     // The agent leaderboard (SEN-26): registered performance, read from the
     // SEN-25 indexer and the agents' own verdicts.
     LeaderboardModule,
+    // The preset catalog and its cohort stats (SEN-76).
+    PresetsModule,
     // Monad's commit state, followed over `MONAD_WS_URL` (SEN-21).
     ChainModule,
     CreditsModule,
