@@ -12,7 +12,13 @@ export type VenueId = 'kuru' | 'perpl';
 /** An exact decimal string ("12.5"), never a float — as everywhere on the wire. */
 export type Decimal = string;
 
-export type PresetId = 'range-trader' | 'guardian';
+export type PresetId =
+  | 'range-trader'
+  | 'guardian'
+  | 'trend-rider'
+  | 'funding-harvester'
+  | 'dca-stacker'
+  | 'mean-reverter';
 
 export type ParamValue = string | number | boolean | readonly string[];
 

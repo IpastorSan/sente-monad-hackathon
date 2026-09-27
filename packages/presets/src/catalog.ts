@@ -3,12 +3,24 @@
  * change to what it tells an agent is a version bump, never a data edit.
  */
 import { resolveParams } from './params.ts';
+import { dcaStacker } from './presets/dca-stacker.ts';
+import { fundingHarvester } from './presets/funding-harvester.ts';
 import { guardian } from './presets/guardian.ts';
+import { meanReverter } from './presets/mean-reverter.ts';
 import { rangeTrader } from './presets/range-trader.ts';
+import { trendRider } from './presets/trend-rider.ts';
 import type { ParamError, Params, PresetDefinition } from './types.ts';
 
-// Catalog order is display order; Guardian is the featured card, so it leads.
-const PRESETS: readonly PresetDefinition[] = [guardian, rangeTrader];
+// Catalog order is display order; Guardian is the featured card, so it leads,
+// and the rest follow agents.html, "The catalog" (SEN-72).
+const PRESETS: readonly PresetDefinition[] = [
+  guardian,
+  rangeTrader,
+  trendRider,
+  fundingHarvester,
+  dcaStacker,
+  meanReverter,
+];
 
 export function listPresets(): readonly PresetDefinition[] {
   return PRESETS;
