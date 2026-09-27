@@ -55,6 +55,7 @@ import {
   bucketStart,
   KLINE_INTERVAL_MS,
   KLINE_SOURCE,
+  kuruSlippageBound,
   simulateQuote,
   toDepth,
   toKlines,
@@ -136,7 +137,21 @@ export class KuruExecutionError extends Error {
   }
 }
 
-/** Levels per side read for a quote. */
+/**
+ * The on-chain book as `quote()` reads it (SEN-63): aggregated levels in book
+ * units, best first, with the params needed to decode them. `bestBid`/`bestAsk`
+ * are `null` for an empty side, never a sentinel.
+ */
+export type KuruBookSnapshot = {
+  readonly params: KuruMarketParams;
+  readonly bids: BookLevel[];
+  readonly asks: BookLevel[];
+  readonly bestBid: bigint | null;
+  readonly bestAsk: bigint | null;
+  readonly observedAt: number;
+};
+
+/** Levels per side read for a quote or a book snapshot. */
 const QUOTE_LEVELS = 100n;
 const GATEWAY_MAX_LEVELS = 200;
 const DEFAULT_KLINE_LIMIT = 500;
@@ -144,7 +159,6 @@ const DEFAULT_KLINE_LIMIT = 500;
 const MAX_CANDLES = 5000;
 /** `bestBidAsk()` reports an empty bid side as uint32 max and an empty ask side as 0. */
 const EMPTY_BID = 2n ** 32n - 1n;
-const WAD = 10n ** 18n;
 
 type PreparedOrder = {
   readonly market: KuruMarketConfig;
@@ -287,7 +301,12 @@ export class KuruVenue implements Venue {
     return klines.slice(-limit);
   }
 
-  async quote({ symbol, side, size }: QuoteRequest): Promise<Quote> {
+  /**
+   * The top `QUOTE_LEVELS` of the live on-chain book plus the market params,
+   * read together. Chain, not Gateway, because a quote or a slippage bound
+   * shown to a user is about to be signed against (SEN-63).
+   */
+  async bookSnapshot(symbol: MarketSymbol): Promise<KuruBookSnapshot> {
     const market = this.market(symbol);
     const [params, [bidPrices, bidSizes, askPrices, askSizes]] = await Promise.all([
       this.marketParams(symbol),
@@ -302,15 +321,30 @@ export class KuruVenue implements Venue {
       prices
         .map((price, i) => ({ price: BigInt(price), size: sizes[i] ?? 0n }))
         .filter((level) => level.size > 0n);
+    const bids = levels(bidPrices, bidSizes);
+    const asks = levels(askPrices, askSizes);
+    return {
+      params,
+      bids,
+      asks,
+      bestBid: bids[0]?.price ?? null,
+      bestAsk: asks[0]?.price ?? null,
+      observedAt: Date.now(),
+    };
+  }
+
+  async quote({ symbol, side, size }: QuoteRequest): Promise<Quote> {
+    const market = this.market(symbol);
+    const { params, bids, asks, observedAt } = await this.bookSnapshot(symbol);
     return simulateQuote({
       symbol,
       side,
       size,
       params,
       quoteDecimals: market.quote.decimals,
-      bids: levels(bidPrices, bidSizes),
-      asks: levels(askPrices, askSizes),
-      observedAt: Date.now(),
+      bids,
+      asks,
+      observedAt,
     });
   }
 
@@ -583,26 +617,19 @@ export class KuruVenue implements Venue {
     side: Side,
     maxSlippage: Decimal,
   ): Promise<Decimal> {
-    const slippage = toUnits(maxSlippage, 18, 'maxSlippage');
     const [bid, ask] = await this.#client.readContract({
       address: market.address,
       abi: kuruAbi.spotOrderBookAbi,
       functionName: 'bestBidAsk',
     });
-    const pd = precisionDecimals(params.pricePrecision);
-    const tick = params.tickSize;
-
-    if (side === 'buy') {
-      const best = BigInt(ask);
-      if (best === 0n) throw new KuruOrderError(`${market.symbol} has no asks`);
-      const bound = (best * (WAD + slippage)) / WAD;
-      return fromUnits(bound - (bound % tick), pd); // floor: never pay more than allowed
+    // The empty-side sentinels are `bestBidAsk()`'s, so they are checked here;
+    // the rounding lives in the pure `kuruSlippageBound` (SEN-63).
+    const best = BigInt(side === 'buy' ? ask : bid);
+    if (side === 'buy' && best === 0n) throw new KuruOrderError(`${market.symbol} has no asks`);
+    if (side === 'sell' && best === EMPTY_BID) {
+      throw new KuruOrderError(`${market.symbol} has no bids`);
     }
-    const best = BigInt(bid);
-    if (best === EMPTY_BID) throw new KuruOrderError(`${market.symbol} has no bids`);
-    if (slippage >= WAD) throw new KuruOrderError('maxSlippage must be below 1 for a sell');
-    const raw = (best * (WAD - slippage) + WAD - 1n) / WAD;
-    return fromUnits(raw % tick === 0n ? raw : raw + tick - (raw % tick), pd); // ceil: never sell for less
+    return kuruSlippageBound(best, side, maxSlippage, params);
   }
 
   async #history(accountId: bigint, market: KuruMarketConfig, ref: KuruOrderRef) {

@@ -58,6 +58,15 @@ export interface Market {
   maxLeverage?: number;
   /** Venue's own identifier, when it differs from `symbol`. */
   venueSymbol?: string;
+  /**
+   * Fee rates as fractions of notional, e.g. `'0.0007'` for 7 bps (SEN-63).
+   * Optional because not every venue's catalog read carries them; absent means
+   * unknown, not free.
+   */
+  makerFee?: Decimal;
+  takerFee?: Decimal;
+  /** Perp only: how margin is shared across positions on this market. */
+  marginMode?: MarginMode;
 }
 
 /** One price level of a book. */
