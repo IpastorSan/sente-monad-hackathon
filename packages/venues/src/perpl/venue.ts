@@ -25,10 +25,8 @@ import type {
   CancelRequest,
   Decimal,
   Depth,
-  DepthLevel,
   DepthQuery,
   Kline,
-  KlineInterval,
   KlineQuery,
   LimitOrderRequest,
   Market,
@@ -44,7 +42,19 @@ import type {
   TimeInForce,
 } from '../types.ts';
 import type { ClosePositionRequest, PerpsVenue, SetLeverageRequest } from '../venue.ts';
-import { divRound, fromScaled, toScaled, unit } from './decimal.ts';
+import { divRound, fromScaled, toScaled } from './decimal.ts';
+import {
+  PERPL_NETWORKS,
+  bookToDepth,
+  fetchPerplKlines,
+  perplMarkets,
+  perplSlippageBoundScaled,
+  quoteFromBook,
+  resolveMarket,
+  resolveSymbol,
+  type PerplNetwork,
+  type ResolvedMarket,
+} from './public.ts';
 import { PerplRest } from './rest.ts';
 import { ServerClock, type PerplCredentials } from './signing.ts';
 import { PerplTradingSocket, OPEN_ORDER_STATUSES } from './trading.ts';
@@ -54,26 +64,16 @@ import {
   ORDER_TYPE,
   POSITION_SIDE,
   type PerplContext,
+  type PerplL2Book,
   type PerplMarket,
   type PerplOrder,
   type PerplPosition,
 } from './wire.ts';
 import { defaultWebSocket, fetchBookSnapshot, type WebSocketFactory } from './ws.ts';
 
-export interface PerplNetwork {
-  readonly restUrl: string;
-  readonly wsUrl: string;
-  readonly chainId: number;
-}
-
-export const PERPL_NETWORKS = {
-  testnet: {
-    restUrl: 'https://testnet.perpl.xyz/api',
-    wsUrl: 'wss://testnet.perpl.xyz',
-    chainId: 10143,
-  },
-  mainnet: { restUrl: 'https://app.perpl.xyz/api', wsUrl: 'wss://app.perpl.xyz', chainId: 143 },
-} as const satisfies Record<string, PerplNetwork>;
+// The public reads moved to `public.ts` (SEN-69); re-exported so existing
+// imports from `venue.ts` keep working.
+export { PERPL_NETWORKS, resolveMarket, type PerplNetwork, type ResolvedMarket };
 
 export interface PerplVenueOptions {
   readonly credentials: PerplCredentials;
@@ -89,50 +89,12 @@ export interface PerplVenueOptions {
   readonly fetchImpl?: typeof fetch;
 }
 
-/** A Perpl market with its scaling resolved. */
-export interface ResolvedMarket {
-  readonly raw: PerplMarket;
-  readonly symbol: MarketSymbol;
-  /** price_decimals, size_decimals, collateral decimals. */
-  readonly pd: number;
-  readonly sd: number;
-  readonly cd: number;
-  readonly collateral: string;
-}
-
-export function resolveMarket(context: PerplContext, raw: PerplMarket): ResolvedMarket {
-  const instance = context.instances.find((i) => i.id === raw.instance_id) ?? context.instances[0];
-  const token = context.tokens.find((t) => t.id === instance?.collateral_token_id);
-  if (!token) throw new Error(`Perpl context has no collateral token for market ${raw.symbol}`);
-  return {
-    raw,
-    symbol: `${raw.symbol}-PERP`,
-    pd: raw.config.price_decimals,
-    sd: raw.config.size_decimals,
-    cd: token.decimals,
-    collateral: token.symbol,
-  };
-}
-
-const INTERVAL_SECONDS: Readonly<Record<KlineInterval, number | undefined>> = {
-  '1m': 60,
-  '5m': 300,
-  '15m': 900,
-  '30m': 1800,
-  '1h': 3600,
-  '4h': 14400,
-  '1d': 86400,
-  '1w': undefined, // Perpl's longest resolution is 1d
-};
-
 const TIF_FLAGS: Readonly<Record<TimeInForce, number>> = {
   GTC: ORDER_FLAGS.GoodTillCancel,
   POST_ONLY: ORDER_FLAGS.PostOnly,
   FOK: ORDER_FLAGS.FillOrKill,
   IOC: ORDER_FLAGS.ImmediateOrCancel,
 };
-
-const MAX_CANDLES = 1024;
 
 /** An order has left the book, one way or another. */
 const isTerminal = (o: PerplOrder) => !!o.r || !OPEN_ORDER_STATUSES.has(o.st);
@@ -331,129 +293,23 @@ export class PerplVenue implements PerpsVenue {
   // --- reads -------------------------------------------------------------
 
   async getMarkets(): Promise<Market[]> {
-    const context = await this.context();
-    return context.markets
-      .filter((raw) => raw.config.is_open)
-      .map((raw) => {
-        const m = resolveMarket(context, raw);
-        return {
-          symbol: m.symbol,
-          kind: 'perp',
-          base: raw.symbol,
-          quote: m.collateral,
-          tickSize: unit(m.pd),
-          stepSize: unit(m.sd),
-          minSize: unit(m.sd),
-          maxLeverage: raw.config.initial_margin / 100,
-          venueSymbol: raw.symbol,
-        };
-      });
+    return perplMarkets(await this.context());
   }
 
   async getDepth({ symbol, limit }: DepthQuery): Promise<Depth> {
     const m = await this.market(symbol);
-    const book = await fetchBookSnapshot(this.network.wsUrl, m.raw.id, {
-      webSocket: this.webSocket,
-    });
-    const level = (l: { p: number; s: number }): DepthLevel => ({
-      price: fromScaled(l.p, m.pd),
-      size: fromScaled(l.s, m.sd),
-    });
-    const bids = [...book.bid].filter((l) => l.s > 0).sort((a, b) => b.p - a.p);
-    const asks = [...book.ask].filter((l) => l.s > 0).sort((a, b) => a.p - b.p);
-    return {
-      symbol,
-      bids: bids.slice(0, limit ?? bids.length).map(level),
-      asks: asks.slice(0, limit ?? asks.length).map(level),
-      timestamp: book.at.t ?? Date.now(),
-      ...(book.sn !== undefined ? { sequence: book.sn } : {}),
-    };
+    return bookToDepth(await this.book(m), m, limit);
   }
 
-  /**
-   * Candles, oldest first.
-   *
-   * `volume` IS AN ESTIMATE. Perpl publishes candle volume only in collateral
-   * units (`v`), which is reported exactly as `quoteVolume`; base volume is
-   * derived as `quoteVolume / typical price ((h + l + c) / 3)`. Use
-   * `quoteVolume` wherever exactness matters.
-   */
-  async getKlines({ symbol, interval, startTime, endTime, limit }: KlineQuery): Promise<Kline[]> {
-    const resolution = INTERVAL_SECONDS[interval];
-    if (resolution === undefined) throw new Error(`Perpl has no ${interval} candles`);
-    const m = await this.market(symbol);
-    const step = resolution * 1000;
-    const to = (endTime ?? Date.now()) - 1; // endTime is exclusive
-    const count = Math.min(limit ?? 100, MAX_CANDLES);
-    const from = startTime ?? to - count * step;
-
-    const series = await this.rest.candles(m.raw.id, resolution, from, to);
-    const candles = series.d
-      .filter((c) => c.t >= from && c.t <= to)
-      .sort((a, b) => a.t - b.t)
-      .slice(-count);
-    return candles.map((c) => {
-      const quote = BigInt(c.v);
-      const typical3 = BigInt(c.h) + BigInt(c.l) + BigInt(c.c); // 3 × typical, scaled pd
-      // base (scaled sd) = quote / 10^cd / (typical / 10^pd) · 10^sd
-      const base =
-        typical3 > 0n
-          ? divRound(quote * 3n * 10n ** BigInt(m.pd + m.sd), typical3 * 10n ** BigInt(m.cd))
-          : 0n;
-      return {
-        openTime: c.t,
-        closeTime: c.t + step,
-        open: fromScaled(c.o, m.pd),
-        high: fromScaled(c.h, m.pd),
-        low: fromScaled(c.l, m.pd),
-        close: fromScaled(c.c, m.pd),
-        volume: fromScaled(base, m.sd),
-        quoteVolume: fromScaled(quote, m.cd),
-      };
-    });
+  /** Candles, oldest first; `volume` is an estimate (see `candlesToKlines`). */
+  async getKlines(query: KlineQuery): Promise<Kline[]> {
+    return fetchPerplKlines(this.rest, await this.market(query.symbol), query);
   }
 
   /** Walks a fresh book snapshot. Places nothing. */
-  async quote({ symbol, side, size }: QuoteRequest): Promise<Quote> {
-    const m = await this.market(symbol);
-    const wanted = toScaled(size, m.sd);
-    const book = await fetchBookSnapshot(this.network.wsUrl, m.raw.id, {
-      webSocket: this.webSocket,
-    });
-    const asks = [...book.ask].filter((l) => l.s > 0).sort((a, b) => a.p - b.p);
-    const bids = [...book.bid].filter((l) => l.s > 0).sort((a, b) => b.p - a.p);
-
-    let filled = 0n;
-    let cost = 0n; // Σ price·size, scaled pd+sd
-    for (const level of side === 'buy' ? asks : bids) {
-      if (filled >= wanted) break;
-      const take = BigInt(level.s) < wanted - filled ? BigInt(level.s) : wanted - filled;
-      filled += take;
-      cost += take * BigInt(level.p);
-    }
-
-    // Twice the mid, so it stays an integer.
-    const mid2 = bids[0] && asks[0] ? BigInt(bids[0].p) + BigInt(asks[0].p) : 0n;
-    let slippage = '0';
-    if (filled > 0n && mid2 > 0n) {
-      // (avg − mid) / mid  ==  (2·cost − mid2·filled) / (mid2·filled); adverse is positive.
-      const adverse = side === 'buy' ? 2n * cost - mid2 * filled : mid2 * filled - 2n * cost;
-      slippage = fromScaled(divRound(adverse * 10n ** 8n, mid2 * filled), 8);
-    }
-    return {
-      symbol,
-      side,
-      size,
-      fillableSize: fromScaled(filled, m.sd),
-      averagePrice: filled > 0n ? fromScaled(divRound(cost * 10n ** 4n, filled), m.pd + 4) : '0',
-      notional: fromScaled(cost, m.pd + m.sd),
-      slippage,
-      estimatedFee: fromScaled(
-        divRound(cost * BigInt(m.raw.config.taker_fee), 1_000_000n),
-        m.pd + m.sd,
-      ),
-      timestamp: book.at.t ?? Date.now(),
-    };
+  async quote(request: QuoteRequest): Promise<Quote> {
+    const m = await this.market(request.symbol);
+    return quoteFromBook(await this.book(m), m, request);
   }
 
   async getOpenOrders(symbol?: MarketSymbol): Promise<Order[]> {
@@ -640,11 +496,12 @@ export class PerplVenue implements PerpsVenue {
   }
 
   private async market(symbol: MarketSymbol, maxAgeMs?: number): Promise<ResolvedMarket> {
-    const context = await this.context(maxAgeMs);
-    const raw = context.markets.find((m) => `${m.symbol}-PERP` === symbol);
-    if (!raw) throw new Error(`Perpl has no market ${symbol}`);
-    if (!raw.config.is_open) throw new Error(`Perpl market ${symbol} is closed`);
-    return resolveMarket(context, raw);
+    return resolveSymbol(await this.context(maxAgeMs), symbol);
+  }
+
+  /** A fresh snapshot on its own socket. */
+  private book(m: ResolvedMarket): Promise<PerplL2Book> {
+    return fetchBookSnapshot(this.network.wsUrl, m.raw.id, { webSocket: this.webSocket });
   }
 
   private openType(side: Side, reduceOnly = false): number {
@@ -672,13 +529,6 @@ export class PerplVenue implements PerpsVenue {
     if (maxSlippage === undefined) {
       throw new Error('refusing an unbounded market order: pass slippageLimitPrice or maxSlippage');
     }
-    let micros = toScaled(maxSlippage, 6, 'floor');
-    const cap = BigInt(m.raw.order_max_market_slippage_bps) * 100n;
-    if (micros > cap) micros = cap;
-    if (micros < 0n) throw new Error(`maxSlippage must not be negative, got ${maxSlippage}`);
-    const mark = BigInt(m.raw.state.mrk);
-    return side === 'buy'
-      ? (mark * (1_000_000n + micros)) / 1_000_000n
-      : (mark * (1_000_000n - micros) + 999_999n) / 1_000_000n;
+    return perplSlippageBoundScaled(BigInt(m.raw.state.mrk), side, maxSlippage, m).price;
   }
 }

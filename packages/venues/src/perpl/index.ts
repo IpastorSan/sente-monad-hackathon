@@ -8,6 +8,7 @@ export * from './constants.ts';
 export * from './decimal.ts';
 export * from './enroll.ts';
 export * from './onboarding.ts';
+export * from './public.ts';
 export * from './rest.ts';
 export * from './signing.ts';
 export * from './trading.ts';
