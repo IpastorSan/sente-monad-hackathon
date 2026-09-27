@@ -25,6 +25,7 @@
     "@scure/base": "^2.4.0",
     "@scure/bip32": "^2.4.0",
     "@scure/bip39": "^2.4.0",
+    "@sente/presets": "workspace:*",
     "@sente/venues": "workspace:*",
     "@shopify/react-native-skia": "2.6.2",
     "expo": "~57.0.20",
