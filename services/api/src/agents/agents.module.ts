@@ -8,6 +8,7 @@ import {
   USER_WALLET_REGISTRY,
   type UserWalletRegistry,
 } from '../wallet/store/user-wallet-registry';
+import { VenuesModule } from '../venues/venues.module';
 import { WalletModule } from '../wallet/wallet.module';
 import {
   AGENT_WALLETS,
@@ -22,6 +23,7 @@ import {
 } from './agents.config';
 import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
+import { agentPortfolioProviders } from './portfolio/portfolio.service';
 import {
   DeviceMandateOwners,
   MANDATE_OWNERS,
@@ -151,6 +153,9 @@ const authProvider: Provider = {
     WalletModule,
     AgentStoreModule,
     AlchemyModule,
+    // VenuesModule: MarketDataService, the marks the agent portfolio values
+    // spot holdings at (SEN-78). It imports nothing from agents.
+    VenuesModule,
     ...agentRunnerImports,
   ],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
@@ -170,6 +175,9 @@ const authProvider: Provider = {
     ...agentToolsProviders,
     // The Tool Runner loop, POST /agents/:id/run and AGENT_TICK_SECONDS (SEN-8).
     ...agentRunnerProviders,
+    // AgentPortfolioService (SEN-78): after the venue and tool providers,
+    // whose AgentVenues and AGENT_EVENTS it reads through.
+    ...agentPortfolioProviders,
   ],
   exports: [
     AgentsService,

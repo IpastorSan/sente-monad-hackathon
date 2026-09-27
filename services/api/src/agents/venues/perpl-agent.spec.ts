@@ -1,5 +1,13 @@
 import { PERPL_TESTNET_CONTRACTS, type PerplContext } from '@sente/venues/perpl';
-import { getAddress, type Address, type Hex, type TypedDataDefinition } from 'viem';
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  getAddress,
+  type Address,
+  type Hex,
+  type PublicClient,
+  type TypedDataDefinition,
+} from 'viem';
 
 import type { AgentWalletProvider } from '../agent-wallet.provider';
 import { EnclaveRefusedError } from '../agents.errors';
@@ -11,6 +19,7 @@ import {
   PerplAgentAccounts,
   PerplNotOnboardedError,
   PerplOnboardingError,
+  perplAccountInfo,
 } from './perpl-agent';
 
 const AGENT = {
@@ -252,5 +261,44 @@ describe('PerplAgentAccounts.credentials', () => {
     await expect(h.accounts.credentials(AGENT)).rejects.toBeInstanceOf(EnclaveRefusedError);
     expect(h.requests).toEqual(['/api/v1/api-key/payload']);
     expect(await h.secrets.getPerplCredentials(AGENT.agentId)).toBeUndefined();
+  });
+});
+
+describe('perplAccountInfo (SEN-78)', () => {
+  const client = (readContract: () => Promise<unknown>) =>
+    ({ readContract }) as unknown as PublicClient;
+  const reverted = () =>
+    new ContractFunctionExecutionError(
+      new ContractFunctionRevertedError({ abi: [], functionName: 'getAccountByAddr' }),
+      { abi: [], functionName: 'getAccountByAddr' },
+    );
+
+  it('reads the id, balance and locked balance off the account tuple', async () => {
+    const read = client(() =>
+      Promise.resolve({ accountId: 7n, balanceCNS: 150_000_000n, lockedBalanceCNS: 2_000_000n }),
+    );
+    await expect(perplAccountInfo(read, AGENT.address)).resolves.toEqual({
+      accountId: 7n,
+      balance: 150_000_000n,
+      locked: 2_000_000n,
+    });
+  });
+
+  it('is null for id 0 and for a revert, the two ways Perpl says "no account"', async () => {
+    const zero = client(() =>
+      Promise.resolve({ accountId: 0n, balanceCNS: 0n, lockedBalanceCNS: 0n }),
+    );
+    await expect(perplAccountInfo(zero, AGENT.address)).resolves.toBeNull();
+    await expect(
+      perplAccountInfo(
+        client(() => Promise.reject(reverted())),
+        AGENT.address,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('throws an RPC failure instead of reporting it as no account', async () => {
+    const down = client(() => Promise.reject(new Error('fetch failed')));
+    await expect(perplAccountInfo(down, AGENT.address)).rejects.toThrow('fetch failed');
   });
 });
