@@ -1,7 +1,10 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 import { KuruVenue } from '@sente/venues/kuru';
+import { PERPL_NETWORKS } from '@sente/venues/perpl';
 import type { PublicClient } from 'viem';
 
+import { PrivyClient } from '../agents/privy/privy.client';
+import { perplAccountReader } from '../agents/venues/perpl-agent';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import type { WriteSpacer } from '../spacing/write-spacer';
@@ -12,11 +15,20 @@ import { WALLET_CONFIG, type WalletConfig } from '../wallet/wallet.config';
 import { MONAD_PUBLIC_CLIENT, WalletModule } from '../wallet/wallet.module';
 import { TradeOutcomes } from './outcome';
 import { cachedPerplContext, PERPL_CONTEXT } from './perpl-context';
+import { PerplEnrollController } from './perpl-enroll.controller';
+import {
+  ENROLL_PERPL,
+  ENROLL_PRIVY,
+  PerplEnrollService,
+  type EnrollPerpl,
+  type EnrollPrivy,
+} from './perpl-enroll.service';
 import { StepExecutor } from './step-executor';
 import { loadTradeConfig, TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeController, TradingEnabledGuard } from './trade.controller';
 import { TradeService } from './trade.service';
 import { TradeStore } from './trade-store';
+import { InMemoryUserVenueSecretStore, USER_VENUE_SECRETS } from './user-venue-secrets';
 
 const configProvider: Provider = {
   provide: TRADE_CONFIG,
@@ -72,6 +84,29 @@ const outcomesProvider: Provider = {
 };
 
 /**
+ * Perpl enrollment (SEN-100) signs through the USER's Privy wallet, so it gets
+ * a client with the app credentials and nothing else — never one that holds
+ * the agent signing key, the same line `WalletModule` draws for USER_WALLETS.
+ * Null without credentials; the service then refuses `user_wallets_unconfigured`.
+ */
+const enrollPrivyProvider: Provider = {
+  provide: ENROLL_PRIVY,
+  inject: [WALLET_CONFIG],
+  useFactory: ({ privy }: WalletConfig): EnrollPrivy | null =>
+    privy ? new PrivyClient({ appId: privy.appId, appSecret: privy.appSecret }) : null,
+};
+
+/** Testnet only, like every other trading table (threat model, "Mainnet"). */
+const enrollPerplProvider: Provider = {
+  provide: ENROLL_PERPL,
+  inject: [MONAD_PUBLIC_CLIENT],
+  useFactory: (client: PublicClient): EnrollPerpl => ({
+    network: PERPL_NETWORKS.testnet,
+    accountOf: perplAccountReader(client),
+  }),
+};
+
+/**
  * AUTH: the same seam `wallet/` and `agents/` use — `Auth` reads back the
  * principal `SessionAuthGuard` verified for this request.
  */
@@ -87,7 +122,7 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
  */
 @Module({
   imports: [WalletModule],
-  controllers: [TradeController],
+  controllers: [TradeController, PerplEnrollController],
   providers: [
     configProvider,
     authProvider,
@@ -99,7 +134,12 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
     stepExecutorProvider,
     // Perpl's live context for onboarding (SEN-99); one cache for the process.
     { provide: PERPL_CONTEXT, useFactory: () => cachedPerplContext() },
+    enrollPrivyProvider,
+    enrollPerplProvider,
+    // One store per process: enrollment writes the read key Portfolio reads (M-T19).
+    { provide: USER_VENUE_SECRETS, useFactory: () => new InMemoryUserVenueSecretStore() },
+    PerplEnrollService,
   ],
-  exports: [TRADE_CONFIG, TradeStore, StepExecutor, TradeService],
+  exports: [TRADE_CONFIG, TradeStore, StepExecutor, TradeService, USER_VENUE_SECRETS],
 })
 export class TradeModule {}
