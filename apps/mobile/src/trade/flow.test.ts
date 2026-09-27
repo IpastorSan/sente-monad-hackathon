@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  cancelOrderCall,
   depositCalls,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
@@ -28,6 +29,7 @@ import { TradeApiError } from './api.ts';
 import { tradeIdempotencyKey } from './envelope.ts';
 import {
   describeTradeError,
+  kuruCancelDraft,
   runTrade,
   TradeApprovalRefusedError,
   TradePriceMovedError,
@@ -427,6 +429,65 @@ test('a cancel needs no market read and carries a phone-generated id', async () 
   const sent = api.calls[0]!.args[0] as TradeIntent;
   assert.equal(sent.kind, 'kuru.cancel');
   assert.match(sent.clientTradeId, UUID_V4);
+});
+
+/** What the server prepares for a Kuru cancel: one batch cancelling `slot`. */
+function prepareCancel(slot: number) {
+  return (intent: TradeIntent): PreparedTrade => ({
+    tradeId: TRADE_ID,
+    clientTradeId: intent.clientTradeId,
+    expiresAt: '2026-09-27T12:05:00.000Z',
+    wallet: { walletId: WALLET_ID, address: WALLET },
+    steps: [
+      {
+        index: 0,
+        kind: 'cancel',
+        title: 'cancel',
+        payload: payload(intent.clientTradeId, 0, cancelOrderCall(MON_USDC.address, slot)),
+      },
+    ],
+    summary: {},
+  });
+}
+
+const CANCEL_7 = kuruCancelDraft({ venue: 'kuru', symbol: MON_USDC.symbol, id: '7:23818' })!;
+
+test('a cancel of the confirmed order is verified, signed once and committed (SEN-144)', async () => {
+  const api = fakeApi({ prepare: prepareCancel(7) });
+  const { sign, signed } = recordingSigner();
+  const outcome = await runTrade(api, CANCEL_7, CTX, sign, () => {}, fakeClock());
+  assert.equal(outcome.status, 'completed');
+  assert.equal(signed.length, 1);
+  assert.deepEqual(
+    api.calls.map((c) => c.method),
+    ['prepare', 'commit', 'status'],
+  );
+});
+
+test('a cancel prepared for another order signs NOTHING and commits nothing (SEN-144)', async () => {
+  // Slot 8 is another of the user's resting orders: cancelling it would be
+  // a real, unwanted action, so the phone must refuse before signing.
+  const api = fakeApi({ prepare: prepareCancel(8) });
+  const { sign, signed } = recordingSigner();
+  await assert.rejects(
+    runTrade(api, CANCEL_7, CTX, sign, () => {}, fakeClock()),
+    (e: unknown) => e instanceof TradeApprovalRefusedError && /slot/.test(e.problem),
+  );
+  assert.equal(signed.length, 0);
+  assert.deepEqual(
+    api.calls.map((c) => c.method),
+    ['prepare'],
+  );
+});
+
+test('kuruCancelDraft takes the market from the phone table, and only for Kuru', () => {
+  assert.deepEqual(CANCEL_7, {
+    kind: 'kuru.cancel',
+    market: MON_USDC.address,
+    orderId: '7:23818',
+  });
+  assert.equal(kuruCancelDraft({ venue: 'perpl', symbol: 'BTC-PERP', id: '1' }), null);
+  assert.equal(kuruCancelDraft({ venue: 'kuru', symbol: 'NOPE-USDC', id: '7:1' }), null);
 });
 
 // ---------------------------------------------------------------------------

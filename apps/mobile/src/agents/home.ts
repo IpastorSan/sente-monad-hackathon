@@ -318,11 +318,6 @@ export function greeting(hour: number): string {
   return 'Good evening';
 }
 
-/** The hide-balances preference as stored on the device: `'1'` hides, anything else shows. */
-export function parseHidden(raw: string | null): boolean {
-  return raw === '1';
-}
-
 /** One agent's card under "Your agents at work": its last move and its day. */
 export type AgentAtWork = {
   move: Move | null;
