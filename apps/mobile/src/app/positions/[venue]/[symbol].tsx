@@ -10,8 +10,8 @@
  * (Perpl has none) and no stop field: stop-loss and take-profit are shown as
  * not on Perpl yet, pointing at an agent that watches levels instead.
  *
- * Close and add need the trade flow and are shown only while manual trading
- * is on (`useTradingEnabled`).
+ * Close, sell and add need the trade flow and are shown only while manual
+ * trading is on (`useTradingEnabled`).
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
@@ -68,7 +68,18 @@ export default function PositionScreen() {
     <Screen
       footer={
         found && user.trading ? (
-          <Actions kind={found.kind} onAdd={() => router.push('/trade')} />
+          <Actions
+            kind={found.kind}
+            onAdd={() => router.push('/trade')}
+            // The spot ticket's route, prefilled for a sell of this holding on
+            // its USDC book (the same market the chart shows).
+            onSell={() =>
+              router.push({
+                pathname: '/trade/[venue]/[symbol]',
+                params: { venue: 'kuru', symbol: market, side: 'sell' },
+              })
+            }
+          />
         ) : undefined
       }
     >
@@ -253,10 +264,20 @@ function SpotBody({ row, hidden }: { row: SpotRow; hidden: boolean }) {
 }
 
 /**
- * Close / sell and add. Add opens the ticket. Close needs the trade flow
- * (SEN-103, `src/trade/flow.ts`), which is not on main yet.
+ * Close / sell and add. Add opens the ticket. Sell opens the spot ticket
+ * (SEN-119) on a sell (SEN-144) rather than selling from here: the ticket owns
+ * size, price and review, and runs `runTrade` itself. Close is a reduce-only
+ * market order on Perpl, which arrives with the perp ticket (U-14).
  */
-function Actions({ kind, onAdd }: { kind: 'perp' | 'spot'; onAdd: () => void }) {
+function Actions({
+  kind,
+  onAdd,
+  onSell,
+}: {
+  kind: 'perp' | 'spot';
+  onAdd: () => void;
+  onSell: () => void;
+}) {
   return (
     <>
       <ButtonRow>
@@ -265,23 +286,19 @@ function Actions({ kind, onAdd }: { kind: 'perp' | 'spot'; onAdd: () => void }) 
           kind="soft"
           onPress={onAdd}
         />
-        {/*
-          TODO(SEN-103): close (a reduce-only market order on Perpl) and sell
-          (a Kuru market sell) go through `src/trade/flow.ts` — prepare,
-          verify, sign with the passkey, commit. Disabled until it lands so
-          the button never pretends to have done something.
-        */}
         <Button
           label={kind === 'perp' ? 'Close position' : 'Sell'}
           kind="primary"
-          disabled
-          onPress={() => undefined}
+          disabled={kind === 'perp'}
+          onPress={onSell}
           style={styles.grow}
         />
       </ButtonRow>
-      <Text style={[text.caption, styles.pending]}>
-        {kind === 'perp' ? 'Closing' : 'Selling'} from here arrives with the order ticket.
-      </Text>
+      {kind === 'perp' ? (
+        <Text style={[text.caption, styles.pending]}>
+          Closing from here arrives with the perp ticket.
+        </Text>
+      ) : null}
     </>
   );
 }

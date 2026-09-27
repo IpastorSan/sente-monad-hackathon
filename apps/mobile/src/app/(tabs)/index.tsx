@@ -19,7 +19,7 @@
  * captioned as such.
  *
  * The eye hides every figure for trading in public; the choice is kept on the
- * device (`expo-secure-store`, as the Markets lists are). Account lives behind
+ * device and shared with Portfolio (`portfolio/hideBalances.ts`). Account lives behind
  * the avatar. The study's bell is left out: there is no notification feed
  * behind it, and a purple dot is an event, so it cannot be decoration.
  *
@@ -32,7 +32,6 @@
  * card is worded — is `agents/home.ts`, under test. This file only lays out.
  */
 import { Canvas, Group, Path, Skia } from '@shopify/react-native-skia';
-import * as SecureStore from 'expo-secure-store';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
@@ -49,7 +48,6 @@ import {
   homeAgents,
   idleCash,
   latestMove,
-  parseHidden,
   realisedSeries,
   realisedToday,
   sinceLabel,
@@ -75,6 +73,7 @@ import {
   type TickerIndex,
 } from '@/markets/select';
 import { useSparklines } from '@/markets/useSparklines';
+import { useHideBalances } from '@/portfolio/hideBalances';
 import { useSession } from '@/session';
 import { Chart } from '@/ui/chart/Chart';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
@@ -112,8 +111,6 @@ const STABLES = FUNDING_TOKENS.filter(
 /** The route's own maximum: the day's verdicts for the chart, and the latest move. */
 const ACTIVITY_PAGE = 50;
 
-const HIDDEN_KEY = 'sente.home.hideBalances';
-
 export default function Home() {
   const router = useRouter();
   // The session lives in <SessionProvider> so the agent screens share it. The
@@ -123,7 +120,8 @@ export default function Home() {
   const activity = useActivity();
   const markets = useMarkets();
   const tickers = useTickers();
-  const [hidden, toggleHidden] = useHidden();
+  // The same preference as Portfolio's eye (SEN-144): hide here, hidden there.
+  const [hidden, toggleHidden] = useHideBalances();
   const [favourites, setFavourites] = useState<ReadonlySet<MarketKey>>(new Set());
   const [fundOpen, setFundOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -534,31 +532,6 @@ function EyeIcon({ off }: { off: boolean }) {
       </Group>
     </Canvas>
   );
-}
-
-/** The hide-balances switch, kept on the device. A failed read shows; a failed write is dropped. */
-function useHidden(): [boolean, () => void] {
-  const [hidden, setHidden] = useState(false);
-  useEffect(() => {
-    let live = true;
-    SecureStore.getItemAsync(HIDDEN_KEY).then(
-      (raw) => {
-        if (live) setHidden(parseHidden(raw));
-      },
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, []);
-  const toggle = useCallback(() => {
-    setHidden((was) => {
-      const next = !was;
-      SecureStore.setItemAsync(HIDDEN_KEY, next ? '1' : '0').catch(() => undefined);
-      return next;
-    });
-  }, []);
-  return [hidden, toggle];
 }
 
 /**

@@ -19,7 +19,7 @@
  * phone observed since the app opened, and the caption says exactly that.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
 
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
@@ -56,6 +56,7 @@ import {
   type OrderRow,
 } from '@/portfolio/view';
 import { useSession } from '@/session';
+import { describeTradeError, kuruCancelDraft, runTrade, type TradeFlowState } from '@/trade/flow';
 import { Chart } from '@/ui/chart/Chart';
 import { Button, Card, Loading, Notice, Row, Screen, Segmented, Sheet } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
@@ -275,7 +276,13 @@ export default function PortfolioScreen() {
           onShare={() => void Share.share({ message: address })}
         />
       ) : null}
-      <CancelSheet row={cancelling} hidden={hidden} onClose={() => setCancelling(null)} />
+      <CancelSheet
+        row={cancelling}
+        hidden={hidden}
+        trading={user.trading}
+        onClose={() => setCancelling(null)}
+        onSettled={user.polled.refresh}
+      />
     </Screen>
   );
 }
@@ -414,23 +421,89 @@ function FundSheet({
   );
 }
 
+type SheetNotice = { tone: 'info' | 'error'; title: string; detail?: string };
+
 /**
  * The cancel confirmation: what comes off the book, what goes back to cash,
  * and the race a partial fill can win. Neither venue can amend, so the sheet
  * says how to change a price instead of offering an Edit.
+ *
+ * A Kuru cancel runs through `runTrade` (SEN-144): the phone builds the
+ * `kuru.cancel` intent from its own market table, the server prepares it, the
+ * verifier checks it cancels exactly this order's slot, and only then does the
+ * passkey sign. Perpl cancels wait for U-14, so their confirm stays disabled.
  */
 function CancelSheet({
   row,
   hidden,
+  trading,
   onClose,
+  onSettled,
 }: {
   row: OrderRow | null;
   hidden: boolean;
+  trading: boolean;
   onClose: () => void;
+  /** A cancel reached the server (whatever its outcome): re-read the orders. */
+  onSettled: () => void;
 }) {
+  const { trade, wallet, auth } = useSession();
+  const [phase, setPhase] = useState<TradeFlowState['phase'] | null>(null);
+  const [notice, setNotice] = useState<SheetNotice | null>(null);
   const order = row?.order;
   const spot = order?.venue === 'kuru';
   const side = order?.side === 'buy' ? 'buy' : 'sell';
+  const draft = order ? kuruCancelDraft(order) : null;
+  const busy = phase !== null;
+
+  // A notice belongs to the order it was about; a new row starts clean.
+  useEffect(() => setNotice(null), [row?.key]);
+
+  const confirm = async () => {
+    const walletId = wallet.wallet?.walletId;
+    const address = wallet.wallet?.address;
+    if (draft === null || trade === null || walletId === undefined || address === undefined) {
+      setNotice({
+        tone: 'error',
+        title: 'Your wallet isn’t ready',
+        detail: 'Try again in a moment.',
+      });
+      return;
+    }
+    setNotice(null);
+    setPhase('preparing');
+    try {
+      const outcome = await runTrade(
+        trade,
+        draft,
+        { walletId, wallet: address },
+        auth.signPrivyAuthorization,
+        (state) => setPhase(state.phase),
+      );
+      onSettled();
+      if (outcome.status === 'completed') {
+        onClose();
+      } else if (outcome.status === 'pending') {
+        // Signed and sent, so never reported as failed (flow.ts `follow`).
+        setNotice({
+          tone: 'info',
+          title: 'Cancel sent, not confirmed yet',
+          detail: 'The order leaves the list once the cancel lands.',
+        });
+      } else {
+        setNotice({
+          tone: 'error',
+          title:
+            outcome.status === 'expired' ? 'The cancel expired' : 'The cancel didn’t go through',
+          detail: 'The order may still be on the book. Pull to refresh and try again.',
+        });
+      }
+    } catch (caught) {
+      setNotice({ tone: 'error', ...describeTradeError(caught) });
+    } finally {
+      setPhase(null);
+    }
+  };
   return (
     <Sheet
       visible={row !== null}
@@ -459,27 +532,44 @@ function CancelSheet({
             {spot ? 'Kuru' : 'Perpl'} can't amend an order: to change the price, cancel and place a
             new one. If part fills before the cancel lands, you keep what filled.
           </Text>
-          {/*
-            TODO(SEN-103): the cancel goes through the trade flow — prepare a
-            `kuru.cancel` intent, verify it, sign with the passkey, commit —
-            which `src/trade/flow.ts` owns and which is not on main yet. Until
-            it lands the confirm is shown but disabled rather than faked.
-          */}
+          {notice ? (
+            <View style={styles.sheetLead}>
+              <Notice tone={notice.tone} title={notice.title} detail={notice.detail} />
+            </View>
+          ) : null}
           <Button
-            label="Cancel order with passkey"
+            label={busy ? phaseLabel(phase) : 'Cancel order with passkey'}
             kind="primary"
-            disabled
-            onPress={() => undefined}
+            disabled={draft === null || !trading}
+            busy={busy}
+            onPress={() => void confirm()}
             style={styles.sheetButton}
           />
-          <Text style={[text.caption, styles.pending]}>
-            Cancelling from the app arrives with the order ticket.
-          </Text>
+          {draft === null ? (
+            <Text style={[text.caption, styles.pending]}>
+              Cancelling a Perpl order arrives with the perp ticket.
+            </Text>
+          ) : null}
           <Button label="Keep it on the book" onPress={onClose} style={styles.keep} />
         </>
       ) : null}
     </Sheet>
   );
+}
+
+/** The confirm button's label while the flow runs, so a slow step reads as progress. */
+function phaseLabel(phase: TradeFlowState['phase'] | null): string {
+  switch (phase) {
+    case 'verifying':
+    case 'signing':
+      return 'Checking and signing';
+    case 'committing':
+    case 'following':
+    case 'settled':
+      return 'Cancelling';
+    default:
+      return 'Preparing the cancel';
+  }
 }
 
 const styles = StyleSheet.create({

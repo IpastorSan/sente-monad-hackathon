@@ -14,7 +14,6 @@ import {
   homeAgents,
   idleCash,
   latestMove,
-  parseHidden,
   realisedSeries,
   realisedToday,
   sinceLabel,
@@ -247,12 +246,6 @@ test('greeting follows the hour', () => {
   assert.equal(greeting(13), 'Good afternoon');
   assert.equal(greeting(21), 'Good evening');
   assert.equal(greeting(2), 'Good evening');
-});
-
-test('parseHidden only hides on the stored flag', () => {
-  assert.equal(parseHidden('1'), true);
-  assert.equal(parseHidden('0'), false);
-  assert.equal(parseHidden(null), false);
 });
 
 function mandate(venues: AgentMandate['venues'], kuru: string[] = [], perpl: string[] = []) {

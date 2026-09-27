@@ -64,6 +64,24 @@ export type KuruTradeDraft =
   | Omit<KuruCancelIntent, 'clientTradeId'>
   | Omit<KuruWithdrawIntent, 'clientTradeId'>;
 
+/**
+ * The cancel draft for one of the user's resting orders, as `/portfolio` lists
+ * it (SEN-144). The market comes from the phone's own table by symbol, never
+ * from the server, so the verifier checks the cancel against a market this
+ * phone knows. `null` for anything this flow cannot cancel: a Perpl order
+ * (U-14) or a Kuru symbol the app does not trade.
+ */
+export function kuruCancelDraft(order: {
+  readonly venue: string;
+  readonly symbol: string;
+  readonly id: string;
+}): Omit<KuruCancelIntent, 'clientTradeId'> | null {
+  if (order.venue !== 'kuru') return null;
+  const market = KURU_TESTNET_MARKETS.find((m) => m.symbol === order.symbol);
+  if (market === undefined) return null;
+  return { kind: 'kuru.cancel', market: market.address, orderId: order.id };
+}
+
 export type TradeFlowContext = {
   /** Privy's id for the user's wallet; pins every step's envelope. */
   readonly walletId: string;
