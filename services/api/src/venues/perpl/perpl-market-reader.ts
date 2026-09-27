@@ -15,7 +15,7 @@
  * The book fallback is throttled because each one opens a socket against a
  * 10-requests/min server budget: when the feed has no fresh book and a snapshot
  * was taken in the last 30 s, the newest book we hold is served `stale: true`
- * rather than opening another.
+ * rather than opening another — up to 60 s old, past which the book is refused.
  *
  * `funding` is still null, but needs no new request: every `/pub/context`
  * market carries its latest `funding` event and `funding_interval_sec`
@@ -101,6 +101,16 @@ const STALE_IF_ERROR = {
 
 /** Same threshold as the feed's own `staleMs`, so both sources call a book stale alike. */
 const BOOK_STALE_MS = 15 * SECOND;
+
+/**
+ * The oldest book served at all once the feed has stopped vouching for it
+ * (SEN-131). Two snapshot windows: one failed fallback is ridden out stale, a
+ * second means Perpl's book is simply unknown. Without a cap the last book we
+ * ever held was served (flagged stale) forever, which is the "old price shown
+ * as current" the Kuru side refuses after 6.5 s. A quiet book on a live socket
+ * is not capped: the feed calls it fresh however old its last frame (SEN-62).
+ */
+const BOOK_MAX_AGE_MS = 2 * TTL.snapshot;
 
 type HeldBook = { readonly book: PerplL2Book; readonly receivedAt: number };
 type ServedBook = HeldBook & { readonly stale: boolean };
@@ -370,15 +380,13 @@ export class PerplMarketReader implements PerplReader {
     const newest = [fed, snapshot]
       .filter((held): held is HeldBook => held !== null && held !== undefined)
       .sort((a, b) => b.receivedAt - a.receivedAt)[0];
-    if (!newest) {
+    const age = newest ? this.#now() - newest.receivedAt : Infinity;
+    if (!newest || age >= BOOK_MAX_AGE_MS) {
       const why = this.#snapshotError.get(id) ?? 'no book received yet';
-      throw new VenueUnavailableError('perpl', `no ${m.symbol} order book: ${why}`);
+      const which = newest ? `order book newer than ${BOOK_MAX_AGE_MS / SECOND} s` : 'order book';
+      throw new VenueUnavailableError('perpl', `no ${m.symbol} ${which}: ${why}`);
     }
-    return {
-      book: newest.book,
-      receivedAt: newest.receivedAt,
-      stale: this.#now() - newest.receivedAt > BOOK_STALE_MS,
-    };
+    return { book: newest.book, receivedAt: newest.receivedAt, stale: age > BOOK_STALE_MS };
   }
 }
 
