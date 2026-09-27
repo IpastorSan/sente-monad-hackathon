@@ -126,6 +126,22 @@ export interface AgentRecord {
    * never fails a hire (SEN-27, the same shape as `gasFunding`).
    */
   readonly erc8004AgentId?: string;
+  /**
+   * How often the scheduler runs this agent on its own (SEN-67). Absent means
+   * no cadence of its own: the global `AGENT_TICK_SECONDS`, if set, or manual
+   * runs only. Per agent because each scheduled run spends its owner's
+   * credits, so the owner picks the rate — within `AGENT_SCHEDULE_MIN_SECONDS`
+   * and `AGENT_SCHEDULE_MAX_SECONDS`, which the DTO enforces.
+   */
+  readonly schedule?: AgentSchedule;
+}
+
+/** Bounds of `AgentSchedule.everySeconds`: once a minute to once a day (SEN-67). */
+export const AGENT_SCHEDULE_MIN_SECONDS = 60;
+export const AGENT_SCHEDULE_MAX_SECONDS = 86_400;
+
+export interface AgentSchedule {
+  readonly everySeconds: number;
 }
 
 /** The only fields that change after hire. */
@@ -140,6 +156,7 @@ export type AgentPatch = Partial<
     | 'revokedAt'
     | 'gasFunding'
     | 'erc8004AgentId'
+    | 'schedule'
   >
 >;
 

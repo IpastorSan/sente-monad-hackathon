@@ -31,6 +31,7 @@ import {
   ForkAgentDto,
   PrepareMandateDto,
   readMandateApproval,
+  ScheduleDto,
   ReturnFundsDto,
   RevokeAgentDto,
   RunAgentDto,
@@ -93,6 +94,9 @@ export class AgentsController {
         model: body.model,
         mandate: body.mandate,
         ...(body.public !== undefined ? { public: body.public } : {}),
+        ...(typeof body.schedule?.everySeconds === 'number'
+          ? { schedule: { everySeconds: body.schedule.everySeconds } }
+          : {}),
       });
       return { agent: toAgentResponse(agent), mcpToken };
     });
@@ -280,6 +284,23 @@ export class AgentsController {
       }
       return toAgentResponse(await this.agents.amendMandate(principal, params.id, body.mandate));
     });
+  }
+
+  /**
+   * Set or clear the agent's own run cadence (SEN-67). `{ everySeconds: null }`
+   * clears it. 400 outside 60..86400 s, 404 `agent_not_found` for someone
+   * else's agent, 409 `agent_revoked`.
+   */
+  @Patch(':id/schedule')
+  async setSchedule(
+    @Param() params: AgentIdParamDto,
+    @Body() body: ScheduleDto,
+  ): Promise<AgentResponseDto> {
+    return this.guard(async () =>
+      toAgentResponse(
+        await this.agents.setSchedule(this.auth.principal(), params.id, body.everySeconds),
+      ),
+    );
   }
 
   /**

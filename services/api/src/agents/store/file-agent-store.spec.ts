@@ -161,6 +161,18 @@ describe('FileAgentStore persistence', () => {
     expect(await after.listActive()).toEqual([]);
   });
 
+  it('keeps a schedule across a restart, and a cleared one stays cleared (SEN-67)', async () => {
+    const agent = testAgent();
+    await new FileAgentStore(path).insert(agent);
+    await new FileAgentStore(path).update(agent.id, { schedule: { everySeconds: 300 } });
+    expect((await new FileAgentStore(path).get(agent.id))!.schedule).toEqual({
+      everySeconds: 300,
+    });
+
+    await new FileAgentStore(path).update(agent.id, { schedule: undefined });
+    expect(await new FileAgentStore(path).get(agent.id)).not.toHaveProperty('schedule');
+  });
+
   it('still finds an agent by its MCP token hash after a restart', async () => {
     const agent = testAgent();
     await new FileAgentStore(path).insert(agent);

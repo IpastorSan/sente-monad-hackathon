@@ -39,6 +39,7 @@ import {
   type AgentGasFunding,
   type AgentPatch,
   type AgentRecord,
+  type AgentSchedule,
   type AgentStore,
 } from './store/agent-store';
 import { generateMcpToken, hashMcpToken, MCP_TOKEN_PREFIX } from './store/mcp-token';
@@ -57,6 +58,11 @@ export interface HireAgentInput {
    * means `false`: sharing is opt-in, per agent.
    */
   public?: boolean;
+  /**
+   * Run cadence (SEN-67); absent means none of its own. The DTO bounds it; see
+   * `AGENT_SCHEDULE_MIN_SECONDS`.
+   */
+  schedule?: AgentSchedule;
 }
 
 /**
@@ -284,6 +290,7 @@ export class AgentsService {
       policyCleared: false,
       // Opt-in, per agent: unset means private, so nothing is shared by accident.
       public: input.public ?? false,
+      ...(input.schedule ? { schedule: { everySeconds: input.schedule.everySeconds } } : {}),
       createdAt: now,
       updatedAt: now,
       mandateSince: now,
@@ -358,6 +365,8 @@ export class AgentsService {
       // The fork inherits the strategy, never the source's sharing choice.
       public: false,
       forkedFrom: source.id,
+      // No `schedule` (SEN-67): every scheduled run spends the FORKER's credits,
+      // so the cadence is theirs to opt into, never the source's to impose.
       createdAt: now,
       updatedAt: now,
       mandateSince: now,
@@ -541,6 +550,30 @@ export class AgentsService {
 
   get(principal: Principal, id: string): Promise<AgentRecord> {
     return this.owned(principal, id);
+  }
+
+  /**
+   * Sets (or, with `null`, clears) how often the scheduler runs this agent on
+   * its own (SEN-67). Only the owner may, because every scheduled run spends
+   * the owner's credits — which is also why a fork never inherits it.
+   *
+   * A revoked agent is refused rather than quietly updated: it never runs
+   * again, so a cadence on it would be a setting that does nothing.
+   */
+  setSchedule(principal: Principal, id: string, everySeconds: number | null): Promise<AgentRecord> {
+    return this.withAgentLock(id, async () => {
+      const agent = await this.owned(principal, id);
+      if (agent.status === 'revoked') {
+        throw new AgentRefusedError(
+          'agent_revoked',
+          `agent ${id} is revoked; revocation is permanent, so it has no schedule to set`,
+        );
+      }
+      return this.store.update(id, {
+        schedule: everySeconds === null ? undefined : { everySeconds },
+        updatedAt: new Date(),
+      });
+    });
   }
 
   /**
