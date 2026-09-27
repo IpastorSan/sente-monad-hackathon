@@ -103,9 +103,12 @@ function fakeApi(
     status?: { status: string; transactionHash?: string };
     executeStatus?: number;
     executeBody?: unknown;
+    /** Status-route answers in order, the last one repeating; overrides `status`. */
+    statusAnswers?: (() => Promise<Response>)[];
   } = {},
 ) {
   const calls: { method: string; path: string; body: unknown }[] = [];
+  let statusCalls = 0;
   const fetchImpl: typeof fetch = (input, init) => {
     const url = new URL(String(input));
     const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
@@ -127,6 +130,11 @@ function fakeApi(
       );
     }
     if (url.pathname.startsWith('/wallet/operations/')) {
+      const answers = options.statusAnswers;
+      if (answers?.length) {
+        const answer = answers[Math.min(statusCalls++, answers.length - 1)];
+        if (answer) return answer();
+      }
       return Promise.resolve(
         Response.json({
           userOpHash: USER_OP_HASH,
@@ -292,6 +300,53 @@ test('a timeout is pending, never a failure: the money may still have moved', as
   const sent = await sendSponsored(api, intent(), sign, { sleep: noSleep, timeoutMs: 0 });
 
   assert.equal(sent.confirmation?.status, 'pending');
+});
+
+test('an API restart mid-poll does not report a live transfer as failed', async () => {
+  // SEN-127. The status view is in memory, so a restart answers 404 for a hash
+  // it tracked a moment ago, and the gateway in front of it may 502 or drop
+  // the connection meanwhile. None of that is a verdict: the send keeps
+  // polling and reports what the operation actually did.
+  const notFound = () => Promise.resolve(Response.json({ message: 'nope' }, { status: 404 }));
+  const { api, calls } = fakeApi({
+    statusAnswers: [
+      () => Promise.resolve(Response.json({ userOpHash: USER_OP_HASH, status: 'pending' })),
+      () => Promise.reject(new TypeError('Network request failed')),
+      () => Promise.resolve(new Response('bad gateway', { status: 502 })),
+      notFound,
+      notFound,
+      () =>
+        Promise.resolve(
+          Response.json({
+            userOpHash: USER_OP_HASH,
+            status: 'included',
+            transactionHash: `0x${'cd'.repeat(32)}`,
+          }),
+        ),
+    ],
+  });
+
+  const sent = await sendSponsored(api, intent(), sign, { sleep: noSleep });
+
+  assert.equal(sent.confirmation?.status, 'included');
+  assert.equal(sent.confirmation?.source, 'api');
+  assert.equal(calls.filter((call) => call.path.startsWith('/wallet/operations/')).length, 6);
+});
+
+test('an API that never finds the hash again leaves the send pending, not reverted', async () => {
+  // SEN-127: if the restarted API never learns the hash back, the honest answer
+  // is "not confirmed yet" — the screen then says so instead of "nothing moved".
+  const { api, calls } = fakeApi({
+    statusAnswers: [() => Promise.resolve(Response.json({ message: 'nope' }, { status: 404 }))],
+  });
+
+  // A few real milliseconds with no sleeps between polls: enough for the 404
+  // to be read, and re-read, before the deadline.
+  const sent = await sendSponsored(api, intent(), sign, { sleep: noSleep, timeoutMs: 5 });
+
+  assert.ok(calls.some((call) => call.path.startsWith('/wallet/operations/')));
+  assert.equal(sent.confirmation?.status, 'pending');
+  assert.equal(sent.confirmation?.source, 'timeout');
 });
 
 test('does not sign a payload for another wallet, and sends nothing', async () => {
