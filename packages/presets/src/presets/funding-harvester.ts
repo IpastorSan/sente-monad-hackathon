@@ -57,11 +57,12 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
     ? ` and sell the ${coin} you hold on ${hedge} at market, slippage limit ${SLIPPAGE_PCT}% below the best bid`
     : '';
 
-  // SEN-72: no agent tool reports funding yet (TickerDto.funding stays null
-  // until B-T1 finds the endpoint), so the text makes a missing read mean
-  // "open nothing", the same way the candle presets treat a failed get_klines.
+  // SEN-145: get_funding reports the rate already per 8 hours, so the model
+  // compares it with the thresholds instead of converting Perpl's 43-minute
+  // interval itself. A failed or empty read still means "open nothing", as a
+  // failed get_klines does in the candle presets.
   const steps = [
-    `1. Read the funding rate of ${market} as a % per 8 hours (convert if the venue reports another interval). If no tool gives you the funding rate, open nothing this run and say why; keep any position you hold.`,
+    `1. Read the funding rate of ${market} with get_funding: ratePctPer8h is the rate as a % per 8 hours, positive when longs pay shorts (shorts are paid). If the read fails or has no funding, open nothing this run and say why; keep any position you hold.`,
     `2. If you have no ${market} short and funding is at or above +${min}% / 8h (shorts are paid): record a thesis, then short at market with ${MARGIN_SHARE_PCT}% of your AUSD collateral as margin at ${leverage}x leverage, size = margin x leverage / price, slippage limit ${SLIPPAGE_PCT}% below the best bid.${hedge ? ` Then buy the same size of ${coin} on ${hedge} at market with USDC, slippage limit ${SLIPPAGE_PCT}% above the best ask.` : ''}`,
     `3. If you hold the short and funding is ${exit}: close it with close_position${unwind}.`,
     `4. If you hold the short and the mark price is within ${LIQUIDATION_GUARD_PCT}% of its liquidation price: close it with close_position${unwind}.`,
@@ -103,7 +104,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
 
 export const fundingHarvester: PresetDefinition = {
   id: 'funding-harvester',
-  version: 1,
+  version: 2,
   name: 'Funding Harvester',
   tagline: 'Shorts a perp while funding pays shorts, and can hold the same coin on Kuru.',
   description:
@@ -160,6 +161,7 @@ export const fundingHarvester: PresetDefinition = {
     },
   ],
   tools: [
+    'get_funding',
     'get_depth',
     'get_balances',
     'get_positions',

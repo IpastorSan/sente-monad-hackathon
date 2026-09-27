@@ -17,9 +17,9 @@
  * was taken in the last 30 s, the newest book we hold is served `stale: true`
  * rather than opening another — up to 60 s old, past which the book is refused.
  *
- * `funding` is still null, but needs no new request: every `/pub/context`
+ * `funding` costs no request of its own (SEN-145): every `/pub/context`
  * market carries its latest `funding` event and `funding_interval_sec`
- * (SEN-62, docs/perpl.md "Market data, probed"). Wiring it is a follow-up.
+ * (SEN-62, docs/perpl.md "Market data, probed"), so it rides the 3 s context.
  */
 import type { Logger } from '@nestjs/common';
 import type { Decimal, Kline } from '@sente/venues';
@@ -335,7 +335,7 @@ export class PerplMarketReader implements PerplReader {
       ask,
       mid: positive(state.mid, m.pd) ?? midOf(bid, ask),
       ...dayFields(last, day?.value ?? null),
-      funding: null,
+      funding: fundingOf(m),
       stale: context.stale || Boolean(day?.stale),
       asOf: Math.min(state.at.t ?? context.loadedAt, day?.loadedAt ?? Infinity),
     };
@@ -399,6 +399,24 @@ function resolveOrNotFound(context: PerplContext, symbol: string): ResolvedMarke
     // Closed markets too: a market nobody can trade is not one we list.
     throw new MarketNotFoundError('perpl', symbol);
   }
+}
+
+/**
+ * The ticker's funding from the market's latest event (SEN-145). `rate` is
+ * micros per interval, so it is exact at 6 decimals. `nextAt` is an estimate:
+ * Perpl counts the interval in blocks, and the seconds figure is nominal (one
+ * observed gap was 2,643 s against 2,580). A market with no event yet, or no
+ * usable interval, has no funding to show rather than a made-up zero.
+ */
+function fundingOf(m: ResolvedMarket): TickerDto['funding'] {
+  const event = m.raw.funding;
+  const seconds = m.raw.funding_interval_sec;
+  if (!event || seconds === undefined || !(seconds > 0)) return null;
+  return {
+    rate: fromScaled(event.rate, 6),
+    intervalHours: seconds / 3600,
+    nextAt: event.at.t === undefined ? null : event.at.t + seconds * SECOND,
+  };
 }
 
 /** Perpl reports an absent price as 0; the wire contract says null. */

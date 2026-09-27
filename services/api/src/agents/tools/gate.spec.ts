@@ -1,7 +1,7 @@
 import { EnclaveRefusedError } from '../agents.errors';
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
-import type { DepthDto, KlinesDto, QuoteDto } from '../../venues/dto/markets.dto';
+import type { DepthDto, KlinesDto, QuoteDto, TickerDto } from '../../venues/dto/markets.dto';
 import { MarketNotFoundError } from '../../venues/market-data.service';
 import { AgentTools, type ToolContext, type ToolMarketData } from './context';
 import { GATED_TOOLS, toResultText, type ToolOutcome } from './gate';
@@ -299,6 +299,7 @@ describe('gate', () => {
         klines: unused,
         quote: unused,
         depth: unused,
+        ticker: unused,
         mark: (...args) => {
           marks.push(args);
           return mark();
@@ -991,6 +992,12 @@ describe('venue pre-flight (SEN-19)', () => {
   });
 
   describe('market-data reads (SEN-79)', () => {
+    /** What the fake ticker reports as BTC-PERP's funding: Perpl's live SEN-62 event. */
+    let fundingNow: TickerDto['funding'] = null;
+    beforeEach(() => {
+      fundingNow = { rate: '0.00003', intervalHours: 2580 / 3600, nextAt: 5_000 };
+    });
+
     /** A `MarketDataService` stand-in that records what it was asked. */
     function fakeMarketData() {
       const calls: { method: string; args: unknown[] }[] = [];
@@ -1059,6 +1066,31 @@ describe('venue pre-flight (SEN-19)', () => {
           calls.push({ method: 'mark', args: [venue, symbol] });
           return Promise.resolve(null);
         },
+        ticker: (venue, symbol) => {
+          calls.push({ method: 'ticker', args: [venue, symbol] });
+          if (symbol !== BTC_PERP) return Promise.reject(new MarketNotFoundError(venue, symbol));
+          const dto: TickerDto = {
+            venue,
+            symbol,
+            quote: 'AUSD',
+            last: null,
+            mark: null,
+            index: null,
+            bid: null,
+            ask: null,
+            mid: null,
+            open24h: null,
+            high24h: null,
+            low24h: null,
+            change24h: null,
+            change24hPct: null,
+            quoteVolume24h: null,
+            funding: fundingNow,
+            stale: false,
+            asOf: 2_000,
+          };
+          return Promise.resolve(dto);
+        },
       };
       return { marketData, calls };
     }
@@ -1102,6 +1134,52 @@ describe('venue pre-flight (SEN-19)', () => {
       ]);
       expect(h.kuru.writes()).toEqual([]);
       expect(await h.refusals()).toEqual([]);
+    });
+
+    it('get_funding reads the shared ticker, per 8h and in words, with no thesis (SEN-145)', async () => {
+      const md = fakeMarketData();
+      const h = await harness({ marketData: md.marketData });
+      expect(tool('get_funding').kind).toBe('read');
+
+      // 30 micros per 2,580 s interval: 0.003% x 28,800 / 2,580.
+      expect(await h.call('get_funding', { market: BTC_PERP })).toEqual({
+        ok: true,
+        result: {
+          market: BTC_PERP,
+          payer: 'longs pay shorts',
+          ratePctPer8h: '0.03348837',
+          ratePct: '0.003',
+          intervalMinutes: 43,
+          nextAt: 5_000,
+          stale: false,
+        },
+      });
+
+      fundingNow = { rate: '-0.0001', intervalHours: 1, nextAt: null };
+      expect(await h.call('get_funding', { market: BTC_PERP })).toMatchObject({
+        ok: true,
+        result: { payer: 'shorts pay longs', ratePctPer8h: '-0.08', ratePct: '-0.01' },
+      });
+
+      // No event yet is no rate, not a zero rate.
+      fundingNow = null;
+      expect(await h.call('get_funding', { market: BTC_PERP })).toMatchObject({
+        ok: true,
+        result: { market: BTC_PERP, funding: null },
+      });
+
+      expect(md.calls.map((c) => c.args)).toEqual([
+        ['perpl', BTC_PERP],
+        ['perpl', BTC_PERP],
+        ['perpl', BTC_PERP],
+      ]);
+      expect(await h.refusals()).toEqual([]);
+    });
+
+    it('get_funding turns an unknown market into invalid input', async () => {
+      const h = await harness({ marketData: fakeMarketData().marketData });
+      const outcome = refused(await h.call('get_funding', { market: MON_USDC }));
+      expect(outcome.refusal?.code).toBe('invalid_input');
     });
 
     it('refuses a Perpl 1w request as invalid input, with or without the shared service', async () => {

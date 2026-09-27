@@ -436,6 +436,17 @@ describe('SEN-72 presets', () => {
     );
   });
 
+  it('reads Funding Harvester funding from get_funding, and a missing read opens nothing (SEN-145)', () => {
+    const def = getPreset('funding-harvester');
+    assert.ok(def);
+    assert.equal(def.version, 2);
+    assert.ok(def.tools.includes('get_funding'));
+    const text = render('funding-harvester', {});
+    assert.match(text, /with get_funding: ratePctPer8h is the rate as a % per 8 hours/);
+    assert.match(text, /If the read fails or has no funding, open nothing this run/);
+    assert.doesNotMatch(text, /no tool gives you the funding rate/);
+  });
+
   it('keeps Trend Rider long-only unless both directions are chosen', () => {
     assert.doesNotMatch(render('trend-rider', {}), /short/i);
     assert.match(render('trend-rider', { direction: 'both' }), /or a short below the low/);
@@ -665,7 +676,7 @@ const FUNDING_HARVESTER_STRATEGY = [
   'Earn funding on BTC-PERP, Perpl perps, hedged with cbBTC held on cbBTC-USDC, Kuru spot. You only ever short the perp; never go long it.',
   '',
   'Every run:',
-  '1. Read the funding rate of BTC-PERP as a % per 8 hours (convert if the venue reports another interval). If no tool gives you the funding rate, open nothing this run and say why; keep any position you hold.',
+  '1. Read the funding rate of BTC-PERP with get_funding: ratePctPer8h is the rate as a % per 8 hours, positive when longs pay shorts (shorts are paid). If the read fails or has no funding, open nothing this run and say why; keep any position you hold.',
   '2. If you have no BTC-PERP short and funding is at or above +0.01% / 8h (shorts are paid): record a thesis, then short at market with 50% of your AUSD collateral as margin at 2x leverage, size = margin x leverage / price, slippage limit 0.5% below the best bid. Then buy the same size of cbBTC on cbBTC-USDC at market with USDC, slippage limit 0.5% above the best ask.',
   '3. If you hold the short and funding is below zero (shorts now pay): close it with close_position and sell the cbBTC you hold on cbBTC-USDC at market, slippage limit 0.5% below the best bid.',
   '4. If you hold the short and the mark price is within 10% of its liquidation price: close it with close_position and sell the cbBTC you hold on cbBTC-USDC at market, slippage limit 0.5% below the best bid.',

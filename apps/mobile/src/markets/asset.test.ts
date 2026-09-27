@@ -258,6 +258,15 @@ test('funding says who pays in words, then the rate and the countdown', () => {
     '0.0000% / 8h',
   );
   assert.equal(fundingView(null, now), null);
+  // SEN-145: Perpl's 2,580 s interval, not `0.7166666666666667h`.
+  assert.equal(
+    fundingView({ rate: '0.00003', intervalHours: 2580 / 3600, nextAt: null }, now)!.rate,
+    '+0.0030% / 43m',
+  );
+  assert.equal(
+    fundingView({ rate: '0.00003', intervalHours: 1.5, nextAt: null }, now)!.rate,
+    '+0.0030% / 1h 30m',
+  );
   assert.equal(countdown(now + 30_000, now), 'under 1m');
   assert.equal(countdown(now + 12 * MIN, now), '12m');
 });

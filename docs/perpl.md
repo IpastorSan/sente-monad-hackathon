@@ -111,7 +111,7 @@ authentication. Live, BTC over 24 h:
   that block with the exact `at.t` (`…890000`). The frames are keyed by market id, like the
   all-markets REST call.
 
-**Follow-up (not filed): wiring `TickerDto.funding`.** It costs no new request. In
+**Wired in SEN-145: `TickerDto.funding`, and the agents' `get_funding` tool reads it.** It costs no new request. In
 `PerplMarketReader.#ticker`, read `m.raw.funding` and `m.raw.funding_interval_sec` from the
 context it already caches, then set `rate = fromScaled(funding.rate, 6)`,
 `intervalHours = funding_interval_sec / 3600` and `nextAt = funding.at.t + funding_interval_sec *
