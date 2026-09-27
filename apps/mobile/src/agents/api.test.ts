@@ -204,6 +204,21 @@ test('hire carries the sharing flag only when it is set', async () => {
   assert.equal((calls[1]?.body as { public?: boolean }).public, true);
 });
 
+test('a preset hire (SEN-116) sends preset and schedule, and no text for the API to override', async () => {
+  const { api, calls } = recordingApi({ status: 201, body: { agent: WIRE_AGENT, mcpToken: 'a' } });
+  await api.hire({
+    name: 'Low Tide',
+    model: 'anthropic/claude-sonnet-5',
+    mandate: fromWireMandate(WIRE_MANDATE),
+    preset: { id: 'range-trader', version: 1, params: { target: 3 } },
+    schedule: { everySeconds: 900 },
+  });
+  const body = calls[0]?.body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(body), ['name', 'model', 'mandate', 'preset', 'schedule']);
+  assert.deepEqual(body['preset'], { id: 'range-trader', version: 1, params: { target: 3 } });
+  assert.deepEqual(body['schedule'], { everySeconds: 900 });
+});
+
 test('atoms beyond Number.MAX_SAFE_INTEGER survive the wire exactly', () => {
   const huge = 123_456_789_012_345_678_901_234n;
   const mandate = fromWireMandate(WIRE_MANDATE);

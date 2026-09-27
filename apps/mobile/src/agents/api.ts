@@ -166,8 +166,12 @@ export type WireAgent = AgentFields & { mandate: WireMandate };
 
 export type HireAgentRequest = {
   name: string;
-  systemPrompt: string;
-  strategy: string;
+  /**
+   * Required on a free-form hire. With a `preset`, omitted means the preset's
+   * own render; sent, it overrides it and marks the agent customized (SEN-73).
+   */
+  systemPrompt?: string;
+  strategy?: string;
   model: string;
   mandate: AgentMandate;
   /**
@@ -175,6 +179,21 @@ export type HireAgentRequest = {
    * means `false`: sharing is opt-in, per agent.
    */
   public?: boolean;
+  /**
+   * Hire from a catalog preset (SEN-73, SEN-116). The API renders the strategy
+   * and prompt from `params` with the same `@sente/presets` the phone
+   * previewed; `version` makes it refuse rather than render a newer text.
+   */
+  preset?: HirePresetRef;
+  /** Run on its own every `everySeconds` (SEN-67); omitted, it has no cadence of its own. */
+  schedule?: AgentSchedule;
+};
+
+/** `PresetRefDto` on `POST /agents`. */
+export type HirePresetRef = {
+  id: string;
+  version?: number;
+  params: Record<string, unknown>;
 };
 
 /**
@@ -568,11 +587,13 @@ export class AgentsApi {
       '/agents',
       {
         name: request.name,
-        systemPrompt: request.systemPrompt,
-        strategy: request.strategy,
+        ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+        ...(request.strategy !== undefined ? { strategy: request.strategy } : {}),
         model: request.model,
         mandate: toWireMandate(request.mandate),
         ...(request.public !== undefined ? { public: request.public } : {}),
+        ...(request.preset !== undefined ? { preset: request.preset } : {}),
+        ...(request.schedule !== undefined ? { schedule: request.schedule } : {}),
       },
     );
     return { agent: fromWireAgent(agent), mcpToken };
