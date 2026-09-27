@@ -58,7 +58,7 @@ import {
 import { WalletController } from './wallet.controller';
 import { WalletService } from './wallet.service';
 
-const MONAD_PUBLIC_CLIENT = Symbol('WALLET_MONAD_PUBLIC_CLIENT');
+export const MONAD_PUBLIC_CLIENT = Symbol('WALLET_MONAD_PUBLIC_CLIENT');
 
 type MonadPublicClient = ReturnType<typeof createMonadPublicClient>;
 
@@ -260,6 +260,21 @@ const authProvider: Provider = {
   // the device-key quorum that must own a new agent's mandate (SEN-43). It is
   // the SAME instance, deliberately — a second registry would be a second set of
   // bindings and hire would never find the wallet register just created.
-  exports: [WalletService, UserWalletService, USER_WALLET_REGISTRY],
+  //
+  // The rest are for `trade/` (SEN-83), which sends device-signed steps from
+  // the same user wallets. SEND_SPACER above all must be THIS instance: a trade
+  // step and a transfer from one wallet racing through two spacers would both
+  // compose against the same EIP-7702 nonce and one would be refused (SEN-42).
+  // WALLET_CONFIG carries the confirmation cadence the executor polls at.
+  exports: [
+    WalletService,
+    UserWalletService,
+    USER_WALLET_REGISTRY,
+    WALLET_CONFIG,
+    USER_WALLETS,
+    SEND_SPACER,
+    BUNDLER,
+    MONAD_PUBLIC_CLIENT,
+  ],
 })
 export class WalletModule {}

@@ -1,0 +1,43 @@
+/**
+ * The manual-trading feature flag (SEN-83, plan M-T1, "Architecture §5").
+ *
+ * `USER_TRADING` turns on the user's own Buy/Sell/Long/Short. It is off by
+ * default because trading moves the user's funds on a testnet venue whose
+ * contracts we do not control; a deployment has to opt in, never out.
+ *
+ * `USER_TRADE_ATOMIC_BATCH` packs a trade's steps into one ERC-7579 batch
+ * instead of sending them one at a time (plan §2, "Batching"). It is honoured
+ * only with `USER_TRADING` on, so turning trading off can never leave a
+ * half-enabled mode behind it.
+ *
+ * `chainId` is pinned rather than read: every address table and the phone's
+ * verifier assume Monad testnet, and mainnet is out of scope (threat model,
+ * "Mainnet").
+ */
+
+export const TRADE_CONFIG = Symbol('TRADE_CONFIG');
+
+/** Monad testnet — the only chain trading is built for. */
+export const TRADE_CHAIN_ID = 10143;
+
+export interface TradeConfig {
+  readonly enabled: boolean;
+  readonly atomicBatch: boolean;
+  readonly chainId: typeof TRADE_CHAIN_ID;
+}
+
+export function loadTradeConfig(env: NodeJS.ProcessEnv = process.env): TradeConfig {
+  const enabled = isOn(env.USER_TRADING);
+  return {
+    enabled,
+    atomicBatch: enabled && isOn(env.USER_TRADE_ATOMIC_BATCH),
+    chainId: TRADE_CHAIN_ID,
+  };
+}
+
+// Only '1' and 'true' count — the same reading `AUTH_PLACEHOLDER` gets — so a
+// stray 'yes' or 'on' leaves trading off rather than guessing at intent.
+function isOn(raw: string | undefined): boolean {
+  const value = raw?.trim();
+  return value === '1' || value === 'true';
+}
