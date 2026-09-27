@@ -257,9 +257,10 @@ export async function sendSponsored(
   const sent = await api.executeSend(prepared.prepareId, sign(prepared.payload));
   if (!sent.userOpHash) return sent;
 
-  // The same API source the Kernel path races its bundler against: a 404 there
-  // is a real answer ("no record of this hash"), and anything else is transient
-  // and must not settle the race.
+  // The same API source the Kernel path races its bundler against. Only
+  // `included`/`reverted` settle it: a 404 (the API restarted and lost its
+  // in-memory record) or a transient error keeps polling, and a timeout comes
+  // back `pending` — never `reverted`, which would invite a second send (SEN-127).
   const confirmation = await waitForUserOperation(
     sent.userOpHash,
     { api: (hash) => readApiStatus(api, hash) },

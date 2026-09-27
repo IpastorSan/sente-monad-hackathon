@@ -22,14 +22,7 @@
  * ---------------------------------------------------------------------------
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  createPublicClient,
-  http,
-  type Address,
-  type Hash,
-  type Hex,
-  type LocalAccount,
-} from 'viem';
+import { createPublicClient, http, type Address, type Hex, type LocalAccount } from 'viem';
 import { createBundlerClient, getUserOperationHash } from 'viem/account-abstraction';
 
 import { monadChain } from '../chain';
@@ -43,7 +36,12 @@ import {
   type WalletAccount,
 } from './api';
 import { assertCallDataMatches } from './batch';
-import { readApiStatus, waitForUserOperation, type ConfirmationResult } from './confirmation';
+import {
+  readApiStatus,
+  readBundlerReceipt,
+  waitForUserOperation,
+  type ConfirmationResult,
+} from './confirmation';
 import { ENTRY_POINT, toSenteKernelAccount, type SenteKernelAccount } from './kernel';
 
 /**
@@ -299,25 +297,4 @@ export function useSmartAccount(
     sendCalls,
     refresh,
   };
-}
-
-async function readBundlerReceipt(
-  bundler: ReturnType<typeof createBundlerClient>,
-  userOpHash: Hash,
-) {
-  try {
-    const receipt = await bundler.getUserOperationReceipt({ hash: userOpHash });
-    if (!receipt) return null;
-    return {
-      // `receipt.success` is the UserOperation's OWN flag. A bundle transaction
-      // can succeed while the operation inside it reverted.
-      status: receipt.success ? ('included' as const) : ('reverted' as const),
-      transactionHash: receipt.receipt.transactionHash,
-      blockNumber: receipt.receipt.blockNumber,
-      actualGasCost: receipt.actualGasCost,
-    };
-  } catch {
-    // viem throws while the operation is still in the mempool. Normal.
-    return null;
-  }
 }
