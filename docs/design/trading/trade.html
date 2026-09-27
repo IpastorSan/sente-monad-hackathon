@@ -1,0 +1,1476 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Place an order</title>
+    <link rel="stylesheet" href="../sente.css" />
+    <link rel="stylesheet" href="trading.css" />
+    <script src="chart.js" defer></script>
+    <style>
+      /* Page-only pieces for the order ticket, built on Goban tokens. */
+      .behind {
+        padding: 0 var(--gutter);
+      }
+      .sheet {
+        z-index: 6;
+        padding-bottom: 26px;
+      }
+      .sheet__grip {
+        margin-bottom: 12px;
+      }
+      .sheet__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .sheet .chart {
+        margin-left: calc(-1 * var(--gutter));
+        margin-right: calc(-1 * var(--gutter));
+      }
+      .segs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .seg--side button[aria-pressed='true'].is-buy {
+        background: rgb(95 227 179 / 0.16);
+        color: var(--mint);
+      }
+      .seg--side button[aria-pressed='true'].is-sell {
+        background: rgb(240 80 140 / 0.16);
+        color: var(--berry);
+      }
+      .amount {
+        padding: 12px 0 4px;
+      }
+      .amount .big small {
+        margin-left: 6px;
+      }
+      .amount .big--md {
+        font-size: 48px;
+      }
+      .amount__sub {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 500 13px var(--f-body);
+        color: var(--text-dim);
+      }
+      .amount--bad .big {
+        color: var(--berry);
+      }
+      .caret {
+        display: inline-block;
+        width: 2px;
+        height: 0.8em;
+        margin-left: 2px;
+        vertical-align: -0.05em;
+        background: var(--purple-hi);
+        animation: blink 1.1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      .keypad span {
+        height: 42px;
+      }
+      .disclose {
+        margin-top: 10px;
+      }
+      .disclose svg.i {
+        margin-left: 4px;
+        vertical-align: -2px;
+      }
+      .disclose svg.i {
+        color: var(--text-dim);
+      }
+      .err {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 10px 12px;
+        border-radius: var(--r-well);
+        background: rgb(240 80 140 / 0.1);
+        color: var(--text);
+        font: 400 13px/1.45 var(--f-body);
+      }
+      .err b {
+        color: var(--berry);
+        font-weight: 500;
+      }
+      .err a,
+      .link {
+        color: var(--purple-hi);
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .note {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font: 400 13px/1.45 var(--f-body);
+        color: var(--text-dim);
+      }
+      .note svg.i {
+        margin-top: 1px;
+        color: var(--purple-hi);
+      }
+      .field__input {
+        padding: 11px 14px;
+      }
+      .field__input b {
+        font: 600 20px var(--f-display);
+        font-stretch: 85%;
+        font-variant-numeric: tabular-nums;
+      }
+      .helper {
+        display: flex;
+        justify-content: space-between;
+        font: 400 12px var(--f-body);
+        color: var(--text-faint);
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .stats > div {
+        display: grid;
+        gap: 1px;
+        padding: 8px 12px;
+        border-radius: var(--r-well);
+        background: var(--well);
+        font-variant-numeric: tabular-nums;
+      }
+      .stats b {
+        font: 500 15px var(--f-body);
+      }
+      .lev-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin: 14px 0 2px;
+      }
+      .lev-head b {
+        font: 600 22px var(--f-display);
+        font-stretch: 85%;
+      }
+      .ticks--abs {
+        position: relative;
+        height: 14px;
+      }
+      .ticks--abs span {
+        position: absolute;
+        transform: translateX(-50%);
+      }
+      .ticks--abs span:first-child {
+        transform: none;
+      }
+      .ticks--abs span:last-child {
+        transform: translateX(-100%);
+      }
+      .protect {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 2px 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: var(--r-well);
+        border: 1px dashed var(--line-strong);
+      }
+      .protect > svg.i {
+        color: var(--text-faint);
+      }
+      .protect .t-caption {
+        grid-column: 2 / -1;
+      }
+      .soon {
+        font: 500 10.5px/1.6 var(--f-body);
+        padding: 0 7px;
+        border-radius: 999px;
+        color: var(--text-dim);
+        background: var(--well);
+        white-space: nowrap;
+      }
+      .rows .row {
+        padding: 9px 0;
+      }
+      .rows .row > :first-child {
+        font-size: 13px;
+      }
+      .rows .row > :last-child {
+        font-size: 14px;
+      }
+      .passkey {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 6px;
+        margin-top: 10px;
+        font: 400 12px var(--f-body);
+        color: var(--text-faint);
+      }
+      .hold {
+        width: 100%;
+      }
+      .hold span {
+        position: relative;
+        z-index: 1;
+      }
+      /* Execution steps: a spine of stones. */
+      .steps {
+        position: relative;
+        display: grid;
+        gap: 0;
+      }
+      .steps::before {
+        content: '';
+        position: absolute;
+        left: 8px;
+        top: 12px;
+        bottom: 24px;
+        width: 1px;
+        background: var(--line-strong);
+      }
+      .step {
+        position: relative;
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 14px;
+        padding-bottom: 18px;
+      }
+      .step .stone {
+        --s: 18px;
+        margin-top: 1px;
+        z-index: 1;
+        display: grid;
+        place-items: center;
+        color: var(--ink);
+      }
+      .step .stone svg.i {
+        width: 11px;
+        height: 11px;
+        stroke-width: 3;
+      }
+      .stone--wait {
+        background: var(--board);
+        box-shadow: 0 0 0 1.5px var(--line-strong) inset;
+      }
+      .stone--now {
+        background: var(--ink);
+        box-shadow:
+          0 0 0 2px var(--purple) inset,
+          0 0 12px var(--purple-glow);
+      }
+      .stone--now::after {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--purple-hi);
+        animation: breathe 2.4s ease-in-out infinite;
+      }
+      .step__title {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font: 500 15px var(--f-body);
+      }
+      .step--wait .step__title {
+        color: var(--text-faint);
+      }
+      .step .ramp {
+        margin-top: 8px;
+      }
+      .result-mark {
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        margin: 18px auto 12px;
+        background: radial-gradient(circle at 35% 30%, #fff, #d8d3ee 70%);
+        color: var(--ink);
+        box-shadow: 0 0 24px rgb(236 232 251 / 0.25);
+      }
+      .result-mark svg.i {
+        width: 24px;
+        height: 24px;
+        stroke-width: 2.4;
+      }
+      .result-mark--half {
+        background: linear-gradient(90deg, #ece8fb 62%, var(--ink) 62%);
+        box-shadow: 0 0 0 2px #ece8fb inset;
+      }
+      .result-mark--ring {
+        background: var(--ink);
+        box-shadow:
+          0 0 0 2.5px #ece8fb inset,
+          0 0 24px rgb(236 232 251 / 0.18);
+      }
+      /* Narrow screens: the perp ticket gives up spacing, not content. */
+      @media (max-width: 440px) {
+        .sheet--dense {
+          padding-top: 6px;
+          padding-bottom: 16px;
+        }
+        .sheet--dense .sheet__grip {
+          margin-bottom: 8px;
+        }
+        .sheet--dense .amount {
+          padding: 4px 0 0;
+        }
+        .sheet--dense .lev-head {
+          margin-top: 8px;
+        }
+        .sheet--dense .narrow-hide {
+          display: none;
+        }
+        .sheet--dense .protect {
+          padding: 8px 10px;
+        }
+      }
+      .center {
+        text-align: center;
+      }
+      .fillbar {
+        position: relative;
+        height: 6px;
+        border-radius: 6px;
+        background: var(--well);
+        overflow: hidden;
+        margin: 12px 0 6px;
+      }
+      .fillbar i {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: var(--p);
+        background: var(--text);
+        border-radius: 6px;
+      }
+      .pick-row {
+        display: grid;
+        grid-template-columns: 32px 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 9px 0;
+      }
+      .pick-row .tok {
+        width: 32px;
+        height: 32px;
+        font-size: 13px;
+      }
+      .pick-row .t-strong,
+      .pick-row .t-dim {
+        line-height: 1.3;
+      }
+      .pick-row > div:last-child {
+        text-align: right;
+        display: grid;
+        font-variant-numeric: tabular-nums;
+      }
+      .recents {
+        display: flex;
+        gap: 8px;
+      }
+      .recents .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px 5px 5px;
+      }
+      .testnet {
+        font: 500 10px var(--f-chain);
+        color: var(--text-faint);
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head">
+        <div class="crumbs"><a href="index.html">Trading study</a> / Place an order</div>
+        <h1>Place an order</h1>
+        <p>
+          The order ticket is a bottom sheet over the asset page. One giant number, presets, and a
+          button whose label says what's missing or what will happen. Market orders are bounded (a
+          max slippage, and they can partially fill), manual trades are several transactions rather
+          than one, and a perp's liquidation price is our estimate. The ticket says all three
+          plainly instead of hiding them behind a spinner.
+        </p>
+      </header>
+
+      <section class="flow">
+        <header>
+          <h2>Spot ticket on Kuru</h2>
+          <p>
+            From the Trade button to MON: buy 200 USDC at market, confirm, watch it land; or rest a
+            limit
+          </p>
+        </header>
+        <div class="screens">
+          <!-- Pick -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="t-title">Home</span>
+                    <span class="testnet">Monad testnet</span>
+                  </div>
+                  <span class="big big--xl">3,918<small>.40</small></span>
+                  <div class="chg up">+$84.12 (+2.19%) today</div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet" style="top: 120px">
+                  <div class="sheet__grip"></div>
+                  <div class="sheet__head">
+                    <span class="t-title" style="font-size: 22px">Trade</span>
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-close" /></svg
+                    ></span>
+                  </div>
+                  <div class="field__input">
+                    <svg class="i"><use href="icons.svg#i-search" /></svg>
+                    <span class="placeholder">Search markets</span>
+                  </div>
+
+                  <div class="t-label" style="margin: 16px 0 8px">Recent</div>
+                  <div class="recents">
+                    <span class="chip"
+                      ><span class="tok tok--sm" style="--tok: var(--purple-soft)">M</span>MON</span
+                    >
+                    <span class="chip"
+                      ><span class="tok tok--sm" style="--tok: #cfd6ff">E</span>ETH-PERP</span
+                    >
+                    <span class="chip"
+                      ><span class="tok tok--sm" style="--tok: #f3e3b0">X</span>XAUt</span
+                    >
+                  </div>
+
+                  <div class="t-label" style="margin: 16px 0 2px">You hold</div>
+                  <div class="pick-row">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-strong">MON</div>
+                      <div class="t-caption">412.00 MON · Kuru spot</div>
+                    </div>
+                    <div>
+                      <span class="t-strong">0.9812</span><span class="t-caption up">+2.41%</span>
+                    </div>
+                  </div>
+                  <div class="pick-row">
+                    <span class="tok" style="--tok: #cfd6ff">E</span>
+                    <div>
+                      <div class="t-strong">ETH<span class="tag-perp">PERP 20×</span></div>
+                      <div class="t-caption">Long 3× · 0.25 ETH · Perpl</div>
+                    </div>
+                    <div>
+                      <span class="t-strong">2,544.10</span
+                      ><span class="t-caption down">−1.12%</span>
+                    </div>
+                  </div>
+
+                  <div class="t-label" style="margin: 14px 0 2px">All markets</div>
+                  <div class="pick-row">
+                    <span class="tok" style="--tok: #cfd6ff">W</span>
+                    <div>
+                      <div class="t-strong">WETH</div>
+                      <div class="t-caption">Kuru spot · USDC</div>
+                    </div>
+                    <div>
+                      <span class="t-strong">2,541.30</span
+                      ><span class="t-caption down">−1.08%</span>
+                    </div>
+                  </div>
+                  <div class="pick-row">
+                    <span class="tok" style="--tok: #f7c99b">B</span>
+                    <div>
+                      <div class="t-strong">BTC<span class="tag-perp">PERP 20×</span></div>
+                      <div class="t-caption">Perpl perps · AUSD</div>
+                    </div>
+                    <div>
+                      <span class="t-strong">64,188.5</span><span class="t-caption up">+0.58%</span>
+                    </div>
+                  </div>
+                  <div class="pick-row">
+                    <span class="tok" style="--tok: #f7c99b">C</span>
+                    <div>
+                      <div class="t-strong">cbBTC</div>
+                      <div class="t-caption">Kuru spot · USDC</div>
+                    </div>
+                    <div>
+                      <span class="t-strong">64,210.00</span
+                      ><span class="t-caption up">+0.62%</span>
+                    </div>
+                  </div>
+                  <div class="pick-row">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-strong">MON<span class="tag-perp">PERP 10×</span></div>
+                      <div class="t-caption">Perpl perps · AUSD</div>
+                    </div>
+                    <div>
+                      <span class="t-strong">0.9809</span><span class="t-caption up">+2.36%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Pick a market</h3>
+            <div class="backing">
+              <span class="b b--api">API · markets, ticker</span
+              ><span class="b b--live">Live · local recents</span>
+            </div>
+            <ul>
+              <li>
+                Recents first, then what you hold, then all eleven markets. Search filters that
+                short list; it never promises "any token".
+              </li>
+              <li>
+                Holdings row says your stake ("Long 3× · 0.25 ETH") so the sheet doubles as a quick
+                "add to / sell" entry.
+              </li>
+              <li>Each row names its venue and quote currency: USDC on Kuru, AUSD on Perpl.</li>
+            </ul>
+          </article>
+          <!-- Ticket -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <span class="big">0.9812</span>
+                    <div class="chg up">+2.41% today</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":200,"prev":true}'
+                  ></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="segs">
+                    <div class="seg seg--side">
+                      <button class="is-buy" aria-pressed="true">Buy</button
+                      ><button class="is-sell">Sell</button>
+                    </div>
+                    <div class="seg">
+                      <button aria-pressed="true">Market</button><button>Limit</button>
+                    </div>
+                  </div>
+                  <div class="amount">
+                    <span class="big">200<small>USDC</small><i class="caret"></i></span>
+                    <span class="amount__sub">≈ 203.8 MON · at 0.9812</span>
+                  </div>
+                  <div class="presets" style="margin-top: 8px">
+                    <button>10%</button><button>25%</button><button>50%</button><button>Max</button>
+                  </div>
+                  <div class="t-caption center" style="margin-top: 8px">500.00 USDC available</div>
+                  <div class="keypad" style="margin: 8px 0 12px">
+                    <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span
+                    ><span>6</span><span>7</span><span>8</span><span>9</span><span>.</span
+                    ><span>0</span
+                    ><span
+                      ><svg class="i i--lg"><use href="icons.svg#i-back" /></svg
+                    ></span>
+                  </div>
+                  <button class="btn btn--primary btn--block">Buy 203.8 MON</button>
+                  <div class="disclose">
+                    <span>Market · est. fill 0.9812 · fee 0.04 USDC</span><br /><span
+                      >Max slippage 0.5%</span
+                    >
+                    <svg class="i i--sm"><use href="icons.svg#i-gear" /></svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Amount in USDC, answer in MON</h3>
+            <div class="backing">
+              <span class="b b--api">API · quote</span
+              ><span class="b b--signing">Signing · order</span>
+            </div>
+            <ul>
+              <li>
+                You type what you spend; the MON you get is the quote walked through the book,
+                refreshed every few seconds.
+              </li>
+              <li>
+                Before any digit the button reads "Enter an amount", disabled. It never says just
+                "Buy".
+              </li>
+              <li>
+                The disclosure line is the order's contract: a market order here is an IOC limit at
+                0.5% worse than the est. fill. The gear sets 0.1–3%.
+              </li>
+              <li>
+                The side colour stays in the Buy segment; the button stays purple until the final
+                confirm.
+              </li>
+            </ul>
+          </article>
+          <!-- Invalid -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <span class="big">0.9812</span>
+                    <div class="chg up">+2.41% today</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":200,"prev":true}'
+                  ></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="segs">
+                    <div class="seg seg--side">
+                      <button class="is-buy" aria-pressed="true">Buy</button
+                      ><button class="is-sell">Sell</button>
+                    </div>
+                    <div class="seg">
+                      <button aria-pressed="true">Market</button><button>Limit</button>
+                    </div>
+                  </div>
+                  <div class="amount amount--bad">
+                    <span class="big">620<small>USDC</small><i class="caret"></i></span>
+                    <span class="amount__sub">≈ 631.9 MON · at 0.9812</span>
+                  </div>
+                  <div class="presets" style="margin-top: 8px">
+                    <button>10%</button><button>25%</button><button>50%</button><button>Max</button>
+                  </div>
+                  <div class="err" style="margin-top: 12px">
+                    <svg class="i i--sm" style="color: var(--berry); margin-top: 2px">
+                      <use href="icons.svg#i-bolt" />
+                    </svg>
+                    <span
+                      ><b>That's 120.00 USDC more than you have.</b> Tap Max for 500.00, or
+                      <a href="#">add USDC</a>.</span
+                    >
+                  </div>
+                  <div class="keypad" style="margin: 8px 0 12px">
+                    <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span
+                    ><span>6</span><span>7</span><span>8</span><span>9</span><span>.</span
+                    ><span>0</span
+                    ><span
+                      ><svg class="i i--lg"><use href="icons.svg#i-back" /></svg
+                    ></span>
+                  </div>
+                  <button class="btn btn--primary btn--block" disabled>Insufficient USDC</button>
+                  <div class="disclose">
+                    <span>Market · max slippage 0.5%</span>
+                    <svg class="i i--sm"><use href="icons.svg#i-gear" /></svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Invalid: more than you have</h3>
+            <div class="backing">
+              <span class="b b--live">Live · wallet balance</span
+              ><span class="b b--signing">Signing · order</span>
+            </div>
+            <ul>
+              <li>
+                The button carries the reason ("Insufficient USDC"); the line above says by how much
+                and the two ways out.
+              </li>
+              <li>
+                Other labels in the same slot: "Enter an amount", "Below Kuru's minimum (1.00
+                USDC)", "Quote is stale, refreshing".
+              </li>
+              <li>"Have" means wallet plus your Kuru account: USDC already deposited counts.</li>
+            </ul>
+          </article>
+          <!-- Review -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <span class="big">0.9812</span>
+                    <div class="chg up">+2.41% today</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":200,"prev":true}'
+                  ></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="sheet__head">
+                    <span class="t-title" style="font-size: 22px">Review your buy</span>
+                    <span class="pill pill--live">Quote 2s ago</span>
+                  </div>
+                  <div class="center" style="padding: 6px 0 12px">
+                    <span class="big">203.8<small>3 MON</small></span>
+                    <div class="t-dim" style="margin-top: 4px">for 200.00 USDC, at market</div>
+                  </div>
+                  <div class="rows">
+                    <div class="row"><span>Est. fill</span><span>0.9812 USDC</span></div>
+                    <div class="row"><span>Worst price</span><span>0.9861 USDC · +0.5%</span></div>
+                    <div class="row"><span>You get at least</span><span>202.82 MON</span></div>
+                    <div class="row"><span>Fee</span><span>0.04 USDC</span></div>
+                    <div class="row">
+                      <span>If it can't fill at 0.9861</span><span>the rest is cancelled</span>
+                    </div>
+                    <div class="row">
+                      <span>Venue</span><span class="t-chain">Kuru · MON-USDC book</span>
+                    </div>
+                  </div>
+                  <button class="btn btn--long hold" style="--held: 60%; margin-top: 16px">
+                    <span>Hold to buy 203.8 MON</span>
+                  </button>
+                  <div class="passkey">
+                    <svg class="i i--sm"><use href="icons.svg#i-key" /></svg> Your passkey signs
+                    this. First time on Kuru: 3 steps.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Review, hold to confirm</h3>
+            <div class="backing">
+              <span class="b b--api">API · quote</span
+              ><span class="b b--signing">Signing · passkey</span>
+            </div>
+            <ul>
+              <li>
+                The only mint button in the flow: the side's colour means "this moves money". Shown
+                mid-press, 60% held.
+              </li>
+              <li>
+                Worst price and "at least" are the bound we send, not decoration. If the quote goes
+                older than 10 s, the button falls back to "Refresh quote".
+              </li>
+              <li>The passkey line warns up front that a first Kuru trade takes three steps.</li>
+            </ul>
+          </article>
+          <!-- Execution -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <span class="big">0.9812</span>
+                    <div class="chg up">+2.41% today</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":200,"prev":true}'
+                  ></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="t-title" style="font-size: 22px">Buying 203.8 MON</div>
+                  <p class="t-dim" style="margin: 6px 0 20px">
+                    Your first Kuru trade takes three transactions. Each one lands on its own.
+                  </p>
+                  <div class="steps">
+                    <div class="step">
+                      <span class="stone stone--trade"
+                        ><svg class="i"><use href="icons.svg#i-check" /></svg
+                      ></span>
+                      <div>
+                        <div class="step__title"><span>Allow Kuru to use USDC</span></div>
+                        <div class="t-chain">approve · 0x4e1b…90ac · block 38,412,907</div>
+                      </div>
+                    </div>
+                    <div class="step">
+                      <span class="stone stone--now"></span>
+                      <div>
+                        <div class="step__title">
+                          <span>Deposit 200.04 USDC to Kuru</span>
+                          <span class="t-caption" style="color: var(--purple-hi)">landing</span>
+                        </div>
+                        <div class="ramp ramp--live">
+                          <div class="ramp__track"><div class="ramp__fill"></div></div>
+                          <div class="ramp__stops">
+                            <span class="on">SENT</span><span class="on">PROPOSED</span
+                            ><span>VOTED</span><span>FINAL</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="step step--wait" style="padding-bottom: 0">
+                      <span class="stone stone--wait"></span>
+                      <div>
+                        <div class="step__title"><span>Place the order</span></div>
+                        <div class="t-caption">Buy at market, worst price 0.9861</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="well" style="margin-top: 22px">
+                    <div class="note">
+                      <svg class="i i--sm"><use href="icons.svg#i-shield" /></svg>
+                      <span
+                        >If a step fails, nothing is lost. USDC you've deposited stays in your Kuru
+                        account; retry the order or withdraw it from Portfolio.</span
+                      >
+                    </div>
+                  </div>
+                  <button class="btn btn--soft btn--block" style="margin-top: 16px">
+                    Keep trading, we'll notify you
+                  </button>
+                </div>
+              </div>
+            </div>
+            <h3>Execution, step by step</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · approve, deposit, batch</span>
+            </div>
+            <ul>
+              <li>
+                Three non-atomic transactions, each a stone: purple solid when it landed, a
+                breathing ring with the consensus ramp while it lands, an empty ring while it waits.
+              </li>
+              <li>
+                Next time, if your Kuru account already holds the USDC, it's one step and this sheet
+                is skipped.
+              </li>
+              <li>
+                On failure the stone turns into a refusal ring and the button becomes "Retry the
+                order", naming where the money is right now.
+              </li>
+            </ul>
+          </article>
+          <!-- Limit -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <span class="big">0.9812</span>
+                    <div class="chg up">+2.41% today</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":200,"prev":true}'
+                  ></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="segs">
+                    <div class="seg seg--side">
+                      <button class="is-buy" aria-pressed="true">Buy</button
+                      ><button class="is-sell">Sell</button>
+                    </div>
+                    <div class="seg">
+                      <button>Market</button><button aria-pressed="true">Limit</button>
+                    </div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":120,"lines":[{"at":0.95,"kind":"limit","label":"YOUR LIMIT"}]}'
+                  ></div>
+                  <div class="field" style="margin-top: 10px">
+                    <span class="t-label">Limit price</span>
+                    <div class="field__input field__input--focus">
+                      <b>0.9500<i class="caret"></i></b><span class="suffix">USDC per MON</span>
+                    </div>
+                    <div class="helper">
+                      <span style="color: var(--text-dim)">−3.2% vs market 0.9812</span
+                      ><span>Drag the line</span>
+                    </div>
+                  </div>
+                  <div class="field" style="margin-top: 12px">
+                    <span class="t-label">Amount</span>
+                    <div class="field__input"><b>150</b><span class="suffix">MON</span></div>
+                    <div class="helper">
+                      <span>Total 142.50 USDC</span><span>500.00 USDC available</span>
+                    </div>
+                  </div>
+                  <div class="presets" style="margin-top: 12px">
+                    <button>10%</button><button>25%</button><button>50%</button><button>Max</button>
+                  </div>
+                  <div class="well" style="margin-top: 14px; display: grid; gap: 8px">
+                    <div class="note">
+                      <svg class="i i--sm"><use href="icons.svg#i-clock" /></svg>
+                      <span
+                        >Rests on the book until it fills or you cancel it. Kuru limit orders don't
+                        expire.</span
+                      >
+                    </div>
+                    <div class="note">
+                      <svg class="i i--sm"><use href="icons.svg#i-shield" /></svg>
+                      <span>142.50 USDC waits in your Kuru account while the order rests.</span>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--block" style="margin-top: 14px">
+                    Place limit buy
+                  </button>
+                  <div class="disclose">
+                    <span>Limit · may fill in parts · fee on fill ≈ 0.03 USDC</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Limit buy</h3>
+            <div class="backing">
+              <span class="b b--api">API · ticker, klines</span
+              ><span class="b b--signing">Signing · deposit, order</span>
+            </div>
+            <ul>
+              <li>
+                The limit is a purple-soft line on a mini chart; dragging it edits the field and the
+                "vs market" helper.
+              </li>
+              <li>
+                No expiry picker, because Kuru has none. The sheet says so instead of offering "Good
+                till" and quietly ignoring it.
+              </li>
+              <li>
+                Funds are named: the USDC is deposited and waits in Kuru, cancellable any time from
+                Portfolio → Open orders.
+              </li>
+              <li>This is the order that shows up as "buy 150 MON at 0.9500" on Portfolio.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="flow">
+        <header>
+          <h2>Results</h2>
+          <p>Filled, partly filled, resting: each says what happened and where the money is</p>
+        </header>
+        <div class="screens">
+          <!-- Filled -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span></span>
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-close" /></svg
+                    ></span>
+                  </div>
+                  <div class="result-mark">
+                    <svg class="i"><use href="icons.svg#i-check" /></svg>
+                  </div>
+                  <div class="center">
+                    <div class="t-dim">You bought</div>
+                    <span class="big big--xl">203.8<small>3 MON</small></span>
+                    <div class="t-dim" style="margin-top: 6px">
+                      at 0.9812 avg · 200.00 USDC + 0.04 fee
+                    </div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":150,"prev":true,"markers":[{"i":-1,"kind":"you","label":"You"}]}'
+                  ></div>
+                  <div class="rows" style="margin-top: 8px">
+                    <div class="row"><span>Filled</span><span>100% · 1 fill</span></div>
+                    <div class="row">
+                      <span>You now hold</span><span>615.83 MON · avg 0.9555</span>
+                    </div>
+                    <div class="row">
+                      <span>Order</span><span class="t-chain">0x9d02…7f3e ↗</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--soft">Done</button>
+                  <button class="btn btn--primary">View position</button>
+                </div>
+              </div>
+            </div>
+            <h3>Filled</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · fill receipt</span
+              ><span class="b b--api">API · klines</span>
+            </div>
+            <ul>
+              <li>
+                The fill is a white stone on the chart: your own move, in the ledger's language.
+              </li>
+              <li>
+                A calm full-screen, not a toast: amount, average, fee, and the new total position
+                (412.00 + 203.83 MON).
+              </li>
+              <li>No confetti. The mint of the side stays on the confirm; the result is white.</li>
+            </ul>
+          </article>
+          <!-- Partial -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span></span>
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-close" /></svg
+                    ></span>
+                  </div>
+                  <div class="result-mark result-mark--half"></div>
+                  <div class="center">
+                    <div class="t-dim">You bought</div>
+                    <span class="big big--xl">126.1<small>6 MON</small></span>
+                    <div class="t-dim" style="margin-top: 6px">of 203.83 · at 0.9829 avg</div>
+                  </div>
+                  <div class="fillbar"><i style="--p: 62%"></i></div>
+                  <div class="t-strong center">Filled 62% · rest cancelled</div>
+                  <div class="t-dim center" style="margin-top: 2px">
+                    The price moved past your worst price (0.9861, max slippage 0.5%) before the
+                    rest could fill.
+                  </div>
+
+                  <div class="t-label" style="margin: 18px 0 2px">Fills</div>
+                  <div class="rows">
+                    <div class="row"><span>81.48 MON</span><span>at 0.9818 · 80.00 USDC</span></div>
+                    <div class="row"><span>44.68 MON</span><span>at 0.9848 · 44.00 USDC</span></div>
+                    <div class="row">
+                      <span>Cancelled</span
+                      ><span class="t-dim">76.00 USDC · no offers ≤ 0.9861</span>
+                    </div>
+                  </div>
+                  <div class="t-label" style="margin: 18px 0 2px">Money</div>
+                  <div class="rows">
+                    <div class="row"><span>Spent</span><span>124.00 + 0.02 fee USDC</span></div>
+                    <div class="row">
+                      <span>Not spent</span><span>76.02 USDC · in your Kuru account</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--soft">Buy the rest</button>
+                  <button class="btn btn--primary">View position</button>
+                </div>
+              </div>
+            </div>
+            <h3>Partially filled</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · fill receipt</span
+              ><span class="b b--api">API · quote</span>
+            </div>
+            <ul>
+              <li>
+                A half stone, not an error. The line says what happened and why, in one sentence.
+              </li>
+              <li>
+                Where the unspent money is right now: it was deposited, so it waits in Kuru, ready
+                for the next order.
+              </li>
+              <li>
+                "Buy the rest" reopens the ticket with 76.02 USDC and a fresh quote; it never
+                re-sends the old bound.
+              </li>
+            </ul>
+          </article>
+          <!-- Limit placed -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span></span>
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-close" /></svg
+                    ></span>
+                  </div>
+                  <div class="result-mark result-mark--ring"></div>
+                  <div class="center">
+                    <div class="t-dim">On the book</div>
+                    <span class="big big--xl">150<small> MON</small></span>
+                    <div class="t-dim" style="margin-top: 6px">buy at 0.9500 · 142.50 USDC</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.9356656,"height":150,"lines":[{"at":0.95,"kind":"limit","label":"BUY 150 MON"}]}'
+                  ></div>
+                  <div class="rows" style="margin-top: 8px">
+                    <div class="row"><span>Filled</span><span>0 of 150 MON</span></div>
+                    <div class="row">
+                      <span>Waiting</span><span>142.50 USDC · in your Kuru account</span>
+                    </div>
+                    <div class="row"><span>Expires</span><span>Never · cancel any time</span></div>
+                    <div class="row">
+                      <span>Order</span><span class="t-chain">0x61c8…a04d ↗</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--soft">Cancel order</button>
+                  <button class="btn btn--primary">Open orders</button>
+                </div>
+              </div>
+            </div>
+            <h3>Limit resting</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · order, cancel</span
+              ><span class="b b--api">API · open orders</span>
+            </div>
+            <ul>
+              <li>
+                A hollow white stone: your move, placed as intent but not yet played. It turns
+                solid, fill by fill.
+              </li>
+              <li>
+                Status comes from polling open orders; a fill arrives as a notification, not a live
+                tick.
+              </li>
+              <li>
+                Cancel is right here because it is the only edit Kuru allows: no amend, so moving
+                the price means cancel and place again.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════ PERP ══════════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Perp long</h2>
+          <p>ETH-PERP on Perpl, 250 AUSD margin at 5×</p>
+        </header>
+        <div class="screens">
+          <!-- First perp: setup -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: #cfd6ff">E</span>
+                    <div>
+                      <div class="t-title">ETH<span class="tag-perp">PERP 20×</span></div>
+                      <div class="t-caption">ETH-PERP · Perpl perps</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px"><span class="big">2,544.10</span></div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="t-title" style="font-size: 22px">Set up your Perpl account</div>
+                  <p class="t-dim" style="margin: 6px 0 18px">
+                    Perpl keeps your margin in an account on the exchange, and opening one takes a
+                    100 AUSD minimum deposit. You do this once.
+                  </p>
+                  <div class="steps">
+                    <div class="step">
+                      <span class="stone stone--wait"></span>
+                      <div>
+                        <div class="step__title"><span>Allow Perpl to use AUSD</span></div>
+                        <div class="t-caption">A one-time approval</div>
+                      </div>
+                    </div>
+                    <div class="step">
+                      <span class="stone stone--wait"></span>
+                      <div>
+                        <div class="step__title"><span>Open the account with 100 AUSD</span></div>
+                        <div class="t-caption">
+                          Stays yours: it becomes margin for your first trades.
+                        </div>
+                      </div>
+                    </div>
+                    <div class="step" style="padding-bottom: 0">
+                      <span class="stone stone--wait"></span>
+                      <div>
+                        <div class="step__title"><span>Let Sente place your orders</span></div>
+                        <div class="t-caption">
+                          Enables order forwarding and signs a trading key for this phone.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="rows" style="margin-top: 16px">
+                    <div class="row"><span>From your wallet</span><span>100.00 AUSD</span></div>
+                    <div class="row">
+                      <span>Network fees</span><span>≈ 0.035 MON · you have 0.42</span>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--block" style="margin-top: 16px">
+                    <svg class="i"><use href="icons.svg#i-key" /></svg> Set up with passkey
+                  </button>
+                  <button
+                    class="btn btn--block"
+                    style="border: 0; color: var(--text-dim); min-height: 40px; margin-top: 4px"
+                  >
+                    Not now
+                  </button>
+                </div>
+              </div>
+            </div>
+            <h3>First perp ever: account setup</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · approve, createAccount, forwarding, key</span>
+            </div>
+            <ul>
+              <li>Opens instead of the ticket the first time you tap Long or Short on any perp.</li>
+              <li>
+                One line of why (margin lives on the exchange), the 100 AUSD minimum up front, and
+                that it's yours.
+              </li>
+              <li>
+                Runs with the same step stones as a first Kuru trade. If step 3 fails, the account
+                exists and the next attempt resumes there.
+              </li>
+            </ul>
+          </article>
+
+          <!-- Perp ticket -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="scrim"></div>
+                <div class="sheet sheet--dense">
+                  <div class="sheet__grip"></div>
+                  <div class="segs">
+                    <div class="seg seg--side">
+                      <button class="is-buy" aria-pressed="true">Long</button
+                      ><button class="is-sell">Short</button>
+                    </div>
+                    <div class="seg">
+                      <button aria-pressed="true">Market</button><button>Limit</button>
+                    </div>
+                  </div>
+                  <div class="amount" style="padding-top: 10px">
+                    <span class="t-label">Margin</span>
+                    <span class="big big--md">250<small>.00 AUSD</small></span>
+                  </div>
+                  <div class="presets" style="margin-top: 6px">
+                    <button>10%</button><button>25%</button><button>50%</button><button>Max</button>
+                  </div>
+                  <div class="t-caption center narrow-hide" style="margin-top: 6px">
+                    1,284.50 AUSD available
+                  </div>
+                  <div class="lev-head"><span class="t-label">Leverage</span><b>5×</b></div>
+                  <div class="slider" style="--p: 21.05%">
+                    <i style="--p: 21.05%"></i><b style="--p: 21.05%"></b>
+                  </div>
+                  <div class="ticks ticks--abs">
+                    <span style="left: 0">1×</span><span style="left: 21.05%">5×</span
+                    ><span style="left: 47.37%">10×</span><span style="left: 73.68%">15×</span
+                    ><span style="left: 100%">20×</span>
+                  </div>
+                  <div class="stats" style="margin-top: 12px">
+                    <div>
+                      <span class="t-caption">Position size</span><b>1,250.00 AUSD</b
+                      ><span class="t-caption">≈ 0.491 ETH</span>
+                    </div>
+                    <div>
+                      <span class="t-caption">Liq. price est.</span><b class="down">2,060.70</b
+                      ><span class="t-caption">−19.0% from entry</span>
+                    </div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"candles","seed":"ETH-PERP","points":30,"vol":0.025,"start":2419.1439617,"height":130,"lines":[{"at":2544.1,"kind":"entry","label":"ENTRY"},{"at":2060.7,"kind":"liq","label":"LIQ EST"}]}'
+                  ></div>
+                  <div class="protect" style="margin-top: 10px">
+                    <svg class="i"><use href="icons.svg#i-shield" /></svg>
+                    <span class="t-strong">Stop &amp; target</span>
+                    <span class="soon">Not on Perpl yet</span>
+                    <span class="t-caption"
+                      >Perpl can't hold stop orders yet, so we won't fake one. Close it yourself, or
+                      <a class="link" href="agents.html">hire an agent that trades with stops</a
+                      >.</span
+                    >
+                  </div>
+                  <button class="btn btn--primary btn--block" style="margin-top: 12px">
+                    Long ETH 5×
+                  </button>
+                  <div class="disclose">
+                    <span>Market · est. fill 2,544.10 · fee 0.63 AUSD</span><br /><span
+                      >Max slippage 0.5%</span
+                    >
+                    <svg class="i i--sm"><use href="icons.svg#i-gear" /></svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Perp ticket: margin, leverage, liq. est.</h3>
+            <div class="backing">
+              <span class="b b--api">API · quote, candles</span
+              ><span class="b b--signing">Signing · order</span
+              ><span class="b b--venue">Venue · SL/TP triggers</span>
+            </div>
+            <ul>
+              <li>
+                You type margin; size and liq. est. follow the slider live. The liq line on the
+                chart moves with it, so 20× visibly sits on top of the price.
+              </li>
+              <li>
+                Protect is a visible, disabled promise, not an agent. An agent can't watch this
+                position: it trades only its own wallet, and your perp isn't its funds.
+              </li>
+              <li>
+                The honest exit today is a link to hire a preset whose stops are agent-watched,
+                labelled that way on its own page.
+              </li>
+              <li>Keypad slides up only when you tap the margin, to leave room for leverage.</li>
+            </ul>
+          </article>
+
+          <!-- Perp review -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="behind">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: #cfd6ff">E</span>
+                    <div>
+                      <div class="t-title">ETH<span class="tag-perp">PERP 20×</span></div>
+                      <div class="t-caption">ETH-PERP · Perpl perps</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="sheet__head">
+                    <span class="t-title" style="font-size: 22px">Review your long</span>
+                    <span class="pill pill--live">Quote 1s ago</span>
+                  </div>
+                  <div class="center" style="padding: 4px 0 10px">
+                    <span class="side side--long">Long 5×</span>
+                    <div style="margin-top: 6px">
+                      <span class="big">0.491<small> ETH</small></span>
+                    </div>
+                    <div class="t-dim" style="margin-top: 4px">1,250.00 AUSD position</div>
+                  </div>
+                  <div class="rows">
+                    <div class="row"><span>Margin</span><span>250.00 AUSD · isolated</span></div>
+                    <div class="row"><span>Est. fill</span><span>2,544.10</span></div>
+                    <div class="row"><span>Worst price</span><span>2,556.82 · +0.5%</span></div>
+                    <div class="row"><span>Fee</span><span>0.63 AUSD</span></div>
+                    <div class="row">
+                      <span>Liq. price est.</span><span class="down">2,060.70</span>
+                    </div>
+                    <div class="row">
+                      <span>Funding</span><span>+0.0100% / 8h · longs pay</span>
+                    </div>
+                  </div>
+                  <p class="t-caption" style="margin: 10px 0 0">
+                    Liq. is our estimate and leaves out funding. Margin can't be added later: to
+                    change it, close and reopen.
+                  </p>
+                  <button class="btn btn--long hold" style="--held: 60%; margin-top: 14px">
+                    <span>Hold to long ETH 5×</span>
+                  </button>
+                  <div class="passkey">
+                    <svg class="i i--sm"><use href="icons.svg#i-key" /></svg> Your passkey signs
+                    this.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Perp review, hold to confirm</h3>
+            <div class="backing">
+              <span class="b b--api">API · quote, funding</span
+              ><span class="b b--signing">Signing · order key</span>
+            </div>
+            <ul>
+              <li>
+                Same sheet as the spot review, plus leverage, isolated margin, liq. est. and
+                funding. Every figure in AUSD.
+              </li>
+              <li>
+                The two perp limits that bite later (no add-margin, no amend) are said here, before
+                the money moves.
+              </li>
+              <li>
+                Once the account exists, a perp order is one step: no deposit dance, and the result
+                screens match spot.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

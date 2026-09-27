@@ -1,0 +1,617 @@
+/*
+ * Trading study (SEN-61): page chrome, the phone, the floating tab bar, and the
+ * trading components, on top of Goban (`../sente.css`). Every page in this
+ * folder links both:
+ *
+ *   <link rel="stylesheet" href="../sente.css" />
+ *   <link rel="stylesheet" href="trading.css" />
+ *   <script src="chart.js" defer></script>  <script src="../sigil.js" defer></script>
+ *
+ * Icons: <svg class="i"><use href="icons.svg#i-home" /></svg>
+ */
+
+/* ─── Page chrome (the study, not the app) ───────────────────────────────── */
+
+body {
+  margin: 0;
+  background: #08060f;
+  color: var(--text);
+  font-family: var(--f-body);
+}
+.page {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 40px 16px 96px;
+}
+.page-head {
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+}
+.page-head .crumbs {
+  font: 500 13px var(--f-body);
+  color: var(--text-faint);
+}
+.page-head .crumbs a {
+  color: var(--purple-hi);
+  text-decoration: none;
+}
+.page-head h1 {
+  margin: 0;
+  font: 700 56px/0.95 var(--f-display);
+  font-stretch: 80%;
+  letter-spacing: -0.04em;
+}
+.page-head p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1.6;
+}
+.flow {
+  margin-top: 72px;
+}
+.flow > header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-bottom: 14px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.flow h2 {
+  margin: 0;
+  font: 600 28px/1 var(--f-display);
+  letter-spacing: -0.02em;
+}
+.flow > header p {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 14px;
+}
+.screens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 48px 40px;
+}
+.shot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  width: 390px;
+  max-width: 100%;
+  min-width: 0;
+  align-content: start;
+}
+.shot h3 {
+  margin: 0;
+  font: 600 15px var(--f-body);
+}
+.shot ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.shot li::marker {
+  color: var(--purple);
+}
+
+/* The honesty legend: what backs a screen. Notes only — never inside a phone. */
+.backing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.b {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: 500 11px/1.6 var(--f-chain);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.b--live {
+  color: var(--mint);
+}
+.b--api {
+  color: var(--purple-hi);
+}
+.b--signing {
+  color: #f5b86b;
+}
+.b--venue {
+  color: var(--berry);
+}
+
+/* ─── The phone ──────────────────────────────────────────────────────────── */
+
+.phone {
+  position: relative;
+  width: 390px;
+  max-width: 100%;
+  aspect-ratio: 390 / 844;
+  border-radius: 52px;
+  padding: 10px;
+  box-sizing: border-box;
+  background: linear-gradient(160deg, #2a2445, #141022 40%, #1c1733);
+  box-shadow:
+    0 40px 80px -30px rgb(0 0 0 / 0.8),
+    0 0 0 1px rgb(255 255 255 / 0.06) inset;
+}
+.phone > .app {
+  border-radius: 42px;
+  background:
+    radial-gradient(120% 50% at 50% -10%, rgb(131 110 249 / 0.14), transparent 60%), var(--ink);
+}
+@media (max-width: 440px) {
+  .phone {
+    border-radius: 40px;
+    padding: 6px;
+  }
+  .phone > .app {
+    border-radius: 34px;
+  }
+}
+.app__scroll {
+  padding-bottom: 110px; /* room for the floating tab bar */
+}
+.app__scroll--plain {
+  padding-bottom: 24px;
+}
+
+svg.i {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+svg.i--sm {
+  width: 14px;
+  height: 14px;
+}
+svg.i--lg {
+  width: 22px;
+  height: 22px;
+}
+
+/* ─── Floating tab bar + Trade button ────────────────────────────────────── */
+
+.dock {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 5;
+}
+.dock__tabs {
+  flex: 1;
+  display: flex;
+  justify-content: space-around;
+  padding: 8px 6px;
+  border-radius: 999px;
+  background: rgb(29 24 56 / 0.86);
+  border: 1px solid var(--line-strong);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 16px 40px -16px rgb(0 0 0 / 0.8);
+}
+.dock__tabs a {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font: 500 10px var(--f-body);
+  color: var(--text-faint);
+  text-decoration: none;
+}
+.dock__tabs a[aria-current='page'] {
+  color: var(--text);
+  background: rgb(131 110 249 / 0.18);
+}
+.dock__tabs a[aria-current='page'] svg {
+  color: var(--purple-hi);
+}
+.dock__fab {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: var(--purple);
+  color: #fff;
+  box-shadow: 0 12px 30px -8px var(--purple-glow);
+  border: 1px solid var(--purple-hi);
+}
+.dock__fab svg.i {
+  width: 24px;
+  height: 24px;
+}
+
+/* ─── Numbers ────────────────────────────────────────────────────────────── */
+
+/* Big figure with dimmed decimals: <span class="big">1,284<small>.50</small></span> */
+.big {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-stretch: 80%;
+  font-size: 44px;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.big small {
+  font-size: 0.62em;
+  color: var(--text-faint);
+  letter-spacing: -0.02em;
+}
+.big--xl {
+  font-size: 64px;
+}
+.big--md {
+  font-size: 32px;
+}
+.chg {
+  font: 500 14px var(--f-body);
+  font-variant-numeric: tabular-nums;
+}
+.blurred {
+  filter: blur(9px);
+}
+
+/* ─── Market rows ────────────────────────────────────────────────────────── */
+
+.mkt {
+  display: grid;
+  grid-template-columns: 36px 1fr 64px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mkt:last-child {
+  border-bottom: 0;
+}
+.mkt__main {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.mkt__px {
+  text-align: right;
+  display: grid;
+  gap: 1px;
+  font-variant-numeric: tabular-nums;
+}
+/* Token glyph: a stone with the ticker's first letter. No third-party logos. */
+.tok {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font: 700 14px var(--f-display);
+  color: var(--ink);
+  background: var(--tok, var(--purple-soft));
+}
+.tok--sm {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+.tag-perp {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font: 600 9.5px/1.6 var(--f-body);
+  letter-spacing: 0.06em;
+  color: var(--purple-hi);
+  background: rgb(131 110 249 / 0.16);
+  vertical-align: 1px;
+}
+
+/* ─── Chart surroundings ─────────────────────────────────────────────────── */
+
+.chart {
+  margin: 10px -20px 0; /* bleed to the phone edges */
+}
+.ranges {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+.ranges button {
+  flex: 1;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  font: 500 12px var(--f-body);
+}
+.ranges button[aria-pressed='true'] {
+  background: var(--well);
+  color: var(--text);
+}
+.sc-axis {
+  font: 400 9.5px var(--f-chain);
+  fill: #6f688f;
+}
+.sc-tag {
+  font: 600 10px var(--f-chain);
+  fill: #0d0a19;
+}
+.sc-level {
+  paint-order: stroke;
+  stroke: #0d0a19;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  font: 500 9.5px var(--f-chain);
+  letter-spacing: 0.02em;
+}
+.sc-marker {
+  font: 600 9px var(--f-body);
+  fill: #f3f0ff;
+}
+
+/* Change grid: 5M / 1H / 4H / 1D cells. */
+.tf-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.tf-grid > div {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--r-well);
+  background: var(--well);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Split pressure bar: <div class="pressure"><i style="--p:62%"></i></div> */
+.pressure {
+  position: relative;
+  height: 6px;
+  border-radius: 6px;
+  background: var(--berry);
+  overflow: hidden;
+}
+.pressure i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p);
+  background: var(--mint);
+  border-right: 2px solid var(--ink);
+}
+
+/* ─── Actions ────────────────────────────────────────────────────────────── */
+
+.btn--long {
+  background: var(--mint);
+  border-color: var(--mint);
+  color: #06261b;
+}
+.btn--short {
+  background: var(--berry);
+  border-color: var(--berry);
+  color: #2b0314;
+}
+.cta-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 10px;
+  padding: 14px var(--gutter) 30px;
+  background: linear-gradient(to top, var(--ink) 70%, transparent);
+  z-index: 4;
+}
+.cta-bar > .btn {
+  flex: 1;
+}
+
+/* Amount entry */
+.amount {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 18px 0 8px;
+}
+.amount .big {
+  font-size: 60px;
+}
+.presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.presets button {
+  padding: 9px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: 500 13px var(--f-body);
+}
+.presets button[aria-pressed='true'] {
+  background: var(--purple-soft);
+  border-color: var(--purple-soft);
+  color: var(--purple-deep);
+}
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.keypad span {
+  display: grid;
+  place-items: center;
+  height: 46px;
+  border-radius: 12px;
+  font: 500 22px var(--f-body);
+  color: var(--text);
+}
+.disclose {
+  font: 400 12px/1.5 var(--f-body);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* Slider (leverage, size): <div class="slider"><i style="--p:40%"></i><b style="--p:40%"></b></div> */
+.slider {
+  position: relative;
+  height: 28px;
+}
+.slider::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--well);
+}
+.slider i {
+  position: absolute;
+  left: 0;
+  top: 12px;
+  height: 4px;
+  width: var(--p);
+  border-radius: 4px;
+  background: var(--purple);
+}
+.slider b {
+  position: absolute;
+  top: 4px;
+  left: calc(var(--p) - 10px);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 0 0 4px rgb(131 110 249 / 0.3);
+}
+.ticks {
+  display: flex;
+  justify-content: space-between;
+  font: 500 11px var(--f-chain);
+  color: var(--text-faint);
+}
+
+/* Hold-to-confirm: fill grows while held. */
+.hold {
+  position: relative;
+  overflow: hidden;
+}
+.hold::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--held, 0%);
+  background: rgb(255 255 255 / 0.22);
+}
+
+/* ─── Positions & levels ─────────────────────────────────────────────────── */
+
+.pos {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.pos:last-child {
+  border-bottom: 0;
+}
+.side {
+  font: 600 10px/1.6 var(--f-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 6px;
+  border-radius: 4px;
+}
+.side--long {
+  color: var(--mint);
+  background: rgb(95 227 179 / 0.12);
+}
+.side--short {
+  color: var(--berry);
+  background: rgb(240 80 140 / 0.12);
+}
+.levels {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.levels > div {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--r-well);
+  background: var(--well);
+  border-top: 2px solid var(--lv, var(--line-strong));
+  font-variant-numeric: tabular-nums;
+}
+.lv-entry {
+  --lv: var(--text);
+}
+.lv-tp {
+  --lv: var(--mint);
+}
+.lv-sl {
+  --lv: var(--berry);
+}
+.lv-liq {
+  --lv: var(--berry-deep);
+}
+
+/* ─── Ticker marquee ─────────────────────────────────────────────────────── */
+
+.ticker {
+  display: flex;
+  gap: 18px;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  font: 500 12px var(--f-body);
+  font-variant-numeric: tabular-nums;
+}
+.ticker > div {
+  display: flex;
+  gap: 18px;
+  animation: marquee 22s linear infinite;
+}
+.ticker span b {
+  font-weight: 600;
+  margin-right: 5px;
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker > div {
+    animation: none;
+  }
+}

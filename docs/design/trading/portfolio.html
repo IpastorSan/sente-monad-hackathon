@@ -1,0 +1,1165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Portfolio · Trading-first Sente</title>
+    <link rel="stylesheet" href="../sente.css" />
+    <link rel="stylesheet" href="trading.css" />
+    <script src="chart.js" defer></script>
+    <script src="../sigil.js" defer></script>
+    <style>
+      /* Page-specific pieces for portfolio.html. Candidates for trading.css are
+         flagged in the report: .alloc, .stone--withdraw, .offchart, .tag-spot. */
+      .between {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .pf-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 44px;
+      }
+      .pf-head .t-title {
+        font-size: 22px;
+      }
+      .pf-head__tools {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .icon-btn--on {
+        color: var(--purple-hi);
+        border-color: var(--purple);
+        background: rgb(131 110 249 / 0.16);
+      }
+      .net {
+        font: 500 10px/1 var(--f-chain);
+        color: var(--text-faint);
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+      }
+
+      /* Hero */
+      .hero-v {
+        margin-top: 12px;
+        display: grid;
+        gap: 6px;
+      }
+      .hero-v .big {
+        font-size: 58px;
+      }
+      .big .approx {
+        font-size: 0.5em;
+        color: var(--text-dim);
+        letter-spacing: 0;
+        margin-right: 2px;
+      }
+      .hero-v .chart {
+        margin-top: 4px;
+      }
+
+      /* Allocation bar: what the total is made of. Neutral + purple only;
+         mint/berry stay reserved for direction. */
+      .alloc {
+        display: flex;
+        gap: 2px;
+        height: 8px;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .alloc i {
+        width: var(--w);
+        background: var(--c);
+      }
+      .alloc-legend {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 18px;
+        margin-top: 12px;
+      }
+      .alloc-legend > div {
+        display: grid;
+        grid-template-columns: 8px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .alloc-legend i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--c);
+      }
+      .alloc-legend span {
+        color: var(--text-dim);
+      }
+      .c-cash {
+        --c: var(--text-dim);
+      }
+      .c-spot {
+        --c: var(--purple-soft);
+      }
+      .c-perp {
+        --c: var(--purple-hi);
+      }
+      .c-agents {
+        --c: var(--purple);
+      }
+
+      /* Cash card */
+      .cash-line {
+        display: grid;
+        grid-template-columns: 24px 1fr auto;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 0;
+      }
+      .cash-line .t-strong {
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Rows */
+      a.pos {
+        color: inherit;
+        text-decoration: none;
+      }
+      .pos__main {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .pos__main .t-caption {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pos__px {
+        display: grid;
+        gap: 1px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .pos .side {
+        margin-left: 6px;
+        vertical-align: 1px;
+      }
+      .pos .sigil {
+        width: 36px;
+        height: 36px;
+        border-radius: 11px;
+      }
+      .pos .sigil svg {
+        width: 26px;
+        height: 26px;
+      }
+      .tag-spot {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 0 5px;
+        border-radius: 4px;
+        font: 600 9.5px/1.6 var(--f-body);
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+        background: var(--well);
+        vertical-align: 1px;
+      }
+      .agents-group {
+        margin: 22px -8px 0;
+        padding: 12px 10px 2px;
+        border-radius: var(--r-board);
+        border: 1px dashed var(--line-strong);
+      }
+      .agents-group .pos {
+        grid-template-columns: 36px 1fr auto 12px;
+        gap: 10px;
+      }
+      .agents-group .chev {
+        width: 12px;
+        height: 12px;
+      }
+      .pos__main > .t-strong,
+      .pos__px > .t-strong {
+        white-space: nowrap;
+      }
+      .agents-group .chev {
+        color: var(--text-faint);
+      }
+      .seg--sm button {
+        padding: 6px 0;
+        font-size: 12px;
+      }
+      .seg .n {
+        color: var(--text-faint);
+        margin-left: 3px;
+      }
+      .asof {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font: 400 11px var(--f-chain);
+        color: var(--text-faint);
+      }
+      .asof::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--purple-hi);
+        box-shadow: 0 0 0 3px rgb(131 110 249 / 0.22);
+      }
+
+      /* Position detail */
+      .pnl-big {
+        color: var(--mint);
+      }
+      .pnl-big small {
+        color: rgb(95 227 179 / 0.55);
+      }
+      .pnl-big .unit {
+        font-size: 0.4em;
+        color: var(--text-dim);
+        letter-spacing: 0;
+        margin-left: 6px;
+      }
+      .lv-mark {
+        --lv: var(--purple-hi);
+      }
+      .levels b {
+        font: 600 13px var(--f-body);
+        font-variant-numeric: tabular-nums;
+      }
+      .levels > div.none b {
+        color: var(--text-faint);
+      }
+      /* A level too far away to draw without flattening the candles. */
+      .offchart {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 2px;
+        font: 500 10.5px var(--f-chain);
+        color: var(--berry);
+      }
+      .offchart::before {
+        content: '';
+        flex: 1;
+        border-top: 1.5px dotted var(--berry);
+        opacity: 0.8;
+      }
+      .detail-rows .row {
+        padding: 9px 0;
+      }
+      .detail-rows .row > :last-child {
+        font-size: 14px;
+      }
+      .protect {
+        display: grid;
+        gap: 10px;
+      }
+      .protect__off {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        border-radius: var(--r-well);
+        background: var(--well);
+        font-size: 13px;
+        color: var(--text-faint);
+      }
+      .protect a {
+        font: 500 13px var(--f-body);
+        color: var(--purple-hi);
+        text-decoration: none;
+      }
+
+      /* Orders */
+      .order {
+        display: grid;
+        gap: 12px;
+      }
+      .dist {
+        position: relative;
+        height: 34px;
+        margin: 4px 6px 0;
+      }
+      .dist::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 15px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--line);
+      }
+      .dist__gap {
+        position: absolute;
+        top: 15px;
+        height: 2px;
+        left: 18%;
+        right: 22%;
+        background: repeating-linear-gradient(90deg, var(--purple-soft) 0 4px, transparent 4px 7px);
+      }
+      .dist__pt {
+        position: absolute;
+        top: 10px;
+        width: 12px;
+        height: 12px;
+        margin-left: -6px;
+        border-radius: 50%;
+      }
+      .dist__pt span {
+        position: absolute;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        white-space: nowrap;
+        font: 500 10px var(--f-chain);
+        color: var(--text-dim);
+      }
+      .dist__pt--limit {
+        left: 18%;
+        background: var(--ink);
+        box-shadow: 0 0 0 2px var(--purple-soft) inset;
+      }
+      .dist__pt--mkt {
+        left: 78%;
+        background: var(--text);
+      }
+      .diff {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* History */
+      .day {
+        margin: 18px 0 12px;
+      }
+      .day:first-of-type {
+        margin-top: 14px;
+      }
+      .spine .move {
+        padding-bottom: 16px;
+      }
+      .spine .move:last-child {
+        padding-bottom: 0;
+      }
+      .move .t-dim {
+        font-size: 12.5px;
+      }
+      .move .t-chain {
+        font-size: 11px;
+        color: var(--text-faint);
+      }
+      .move .side {
+        margin-right: 6px;
+        vertical-align: 1px;
+      }
+      /* Capital leaving: the white deposit stone, hollowed. */
+      .stone--withdraw {
+        background: var(--ink);
+        box-shadow: 0 0 0 2px #d8d3ee inset;
+      }
+      @media (max-width: 440px) {
+        .pos__px > .t-strong .t-dim,
+        .pos__px .amt {
+          display: none;
+        }
+        .agents-group {
+          margin-inline: -4px;
+        }
+        .alloc-legend {
+          gap: 8px 12px;
+        }
+      }
+      .chips--sm .chip {
+        padding: 6px 11px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head">
+        <div class="crumbs"><a href="index.html">Trading study</a> / Portfolio</div>
+        <h1>What I own</h1>
+        <p>
+          The Portfolio tab answers one question: where is my money, and what is it doing? One total
+          in dollars, honestly marked "≈" because it sums AUSD and USDC; a bar that splits it into
+          cash, spot, perps and capital with agents; then your positions, open orders and history.
+          Your own positions can be managed here. Your agents' positions sit beside them for the
+          full picture, but they belong to the agent, so they open in its cockpit.
+        </p>
+      </header>
+
+      <!-- ═══════════════════════════ PORTFOLIO TAB ═══════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>The tab</h2>
+          <p>Total, what it's made of, cash, and everything you hold</p>
+        </header>
+        <div class="screens">
+          <!-- 1 · Portfolio tab -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="pf-head">
+                    <span class="t-title">Portfolio</span>
+                    <span class="pf-head__tools">
+                      <span class="net">Monad testnet</span>
+                      <span class="icon-btn" aria-label="Hide balances"
+                        ><svg class="i"><use href="icons.svg#i-eye" /></svg
+                      ></span>
+                    </span>
+                  </div>
+                  <div class="hero-v">
+                    <span class="t-label">Total value</span>
+                    <span class="big"><span class="approx">≈ $</span>3,918<small>.40</small></span>
+                    <span class="chg up">+$84.12 (+2.19%) today</span>
+                    <div
+                      class="chart"
+                      data-chart='{"type":"area","seed":"portfolio","start":3834.28,"drift":0.00045,"vol":0.003,"height":128,"prev":true,"last":false,"tone":"mint","label":"Portfolio value, today"}'
+                    ></div>
+                  </div>
+                  <div class="ranges">
+                    <button aria-pressed="true">1D</button><button>1W</button><button>1M</button
+                    ><button>ALL</button>
+                  </div>
+
+                  <div class="section" style="margin-top: 20px">
+                    <div class="alloc" aria-label="Allocation">
+                      <i class="c-cash" style="--w: 45.6%"></i
+                      ><i class="c-agents" style="--w: 38.5%"></i
+                      ><i class="c-spot" style="--w: 10.3%"></i
+                      ><i class="c-perp" style="--w: 5.6%"></i>
+                    </div>
+                    <div class="alloc-legend">
+                      <div class="c-cash"><i></i><span>Cash</span><b>$1,784.91</b></div>
+                      <div class="c-agents"><i></i><span>With agents</span><b>$1,509.54</b></div>
+                      <div class="c-spot"><i></i><span>Spot</span><b>$404.25</b></div>
+                      <div class="c-perp"><i></i><span>Perps</span><b>$219.70</b></div>
+                    </div>
+                  </div>
+
+                  <div class="board" style="margin-top: 18px; padding: 12px 16px 16px">
+                    <div class="between">
+                      <span class="t-label">Cash</span>
+                      <span class="t-caption">in your wallet</span>
+                    </div>
+                    <div class="cash-line">
+                      <span class="tok tok--sm" style="--tok: #cfd6ff">A</span>
+                      <span class="t-strong">1,284.50 <span class="t-dim">AUSD</span></span>
+                      <span class="t-caption">for perps</span>
+                    </div>
+                    <div class="cash-line" style="padding-top: 0">
+                      <span class="tok tok--sm" style="--tok: #e9e4ff">U</span>
+                      <span class="t-strong">500.00 <span class="t-dim">USDC</span></span>
+                      <span class="t-caption">for spot</span>
+                    </div>
+                    <div class="btn-row" style="margin-top: 8px">
+                      <button class="btn btn--soft btn--sm">Withdraw</button>
+                      <button class="btn btn--primary btn--sm">
+                        <svg class="i i--sm"><use href="icons.svg#i-plus" /></svg> Add funds
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="seg" style="margin-top: 20px" role="group">
+                    <button aria-pressed="true">Positions</button>
+                    <button aria-pressed="false">Orders<span class="n">1</span></button>
+                    <button aria-pressed="false">History</button>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Portfolio tab</h3>
+            <div class="backing">
+              <span class="b b--live">Live · wallet balances</span
+              ><span class="b b--live">Live · withdraw (sponsored send)</span
+              ><span class="b b--api">API · value history, prices</span
+              ><span class="b b--signing">Signing · your own spot &amp; perps</span>
+            </div>
+            <ul>
+              <li>
+                The total says "≈ $" because it adds AUSD and USDC as if both were dollars. The cash
+                card never merges them: each currency sits next to what it's for.
+              </li>
+              <li>
+                The bar splits the total into cash, spot, perps and capital with agents. It uses
+                neutral and purple tones; mint and berry stay reserved for up and down.
+              </li>
+              <li>
+                Add funds is the primary action. Withdraw is a secondary button, not hidden in a
+                menu. The area chart is tinted by the sign of the selected range.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 2 · Positions list -->
+          <article class="shot" id="positions">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="pf-head">
+                    <span class="t-title">Portfolio</span>
+                    <span class="t-strong num" style="color: var(--text-dim)">≈ $3,918.40</span>
+                  </div>
+                  <div class="seg" style="margin-top: 6px" role="group">
+                    <button aria-pressed="true">Positions</button>
+                    <button aria-pressed="false">Orders<span class="n">1</span></button>
+                    <button aria-pressed="false">History</button>
+                  </div>
+                  <div class="between" style="margin-top: 14px">
+                    <div class="seg seg--sm" role="group" style="width: 172px">
+                      <button aria-pressed="true">Open<span class="n">2</span></button>
+                      <button aria-pressed="false">Closed<span class="n">1</span></button>
+                    </div>
+                    <span class="asof">as of 9:41:03</span>
+                  </div>
+
+                  <div style="margin-top: 8px">
+                    <a class="pos" href="#position">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="pos__main">
+                        <span class="t-strong">MON<span class="tag-spot">SPOT</span></span>
+                        <span class="t-caption">412.00 · entry 0.9420 · Kuru</span>
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong">404.25 <span class="t-dim">USDC</span></span>
+                        <span class="t-dim up"><span class="amt">+16.15 · </span>+4.16%</span>
+                      </div>
+                    </a>
+                    <a class="pos" href="#position">
+                      <span class="tok" style="--tok: #cfd6ff">E</span>
+                      <div class="pos__main">
+                        <span class="t-strong"
+                          >ETH-PERP<span class="side side--long">Long 3×</span></span
+                        >
+                        <span class="t-caption">0.25 ETH · entry 2,498.00 · Perpl</span>
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong">219.70 <span class="t-dim">AUSD</span></span>
+                        <span class="t-dim up"><span class="amt">+11.53 · </span>+5.54%</span>
+                      </div>
+                    </a>
+                  </div>
+
+                  <div class="agents-group">
+                    <div class="between">
+                      <span class="t-label">With your agents</span>
+                      <span class="t-caption num">≈ $1,509.54</span>
+                    </div>
+                    <p class="t-caption" style="margin: 4px 0 2px">
+                      Their funds, their trades. Open one to ask it to close, amend or revoke.
+                    </p>
+                    <a class="pos" href="cockpit.html">
+                      <span class="sigil" data-sigil="range-hunter"></span>
+                      <div class="pos__main">
+                        <span class="t-strong">MON<span class="side side--long">Long</span></span>
+                        <span class="t-caption">Range Hunter · from 0.9744</span>
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong">176.62 <span class="t-dim">USDC</span></span>
+                        <span class="t-dim up"><span class="amt">+1.22 · </span>+0.70%</span>
+                      </div>
+                      <svg class="i i--sm chev"><use href="icons.svg#i-chev" /></svg>
+                    </a>
+                    <a class="pos" href="cockpit.html">
+                      <span class="sigil" data-sigil="basis-monk"></span>
+                      <div class="pos__main">
+                        <span class="t-strong"
+                          >MON-PERP<span class="side side--short">Short 2×</span></span
+                        >
+                        <span class="t-caption">Basis Monk · from 0.9920</span>
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong">202.84 <span class="t-dim">AUSD</span></span>
+                        <span class="t-dim up"><span class="amt">+4.44 · </span>+2.24%</span>
+                      </div>
+                      <svg class="i i--sm chev"><use href="icons.svg#i-chev" /></svg>
+                    </a>
+                    <a class="pos" href="agents.html" style="opacity: 0.7">
+                      <span class="sigil" data-sigil="night-shift" style="opacity: 0.55"></span>
+                      <div class="pos__main">
+                        <span class="t-strong" style="color: var(--text-dim)">Night Shift</span>
+                        <span class="t-caption">Revoked Sep 23</span>
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong">412.00 <span class="t-dim">USDC</span></span>
+                        <span class="t-caption">ready to return</span>
+                      </div>
+                      <svg class="i i--sm chev"><use href="icons.svg#i-chev" /></svg>
+                    </a>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Positions (same tab, scrolled)</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · your positions</span
+              ><span class="b b--api">API · agent portfolio route</span
+              ><span class="b b--api">API · spot uPnL (price route)</span>
+            </div>
+            <ul>
+              <li>
+                Each row shows value in the market's own currency and P&amp;L in amount and %. The
+                spot P&amp;L needs a price route, since the backend has no spot uPnL today.
+              </li>
+              <li>
+                Agent positions sit in a dashed group with the agent's sigil where the token would
+                be. There's no swipe-to-close: a tap opens the cockpit, where you can ask the agent
+                to close.
+              </li>
+              <li>
+                A revoked agent with idle funds stays visible until they're returned. Otherwise
+                412.00 USDC would drop out of your total without explanation.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 3 · Blurred -->
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="pf-head">
+                    <span class="t-title">Portfolio</span>
+                    <span class="pf-head__tools">
+                      <span class="net">Monad testnet</span>
+                      <span class="icon-btn icon-btn--on" aria-label="Show balances"
+                        ><svg class="i"><use href="icons.svg#i-eye-off" /></svg
+                      ></span>
+                    </span>
+                  </div>
+                  <div class="hero-v">
+                    <span class="t-label">Total value</span>
+                    <span class="big"
+                      ><span class="approx">≈ $</span
+                      ><span class="blurred">3,918<small>.40</small></span></span
+                    >
+                    <span class="chg up"><span class="blurred">+$84.12</span> +2.19% today</span>
+                    <div
+                      class="chart"
+                      data-chart='{"type":"area","seed":"portfolio","start":3834.28,"drift":0.00045,"vol":0.003,"height":128,"prev":true,"last":false,"tone":"mint","label":"Portfolio value, today"}'
+                    ></div>
+                  </div>
+                  <div class="ranges">
+                    <button aria-pressed="true">1D</button><button>1W</button><button>1M</button
+                    ><button>ALL</button>
+                  </div>
+                  <div class="section" style="margin-top: 20px">
+                    <div class="alloc" aria-label="Allocation">
+                      <i class="c-cash" style="--w: 45.6%"></i
+                      ><i class="c-agents" style="--w: 38.5%"></i
+                      ><i class="c-spot" style="--w: 10.3%"></i
+                      ><i class="c-perp" style="--w: 5.6%"></i>
+                    </div>
+                    <div class="alloc-legend">
+                      <div class="c-cash"><i></i><span>Cash</span><b>46%</b></div>
+                      <div class="c-agents"><i></i><span>With agents</span><b>38%</b></div>
+                      <div class="c-spot"><i></i><span>Spot</span><b>10%</b></div>
+                      <div class="c-perp"><i></i><span>Perps</span><b>6%</b></div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <div class="pos">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="pos__main">
+                        <span class="t-strong">MON<span class="tag-spot">SPOT</span></span>
+                        <span class="t-caption"
+                          ><span class="blurred">412.00</span> MON · Kuru</span
+                        >
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong blurred">404.25 USDC</span>
+                        <span class="t-dim up">+4.16%</span>
+                      </div>
+                    </div>
+                    <div class="pos">
+                      <span class="tok" style="--tok: #cfd6ff">E</span>
+                      <div class="pos__main">
+                        <span class="t-strong"
+                          >ETH-PERP<span class="side side--long">Long 3×</span></span
+                        >
+                        <span class="t-caption"><span class="blurred">0.25</span> ETH · Perpl</span>
+                      </div>
+                      <div class="pos__px">
+                        <span class="t-strong blurred">219.70 AUSD</span>
+                        <span class="t-dim up">+5.54%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Balances hidden</h3>
+            <div class="backing"><span class="b b--live">Live · device setting</span></div>
+            <ul>
+              <li>
+                The eye hides amounts and sizes but keeps percentages, sides and markets. Glancing
+                at a phone on a train shows direction, not wealth.
+              </li>
+              <li>
+                The legend switches to shares of the total, and the chart keeps its shape with no
+                price tag. The toggle turns purple while active so you know the numbers are hidden.
+              </li>
+              <li>
+                The setting is saved on the device and applies app-wide (Home, cockpits, the
+                ticket's balance line), not just on this tab.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════ POSITION DETAIL ═══════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Your position</h2>
+          <p>
+            A manual perp you opened yourself: what it's worth, where it breaks, what you can do
+          </p>
+        </header>
+        <div class="screens">
+          <!-- 4 · ETH-PERP detail -->
+          <article class="shot" id="position">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll app__scroll--plain">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Portfolio</span
+                    >
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-more" /></svg
+                    ></span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: #cfd6ff">E</span>
+                    <div>
+                      <div class="t-title">
+                        ETH-PERP<span
+                          class="side side--long"
+                          style="margin-left: 8px; vertical-align: 3px"
+                          >Long 3×</span
+                        >
+                      </div>
+                      <div class="t-caption">Perpl · isolated margin · opened Sep 25</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px; display: grid; gap: 4px">
+                    <span class="t-label">Unrealised P&amp;L</span>
+                    <span class="big pnl-big"
+                      >+11<small>.53</small><span class="unit">AUSD</span></span
+                    >
+                    <span class="t-dim"
+                      ><span class="up">+5.54%</span> on 208.17 margin ·
+                      <span class="asof" style="vertical-align: 1px">mark 9:41:03</span></span
+                    >
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"candles","seed":"ETH-PERP","start":2290,"points":48,"height":150,"decimals":2,"lines":[{"at":2498,"kind":"entry","label":"ENTRY"}],"markers":[{"i":-3,"kind":"you"}],"label":"ETH-PERP 1H candles"}'
+                  ></div>
+                  <div class="offchart">LIQ est. 1,690.00 · 33.6% below ↓</div>
+                  <div class="ranges">
+                    <button>15M</button><button aria-pressed="true">1H</button><button>4H</button
+                    ><button>1D</button>
+                    <span class="icon-btn" style="width: 30px; height: 30px"
+                      ><svg class="i i--sm"><use href="icons.svg#i-line" /></svg
+                    ></span>
+                  </div>
+                  <div class="levels" style="margin-top: 14px">
+                    <div class="lv-entry"><span class="t-caption">Entry</span><b>2,498.00</b></div>
+                    <div class="lv-mark"><span class="t-caption">Mark</span><b>2,544.10</b></div>
+                    <div class="lv-liq"><span class="t-caption">Liq. est</span><b>1,690.00</b></div>
+                    <div class="none"><span class="t-caption">Stop</span><b>—</b></div>
+                  </div>
+
+                  <div class="board protect" style="margin-top: 14px; padding: 14px">
+                    <div style="display: flex; gap: 10px; align-items: center">
+                      <svg class="i" style="color: var(--purple-hi)">
+                        <use href="icons.svg#i-shield" />
+                      </svg>
+                      <span class="t-strong">Protect this position</span>
+                    </div>
+                    <div class="protect__off">
+                      <span>Stop-loss · take-profit</span><span>Not on Perpl yet</span>
+                    </div>
+                    <span class="t-caption"
+                      >Agents can watch a stop on their own trades. It's checked every run, not a
+                      venue order. <a href="agents.html">Trade it with an agent</a></span
+                    >
+                  </div>
+                  <div class="detail-rows" style="margin-top: 8px">
+                    <div class="row"><span>Size</span><span>0.25 ETH · 636.03 AUSD</span></div>
+                    <div class="row"><span>Margin</span><span>208.17 AUSD · 3×</span></div>
+                    <div class="row">
+                      <span>Funding paid</span><span class="down">−0.38 AUSD</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--soft" style="white-space: nowrap; padding: 0 12px">
+                    Add to position
+                  </button>
+                  <button class="btn btn--primary">Close position</button>
+                </div>
+              </div>
+            </div>
+            <h3>Position detail: ETH-PERP long 3×</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · close, add</span
+              ><span class="b b--api">API · klines, mark, funding</span
+              ><span class="b b--venue">Venue · SL/TP</span>
+            </div>
+            <ul>
+              <li>
+                The headline is unrealised P&amp;L, not price, because that's what you check when
+                you open a position. Its % is measured on margin, so it matches what you put in.
+              </li>
+              <li>
+                The liquidation line is 33.6% away. Drawing it would squash the candles into a
+                strip, so it sits under the chart as a dotted berry marker with the distance,
+                labelled "est.".
+              </li>
+              <li>
+                No "Add margin" (Perpl has none) and no stop field. Stop and take-profit are shown
+                as not available yet. Close is purple here; the confirm in the ticket takes the
+                side's colour.
+              </li>
+              <li>
+                Your fill is a white stone on the chart and the entry line is white, so it looks the
+                same as your fills in the ledger.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════ ORDERS & HISTORY ═══════════════════════════ -->
+      <section class="flow">
+        <header>
+          <h2>Orders &amp; history</h2>
+          <p>What's waiting on the book, and what already happened</p>
+        </header>
+        <div class="screens">
+          <!-- 5 · Orders + cancel sheet -->
+          <article class="shot" id="orders">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="pf-head">
+                    <span class="t-title">Portfolio</span>
+                    <span class="t-strong num" style="color: var(--text-dim)">≈ $3,918.40</span>
+                  </div>
+                  <div class="seg" style="margin-top: 6px" role="group">
+                    <button aria-pressed="false">Positions</button>
+                    <button aria-pressed="true">Orders<span class="n">1</span></button>
+                    <button aria-pressed="false">History</button>
+                  </div>
+                  <div class="board order" style="margin-top: 16px">
+                    <div style="display: flex; align-items: center; gap: 10px">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div style="flex: 1; display: grid; gap: 1px">
+                        <span class="t-strong"
+                          ><span class="side side--long" style="margin-right: 6px">Buy</span>150.00
+                          MON</span
+                        >
+                        <span class="t-caption">Limit · MON-USDC · Kuru spot</span>
+                      </div>
+                      <span class="pill">Resting</span>
+                    </div>
+                    <div class="dist" aria-label="Limit 3.18% below market">
+                      <div class="dist__gap"></div>
+                      <div class="dist__pt dist__pt--limit"><span>0.9500</span></div>
+                      <div class="dist__pt dist__pt--mkt"><span>0.9812 now</span></div>
+                    </div>
+                    <span class="t-dim" style="margin-top: 6px"
+                      >Fills if MON drops 3.18%. 0 of 150.00 filled so far.</span
+                    >
+                  </div>
+                </div>
+                <div class="scrim"></div>
+                <div class="sheet">
+                  <div class="sheet__grip"></div>
+                  <div class="t-title" style="font-size: 22px">Cancel your MON buy?</div>
+                  <p class="t-dim" style="margin: 6px 0 8px">
+                    It comes off the Kuru book and the USDC it reserved goes back to your cash.
+                  </p>
+                  <div class="diff">
+                    <span class="t-dim">Order</span><span>Buy 150.00 MON at 0.9500</span>
+                  </div>
+                  <div class="diff">
+                    <span class="t-dim">Back to cash</span><span>142.50 USDC</span>
+                  </div>
+                  <div class="diff" style="border: 0">
+                    <span class="t-dim">Placed</span><span>Today 09:14 · good till cancelled</span>
+                  </div>
+                  <p class="t-caption" style="margin: 2px 0 0">
+                    Kuru can't amend an order: to change the price, cancel and place a new one. If
+                    part fills before the cancel lands, you keep what filled.
+                  </p>
+                  <div style="display: grid; gap: 8px; margin-top: 14px">
+                    <button class="btn btn--primary btn--block">
+                      <svg class="i"><use href="icons.svg#i-key" /></svg> Cancel order with passkey
+                    </button>
+                    <button class="btn btn--block" style="border: 0; color: var(--text-dim)">
+                      Keep it on the book
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <h3>Open orders, with the cancel sheet</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · place, cancel</span
+              ><span class="b b--api">API · open orders</span>
+            </div>
+            <ul>
+              <li>
+                The order card shows how far the order is from the market: the limit as a hollow
+                stone (planned, not yet played), the market as a solid dot, and "fills if MON drops
+                3.18%".
+              </li>
+              <li>
+                Cancel uses the same confirm sheet as the rest of the app. It shows what you get
+                back (142.50 USDC) and warns about a partial fill racing the cancel.
+              </li>
+              <li>
+                No "Edit" button, because Kuru has no amend and no expiry. The sheet explains the
+                workaround instead.
+              </li>
+            </ul>
+          </article>
+
+          <!-- 6 · History -->
+          <article class="shot" id="history">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="pf-head">
+                    <span class="t-title">Portfolio</span>
+                    <span class="t-strong num" style="color: var(--text-dim)">≈ $3,918.40</span>
+                  </div>
+                  <div class="seg" style="margin-top: 6px" role="group">
+                    <button aria-pressed="false">Positions</button>
+                    <button aria-pressed="false">Orders<span class="n">1</span></button>
+                    <button aria-pressed="true">History</button>
+                  </div>
+                  <div class="chips chips--sm" style="margin-top: 12px">
+                    <span class="chip chip--on">All</span><span class="chip">Trades</span
+                    ><span class="chip">Transfers</span>
+                  </div>
+
+                  <div class="t-label day">Today</div>
+                  <div class="spine">
+                    <div class="move">
+                      <i class="stone stone--thesis"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong"
+                            ><span class="side side--long">Buy</span>Limit 150.00 MON</span
+                          >
+                          <span class="move__time">09:14</span>
+                        </div>
+                        <div class="t-dim">at 0.9500 · Kuru spot · resting</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="t-label day">Fri, Sep 25</div>
+                  <div class="spine">
+                    <div class="move">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong"
+                            ><span class="side side--long">Long</span>0.25 ETH-PERP 3×</span
+                          >
+                          <span class="move__time">14:12</span>
+                        </div>
+                        <div class="t-dim">at 2,498.00 · Perpl · fee 0.31 AUSD</div>
+                        <div class="t-chain">0x3b7e…a41c</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="t-label day">Thu, Sep 24</div>
+                  <div class="spine">
+                    <div class="move">
+                      <i class="stone stone--win"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong"
+                            ><span class="side side--short">Sell</span>200.00 MON
+                            <span class="up">+4.40</span></span
+                          >
+                          <span class="move__time">16:40</span>
+                        </div>
+                        <div class="t-dim">at 0.9610 · Kuru spot · fee 0.06 USDC</div>
+                        <div class="t-chain">0x9c1e…44ab</div>
+                      </div>
+                    </div>
+                    <div class="move">
+                      <i class="stone stone--trade"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong"
+                            ><span class="side side--long">Buy</span>412.00 MON</span
+                          >
+                          <span class="move__time">10:05</span>
+                        </div>
+                        <div class="t-dim">at 0.9420 · Kuru spot · fee 0.12 USDC</div>
+                        <div class="t-chain">0x5d02…e7f9</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="t-label day">Tue, Sep 22</div>
+                  <div class="spine">
+                    <div class="move">
+                      <i class="stone stone--withdraw"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Sent 250.00 USDC</span>
+                          <span class="move__time">18:22</span>
+                        </div>
+                        <div class="t-chain">to 0x51c0…9e2d</div>
+                      </div>
+                    </div>
+                    <div class="move">
+                      <i class="stone stone--deposit"></i>
+                      <div>
+                        <div class="move__meta">
+                          <span class="t-strong">Added 2,000.00 AUSD</span>
+                          <span class="move__time">09:02</span>
+                        </div>
+                        <div class="t-chain">from 0x8f1d…7a30</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="markets.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="agents.html"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="trade.html" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>History</h3>
+            <div class="backing">
+              <span class="b b--signing">Signing · your fills</span
+              ><span class="b b--api">API · fills (Kuru receipts, Perpl REST)</span
+              ><span class="b b--api">API · transfer history</span>
+            </div>
+            <ul>
+              <li>
+                History uses the ledger's stones: a white stone is capital in, a hollow white ring
+                is capital out, a purple stone is a fill, a hollow purple ring is an order still
+                waiting, and a half stone is a closed trade with its result.
+              </li>
+              <li>
+                Every fill shows side, size, price, venue and fee in that venue's currency. The tx
+                hash is set in mono type (the chain's voice) and opens the explorer.
+              </li>
+              <li>
+                Grouped by day, newest first. Your agents' fills stay in their own ledgers, so this
+                list is only what you did.
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading kit</title>
+    <link rel="stylesheet" href="../sente.css" />
+    <link rel="stylesheet" href="trading.css" />
+    <script src="chart.js" defer></script>
+    <script src="../sigil.js" defer></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-head">
+        <div class="crumbs"><a href="index.html">Trading study</a> / Kit</div>
+        <h1>Trading kit</h1>
+        <p>
+          The shared pieces every page in this study is built from: the phone, the floating dock,
+          big numbers, market rows, the chart and its levels, the ticket parts. Copy the markup from
+          here.
+        </p>
+      </header>
+
+      <section class="flow">
+        <header>
+          <h2>Reference screen</h2>
+          <p>A phone with the dock, a chart with levels and markers, and the CTA bar</p>
+        </header>
+        <div class="screens">
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="topbar">
+                    <span class="topbar__back"
+                      ><svg class="i"><use href="icons.svg#i-back" /></svg>Markets</span
+                    >
+                    <span class="icon-btn"
+                      ><svg class="i"><use href="icons.svg#i-star" /></svg
+                    ></span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                    <div>
+                      <div class="t-title">MON</div>
+                      <div class="t-caption">MON-USDC · Kuru spot</div>
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px">
+                    <span class="big" id="k-price">0.9812</span>
+                    <div class="chg up" id="k-chg" data-suffix=" today">+2.41% today</div>
+                  </div>
+                  <div
+                    class="chart"
+                    data-chart='{"type":"line","seed":"MON","start":0.958,"height":210,"prev":true,"scrub":"#k-price","scrubChange":"#k-chg","lines":[{"at":"-1.4%","kind":"entry","label":"ENTRY"},{"at":"+2.5%","kind":"tp","label":"TP"},{"at":"-3.5%","kind":"sl","label":"SL"}],"markers":[{"i":-40,"kind":"agent"},{"i":-12,"kind":"you"}]}'
+                  ></div>
+                  <div class="ranges">
+                    <button>1H</button><button aria-pressed="true">1D</button><button>1W</button
+                    ><button>1M</button><button>1Y</button>
+                    <span class="icon-btn" style="width: 30px; height: 30px"
+                      ><svg class="i i--sm"><use href="icons.svg#i-candles" /></svg
+                    ></span>
+                  </div>
+                </div>
+                <div class="cta-bar">
+                  <button class="btn btn--short">Sell</button>
+                  <button class="btn btn--long">Buy</button>
+                </div>
+              </div>
+            </div>
+            <h3>Asset detail skeleton</h3>
+            <div class="backing">
+              <span class="b b--api">API · klines</span
+              ><span class="b b--signing">Signing · buy</span>
+            </div>
+            <ul>
+              <li>Drag across the chart: the headline price and change follow the finger.</li>
+              <li>
+                Levels: entry white, TP mint, SL berry. Markers: agent = purple stone, you = white.
+              </li>
+            </ul>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="app">
+                <div class="app__status"><span>9:41</span><span>●●●</span></div>
+                <div class="app__scroll">
+                  <div class="t-display" style="margin-top: 20px">Markets</div>
+                  <div style="margin-top: 12px">
+                    <div class="mkt">
+                      <span class="tok" style="--tok: var(--purple-soft)">M</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">MON</span><span class="t-caption">Kuru spot</span>
+                      </div>
+                      <div data-chart='{"type":"spark","seed":"MON","start":0.93}'></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">0.9812</span><span class="t-dim up">+2.41%</span>
+                      </div>
+                    </div>
+                    <div class="mkt">
+                      <span class="tok" style="--tok: #cfd6ff">E</span>
+                      <div class="mkt__main">
+                        <span class="t-strong">ETH<span class="tag-perp">PERP 20×</span></span
+                        ><span class="t-caption">Perpl perps</span>
+                      </div>
+                      <div
+                        data-chart='{"type":"spark","seed":"ETH-x","drift":-0.001,"start":2610}'
+                      ></div>
+                      <div class="mkt__px">
+                        <span class="t-strong">2,544.10</span><span class="t-dim down">−1.12%</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="section">
+                    <div class="t-label" style="margin-bottom: 8px">Levels</div>
+                    <div class="levels">
+                      <div class="lv-entry"><span class="t-caption">Entry</span><b>0.9680</b></div>
+                      <div class="lv-tp"><span class="t-caption">Target</span><b>1.0050</b></div>
+                      <div class="lv-sl"><span class="t-caption">Stop</span><b>0.9460</b></div>
+                      <div class="lv-liq"><span class="t-caption">Liq. est</span><b>—</b></div>
+                    </div>
+                  </div>
+                  <div class="section">
+                    <div class="t-label" style="margin-bottom: 8px">Order book pressure</div>
+                    <div class="pressure"><i style="--p: 62%"></i></div>
+                    <div
+                      class="between t-caption"
+                      style="margin-top: 6px; display: flex; justify-content: space-between"
+                    >
+                      <span class="up">Bids 62%</span><span class="down">Asks 38%</span>
+                    </div>
+                  </div>
+                  <div class="section">
+                    <div class="t-label" style="margin-bottom: 8px">Equity</div>
+                    <div
+                      data-chart='{"type":"area","seed":"equity","start":500,"height":90,"last":false}'
+                    ></div>
+                  </div>
+                </div>
+                <nav class="dock">
+                  <div class="dock__tabs">
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-home" /></svg>Home</a
+                    >
+                    <a href="#" aria-current="page"
+                      ><svg class="i i--lg"><use href="icons.svg#i-markets" /></svg>Markets</a
+                    >
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-agents" /></svg>Agents</a
+                    >
+                    <a href="#"
+                      ><svg class="i i--lg"><use href="icons.svg#i-portfolio" /></svg>Portfolio</a
+                    >
+                  </div>
+                  <a class="dock__fab" href="#" aria-label="Trade"
+                    ><svg class="i"><use href="icons.svg#i-trade" /></svg
+                  ></a>
+                </nav>
+              </div>
+            </div>
+            <h3>Rows, levels, pressure, dock</h3>
+            <ul>
+              <li>Token glyphs are stones with a letter: no third-party logos.</li>
+              <li>Perps carry a small "PERP 20×" tag; one row style for both venues.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
