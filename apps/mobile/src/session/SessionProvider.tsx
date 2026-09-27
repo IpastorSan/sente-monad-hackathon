@@ -10,6 +10,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import { AgentsApi } from '@/agents/api';
 import { MarketsApi } from '@/markets/api';
+import { TradeApi } from '@/trade/api';
 import { useAccount, type UseAccount } from '@/auth';
 import {
   useSmartAccount,
@@ -47,6 +48,8 @@ export type Session = {
   readonly agents: AgentsApi | null;
   /** The `/markets` client (SEN-110); `null` until signed in, like `agents`. */
   readonly markets: MarketsApi | null;
+  /** The `/trade` and `/portfolio` client (SEN-102); `null` until signed in, like `agents`. */
+  readonly trade: TradeApi | null;
 };
 
 const SessionContext = createContext<Session | null>(null);
@@ -73,9 +76,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     () => (auth.address ? new MarketsApi({ auth: api }) : null),
     [auth.address, api],
   );
+  // One trade client (SEN-102), gated like `markets`: a prepare and the commit
+  // that follows it must go out under the same session.
+  const trade = useMemo(
+    () => (auth.address ? new TradeApi({ auth: api }) : null),
+    [auth.address, api],
+  );
   const session = useMemo(
-    () => ({ auth, wallet, walletApi, smart, api, agents, markets }),
-    [auth, wallet, walletApi, smart, api, agents, markets],
+    () => ({ auth, wallet, walletApi, smart, api, agents, markets, trade }),
+    [auth, wallet, walletApi, smart, api, agents, markets, trade],
   );
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }
