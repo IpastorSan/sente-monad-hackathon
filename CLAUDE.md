@@ -378,7 +378,9 @@ Two choices that look optional and are not:
 - **jest uses `services/api/tsconfig.spec.json`, which turns that rewriting OFF.** Jest's resolver
   loads `./x.ts` literally; rewritten to `./x.js` it finds nothing in `packages/mandate`, and in
   `packages/venues/src` it finds stale committed `.js` twins of the sources (`kuru/adapter.js` and
-  friends) and silently loads those instead.
+  friends) and silently loads those instead. It also sets `isolatedModules`, so ts-jest
+  transpiles without type-checking (SEN-140): **a type error in a spec fails
+  `pnpm run typecheck`, not `pnpm run test`.**
 
 API files that a script imports (`src/agents/privy/*`, `agents.config.ts`, `agents.errors.ts`,
 `agent-wallet.provider.ts`) use `.ts` specifiers and **erasable syntax only** — no Nest decorators,

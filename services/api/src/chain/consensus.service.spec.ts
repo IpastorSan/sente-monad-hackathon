@@ -157,13 +157,19 @@ async function nextOf(iterator: AsyncIterableIterator<unknown>): Promise<unknown
   }
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 500): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error('condition never held');
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
+/**
+ * The specs that exercise the service's own poll and reconnect timers run them
+ * on jest's fake clock (SEN-140). They used to sleep on the real one and poll a
+ * condition every 2 ms, which is both slow and the first thing to time out on a
+ * loaded CI box. `tick` fires every timer due within `ms` and settles the
+ * promises each one starts, so a poll's `await` chain lands before the assert.
+ */
+function useServiceTimers(): void {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
 }
+
+const tick = (ms: number): Promise<void> => jest.advanceTimersByTimeAsync(ms);
 
 describe('ConsensusService', () => {
   it('subscribes to monadNewHeads and follows a block through all four states', async () => {
@@ -343,31 +349,118 @@ describe('ConsensusService', () => {
     h.service.stop();
   });
 
-  it('polls on its own until the socket opens, then stops', async () => {
-    const h = setup({ pollIntervalMs: 1 });
-    h.tags.byTag.set('latest', { number: BLOCK, id: ID_A });
-    h.tags.byTag.set('safe', { number: BLOCK - 1, id: `0x${'4'.repeat(64)}` });
-    h.tags.byTag.set('finalized', { number: BLOCK - 2, id: `0x${'5'.repeat(64)}` });
+  describe('on its own timers', () => {
+    useServiceTimers();
 
-    h.service.start();
-    await waitFor(() => h.service.stateOf(BLOCK)?.state === 'Proposed');
+    it('polls on its own until the socket opens, then stops', async () => {
+      const h = setup({ pollIntervalMs: 1 });
+      h.tags.byTag.set('latest', { number: BLOCK, id: ID_A });
+      h.tags.byTag.set('safe', { number: BLOCK - 1, id: `0x${'4'.repeat(64)}` });
+      h.tags.byTag.set('finalized', { number: BLOCK - 2, id: `0x${'5'.repeat(64)}` });
 
-    // The socket comes up: the fallback stops asking. It has not opened until
-    // the node has acknowledged the subscription, which is why `accept` is two
-    // frames and not one.
-    h.socket.accept();
-    const askedWhenOpen = h.tags.asked.length;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(h.tags.asked.length).toBe(askedWhenOpen);
+      h.service.start();
+      await tick(0);
+      expect(h.service.stateOf(BLOCK)?.state).toBe('Proposed');
 
-    // A dropped socket brings it straight back.
-    h.socket.drop();
-    await waitFor(() => h.tags.asked.length > askedWhenOpen);
+      // The socket comes up: the fallback stops asking. It has not opened until
+      // the node has acknowledged the subscription, which is why `accept` is two
+      // frames and not one.
+      h.socket.accept();
+      const askedWhenOpen = h.tags.asked.length;
+      await tick(25);
+      expect(h.tags.asked.length).toBe(askedWhenOpen);
 
-    // ...and the socket is closed rather than left half-open.
-    expect(h.socket.closed).toBe(true);
+      // A dropped socket brings it straight back.
+      h.socket.drop();
+      await tick(0);
+      expect(h.tags.asked.length).toBeGreaterThan(askedWhenOpen);
 
-    h.service.stop();
+      // ...and the socket is closed rather than left half-open.
+      expect(h.socket.closed).toBe(true);
+
+      h.service.stop();
+    });
+
+    it('does not call a socket flap a reorg: the fallback hash is not the socket id', async () => {
+      // Its own socket, so the reconnect is something this spec can observe:
+      // `connects` ticks when the service asks for one again.
+      const socket = new FakeSocket();
+      let connects = 0;
+      const h = setup({
+        reconnect: { baseMs: 1, maxMs: 1 },
+        pollIntervalMs: 10_000,
+        connect: () => {
+          connects += 1;
+          return socket;
+        },
+      });
+      h.service.start();
+      socket.accept();
+
+      // The socket has the block at `Voted`, under Monad's consensus id.
+      socket.pushHead(BLOCK, ID_A, 'Proposed');
+      h.advanced(OFF_VOTED_MS);
+      socket.pushHead(BLOCK, ID_A, 'Voted');
+
+      const feed = h.service.watch(BLOCK);
+      const moves: string[] = [];
+      void (async () => {
+        for await (const transition of feed) moves.push(transition.state);
+      })();
+
+      // The socket drops. The HTTP tags report the SAME block, by its execution
+      // hash, which is a different string from `blockId` and always was.
+      const connectsBefore = connects;
+      socket.drop();
+      h.advanced(OFF_FINALIZED_MS - OFF_VOTED_MS);
+      h.tags.byTag.set('finalized', { number: BLOCK, id: HASH_A });
+      await h.service.pollOnce();
+
+      // The socket comes back and pushes the same block again.
+      await tick(1);
+      expect(connects).toBeGreaterThan(connectsBefore);
+      socket.accept();
+      h.advanced(OFF_VERIFIED_MS - OFF_FINALIZED_MS);
+      socket.pushHead(BLOCK, ID_A, 'Verified');
+      await tick(0);
+
+      // No `reorged` anywhere: the block never moved, so the ramp never plays
+      // backwards. It simply walked Voted -> Finalized -> Verified.
+      expect(moves).toEqual(['Finalized', 'Verified']);
+
+      const record = h.service.stateOf(BLOCK)!;
+      expect(record.state).toBe('Verified');
+      expect(record.blockId).toBe(ID_A);
+      expect(record.blockHash).toBe(HASH_A);
+      // Everything the block has been through is still on the record.
+      expect(Object.keys(record.at).sort()).toEqual(['finalized', 'proposed', 'verified', 'voted']);
+
+      await feed.return?.();
+      h.service.stop();
+    });
+
+    it('stops for good: no socket, no timers, and a watcher is released', async () => {
+      const h = setup({ pollIntervalMs: 1 });
+      h.tags.byTag.set('latest', { number: BLOCK, id: ID_A });
+      h.service.start();
+      await tick(0);
+      expect(h.service.size).toBeGreaterThan(0);
+
+      h.service.stop();
+      const askedAtStop = h.tags.asked.length;
+      await tick(20);
+      expect(h.tags.asked.length).toBe(askedAtStop);
+      expect(jest.getTimerCount()).toBe(0);
+
+      // `stop` is how Nest tears the service down; a watcher simply stops being fed.
+      const feed = h.service.watch(BLOCK);
+      h.socket.pushHead(BLOCK, ID_A, 'Voted');
+      const pending = feed.next();
+      await feed.return?.();
+      await expect(pending).resolves.toEqual({ value: undefined, done: true });
+      // And the push that arrived after stop was dropped, not queued.
+      await expect(feed.next()).resolves.toEqual({ value: undefined, done: true });
+    });
   });
 
   it('keeps polling when a tag read fails, and recovers when it does not', async () => {
@@ -404,63 +497,6 @@ describe('ConsensusService', () => {
     h.service.stop();
   });
 
-  it('does not call a socket flap a reorg: the fallback hash is not the socket id', async () => {
-    // Its own socket, so the reconnect is something this spec can wait for
-    // rather than race: `connects` ticks when the service asks for one again.
-    const socket = new FakeSocket();
-    let connects = 0;
-    const h = setup({
-      reconnect: { baseMs: 1, maxMs: 1 },
-      pollIntervalMs: 10_000,
-      connect: () => {
-        connects += 1;
-        return socket;
-      },
-    });
-    h.service.start();
-    socket.accept();
-
-    // The socket has the block at `Voted`, under Monad's consensus id.
-    socket.pushHead(BLOCK, ID_A, 'Proposed');
-    h.advanced(OFF_VOTED_MS);
-    socket.pushHead(BLOCK, ID_A, 'Voted');
-
-    const feed = h.service.watch(BLOCK);
-    const moves: string[] = [];
-    void (async () => {
-      for await (const transition of feed) moves.push(transition.state);
-    })();
-
-    // The socket drops. The HTTP tags report the SAME block, by its execution
-    // hash, which is a different string from `blockId` and always was.
-    const connectsBefore = connects;
-    socket.drop();
-    h.advanced(OFF_FINALIZED_MS - OFF_VOTED_MS);
-    h.tags.byTag.set('finalized', { number: BLOCK, id: HASH_A });
-    await h.service.pollOnce();
-
-    // The socket comes back and pushes the same block again.
-    await waitFor(() => connects > connectsBefore);
-    socket.accept();
-    h.advanced(OFF_VERIFIED_MS - OFF_FINALIZED_MS);
-    socket.pushHead(BLOCK, ID_A, 'Verified');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-
-    // No `reorged` anywhere: the block never moved, so the ramp never plays
-    // backwards. It simply walked Voted -> Finalized -> Verified.
-    expect(moves).toEqual(['Finalized', 'Verified']);
-
-    const record = h.service.stateOf(BLOCK)!;
-    expect(record.state).toBe('Verified');
-    expect(record.blockId).toBe(ID_A);
-    expect(record.blockHash).toBe(HASH_A);
-    // Everything the block has been through is still on the record.
-    expect(Object.keys(record.at).sort()).toEqual(['finalized', 'proposed', 'verified', 'voted']);
-
-    await feed.return?.();
-    h.service.stop();
-  });
-
   it('bounds the map to the tracking window, evicting the lowest height', () => {
     const h = setup({ windowSize: 3 });
     h.service.start();
@@ -493,27 +529,6 @@ describe('ConsensusService', () => {
     expect(h.socket.closed).toBe(true);
 
     h.service.stop();
-  });
-
-  it('stops for good: no socket, no timers, and a watcher is released', async () => {
-    const h = setup({ pollIntervalMs: 1 });
-    h.tags.byTag.set('latest', { number: BLOCK, id: ID_A });
-    h.service.start();
-    await waitFor(() => h.service.size > 0);
-
-    h.service.stop();
-    const askedAtStop = h.tags.asked.length;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(h.tags.asked.length).toBe(askedAtStop);
-
-    // `stop` is how Nest tears the service down; a watcher simply stops being fed.
-    const feed = h.service.watch(BLOCK);
-    h.socket.pushHead(BLOCK, ID_A, 'Voted');
-    const pending = feed.next();
-    await feed.return?.();
-    await expect(pending).resolves.toEqual({ value: undefined, done: true });
-    // And the push that arrived after stop was dropped, not queued.
-    await expect(feed.next()).resolves.toEqual({ value: undefined, done: true });
   });
 
   it('queues transitions for a watcher that is not awaiting, dropping the oldest', async () => {

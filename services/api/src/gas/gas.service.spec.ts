@@ -69,6 +69,10 @@ const KERNEL_CODE = '0x363d3d373d3d363d7f360894a13ba1a3210667c828492db98dca3e207
 const senderPool = (empty = false): SenderPool =>
   ({ size: empty ? 0 : 3, addresses: () => [SENDER] }) as unknown as SenderPool;
 
+/** Midday UTC: no spec's drips can straddle the day boundary the caps count against (SEN-140). */
+const NOON = new Date('2026-09-27T12:00:00.000Z');
+const TODAY = utcDay(NOON);
+
 const DRIP_TX = `0x${'a9'.repeat(32)}` as Hash;
 const UNCONFIRMED_TX = `0x${'be'.repeat(32)}` as Hash;
 
@@ -112,6 +116,7 @@ function build(
     noSenders?: boolean;
     code?: Hex | undefined | Error;
     dispatch?: DispatchBehaviour;
+    now?: () => Date;
   } = {},
 ) {
   const ledger = over.ledger ?? new InMemoryDripLedger();
@@ -124,6 +129,7 @@ function build(
     rateLimiter(over.allowIp ?? true),
     codeReader(over.code),
     dispatcher,
+    over.now ?? (() => NOON),
   );
   return { service, ledger, sends };
 }
@@ -215,6 +221,25 @@ describe('GasDripService.drip', () => {
     expect(sends).toHaveLength(1);
   });
 
+  it('resets the daily cap at UTC midnight', async () => {
+    let now = new Date('2026-09-27T23:59:59.999Z');
+    const { service, ledger, sends } = build({
+      cfg: { dailyCapWei: ONE_TENTH_MON },
+      now: () => now,
+    });
+    const second = { address: '0x3333333333333333333333333333333333333333', ip: IP };
+    await service.drip(USER, { address: ADDRESS, ip: IP });
+    expect(await refusal(service.drip({ userId: 'user-2' }, second))).toBe('daily_cap_reached');
+
+    // One millisecond later it is tomorrow, and tomorrow's budget is untouched.
+    now = new Date('2026-09-28T00:00:00.000Z');
+    const receipt = await service.drip({ userId: 'user-2' }, second);
+
+    expect(receipt.dailyTotalWei).toBe(ONE_TENTH_MON);
+    expect(await ledger.dailyTotalWei('2026-09-27')).toBe(ONE_TENTH_MON);
+    expect(sends).toHaveLength(2);
+  });
+
   it('gives the budget back when the send fails, so a broken RPC cannot drain the cap', async () => {
     const { service, ledger } = build({ dispatch: 'throw' });
 
@@ -223,8 +248,7 @@ describe('GasDripService.drip', () => {
     );
 
     // Reservation released: no budget consumed, and the user may retry.
-    const day = new Date().toISOString().slice(0, 10);
-    expect(await ledger.dailyTotalWei(day)).toBe(0n);
+    expect(await ledger.dailyTotalWei(TODAY)).toBe(0n);
     expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
   });
 
@@ -287,8 +311,7 @@ describe('GasDripService.drip', () => {
       );
 
       expect(sends).toHaveLength(0);
-      const day = new Date().toISOString().slice(0, 10);
-      expect(await ledger.dailyTotalWei(day)).toBe(0n);
+      expect(await ledger.dailyTotalWei(TODAY)).toBe(0n);
       expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
     });
   });
@@ -302,8 +325,7 @@ describe('GasDripService.drip', () => {
       );
 
       // Nothing moved, so the user may retry.
-      const day = new Date().toISOString().slice(0, 10);
-      expect(await ledger.dailyTotalWei(day)).toBe(0n);
+      expect(await ledger.dailyTotalWei(TODAY)).toBe(0n);
       expect(await ledger.findByUserId(USER.userId)).toBeUndefined();
       expect(await ledger.findByAddress(ADDRESS)).toBeUndefined();
     });
@@ -314,8 +336,7 @@ describe('GasDripService.drip', () => {
       const receipt = await service.drip(USER, { address: ADDRESS, ip: IP });
 
       expect(receipt).toMatchObject({ txHash: UNCONFIRMED_TX, confirmed: false });
-      const day = new Date().toISOString().slice(0, 10);
-      expect(await ledger.dailyTotalWei(day)).toBe(ONE_TENTH_MON);
+      expect(await ledger.dailyTotalWei(TODAY)).toBe(ONE_TENTH_MON);
       expect(await refusal(service.drip(USER, { address: ADDRESS, ip: IP }))).toBe(
         'user_already_dripped',
       );
@@ -355,7 +376,6 @@ describe('GasDripService.dripToAgent', () => {
     agentId: `agent-${n}`,
     address: `0x${(0xa0 + n).toString(16).padStart(40, '0')}`,
   });
-  const today = () => utcDay(new Date());
 
   it('funds an agent once, with the agent amount, keyed on the agent id and the address', async () => {
     const { service, sends } = build();
@@ -394,6 +414,20 @@ describe('GasDripService.dripToAgent', () => {
     // The cap is per user.
     expect((await service.dripToAgent(agent(4, 'user-2'))).funded).toBe(true);
     expect(sends).toHaveLength(3);
+  });
+
+  it('resets the per-user agent cap at UTC midnight', async () => {
+    let now = new Date('2026-09-27T23:59:59.999Z');
+    const { service } = build({ agent: { maxPerUserPerDay: 1 }, now: () => now });
+
+    expect((await service.dripToAgent(agent(1))).funded).toBe(true);
+    expect(await service.dripToAgent(agent(2))).toMatchObject({
+      funded: false,
+      reason: 'agent_daily_limit_reached',
+    });
+
+    now = new Date('2026-09-28T00:00:00.000Z');
+    expect((await service.dripToAgent(agent(2))).funded).toBe(true);
   });
 
   it('neither uses up nor is blocked by the user’s own drip', async () => {
@@ -459,7 +493,7 @@ describe('GasDripService.dripToAgent', () => {
     });
 
     // Nothing moved, so the agent can still be funded later.
-    expect(await ledger.dailyTotalWei(today())).toBe(0n);
+    expect(await ledger.dailyTotalWei(TODAY)).toBe(0n);
     expect(await ledger.findByAgentId('agent-1')).toBeUndefined();
   });
 
@@ -472,7 +506,7 @@ describe('GasDripService.dripToAgent', () => {
       txHash: UNCONFIRMED_TX,
     });
     // It may still land: the budget stays spent and a retry is refused.
-    expect(await ledger.dailyTotalWei(today())).toBe(AGENT_AMOUNT);
+    expect(await ledger.dailyTotalWei(TODAY)).toBe(AGENT_AMOUNT);
     expect(await service.dripToAgent(agent(1))).toMatchObject({ reason: 'agent_already_dripped' });
     expect(sends).toHaveLength(1);
   });
@@ -484,7 +518,7 @@ describe('GasDripService.dripToAgent', () => {
       funded: false,
       reason: 'drip_failed',
     });
-    expect(await ledger.dailyTotalWei(today())).toBe(0n);
+    expect(await ledger.dailyTotalWei(TODAY)).toBe(0n);
   });
 
   it('never throws, even when a read fails before the claim', async () => {
@@ -572,6 +606,7 @@ describe('GasDripService spacing across user and agent drips', () => {
       rateLimiter(),
       codeReader(undefined),
       dispatcher,
+      () => NOON,
     );
     return { service, sends, receiptAt };
   }

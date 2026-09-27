@@ -15,6 +15,7 @@ import { AgentsService, type HireAgentInput } from '../agents.service';
 import { ServerMandateOwners } from '../mandate-owner';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
 import { FakeAgentWalletProvider } from '../testing/fake-agent-wallet.provider';
+import { EXPIRES_IN_A_YEAR } from '../testing/mandate-expiry';
 import { FakeKuruVenue } from '../tools/testing/fake-venues';
 import type { AgentReceipt, AgentTransaction } from '../venues/agent-transactions';
 import {
@@ -36,7 +37,7 @@ function mandateInput(over: Record<string, unknown> = {}): Record<string, unknow
   return {
     version: 1,
     chainId: 10143,
-    expiresAt: 2_000_000_000,
+    expiresAt: EXPIRES_IN_A_YEAR,
     venues: ['kuru'],
     kuru: {
       markets: [KURU_TESTNET_MARKETS[0]!.address],

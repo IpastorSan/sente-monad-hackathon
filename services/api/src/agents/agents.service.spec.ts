@@ -28,6 +28,7 @@ import { RegistryReturnAddresses } from './return-address';
 import { InMemoryAgentStore, type AgentRecord } from './store/agent-store';
 import { hashMcpToken } from './store/mcp-token';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
+import { EXPIRES_IN_A_YEAR } from './testing/mandate-expiry';
 
 const ALICE = { userId: 'alice' };
 const BOB = { userId: 'bob' };
@@ -41,7 +42,7 @@ function mandateInput(over: Record<string, unknown> = {}): Record<string, unknow
   return {
     version: 1,
     chainId: 10143,
-    expiresAt: 2_000_000_000,
+    expiresAt: EXPIRES_IN_A_YEAR,
     venues: ['kuru', 'perpl'],
     kuru: { markets: [MARKET_A.toLowerCase()], maxDepositAtoms: { [USDC]: '1000000000' } },
     perpl: { maxCollateralAtoms: '500000000', maxLeverage: 5, markets: ['BTC-PERP'] },
@@ -897,6 +898,8 @@ describe('AgentsService', () => {
             });
           },
         },
+        // Midday UTC: three hires straddling midnight would each get a fresh cap (SEN-140).
+        () => new Date('2026-09-27T12:00:00.000Z'),
       );
       const { service } = withGas(gas);
 

@@ -1,14 +1,25 @@
 {
-  // ts-jest's tsconfig. Same as tsconfig.json except for one thing: relative
-  // `.ts` specifiers (in src/agents/privy/* and in the workspace packages'
-  // sources) are emitted VERBATIM, because jest's own resolver loads `./x.ts`
-  // literally. Rewriting them to `./x.js`, as the build must, would point jest
-  // at files that do not exist — or, in packages/venues/src, at stale committed
-  // `.js` twins. See CLAUDE.md gotcha 10.
+  // ts-jest's tsconfig. Same as tsconfig.json except for two things.
+  //
+  // Relative `.ts` specifiers (in src/agents/privy/* and in the workspace
+  // packages' sources) are emitted VERBATIM, because jest's own resolver loads
+  // `./x.ts` literally. Rewriting them to `./x.js`, as the build must, would
+  // point jest at files that do not exist — or, in packages/venues/src, at stale
+  // committed `.js` twins. See CLAUDE.md gotcha 10.
+  //
+  // `isolatedModules` makes ts-jest transpile each file on its own instead of
+  // type-checking the program in every worker (SEN-140). `pnpm run typecheck`
+  // already checks every spec through tsconfig.json, so jest was paying for a
+  // second, per-worker check: each of ~15 workers held ~850 MB (~400 MB
+  // without it), the cold suite took 17 s (4 s without), and a worker's teardown
+  // outlast jest-worker's 500 ms exit grace on a loaded box ("A worker process
+  // has failed to exit gracefully"). There was no leaked timer or socket: at
+  // the force-kill every worker had already emptied its event loop.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rewriteRelativeImportExtensions": false,
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "isolatedModules": true
   }
 }

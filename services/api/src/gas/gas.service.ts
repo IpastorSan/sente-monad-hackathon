@@ -3,6 +3,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { formatEther, getAddress, isAddress, type Address, type Hash } from 'viem';
@@ -94,6 +95,13 @@ export interface FaucetStatus {
 }
 
 /**
+ * The drip service's clock. Unbound in the module, so production reads the wall
+ * clock; a spec binds it to pin which UTC day the ledger's caps count against
+ * (SEN-140: a cap test that straddled midnight used to fail on its own).
+ */
+export const GAS_DRIP_CLOCK = Symbol('GAS_DRIP_CLOCK');
+
+/**
  * The MON gas drip: a new Mera passkey account holds zero MON and Mera ships no
  * paymaster, so without a top-up a user cannot send their first transaction.
  * MOV-253 (gas-sponsored Kernel smart account) is the real answer; this is the
@@ -113,9 +121,12 @@ export class GasDripService {
     @Inject(IP_RATE_LIMITER) private readonly rateLimiter: IpRateLimiter,
     @Inject(CODE_READER) private readonly code: CodeReader,
     @Inject(DRIP_DISPATCHER) private readonly dispatcher: DripDispatcher,
+    @Optional()
+    @Inject(GAS_DRIP_CLOCK)
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async status(now: Date = new Date()): Promise<FaucetStatus> {
+  async status(now: Date = this.now()): Promise<FaucetStatus> {
     return {
       configured: this.senders.size > 0,
       senders: this.senders.size,
@@ -133,7 +144,7 @@ export class GasDripService {
    * `address_already_funded` they would trip over a step later.
    */
   async drip(principal: Principal, command: DripCommand): Promise<DripReceipt> {
-    const now = new Date();
+    const now = this.now();
 
     // 1. Per-IP rate limit. First because it is the only free check.
     if (!this.rateLimiter.hit(command.ip, now)) {
@@ -290,7 +301,7 @@ export class GasDripService {
    */
   async dripToAgent(command: AgentDripCommand): Promise<AgentDripOutcome> {
     try {
-      return await this.fundAgent(command, new Date());
+      return await this.fundAgent(command, this.now());
     } catch (error) {
       this.logger.error(
         `agent drip failed agent=${command.agentId} user=${command.userId}: ${describeError(error)}`,
