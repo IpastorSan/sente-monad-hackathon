@@ -237,6 +237,12 @@ test('small formatting rules', () => {
   assert.equal(signedAmount('0.001'), '0.00');
 });
 
+test('a stake P&L in exponent form still reads as a figure (SEN-136)', () => {
+  // Pre-fix: `null`, so the stake line lost its P&L.
+  assert.equal(signedAmount('1e-7'), '0.00');
+  assert.equal(signedAmount('-2.5e1'), '−25.00');
+});
+
 test('funding says who pays in words, then the rate and the countdown', () => {
   const now = 1_000_000;
   assert.deepEqual(

@@ -28,10 +28,12 @@ import type {
 } from './api.ts';
 import type { LedgerEntry, VerdictEntry } from './ledger.ts';
 import { levelsNote, presetLevels, stopAndTarget, type StopTarget } from './levels.ts';
-import { pnlLabel } from './leaderboard.ts';
+import { PNL_LABEL_PLACES, pnlLabel } from './leaderboard.ts';
 import { outcome, sumDecimals } from './ledgerView.ts';
 import { formatNotional, marketFor, tokenFor } from './mandate.ts';
 import { formatDuration, pnlTone } from './usage.ts';
+import { signedFigure } from '../ui/money.ts';
+import { formatPct } from '../ui/tradingFormat.ts';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -161,15 +163,20 @@ export function cockpitStats(
 // ---------------------------------------------------------------------------
 // Overview: the P&L headline and the equity series
 
-/** `+42.18` split for `BigNumber`: the sign as a prefix, the magnitude as the value. */
+/**
+ * `+42.18` split for `BigNumber`: the sign as a prefix, the magnitude as the
+ * value, already rounded to the cent `BigNumber` shows. SEN-136: the sign used
+ * to come from the exact figure, so `-0.001` printed `−0.00` in berry, and
+ * `1e-7` reached `BigNumber` unparsed and printed `—`.
+ */
 export function signedParts(pnl: string | null | undefined): {
   sign: '+' | '−' | '';
   magnitude: string;
   tone: Tone;
 } {
-  const tone = pnlTone(pnl);
-  const magnitude = (pnl ?? '0').trim().replace(/^[-+−]/u, '') || '0';
-  return { sign: tone === 'up' ? '+' : tone === 'down' ? '−' : '', magnitude, tone };
+  const figure = signedFigure(pnl ?? '0', PNL_LABEL_PLACES);
+  if (figure === null) return { sign: '', magnitude: (pnl ?? '').trim() || '0', tone: null };
+  return { sign: figure.sign, magnitude: figure.plain, tone: figure.tone };
 }
 
 /**
@@ -338,7 +345,7 @@ export function positionRows(
         detail: `${position.size} ${base} @ ${position.entryPrice} · Perpl ${position.leverage}×`,
         pnl: pnlLabel(position.unrealizedPnl),
         pct: percentOf(position.unrealizedPnl, cost),
-        tone: pnlTone(position.unrealizedPnl),
+        tone: pnlTone(position.unrealizedPnl, PNL_LABEL_PLACES),
         entry: position.entryPrice,
         mark: position.markPrice,
         liq: position.liquidationPriceEst,
@@ -363,7 +370,7 @@ export function positionRows(
         unrealizedPnl !== null && avgPrice !== null
           ? percentOf(unrealizedPnl, covered * Number(avgPrice))
           : null,
-      tone: pnlTone(unrealizedPnl),
+      tone: pnlTone(unrealizedPnl, PNL_LABEL_PLACES),
       entry: avgPrice,
       mark: holding.markPrice,
       liq: null,
@@ -378,14 +385,12 @@ function baseOf(symbol: string): string {
   return symbol.split(/[-/]/u)[0] || symbol;
 }
 
-/** `+0.70%` — a display ratio, so a float is fine here. */
+/** `+0.70%` — a display ratio, so a float is fine for the division. */
 function percentOf(pnl: string, cost: number): string | null {
   const value = Number(pnl);
   if (!Number.isFinite(value) || !Number.isFinite(cost) || cost <= 0) return null;
-  const pct = (value / cost) * 100;
-  const fixed = Math.abs(pct).toFixed(2);
-  if (fixed === '0.00') return '0.00%';
-  return `${pct < 0 ? '−' : '+'}${fixed}%`;
+  // `formatPct` rounds the ratio on its digits, like every signed figure (SEN-136).
+  return formatPct((value / cost) * 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +467,7 @@ export function historyDays(entries: readonly LedgerEntry[], now: number): Histo
     const total = sumDecimals(pnls);
     if (total !== null) {
       day.pnl = pnlLabel(total);
-      day.tone = pnlTone(total);
+      day.tone = pnlTone(total, PNL_LABEL_PLACES);
     }
   }
   return days;

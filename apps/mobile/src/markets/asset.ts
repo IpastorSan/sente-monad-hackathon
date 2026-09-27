@@ -12,6 +12,7 @@
 import type { Agent, AgentPortfolioDto } from '../agents/api.ts';
 import { marketFor } from '../agents/mandate.ts';
 import { formatPrice as formatPlaces, priceDecimals } from '../ui/chart/geometry.ts';
+import { signedFigure } from '../ui/money.ts';
 import { formatPrice, pctChange } from '../ui/tradingFormat.ts';
 
 import type {
@@ -446,10 +447,8 @@ export function agentStake(portfolio: AgentPortfolioDto | null, market: MarketDt
 
 /** `+1.22`, `−0.40`: a P&L's sign spelled out, two places. */
 export function signedAmount(value: Decimal): string | null {
-  const formatted = formatPlaces(value.replace(/^[+-]/, ''), 2);
-  if (formatted === null) return null;
-  if (Number(formatted.replace(/,/g, '')) === 0) return formatted;
-  return value.trim().startsWith('-') ? `${MINUS}${formatted}` : `+${formatted}`;
+  // The app's one signed formatter (SEN-136), so a stake reads as the cockpit does.
+  return signedFigure(value, 2)?.text ?? null;
 }
 
 function trimZeros(value: Decimal): string {

@@ -11,7 +11,7 @@
  * contract changes: that file answers "what happened", this one "how it reads".
  */
 import { groupThousands } from './amounts.ts';
-import { pnlLabel } from './leaderboard.ts';
+import { PNL_LABEL_PLACES, pnlLabel } from './leaderboard.ts';
 import {
   depositAmount,
   venueLabel,
@@ -24,6 +24,7 @@ import {
   type VerdictEntry,
 } from './ledger.ts';
 import { shortAddress } from '../ui/format.ts';
+import { signedFigure } from '../ui/money.ts';
 
 /**
  * The stone an entry is placed as — `StoneKind` in `ui/goban.tsx`, restated so
@@ -50,8 +51,10 @@ export function stoneFor(entry: LedgerEntry): LedgerStone {
  * API calls a thesis that ended flat one that did not hold.
  */
 export function outcome(entry: VerdictEntry): 'up' | 'down' | null {
-  const value = entry.pnl === null ? NaN : Number(entry.pnl);
-  if (Number.isFinite(value) && value !== 0) return value > 0 ? 'up' : 'down';
+  // Judged at the cent the headline prints (SEN-136): a P&L that reads `0.00`
+  // is not a win or a loss, so the thesis' `held` decides instead.
+  const tone = signedFigure(entry.pnl, PNL_LABEL_PLACES)?.tone ?? null;
+  if (tone !== null) return tone;
   if (entry.held === true) return 'up';
   if (entry.held === false) return 'down';
   return null;
@@ -162,13 +165,9 @@ export function ledgerStats(entries: readonly LedgerEntry[]): LedgerStats {
   }
   const total = sumDecimals(pnls);
   if (total === null) return { trades, held, pnl: null, tone: null };
-  const value = Number(total);
-  return {
-    trades,
-    held,
-    pnl: pnlLabel(total),
-    tone: value > 0 ? 'up' : value < 0 ? 'down' : null,
-  };
+  // Label and tone from one rounding (SEN-136): a total of -0.001 is `0.00`, untinted.
+  const figure = signedFigure(total, PNL_LABEL_PLACES);
+  return { trades, held, pnl: figure?.text ?? total, tone: figure?.tone ?? null };
 }
 
 /** `1,204` — the counts are grouped like every other figure in the app. */

@@ -18,6 +18,7 @@ import type { TickerDto } from '../markets/api.ts';
 import type { Portfolio, PortfolioFill } from '../trade/types.ts';
 import { formatPrice as formatPlaces } from '../ui/chart/geometry.ts';
 import { BALANCE_PLACES } from '../ui/format.ts';
+import { signedFigure } from '../ui/money.ts';
 import { formatPct, maskDigits, pctDirection, type Direction } from '../ui/tradingFormat.ts';
 
 const MINUS = '−';
@@ -113,17 +114,12 @@ export function amountText(value: string, symbol: string): string {
 
 /** `+11.53` / `−4.10` / `0.00`, at 2 places. */
 export function signedMoney(value: string | null): string {
-  if (value === null) return '—';
-  const shown = money(value);
-  if (shown.startsWith(MINUS) || !/[1-9]/u.test(shown)) return shown;
-  return `+${shown}`;
+  // The app's one signed formatter (SEN-136), so this agrees with the agent screens.
+  return signedFigure(value, 2)?.text ?? '—';
 }
 
 export function toneOf(value: string | null): Direction {
-  if (value === null) return 'flat';
-  const shown = money(value);
-  if (!/[1-9]/u.test(shown)) return 'flat';
-  return shown.startsWith(MINUS) ? 'down' : 'up';
+  return signedFigure(value, 2)?.tone ?? 'flat';
 }
 
 // ---------------------------------------------------------------------------
@@ -752,8 +748,9 @@ export type PerpDetail = {
  * leaves out accrued funding) and sits under the chart with its distance.
  */
 export function perpDetail(position: PositionDto, hidden = false): PerpDetail {
-  const tone = toneOf(position.unrealizedPnl);
-  const magnitude = money(position.unrealizedPnl).replace(/^−/u, '');
+  const figure = signedFigure(position.unrealizedPnl, 2);
+  const tone = figure?.tone ?? 'flat';
+  const magnitude = figure?.magnitude ?? '—';
   const pct = ratio(position.unrealizedPnl, position.margin);
   const base = baseOf(position.symbol);
   const notional = mulDecimal(position.size, position.markPrice);

@@ -16,6 +16,7 @@
  * row prints, because a rate without its sample is a lie.
  */
 import { groupThousands } from './amounts.ts';
+import { signedFigure } from '../ui/money.ts';
 
 /** How many theses an agent settled (a boolean `held`), and how many it held. */
 export type Theses = {
@@ -43,22 +44,23 @@ export function roiLabel(roi: number | null): string {
   return `${roi < 0 ? '−' : '+'}${percent(Math.abs(roi))}`;
 }
 
-/** `+12.40` / `−3.10` / `0.00` — a real minus sign, grouped, rounded to the cent. */
+/** `pnlLabel`'s cent; a tone beside it is `pnlTone(value, PNL_LABEL_PLACES)`. */
+export const PNL_LABEL_PLACES = 2;
+
+/**
+ * `+12.40` / `−3.10` / `0.00` — a real minus sign, grouped, rounded to the
+ * cent half away from zero on the digits (SEN-136: `-0.001` is `0.00`, not
+ * `−0.00`; `-2.675` is `−2.68`, not the float's `−2.67`).
+ */
 export function pnlLabel(value: string): string {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return value;
-  const amount = amountLabel(value);
-  if (parsed === 0) return amount;
-  return parsed < 0 ? `−${amount}` : `+${amount}`;
+  // Hand back exactly what could not be parsed rather than inventing a number.
+  return signedFigure(value, PNL_LABEL_PLACES)?.text ?? value;
 }
 
 /** `25.00`, unsigned: for a figure that cannot be negative, like capital deployed. */
 export function amountLabel(value: string): string {
-  const parsed = Number(value);
-  // Hand back exactly what could not be parsed rather than inventing a number.
-  if (!Number.isFinite(parsed)) return value;
-  const [whole = '0', fraction = '00'] = Math.abs(parsed).toFixed(2).split('.');
-  return `${groupThousands(whole)}.${fraction}`;
+  // A blank figure is no capital, as it always read here: `0.00`.
+  return signedFigure(value.trim() || '0', PNL_LABEL_PLACES)?.magnitude ?? value;
 }
 
 /** `01`, `12` — zero-padded so the column is a column. */

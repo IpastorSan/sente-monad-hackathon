@@ -88,8 +88,17 @@ test('cockpitStats: won of settled, average hold, held from the summary when the
 
 test('signedParts splits the sign off for the big number', () => {
   assert.deepEqual(signedParts('42.18'), { sign: '+', magnitude: '42.18', tone: 'up' });
-  assert.deepEqual(signedParts('-2.5'), { sign: '−', magnitude: '2.5', tone: 'down' });
-  assert.deepEqual(signedParts(undefined), { sign: '', magnitude: '0', tone: null });
+  assert.deepEqual(signedParts('-2.5'), { sign: '−', magnitude: '2.50', tone: 'down' });
+  assert.deepEqual(signedParts(undefined), { sign: '', magnitude: '0.00', tone: null });
+});
+
+test('signedParts signs and tones the cent BigNumber shows, not the exact figure (SEN-136)', () => {
+  // Pre-fix: `−` + berry over a BigNumber reading `0.00`.
+  assert.deepEqual(signedParts('-0.001'), { sign: '', magnitude: '0.00', tone: null });
+  // Pre-fix: the raw `1e-7` reached BigNumber, which printed `—`.
+  assert.deepEqual(signedParts('1e-7'), { sign: '', magnitude: '0.00', tone: null });
+  // Pre-fix: the unrounded magnitude; half away from zero on the digits.
+  assert.deepEqual(signedParts('-2.675'), { sign: '−', magnitude: '2.68', tone: 'down' });
 });
 
 test('pnlUnit names one venue’s quote, and only approximates across both', () => {
