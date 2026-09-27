@@ -194,23 +194,28 @@ export interface AgentPortfolioDto {
   asOf: number;
   wallet: SectionResult<{ balances: (BalanceDto & { decimals: number })[] }>;
   kuru: SectionResult<{ accountId: string | null; balances: BalanceDto[]; openOrders: OrderDto[] }>;
+  // `asOf`: when Perpl was read — it can lag the portfolio's own `asOf`,
+  // since the section is cached for longer (SEN-122). `stale`: the latest read
+  // failed and this is the last good one.
   perpl: SectionResult<
-    | {
-        status: 'ok';
-        accountId: string;
-        balances: BalanceDto[];
-        positions: PositionDto[];
-        openOrders: OrderDto[];
-      }
-    | {
-        status: 'not_enrolled';
-        accountId: string;
-        balances: BalanceDto[];
-        positions: null;
-        openOrders: null;
-      }
-    | { status: 'no_account' }
-    | { status: 'not_in_mandate' }
+    (
+      | {
+          status: 'ok';
+          accountId: string;
+          balances: BalanceDto[];
+          positions: PositionDto[];
+          openOrders: OrderDto[];
+        }
+      | {
+          status: 'not_enrolled';
+          accountId: string;
+          balances: BalanceDto[];
+          positions: null;
+          openOrders: null;
+        }
+      | { status: 'no_account' }
+      | { status: 'not_in_mandate' }
+    ) & { asOf?: number; stale?: true }
   >;
   holdings: SpotHoldingDto[];
   totals: { approxUsd: Decimal; byQuote: { USDC: Decimal; AUSD: Decimal }; note: string };
