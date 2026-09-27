@@ -134,6 +134,15 @@ does not lock the user out of an app, it makes their funds unreachable.
 ceremony (`getPasskeyPrfOutput`), so `signIn` runs a second assertion for the `device` salt, pinned
 to the credential the first one chose. Two prompts at sign-in, none afterwards.
 
+### Perpl trade-key label: `sente.perpl.trade-key.v1`
+
+`apps/mobile/src/auth/perplKey.ts` (SEN-89) derives the phone's Ed25519 Perpl trade key as
+`HKDF-SHA256(ikm = device key, salt = empty, info = "sente.perpl.trade-key.v1" ‖ lowercase wallet)`.
+`PERPL_TRADE_KEY_LABEL` becomes permanent the moment a key derived under it is enrolled with Perpl.
+Unlike the PRF salts, renaming it cannot lose funds, but every phone then derives a key Perpl does
+not recognise: each user must re-enroll, and each enrollment burns one of the account's **16** Perpl
+API-key slots. Treat it like a `sente.prf.v1.*` namespace — add a `.v2` label, never rename this one.
+
 ## Gotchas that will burn you
 
 ### 1. The hoisted `node_modules` is load-bearing — and pnpm 12 only reads it from `pnpm-workspace.yaml`
