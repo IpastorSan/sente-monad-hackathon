@@ -8,6 +8,7 @@
  */
 import type { Address, Hex } from 'viem';
 
+import type { BalanceDto, OrderDto, PositionDto } from '../agents/api.ts';
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 
 export type KuruPlaceIntent = {
@@ -166,80 +167,83 @@ export type TradeRefusalReason =
   | 'insufficient_balance'; // 422
 
 // ---------------------------------------------------------------------------
-// `/portfolio` (plan M-T19). PROVISIONAL: the route is not built yet, so these
-// follow the plan's mini-plan, not a DTO. Re-copy them from M-T19's DTO when it
-// lands. Amounts are decimal strings, as everywhere on the wire.
+// `/portfolio` (SEN-101, plan M-T19). Copied from
+// `services/api/src/portfolio/dto/portfolio.dto.ts`, replacing the shapes
+// SEN-102 had to guess before the route existed (SEN-118); change one and
+// change the other. The balance, order and position DTOs are the markets
+// contract's, which the phone already mirrors in `agents/api.ts` for the
+// agent portfolio, so they are imported rather than copied a second time.
 // ---------------------------------------------------------------------------
 
 export type PortfolioVenue = 'kuru' | 'perpl';
 
+/** One wallet token, as `/wallet` sends it too: `raw` atoms and `amount` decimal. */
 export type PortfolioTokenBalance = {
   readonly symbol: string;
   /** The ERC-20, or the zero address for native MON. */
-  readonly address: Address;
+  readonly address: string;
   readonly decimals: number;
+  /** Atoms, as a decimal string: bigint is not JSON. */
   readonly raw: string;
+  /** The same number decimal-shifted, e.g. "1.5" USDC. What the app shows. */
   readonly amount: string;
 };
 
-export type PortfolioVenueBalance = {
-  readonly asset: string;
-  readonly available: string;
-  readonly locked: string;
-};
+/**
+ * - `ok`: read through the user's read-scoped Perpl key (M-T18).
+ * - `unlinked`: an account exists but the server holds no read key for it;
+ *   the chain still gives its collateral balance, nothing else.
+ * - `not_onboarded`: the wallet has no Perpl account at all.
+ */
+export type PerplPortfolioStatus = 'ok' | 'unlinked' | 'not_onboarded';
 
-export type PortfolioOrder = {
-  readonly orderId: string;
-  readonly market: string;
-  readonly side: 'buy' | 'sell';
-  readonly price: string;
-  readonly size: string;
-  readonly filledSize?: string;
-};
-
-export type PortfolioPosition = {
-  readonly market: string;
-  readonly side: 'long' | 'short';
-  readonly size: string;
-  readonly entryPrice: string;
-  readonly markPrice?: string;
-  readonly unrealizedPnl?: string;
-  readonly leverage?: string;
-  readonly liquidationPrice?: string;
-};
-
-/** `GET /portfolio`: wallet, Kuru margin account, Perpl account. */
+/** `GET /portfolio`: the user's Privy wallet, its Kuru account and its Perpl account. */
 export type Portfolio = {
+  /** Unix ms of the read. */
   readonly asOf: number;
+  /** MON, every Kuru market token, and AUSD. */
   readonly wallet: readonly PortfolioTokenBalance[];
   readonly kuru: {
-    /** `null` for an empty Kuru account (id 0). */
+    /** `null` until the wallet's first Kuru deposit creates its AccountCore account. */
     readonly accountId: string | null;
-    readonly balances: readonly PortfolioVenueBalance[];
-    readonly openOrders: readonly PortfolioOrder[];
+    /** `available` is free, `locked` is reserved by resting orders. */
+    readonly balances: readonly BalanceDto[];
+    readonly openOrders: readonly OrderDto[];
   };
   readonly perpl: {
-    readonly status: 'unlinked' | 'ok' | 'not_onboarded';
-    readonly balances?: readonly PortfolioVenueBalance[];
-    readonly positions?: readonly PortfolioPosition[];
-    readonly openOrders?: readonly PortfolioOrder[];
+    readonly status: PerplPortfolioStatus;
+    /** Present whenever the account exists (`ok` and `unlinked`). */
+    readonly accountId?: string;
+    /** `unlinked`: the chain's collateral balance only, which excludes margin in positions. */
+    readonly balances?: readonly BalanceDto[];
+    /** Only with `ok`; absent means unknown, not none. */
+    readonly positions?: readonly PositionDto[];
+    readonly openOrders?: readonly OrderDto[];
   };
 };
 
+/** One of the user's own fills, from a `/trade` they placed. */
 export type PortfolioFill = {
   readonly venue: PortfolioVenue;
-  readonly market: string;
-  readonly side: 'buy' | 'sell';
+  /** Our trade id (`/trade/:tradeId`) that produced the fill. */
+  readonly tradeId: string;
+  /** The venue's own id for the match. */
+  readonly venueTradeId: string;
+  readonly orderId: string | null;
+  /** `null` only if the trade's summary was lost; the fill itself is still real. */
+  readonly symbol: string | null;
+  readonly side: 'buy' | 'sell' | null;
   readonly price: string;
   readonly size: string;
-  readonly fee?: string;
-  readonly tradeId: string;
-  /** ms since epoch. */
-  readonly time: number;
+  /** The transaction that carried the fill, when the step recorded one. */
+  readonly transactionHash: string | null;
+  /** Unix ms. When the trade recorded the result, not the block time. */
+  readonly timestamp: number;
 };
 
-/** `GET /portfolio/fills?venue=&cursor=`: `next` is the cursor for the next page, `null` at the end. */
+/** `GET /portfolio/fills?venue=&cursor=&limit=`, newest first. */
 export type PortfolioFills = {
   readonly fills: readonly PortfolioFill[];
+  /** Pass back as `cursor` for the next, older page; `null` at the end. */
   readonly next: string | null;
 };

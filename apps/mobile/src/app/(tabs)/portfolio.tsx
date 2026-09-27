@@ -1,33 +1,526 @@
 /**
- * Portfolio (SEN-109): the tab exists so the dock has its final shape; your
- * holdings and open positions, yours and your agents', land in U-12.
+ * Portfolio (SEN-118, plan U-12): where your money is and what it is doing.
+ * One ≈ $ total, a bar splitting it into cash, capital with agents, spot and
+ * perps, the cash card, then Positions / Orders / History. Spec:
+ * `docs/design/trading/portfolio.html`.
+ *
+ * Your own positions and orders come from `GET /portfolio`, which only
+ * answers while manual trading is on (the same flag as `/trade`). With it
+ * off the tab still shows the wallet session's cash and everything your
+ * agents hold, plus an honest "trading from your wallet is coming" card —
+ * never an empty tab and never an error for a feature that is simply off.
+ *
+ * Your agents' positions sit beside yours for the full picture but are
+ * read-only: an agent's funds are the agent's, so a row opens its cockpit.
+ *
+ * The total is computed on the phone (`portfolio/view.ts`): USDC and AUSD at
+ * $1, anything else at its Kuru last price, and it always says "≈ $". There
+ * is no value history on the server, so the line under it is what this
+ * phone observed since the app opened, and the caption says exactly that.
  */
-import { StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
+import { Share, StyleSheet, Text, View } from 'react-native';
 
-import { ComingNext } from '@/ui/ComingNext';
-import { Screen } from '@/ui/kit';
-import { text } from '@/ui/theme';
+import { useAgentsOverview } from '@/agents/useAgentsOverview';
+import { useTickers } from '@/markets/hooks';
+import { useHideBalances } from '@/portfolio/hideBalances';
+import {
+  AgentsGroup,
+  AllocationBar,
+  CashCard,
+  FillLine,
+  HideToggle,
+  OrderCard,
+  PerpPositionRow,
+  SpotPositionRow,
+} from '@/portfolio/parts';
+import {
+  useAgentPortfolios,
+  useFills,
+  useObservedValue,
+  useUserPortfolio,
+} from '@/portfolio/usePortfolio';
+import {
+  agentGroup,
+  allocation,
+  allocationParts,
+  amountText,
+  clock,
+  fillDays,
+  holdings,
+  orderRows,
+  seriesChange,
+  shown,
+  signedUsd,
+  type OrderRow,
+} from '@/portfolio/view';
+import { useSession } from '@/session';
+import { Chart } from '@/ui/chart/Chart';
+import { Button, Card, Loading, Notice, Row, Screen, Segmented, Sheet } from '@/ui/kit';
+import { color, font, RADIUS, text } from '@/ui/theme';
+import { AsOf, BigNumber, ChangeText } from '@/ui/trading';
+
+type Tab = 'positions' | 'orders' | 'history';
 
 export default function PortfolioScreen() {
+  const router = useRouter();
+  const { wallet: walletSession } = useSession();
+  const user = useUserPortfolio();
+  const tickers = useTickers();
+  const overview = useAgentsOverview();
+  const [pulls, setPulls] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const agents = overview.state.kind === 'loaded' ? overview.state.agents : null;
+  const agentPortfolios = useAgentPortfolios(agents, pulls);
+  const fills = useFills(user.trading);
+  const [hidden, toggleHidden] = useHideBalances();
+  const [tab, setTab] = useState<Tab>('positions');
+  const [fundOpen, setFundOpen] = useState(false);
+  const [cancelling, setCancelling] = useState<OrderRow | null>(null);
+
+  // With trading off the cash comes from the wallet session; re-read it on
+  // focus the way Home does, since balances move while you are elsewhere.
+  useFocusEffect(
+    useCallback(() => {
+      if (!user.trading) void walletSession.refresh();
+    }, [user.trading, walletSession.refresh]),
+  );
+
+  const tickerList = useMemo(() => tickers.data?.tickers ?? [], [tickers.data]);
+  const held = useMemo(
+    () => (user.wallet ? holdings(user.wallet, user.portfolio, tickerList) : null),
+    [user.wallet, user.portfolio, tickerList],
+  );
+  const group = useMemo(
+    () =>
+      agents && agentPortfolios
+        ? agentGroup(
+            agents.map((agent) => ({ agent, portfolio: agentPortfolios.get(agent.id) ?? null })),
+          )
+        : null,
+    [agents, agentPortfolios],
+  );
+  const split = useMemo(
+    () => (held ? allocation(allocationParts(held, group?.total ?? null)) : null),
+    [held, group],
+  );
+  // A sample is stamped with the newest data time behind it, so it only moves
+  // when a read lands, never on a re-render.
+  const at = Math.max(user.portfolio?.asOf ?? 0, tickers.asOf ?? 0) || null;
+  const series = useObservedValue(split?.total ?? null, at);
+  const change = seriesChange(series);
+  const now = Date.now();
+  const orders = user.trading ? orderRows(user.portfolio, tickerList, now) : [];
+
+  const refresh = async () => {
+    setRefreshing(true);
+    setPulls((n) => n + 1);
+    user.polled.refresh();
+    tickers.refresh();
+    await Promise.all([walletSession.refresh(), overview.refresh()]);
+    setRefreshing(false);
+  };
+
+  const address = walletSession.wallet?.address ?? null;
+  const openPosition = (venue: 'kuru' | 'perpl', symbol: string) =>
+    router.push({ pathname: '/positions/[venue]/[symbol]', params: { venue, symbol } });
+  const openAgent = (id: string) => router.push({ pathname: '/agents/[id]', params: { id } });
+
   return (
-    <Screen tabbed>
+    <Screen tabbed refreshing={refreshing} onRefresh={() => void refresh()}>
       <View style={styles.head}>
         <Text style={text.display}>Portfolio</Text>
+        <View style={styles.tools}>
+          <Text style={styles.net}>Monad testnet</Text>
+          <HideToggle hidden={hidden} onToggle={toggleHidden} />
+        </View>
       </View>
-      <ComingNext
-        icon="portfolio"
-        title="Everything you hold, in one place"
-        detail="Your wallet and every agent's, spot balances and open perps together."
-        points={[
-          'Total value, and what each agent holds',
-          'Open positions with entry, target, stop and liquidation',
-          'Close a position in one tap',
-        ]}
-      />
+
+      {held === null || split === null ? (
+        walletSession.status === 'error' ? (
+          <Notice
+            tone="error"
+            title="Could not reach your wallet"
+            detail={walletSession.error?.message ?? 'Pull to try again.'}
+          />
+        ) : (
+          <Loading />
+        )
+      ) : (
+        <>
+          <View style={styles.hero}>
+            <Text style={text.label}>Total value</Text>
+            <BigNumber value={split.total} prefix="$" approx size="xl" blurred={hidden} />
+            {change !== null ? (
+              <ChangeText
+                pct={change.pct}
+                lead={`${shown(signedUsd(change.delta), hidden)} (`}
+                suffix={`) since ${clock(series[0]?.at ?? now)} UTC`}
+              />
+            ) : null}
+            {series.length > 1 ? (
+              <Chart
+                kind="area"
+                points={series.map((s) => s.usd)}
+                height={128}
+                tone={change?.tone === 'down' ? 'berry' : 'mint'}
+                label="Portfolio value since the app opened"
+              />
+            ) : null}
+            <Text style={text.caption}>
+              {totalNote(held.unpriced, held.perpsUnknown, agentPortfolios === null)}
+            </Text>
+          </View>
+
+          <AllocationBar split={split} hidden={hidden} />
+
+          <CashCard
+            cash={held.cash}
+            venueCash={held.venueCash}
+            hidden={hidden}
+            onAddFunds={() => setFundOpen(true)}
+          />
+
+          {user.trading && user.portfolio ? (
+            <View style={styles.tabs}>
+              <Segmented
+                options={[
+                  { value: 'positions', label: 'Positions' },
+                  { value: 'orders', label: orders.length ? `Orders ${orders.length}` : 'Orders' },
+                  { value: 'history', label: 'History' },
+                ]}
+                value={tab}
+                onChange={setTab}
+              />
+            </View>
+          ) : (
+            <ComingCard trading={user.trading} failed={user.polled.error !== null} />
+          )}
+
+          {tab === 'positions' || !user.portfolio ? (
+            <View style={styles.section}>
+              <View style={styles.between}>
+                <Text style={text.label}>Your positions</Text>
+                {user.portfolio ? <AsOf at={user.polled.asOf} paused={user.polled.stale} /> : null}
+              </View>
+              {held.spot.length + held.perps.length === 0 ? (
+                <Text style={[text.dim, styles.empty]}>
+                  {user.portfolio
+                    ? 'No open positions. Tap Trade to place your first order.'
+                    : 'Nothing but cash in your wallet yet.'}
+                </Text>
+              ) : null}
+              {held.perps.map((p, i) => (
+                <PerpPositionRow
+                  key={`perpl:${p.position.symbol}`}
+                  symbol={p.position.symbol}
+                  side={p.position.side}
+                  leverage={p.position.leverage}
+                  size={p.position.size}
+                  entry={p.position.entryPrice}
+                  value={p.value}
+                  pnl={p.position.unrealizedPnl}
+                  pct={p.pctOnMargin}
+                  hidden={hidden}
+                  onPress={() => openPosition('perpl', p.position.symbol)}
+                  last={i === held.perps.length - 1 && held.spot.length === 0}
+                />
+              ))}
+              {held.spot.map((s, i) => (
+                <SpotPositionRow
+                  key={`kuru:${s.asset}`}
+                  {...s}
+                  hidden={hidden}
+                  onPress={() => openPosition('kuru', s.asset)}
+                  last={i === held.spot.length - 1}
+                />
+              ))}
+              <Agents
+                state={overview.state}
+                group={group}
+                hidden={hidden}
+                onOpen={openAgent}
+                onHire={() => router.push('/agents')}
+              />
+            </View>
+          ) : tab === 'orders' ? (
+            <View style={styles.section}>
+              {orders.length === 0 ? (
+                <Text style={[text.dim, styles.empty]}>
+                  No open orders. Limit orders you place rest here until they fill.
+                </Text>
+              ) : (
+                orders.map((row) => (
+                  <OrderCard
+                    key={row.key}
+                    row={row}
+                    hidden={hidden}
+                    onCancel={user.trading ? () => setCancelling(row) : undefined}
+                  />
+                ))
+              )}
+            </View>
+          ) : (
+            <History fills={fills} hidden={hidden} now={now} />
+          )}
+        </>
+      )}
+
+      {address !== null ? (
+        <FundSheet
+          visible={fundOpen}
+          address={address}
+          onClose={() => setFundOpen(false)}
+          onShare={() => void Share.share({ message: address })}
+        />
+      ) : null}
+      <CancelSheet row={cancelling} hidden={hidden} onClose={() => setCancelling(null)} />
     </Screen>
   );
 }
 
+/** What the ≈ $ leaves out, said under it rather than folded silently into the number. */
+function totalNote(unpriced: readonly string[], perpsUnknown: boolean, agentsLoading: boolean) {
+  const parts = ['USDC and AUSD counted as $1, other tokens at their Kuru price.'];
+  if (unpriced.length > 0) parts.push(`Leaves out ${unpriced.join(', ')}: no Kuru price.`);
+  if (perpsUnknown) parts.push('Perp positions are not readable until Perpl is linked.');
+  if (agentsLoading) parts.push('Still reading your agents.');
+  return parts.join(' ');
+}
+
+/**
+ * Manual trading is off (or its route refused): say what is coming instead
+ * of hiding the fact that orders and history are missing.
+ */
+function ComingCard({ trading, failed }: { trading: boolean; failed: boolean }) {
+  return (
+    <Card style={styles.coming}>
+      <Text style={text.title}>Trading from your wallet is coming</Text>
+      <Text style={[text.dim, styles.comingText]}>
+        {trading && failed
+          ? 'Your own orders and positions could not be read just now. Pull to try again.'
+          : 'Buying and selling on Kuru and opening perps on Perpl from this wallet. Until then, your agents trade for you and their positions are below.'}
+      </Text>
+    </Card>
+  );
+}
+
+function Agents({
+  state,
+  group,
+  hidden,
+  onOpen,
+  onHire,
+}: {
+  state: ReturnType<typeof useAgentsOverview>['state'];
+  group: ReturnType<typeof agentGroup> | null;
+  hidden: boolean;
+  onOpen: (id: string) => void;
+  onHire: () => void;
+}) {
+  if (state.kind === 'failed') {
+    return <Notice tone="error" title={state.title} detail={state.detail} />;
+  }
+  if (state.kind === 'loading' || group === null) return <Loading />;
+  if (state.agents.length === 0) {
+    return (
+      <View style={styles.hire}>
+        <Text style={text.dim}>
+          No agents yet. An agent trades for you inside a mandate you set.
+        </Text>
+        <Button label="Browse agents" kind="soft" size="sm" onPress={onHire} />
+      </View>
+    );
+  }
+  if (group.rows.length === 0) return null;
+  return <AgentsGroup rows={group.rows} total={group.total} hidden={hidden} onOpen={onOpen} />;
+}
+
+function History({
+  fills,
+  hidden,
+  now,
+}: {
+  fills: ReturnType<typeof useFills>;
+  hidden: boolean;
+  now: number;
+}) {
+  const days = fillDays(fills.fills, now);
+  return (
+    <View style={styles.section}>
+      <Text style={text.label}>Your fills</Text>
+      <Text style={[text.caption, styles.historyNote]}>
+        Only what you traded. Your agents' fills stay in their own ledgers.
+      </Text>
+      {days.length === 0 ? (
+        <Text style={[text.dim, styles.empty]}>No fills yet.</Text>
+      ) : (
+        days.map((day) => (
+          <View key={day.key}>
+            <Text style={[text.label, styles.day]}>{day.label}</Text>
+            {day.fills.map((fill) => (
+              <FillLine key={fill.key} fill={fill} hidden={hidden} />
+            ))}
+          </View>
+        ))
+      )}
+      {fills.hasMore ? (
+        <Button
+          label="Older fills"
+          kind="soft"
+          size="sm"
+          busy={fills.loadingMore}
+          onPress={fills.loadMore}
+          style={styles.more}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** The same sheet Home opens: the whole address, and the system share sheet. */
+function FundSheet({
+  visible,
+  address,
+  onShare,
+  onClose,
+}: {
+  visible: boolean;
+  address: string;
+  onShare: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Sheet visible={visible} title="Add funds" onClose={onClose}>
+      <Text style={text.dim}>
+        Send USDC (for spot on Kuru) or AUSD (for perps on Perpl) on Monad testnet to your wallet.
+        Gas is sponsored, so you never need MON.
+      </Text>
+      <View style={styles.addressWell}>
+        <Text style={[text.mono, styles.address]} selectable>
+          {address}
+        </Text>
+      </View>
+      <Text style={text.caption}>Only send on Monad testnet. Other networks will not arrive.</Text>
+      <Button
+        label="Share address"
+        kind="primary"
+        icon="share"
+        onPress={onShare}
+        style={styles.sheetButton}
+      />
+    </Sheet>
+  );
+}
+
+/**
+ * The cancel confirmation: what comes off the book, what goes back to cash,
+ * and the race a partial fill can win. Neither venue can amend, so the sheet
+ * says how to change a price instead of offering an Edit.
+ */
+function CancelSheet({
+  row,
+  hidden,
+  onClose,
+}: {
+  row: OrderRow | null;
+  hidden: boolean;
+  onClose: () => void;
+}) {
+  const order = row?.order;
+  const spot = order?.venue === 'kuru';
+  const side = order?.side === 'buy' ? 'buy' : 'sell';
+  return (
+    <Sheet
+      visible={row !== null}
+      title={row ? `Cancel your ${row.base} ${side}?` : ''}
+      onClose={onClose}
+    >
+      {row && order ? (
+        <>
+          <Text style={[text.dim, styles.sheetLead]}>
+            {spot
+              ? `It comes off the Kuru book and what it reserved goes back to your cash.`
+              : 'It comes off the Perpl book and its margin goes back to your Perpl account.'}
+          </Text>
+          <Row
+            label="Order"
+            value={`${side === 'buy' ? 'Buy' : 'Sell'} ${shown(
+              amountText(row.remaining, row.base),
+              hidden,
+            )} ${row.base}${order.price !== null ? ` at ${order.price}` : ''}`}
+          />
+          {row.backToCash ? (
+            <Row label="Back to cash" value={shown(row.backToCash, hidden)} />
+          ) : null}
+          <Row label="Placed" value={row.placed} />
+          <Text style={[text.caption, styles.sheetLead]}>
+            {spot ? 'Kuru' : 'Perpl'} can't amend an order: to change the price, cancel and place a
+            new one. If part fills before the cancel lands, you keep what filled.
+          </Text>
+          {/*
+            TODO(SEN-103): the cancel goes through the trade flow — prepare a
+            `kuru.cancel` intent, verify it, sign with the passkey, commit —
+            which `src/trade/flow.ts` owns and which is not on main yet. Until
+            it lands the confirm is shown but disabled rather than faked.
+          */}
+          <Button
+            label="Cancel order with passkey"
+            kind="primary"
+            disabled
+            onPress={() => undefined}
+            style={styles.sheetButton}
+          />
+          <Text style={[text.caption, styles.pending]}>
+            Cancelling from the app arrives with the order ticket.
+          </Text>
+          <Button label="Keep it on the book" onPress={onClose} style={styles.keep} />
+        </>
+      ) : null}
+    </Sheet>
+  );
+}
+
 const styles = StyleSheet.create({
-  head: { height: 48, justifyContent: 'flex-end', marginTop: 24 },
+  head: {
+    height: 48,
+    marginTop: 24,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  tools: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  net: {
+    fontFamily: font.chain,
+    fontSize: 10,
+    color: color.textFaint,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: color.line,
+    borderRadius: RADIUS.stone,
+  },
+  hero: { marginTop: 12, gap: 6 },
+  between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  tabs: { marginTop: 20 },
+  section: { marginTop: 16 },
+  empty: { marginTop: 10 },
+  coming: { marginTop: 20 },
+  comingText: { marginTop: 6 },
+  hire: { marginTop: 22, gap: 10, alignItems: 'flex-start' },
+  historyNote: { marginTop: 4 },
+  day: { marginTop: 18, marginBottom: 2 },
+  more: { marginTop: 12, alignSelf: 'flex-start' },
+  addressWell: {
+    marginVertical: 16,
+    padding: 14,
+    borderRadius: RADIUS.well,
+    backgroundColor: color.well,
+  },
+  address: { fontSize: 14, lineHeight: 22, color: color.text },
+  sheetLead: { marginVertical: 8 },
+  sheetButton: { marginTop: 14 },
+  pending: { marginTop: 6, textAlign: 'center' },
+  keep: { marginTop: 8, borderWidth: 0 },
 });

@@ -51,7 +51,7 @@ test('each method hits its route with the session token', async () => {
   await api.list(20);
   await api.portfolio();
   await api.fills();
-  await api.fills({ venue: 'perpl', cursor: 'abc' });
+  await api.fills({ venue: 'perpl', cursor: '50', limit: 20 });
 
   assert.deepEqual(
     calls.map((c) => `${c.init?.method} ${c.url}`),
@@ -64,7 +64,7 @@ test('each method hits its route with the session token', async () => {
       `GET ${BASE}/trade?limit=20`,
       `GET ${BASE}/portfolio`,
       `GET ${BASE}/portfolio/fills`,
-      `GET ${BASE}/portfolio/fills?venue=perpl&cursor=abc`,
+      `GET ${BASE}/portfolio/fills?venue=perpl&cursor=50&limit=20`,
     ],
   );
   for (const { init } of calls) {
