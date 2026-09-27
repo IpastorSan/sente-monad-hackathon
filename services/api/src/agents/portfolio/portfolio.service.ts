@@ -54,8 +54,16 @@ export const AGENT_PORTFOLIO_TTL_MS = 3_000;
 export interface AgentPortfolioReaders {
   readonly wallet: TokenBalanceReader;
   readonly kuruVenue: (address: Address) => KuruAccountVenue;
-  /** The agent's credentialed Perpl venue; `undefined` when it holds no API key. */
-  readonly perplVenue: (agent: AgentIdentity) => Promise<PerplAccountVenue | undefined>;
+  /**
+   * Runs `read` against the agent's credentialed Perpl venue (`undefined` when
+   * it holds no API key). A callback rather than a getter so the reader, not
+   * the service, owns the socket's lifetime: a polled portfolio must not keep
+   * the agent's trading socket open (SEN-122).
+   */
+  readonly withPerplVenue: <T>(
+    agent: AgentIdentity,
+    read: (venue: PerplAccountVenue | undefined) => Promise<T>,
+  ) => Promise<T>;
   readonly perplAccountInfo: PerplAccountInfoReader;
   readonly events: Pick<AgentEventLog, 'list'>;
   readonly marks: Pick<MarketDataService, 'mark'>;
@@ -120,10 +128,9 @@ export class AgentPortfolioService {
         // Not in the mandate means the agent cannot trade there, so any
         // account it has is not this agent's business to show.
         if (!agent.mandate.venues.includes('perpl')) return { status: 'not_in_mandate' as const };
-        return readPerplAccount(agent.address, {
-          accountInfo: this.#readers.perplAccountInfo,
-          venue: this.#readers.perplVenue(identity),
-        });
+        return this.#readers.withPerplVenue(identity, (venue) =>
+          readPerplAccount(agent.address, { accountInfo: this.#readers.perplAccountInfo, venue }),
+        );
       }),
       this.#events(agent.id),
       // Every market's mark, alongside the sections rather than after them:
@@ -284,24 +291,30 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Nest wiring: the real readers over the agents' public client and venues. */
+/** The real readers over the agents' public client and venues. */
+export function agentPortfolioReaders(
+  client: PublicClient,
+  venues: Pick<AgentVenues, 'readPerpl'>,
+  events: Pick<AgentEventLog, 'list'>,
+  marks: Pick<MarketDataService, 'mark'>,
+): AgentPortfolioReaders {
+  return {
+    wallet: new ViemTokenBalanceReader(client, AGENT_WALLET_TOKENS),
+    kuruVenue: (address) => kuruAccountVenue(client, address),
+    // Never `venues.forAgent`: that keeps the socket open (SEN-122).
+    withPerplVenue: (agent, read) => venues.readPerpl(agent, read),
+    perplAccountInfo: (address) => perplAccountInfo(client, address),
+    events,
+    marks,
+  };
+}
+
+/** Nest wiring. */
 export const agentPortfolioProviders: Provider[] = [
   {
     provide: AGENT_PORTFOLIO_READERS,
     inject: [AGENT_PUBLIC_CLIENT, AgentVenues, AGENT_EVENTS, MarketDataService],
-    useFactory: (
-      client: PublicClient,
-      venues: AgentVenues,
-      events: AgentEventLog,
-      marks: MarketDataService,
-    ): AgentPortfolioReaders => ({
-      wallet: new ViemTokenBalanceReader(client, AGENT_WALLET_TOKENS),
-      kuruVenue: (address) => kuruAccountVenue(client, address),
-      perplVenue: async (agent) => (await venues.forAgent(agent)).perpl,
-      perplAccountInfo: (address) => perplAccountInfo(client, address),
-      events,
-      marks,
-    }),
+    useFactory: agentPortfolioReaders,
   },
   AgentPortfolioService,
 ];

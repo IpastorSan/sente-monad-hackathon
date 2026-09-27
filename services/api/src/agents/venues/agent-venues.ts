@@ -9,7 +9,8 @@
  * A Perpl venue holds a long-lived authenticated socket, so the set is cached
  * per agent and torn down after `idleMs` without a `forAgent` call, or at once
  * on `release(agentId)` (revocation). Callers should ask `forAgent` per task
- * rather than keep a set across idle periods.
+ * rather than keep a set across idle periods. Read-only callers that are not
+ * the agent's run (the portfolio) use `readPerpl`, which never keeps one open.
  *
  * Erasable syntax and `.ts` specifiers only (scripts load this file).
  */
@@ -93,6 +94,33 @@ export class AgentVenues {
 
     this.#touch(agent.agentId, entry);
     return entry.perpl ? { kuru: entry.kuru, perpl: entry.perpl } : { kuru: entry.kuru };
+  }
+
+  /**
+   * Run `read` against the agent's Perpl venue without keeping one open for it
+   * (SEN-122). A phone polling the portfolio every few seconds went through
+   * `forAgent`, so each poll reset the idle timer and an agent that had long
+   * stopped running held its authenticated socket for as long as the screen
+   * stayed open. Here a socket the agent's own run already holds is borrowed
+   * as is — its idle timer untouched — and otherwise a throwaway venue is
+   * built for this one read and closed after it. `read` gets `undefined`
+   * when the agent holds no Perpl credentials.
+   */
+  async readPerpl<T>(
+    agent: AgentIdentity,
+    read: (perpl: PerplVenue | undefined) => Promise<T>,
+  ): Promise<T> {
+    const live = this.#entries.get(agent.agentId);
+    if (live?.perpl && live.walletId === agent.walletId) return read(live.perpl);
+
+    const credentials = await this.#secrets.getPerplCredentials(agent.agentId);
+    if (!credentials) return read(undefined);
+    const perpl = this.#createPerpl(credentials);
+    try {
+      return await read(perpl);
+    } finally {
+      perpl.close();
+    }
   }
 
   /** Close the agent's Perpl socket and drop its venues — on revoke, or when idle. */

@@ -1,13 +1,19 @@
 import type { Balance, Order, Position } from '@sente/venues';
-import { getAddress, type Address } from 'viem';
+import type { PerplVenue } from '@sente/venues/perpl';
+import { getAddress, type Address, type PublicClient } from 'viem';
 
 import type { TokenBalance } from '../../wallet/balances/token-balances';
+import type { AgentWalletProvider } from '../agent-wallet.provider';
 import type { AgentEvent } from '../events/agent-event-log';
 import type { AgentRecord } from '../store/agent-store';
+import { InMemoryAgentSecretStore } from '../venues/agent-secret-store';
+import { AgentTransactionSender, type AgentChainClient } from '../venues/agent-transactions';
+import { AgentVenues } from '../venues/agent-venues';
 import type { PerplAccountInfo } from '../venues/perpl-agent';
 import {
   AGENT_PORTFOLIO_TTL_MS,
   AgentPortfolioService,
+  agentPortfolioReaders,
   type AgentPortfolioReaders,
 } from './portfolio.service';
 import type { KuruAccountVenue, PerplAccountVenue } from './venue-reads';
@@ -106,7 +112,7 @@ function harness(over: Partial<AgentPortfolioReaders> = {}): Harness {
       expect(address).toBe(ADDRESS);
       return kuru;
     },
-    perplVenue: () => Promise.resolve(undefined),
+    withPerplVenue: (_agent, read) => read(undefined),
     perplAccountInfo: () =>
       Promise.resolve<PerplAccountInfo>({ accountId: 12n, balance: 150_000_000n, locked: 0n }),
     events: { list: () => Promise.resolve([buy(1, '4', '2')]) },
@@ -124,7 +130,7 @@ describe('AgentPortfolioService (SEN-78)', () => {
       getPositions: () => Promise.resolve([POSITION]),
       getOpenOrders: () => Promise.resolve([]),
     };
-    const { service } = harness({ perplVenue: () => Promise.resolve(perpl) });
+    const { service } = harness({ withPerplVenue: (_agent, read) => read(perpl) });
 
     const p = await service.portfolio(agent());
 
@@ -320,5 +326,94 @@ describe('AgentPortfolioService (SEN-78)', () => {
     const d = await h.service.portfolio(agent());
     expect(h.calls.wallet).toBe(2);
     expect(d.asOf).toBe(1_000_000 + AGENT_PORTFOLIO_TTL_MS);
+  });
+});
+
+/**
+ * SEN-122: the phone polls the portfolio every few seconds, and each read used
+ * to go through `AgentVenues.forAgent`, keeping the agent's authenticated
+ * Perpl socket open for as long as anyone watched. These run the real
+ * `AgentVenues` and wiring over a fake venue that counts socket opens (the
+ * first account read, as `PerplVenue` connects lazily) and closes.
+ */
+describe('AgentPortfolioService Perpl sockets (SEN-122)', () => {
+  const IDLE_MS = 60_000;
+
+  afterEach(() => jest.useRealTimers());
+
+  async function sockets() {
+    const secrets = new InMemoryAgentSecretStore();
+    await secrets.putPerplCredentials('agent-1', { apiKey: 'k1', secretKey: new Uint8Array(32) });
+    const count = { created: 0, opened: 0, closed: 0 };
+    const venues = new AgentVenues({
+      publicClient: {} as PublicClient,
+      sender: new AgentTransactionSender({
+        wallets: {} as AgentWalletProvider,
+        chain: {} as AgentChainClient,
+      }),
+      secrets,
+      idleMs: IDLE_MS,
+      createPerplVenue: () => {
+        count.created += 1;
+        let open = false;
+        const connect = <T>(value: T) => {
+          if (!open) count.opened += 1;
+          open = true;
+          return Promise.resolve(value);
+        };
+        const fake: PerplAccountVenue & Pick<PerplVenue, 'close'> = {
+          getBalances: () => connect([balance('AUSD', '100')]),
+          getPositions: () => connect([POSITION]),
+          getOpenOrders: () => connect([]),
+          close: () => {
+            if (open) count.closed += 1;
+            open = false;
+          },
+        };
+        return fake as unknown as PerplVenue;
+      },
+    });
+    const wired = agentPortfolioReaders(
+      {} as PublicClient,
+      venues,
+      { list: jest.fn() },
+      { mark: jest.fn() },
+    );
+    return { ...harness({ withPerplVenue: wired.withPerplVenue }), venues, count };
+  }
+
+  it('closes the socket it opened after every read, across repeated polls', async () => {
+    const h = await sockets();
+
+    for (let poll = 0; poll < 3; poll += 1) {
+      const p = await h.service.portfolio(agent());
+      expect(p.perpl).toMatchObject({ ok: true, status: 'ok', positions: [{ symbol: 'BTC' }] });
+      expect(h.count.opened - h.count.closed).toBe(0);
+      h.clock.now += AGENT_PORTFOLIO_TTL_MS;
+    }
+
+    expect(h.count).toEqual({ created: 3, opened: 3, closed: 3 });
+    expect(h.venues.size).toBe(0);
+  });
+
+  it("borrows the agent run's live socket without closing it or extending its idle time", async () => {
+    jest.useFakeTimers();
+    const h = await sockets();
+    const run = await h.venues.forAgent({
+      agentId: 'agent-1',
+      walletId: 'wallet-1',
+      address: ADDRESS,
+    });
+    await run.perpl!.getPositions();
+
+    jest.advanceTimersByTime(IDLE_MS - 1);
+    const p = await h.service.portfolio(agent());
+    expect(p.perpl).toMatchObject({ ok: true, status: 'ok' });
+    expect(h.count).toEqual({ created: 1, opened: 1, closed: 0 });
+
+    // The poll did not touch the idle timer: the run's socket closes on schedule.
+    jest.advanceTimersByTime(1);
+    expect(h.count).toEqual({ created: 1, opened: 1, closed: 1 });
+    expect(h.venues.size).toBe(0);
   });
 });
