@@ -1,4 +1,6 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
+import { KuruVenue } from '@sente/venues/kuru';
+import type { PublicClient } from 'viem';
 
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
@@ -7,7 +9,8 @@ import { BUNDLER, type Bundler } from '../wallet/bundler/bundler';
 import { USER_WALLETS, type UserWalletProvider } from '../wallet/user-wallet.provider';
 import { SEND_SPACER } from '../wallet/user-wallet.service';
 import { WALLET_CONFIG, type WalletConfig } from '../wallet/wallet.config';
-import { WalletModule } from '../wallet/wallet.module';
+import { MONAD_PUBLIC_CLIENT, WalletModule } from '../wallet/wallet.module';
+import { TradeOutcomes } from './outcome';
 import { StepExecutor } from './step-executor';
 import { loadTradeConfig, TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeController, TradingEnabledGuard } from './trade.controller';
@@ -34,20 +37,36 @@ const configProvider: Provider = {
  */
 const stepExecutorProvider: Provider = {
   provide: StepExecutor,
-  inject: [TradeStore, USER_WALLETS, BUNDLER, SEND_SPACER, WALLET_CONFIG],
+  inject: [TradeStore, USER_WALLETS, BUNDLER, SEND_SPACER, WALLET_CONFIG, TradeOutcomes],
   useFactory: (
     store: TradeStore,
     wallets: UserWalletProvider,
     bundler: Bundler,
     spacer: WriteSpacer,
     config: WalletConfig,
+    outcomes: TradeOutcomes,
   ): StepExecutor =>
     new StepExecutor({
       store,
       wallets,
       bundler,
       spacer,
+      outcomes,
       options: { pollMs: config.confirmationPollMs, timeoutMs: config.confirmationTimeoutMs },
+    }),
+};
+
+/**
+ * One fill decoder shared by the executor and the service's reconcile-on-read
+ * (SEN-97). The account id is read per call rather than cached here: a user's
+ * first trade registers it, and `KuruVenue` caches only a real one.
+ */
+const outcomesProvider: Provider = {
+  provide: TradeOutcomes,
+  inject: [MONAD_PUBLIC_CLIENT],
+  useFactory: (client: PublicClient): TradeOutcomes =>
+    new TradeOutcomes({
+      accountId: (wallet) => new KuruVenue({ publicClient: client, account: wallet }).accountId(),
     }),
 };
 
@@ -75,6 +94,7 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
     TradingEnabledGuard,
     TradeService,
     { provide: TradeStore, useFactory: () => new TradeStore() },
+    outcomesProvider,
     stepExecutorProvider,
   ],
   exports: [TRADE_CONFIG, TradeStore, StepExecutor, TradeService],

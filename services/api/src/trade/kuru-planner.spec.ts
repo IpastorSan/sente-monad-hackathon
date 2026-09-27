@@ -181,6 +181,14 @@ describe('planKuru — place', () => {
     });
     expect(deposited.args).toEqual([USDC.address, 6_004_000n]);
     expect(approve!.title).toBe('Approve 6.004 USDC for Kuru');
+    // What the receipt is decoded against later (SEN-97).
+    expect(plan.place).toMatchObject({
+      market: MON_USDC.address,
+      timeInForce: 'GTC',
+      quantity: 500n * 10n ** 8n,
+      quoteDecimals: 6,
+      funding: { symbol: 'USDC', decimals: 6, deposit: 6_004_000n },
+    });
   });
 
   it('packs every leg into one self-call batch when atomicBatch is on', async () => {

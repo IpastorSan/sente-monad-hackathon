@@ -28,6 +28,7 @@
  */
 
 import type { AuthorizationPayload } from '@sente/mandate';
+import type { KuruMarketParams } from '@sente/venues/kuru';
 import type { Address, Hex } from 'viem';
 
 import type { EnclaveRequest } from '../agents/agent-wallet.provider.ts';
@@ -67,6 +68,31 @@ export type KuruPlaceResult = {
   unfilledCancelled?: string;
 };
 
+/**
+ * What decoding a place's receipt needs and the trade would otherwise not
+ * know (SEN-97): the planner's view of the order and its funding, kept from
+ * prepare. Server-side only — `toView` never sends it.
+ */
+export type KuruPlaceContext = {
+  readonly market: Address;
+  readonly symbol: string;
+  readonly side: 'buy' | 'sell';
+  readonly orderType: 'market' | 'limit';
+  readonly timeInForce: 'GTC' | 'IOC' | 'POST_ONLY';
+  /** Requested size, in book size units. */
+  readonly quantity: bigint;
+  /** Limit price or the market order's worst price, as the planner rendered it. */
+  readonly price: string;
+  readonly params: KuruMarketParams;
+  readonly quoteDecimals: number;
+  /** The token the order is funded in and how much of it this trade deposits (atoms; may be 0). */
+  readonly funding: {
+    readonly symbol: string;
+    readonly decimals: number;
+    readonly deposit: bigint;
+  };
+};
+
 export type TradeFunds = { where: 'wallet' | 'kuru' | 'perpl'; symbol: string; amount: string }[];
 
 export type TradeStep = {
@@ -102,6 +128,8 @@ export type Trade = {
   readonly expiresAt: Date;
   readonly result?: KuruPlaceResult;
   readonly funds?: TradeFunds;
+  /** Set for a `kuru.place` trade; what M-T15 decodes the receipt against. */
+  readonly place?: KuruPlaceContext;
 };
 
 /** What the executor may change once a trade is claimed. */

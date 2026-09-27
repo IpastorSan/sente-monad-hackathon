@@ -14,16 +14,19 @@ import { PrivyUserWalletProvider } from '../wallet/user-wallet.provider';
 import { WalletRefusedError } from '../wallet/wallet.errors';
 import { CommitTradeDto, TradeIntentDto } from './dto/trade.dto';
 import { KuruPlanRefusedError, planKuru, type KuruPlan } from './kuru-planner';
+import type { TradeOutcomes } from './outcome';
 import type { StepExecutor } from './step-executor';
 import { TRADE_CHAIN_ID, type TradeConfig } from './trade.config';
 import { TradingEnabledGuard } from './trade.controller';
 import {
+  SEND_UNVERIFIABLE,
   TradeService,
+  UNVERIFIABLE_AFTER_MS,
   tradeIdempotencyKey,
   tradeRefusalToHttpException,
   TradeRefusedError,
 } from './trade.service';
-import { TradeStore, type Trade } from './trade-store';
+import { TradeStore, type KuruPlaceResult, type Trade, type TradeStep } from './trade-store';
 
 // Only the planner is faked: it reads the chain. Its refusal class stays real,
 // so the reason mapping is tested against the type the planner really throws.
@@ -111,6 +114,13 @@ function harness(config: Partial<TradeConfig> = {}) {
   const receipt = jest.fn<Promise<UserOperationReceipt | null>, [Hash]>(() =>
     Promise.resolve(null),
   );
+  const placeResult = jest.fn<
+    Promise<KuruPlaceResult | undefined>,
+    [Trade, TradeStep, readonly unknown[]]
+  >(() => Promise.resolve(undefined));
+  const txReceipt = jest.fn<Promise<unknown>, [{ hash: Hash }]>(() =>
+    Promise.reject(new Error('not found')),
+  );
   const bindings = new Map([[ALICE.userId, BINDING]]);
   const service = new FixedClockTradeService(
     { enabled: true, atomicBatch: false, chainId: TRADE_CHAIN_ID, ...config },
@@ -121,9 +131,10 @@ function harness(config: Partial<TradeConfig> = {}) {
     new PrivyUserWalletProvider(new PrivyClient({ appId: 'app-id', appSecret: 'secret' })),
     { find: (userId: string) => Promise.resolve(bindings.get(userId)) },
     { receipt } as Pick<Bundler, 'receipt'>,
-    {} as PublicClient,
+    { getTransactionReceipt: txReceipt } as unknown as PublicClient,
+    { placeResult } as unknown as TradeOutcomes,
   );
-  return { service, store, execute, receipt };
+  return { service, store, execute, receipt, placeResult, txReceipt };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -377,6 +388,105 @@ describe('TradeService — reconcile on read', () => {
     const view = await service.status(ALICE, tradeId);
     expect(view.steps.map((s) => s.status)).toEqual(['included', 'included', 'not_sent']);
     expect(view.status).toBe('failed');
+  });
+
+  it('decodes a place it settles with the shared decoder, from the operation logs', async () => {
+    const { service, receipt, placeResult, tradeId } = await timedOut(2);
+    const logs = [{ address: MARKET, topics: [], data: '0x' }];
+    receipt.mockResolvedValue({ ...landed(hash(3), true), logs } as UserOperationReceipt);
+    const filled: KuruPlaceResult = {
+      status: 'filled',
+      requestedSize: '10',
+      filledSize: '10',
+      fee: '0.01',
+      feeAsset: 'USDC',
+      fills: [],
+    };
+    placeResult.mockResolvedValue(filled);
+
+    const view = await service.status(ALICE, tradeId);
+
+    expect(placeResult).toHaveBeenCalledWith(
+      expect.objectContaining({ id: tradeId }),
+      expect.objectContaining({ index: 2, status: 'included' }),
+      logs,
+    );
+    expect(view).toMatchObject({ status: 'completed', result: filled });
+  });
+
+  it('still settles the step when decoding its outcome fails', async () => {
+    const { service, receipt, placeResult, tradeId } = await timedOut(2);
+    receipt.mockResolvedValue(landed(hash(3), true));
+    placeResult.mockRejectedValue(new Error('rpc down'));
+    const view = await service.status(ALICE, tradeId);
+    expect(view.status).toBe('completed');
+    expect(view.result).toBeUndefined();
+  });
+
+  /** Step 2 went `unknown` with no user-operation hash, as the executor records it. */
+  async function hashless(fields: Partial<TradeStep> = {}) {
+    const h = harness();
+    const { tradeId } = await h.service.prepare(ALICE, intent());
+    const claimed = h.store.claimForCommit(ALICE.userId, tradeId, T0) as Trade;
+    h.store.update(
+      tradeId,
+      {
+        steps: claimed.steps.map((step, i) =>
+          i < 2
+            ? { ...step, status: 'included' }
+            : { ...step, status: 'unknown', error: 'user_wallet_provider_failed', ...fields },
+        ),
+      },
+      T0,
+    );
+    return { ...h, tradeId };
+  }
+
+  it('settles a plain broadcast from its own transaction receipt', async () => {
+    const tx = hash(0x7);
+    const { service, txReceipt, receipt, tradeId } = await hashless({ transactionHash: tx });
+    txReceipt.mockResolvedValue({ status: 'success', blockNumber: 43n, logs: [] });
+    const view = await service.status(ALICE, tradeId);
+    expect(txReceipt).toHaveBeenCalledWith({ hash: tx });
+    expect(receipt).not.toHaveBeenCalled();
+    expect(view.status).toBe('completed');
+    expect(view.steps[2]).toMatchObject({
+      status: 'included',
+      transactionHash: tx,
+      blockNumber: '43',
+    });
+    expect(view.steps[2].error).toBeUndefined();
+  });
+
+  it('fails a plain broadcast whose transaction reverted', async () => {
+    const { service, txReceipt, tradeId } = await hashless({ transactionHash: hash(0x7) });
+    txReceipt.mockResolvedValue({ status: 'reverted', blockNumber: 43n, logs: [] });
+    const view = await service.status(ALICE, tradeId);
+    expect(view.status).toBe('failed');
+    expect(view.steps[2]).toMatchObject({ status: 'reverted' });
+  });
+
+  it('keeps a hashless step unknown and the trade executing inside the window', async () => {
+    const { service, tradeId } = await hashless();
+    // Past the commit deadline, not yet past the window after it.
+    service.at = new Date(T0.getTime() + 5 * 60 * 1000 + UNVERIFIABLE_AFTER_MS - 1);
+    const view = await service.status(ALICE, tradeId);
+    expect(view.status).toBe('executing');
+    expect(view.steps[2]).toMatchObject({
+      status: 'unknown',
+      error: 'user_wallet_provider_failed',
+    });
+  });
+
+  it('after the window: never not_sent, but unknown + send_unverifiable and a failed trade', async () => {
+    const { service, tradeId } = await hashless();
+    service.at = new Date(T0.getTime() + 5 * 60 * 1000 + UNVERIFIABLE_AFTER_MS);
+    const view = await service.status(ALICE, tradeId);
+    expect(view.status).toBe('failed');
+    expect(view.steps[2]).toMatchObject({ status: 'unknown', error: SEND_UNVERIFIABLE });
+    // Settled for good: the next read leaves it alone.
+    service.at = new Date(service.at.getTime() + UNVERIFIABLE_AFTER_MS);
+    expect(await service.status(ALICE, tradeId)).toMatchObject({ status: 'failed' });
   });
 
   it('keeps the summary through executor writes, so a retry answers the same', async () => {

@@ -31,12 +31,28 @@
  * within the confirmation timeout, and leaves the trade `executing` because
  * the operation may still land (plan §2). Nothing else would ever revisit it,
  * so every read asks the bundler again for such steps and settles them
- * ({@link TradeService.reconcile}). A step `unknown` with no user-operation
- * hash has nothing to ask about and stays as it is.
+ * ({@link TradeService.reconcile}). A place settled this way gets its fills
+ * decoded exactly as an on-time one does (SEN-97, `outcome.ts`).
+ *
+ * A step `unknown` WITHOUT a user-operation hash (SEN-97) is settled from
+ * what there is:
+ *
+ * - with a transaction hash, Privy broadcast a plain transaction rather than a
+ *   user operation, so that transaction's own receipt IS the verdict — gotcha
+ *   8 is about operations inside a bundle, and there is none here;
+ * - with no hash at all (the send died without an answer), nothing this
+ *   server can reach will ever say whether it went out. Privy has no lookup by
+ *   idempotency key short of resending, which would send it if it had not
+ *   gone. So it is never called `not_sent`. After {@link UNVERIFIABLE_AFTER_MS}
+ *   the step stays `unknown` with error {@link SEND_UNVERIFIABLE}, and the
+ *   trade is `failed` rather than `executing` forever: the phone stops
+ *   polling, shows that error (check your balances before trying again), and
+ *   retention can finally forget the trade.
  */
 
 import { Inject, Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import type { KuruLog } from '@sente/venues/kuru';
 import { getAddress, type PublicClient } from 'viem';
 
 import { PREPARED_APPROVAL_TTL_MS } from '../agents/prepared-approval';
@@ -63,6 +79,7 @@ import {
   type KuruIntent,
   type KuruPlanRefusalReason,
 } from './kuru-planner';
+import { fundsAfter, TradeOutcomes } from './outcome';
 import { StepExecutor } from './step-executor';
 import { TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeStore, type StepStatus, type Trade, type TradeStep } from './trade-store';
@@ -152,6 +169,21 @@ export function tradeRefusalToHttpException(error: unknown): unknown {
  */
 type TradeWithSummary = Trade & { readonly summary?: Record<string, string> };
 
+/**
+ * The error of a hashless `unknown` step once nobody will ever settle it. Part
+ * of the API contract, like the refusal reasons: the phone branches on it.
+ */
+export const SEND_UNVERIFIABLE = 'send_unverifiable';
+
+/**
+ * How long past the later of the commit deadline and the trade's last change
+ * a hashless `unknown` step keeps the trade `executing`. The send was one
+ * synchronous Privy call, so anything that did go out went out then; half an
+ * hour is far past any bundler inclusion, and short enough that the phone is
+ * not left spinning.
+ */
+export const UNVERIFIABLE_AFTER_MS = 30 * 60 * 1000;
+
 const STEP_IN_FLIGHT: ReadonlySet<StepStatus> = new Set([
   'awaiting_signature',
   'queued',
@@ -171,6 +203,7 @@ export class TradeService {
     @Inject(USER_WALLET_REGISTRY) private readonly registry: Pick<UserWalletRegistry, 'find'>,
     @Inject(BUNDLER) private readonly bundler: Pick<Bundler, 'receipt'>,
     @Inject(MONAD_PUBLIC_CLIENT) private readonly client: PublicClient,
+    private readonly outcomes: TradeOutcomes,
   ) {}
 
   capabilities(): TradeCapabilitiesDto {
@@ -233,6 +266,7 @@ export class TradeService {
       updatedAt: now,
       expiresAt: new Date(now.getTime() + PREPARED_APPROVAL_TTL_MS),
       summary: plan.summary,
+      ...(plan.place ? { place: plan.place } : {}),
     };
     // `put` re-checks the client id: two prepares racing past `byClientId`
     // above both get here, and exactly one trade may win.
@@ -289,52 +323,116 @@ export class TradeService {
   }
 
   /**
-   * Settles steps the executor gave up on (`unknown` after its timeout) from
-   * the user operation's own receipt — its `success`, never the carrying
-   * transaction's status (CLAUDE.md gotcha 8) — and recomputes the trade.
+   * Settles steps the executor gave up on (`unknown`) and recomputes the
+   * trade: from the user operation's own receipt — its `success`, never the
+   * carrying transaction's status (CLAUDE.md gotcha 8) — or, for a step with
+   * no operation hash, as the file header describes.
    *
    * Only `unknown` steps are touched: those are the ones the executor has
    * finished with (it stops at the first one), so this never races its writes.
-   * A bundler error or a still-missing receipt leaves the step as it was; the
-   * next read asks again.
-   *
-   * Known gap: the executor's `onStepLanded` hook (M-T15's fill decoding) does
-   * not run for a step settled here, so such a trade reports no `result`.
+   * A lookup error or a still-missing receipt leaves the step as it was; the
+   * next read asks again. A place that turns out to have landed gets its
+   * `result` from the same decoder the executor's hook uses (SEN-97).
    */
   private async reconcile(trade: Trade): Promise<Trade> {
     if (trade.status !== 'executing') return trade;
-    const pending = trade.steps.filter((s) => s.status === 'unknown' && s.userOpHash);
-    if (pending.length === 0) return trade;
+    if (!trade.steps.some((s) => s.status === 'unknown')) return trade;
 
-    let changed = false;
+    const now = this.now();
+    const landed: { step: TradeStep; logs: readonly KuruLog[] }[] = [];
+    let unverifiable = false;
     const steps = await Promise.all(
       trade.steps.map(async (step): Promise<TradeStep> => {
-        if (step.status !== 'unknown' || !step.userOpHash) return step;
-        const receipt = await this.bundler.receipt(step.userOpHash).catch((error: unknown) => {
-          this.logger.debug(`reconcile ${step.userOpHash}: ${describe(error)}`);
-          return null;
-        });
-        if (!receipt) return step;
-        changed = true;
-        const { error: _stale, ...rest } = step;
-        return {
+        if (step.status !== 'unknown') return step;
+        const settled = await this.settle(trade, step, now);
+        if (!settled) return step;
+        if (settled.step.status === 'unknown') unverifiable = true;
+        else landed.push({ step: settled.step, logs: settled.logs });
+        return settled.step;
+      }),
+    );
+    if (!unverifiable && landed.length === 0) return trade;
+
+    let result = trade.result;
+    for (const { step, logs } of landed) {
+      try {
+        result = (await this.outcomes.placeResult(trade, step, logs)) ?? result;
+      } catch (error) {
+        // As in the executor's hook: the step landed either way.
+        this.logger.error(
+          `trade ${trade.id} step ${step.index} settled ${step.status}, but reading its ` +
+            `outcome failed: ${describe(error)}`,
+        );
+      }
+    }
+
+    const status = steps.every((s) => s.status === 'included')
+      ? 'completed'
+      : !unverifiable && steps.some((s) => STEP_IN_FLIGHT.has(s.status))
+        ? 'executing'
+        : 'failed';
+    this.logger.log(`trade ${trade.id} reconciled: ${status}`);
+    const withResult = { steps, status, ...(result ? { result } : {}) } as const;
+    const funds = fundsAfter({ ...trade, ...withResult });
+    const patch = { ...withResult, ...(funds ? { funds } : {}) };
+    return this.store.update(trade.id, patch) ?? { ...trade, ...patch };
+  }
+
+  /**
+   * One `unknown` step's settlement, or undefined to leave it for the next
+   * read. `logs` are the landed execution's own logs, for the fill decoder.
+   */
+  private async settle(
+    trade: Trade,
+    step: TradeStep,
+    now: Date,
+  ): Promise<{ step: TradeStep; logs: readonly KuruLog[] } | undefined> {
+    const { error: _stale, ...rest } = step;
+    if (step.userOpHash) {
+      const receipt = await this.bundler.receipt(step.userOpHash).catch((error: unknown) => {
+        this.logger.debug(`reconcile ${step.userOpHash}: ${describe(error)}`);
+        return null;
+      });
+      if (!receipt) return undefined;
+      return {
+        logs: receipt.logs,
+        step: {
           ...rest,
           status: receipt.success ? 'included' : 'reverted',
           transactionHash: receipt.receipt.transactionHash,
           blockNumber: receipt.receipt.blockNumber.toString(),
           ...(receipt.success ? {} : { error: receipt.reason ?? 'the user operation reverted' }),
-        };
-      }),
-    );
-    if (!changed) return trade;
+        },
+      };
+    }
 
-    const status = steps.every((s) => s.status === 'included')
-      ? 'completed'
-      : steps.some((s) => STEP_IN_FLIGHT.has(s.status))
-        ? 'executing'
-        : 'failed';
-    this.logger.log(`trade ${trade.id} reconciled from receipts: ${status}`);
-    return this.store.update(trade.id, { steps, status }) ?? { ...trade, steps, status };
+    if (step.transactionHash) {
+      // A plain broadcast, not a user operation: its own receipt decides.
+      const hash = step.transactionHash;
+      const receipt = await this.client.getTransactionReceipt({ hash }).catch((error: unknown) => {
+        this.logger.debug(`reconcile tx ${hash}: ${describe(error)}`);
+        return null;
+      });
+      if (!receipt) return undefined;
+      const included = receipt.status === 'success';
+      return {
+        logs: receipt.logs,
+        step: {
+          ...rest,
+          status: included ? 'included' : 'reverted',
+          blockNumber: receipt.blockNumber.toString(),
+          ...(included ? {} : { error: 'the transaction reverted' }),
+        },
+      };
+    }
+
+    const since = Math.max(trade.expiresAt.getTime(), trade.updatedAt.getTime());
+    if (now.getTime() < since + UNVERIFIABLE_AFTER_MS) return undefined;
+    this.logger.warn(
+      `trade ${trade.id} step ${step.index}: no hash to follow and nothing to ask; ` +
+        `it may or may not have been sent (was: ${step.error ?? 'no error'})`,
+    );
+    return { logs: [], step: { ...rest, status: 'unknown', error: SEND_UNVERIFIABLE } };
   }
 
   private assertEnabled(): void {
