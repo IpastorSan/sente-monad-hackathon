@@ -63,6 +63,9 @@ const ALIASES = {
   ),
   // The Kuru market and token tables for the hire form (SEN-10).
   '@sente/venues/kuru': workspaceSource('@sente/venues', './kuru'),
+  // The phone's own Perpl trader (SEN-105): the trade key never leaves the
+  // phone, so the app signs in and places orders through the adapter itself.
+  '@sente/venues/perpl': workspaceSource('@sente/venues', './perpl'),
   // The preset catalog for the Agents tab's gallery (SEN-114): dependency-free
   // TS, so the phone renders the cards before `GET /presets` is deployed.
   '@sente/presets': workspaceSource('@sente/presets', '.'),
