@@ -37,6 +37,7 @@ import { ReturnFundsService } from './recovery/return-funds.service';
 import { AgentRunnerService } from './runner/agent-runner.service';
 import { InMemoryAgentStore, mandateSinceOf } from './store/agent-store';
 import { FakeAgentWalletProvider } from './testing/fake-agent-wallet.provider';
+import { EXPIRES_IN_A_YEAR } from './testing/mandate-expiry';
 
 const USDC = KURU_TESTNET_TOKENS.USDC.address;
 
@@ -49,7 +50,7 @@ function body(over: Record<string, unknown> = {}): Record<string, unknown> {
     mandate: {
       version: 1,
       chainId: 10143,
-      expiresAt: 2_000_000_000,
+      expiresAt: EXPIRES_IN_A_YEAR,
       venues: ['kuru'],
       kuru: {
         markets: [KURU_TESTNET_MARKETS[0]!.address],
