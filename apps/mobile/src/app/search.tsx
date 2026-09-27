@@ -220,7 +220,10 @@ export default function SearchScreen() {
               label={agentsHeading(results.markets)}
               aside={
                 board !== null ? (
-                  <SectionLink label="Top agents" onPress={() => router.push('/leaderboard')} />
+                  <SectionLink
+                    label="Top agents"
+                    onPress={() => router.push('/agents?segment=top')}
+                  />
                 ) : undefined
               }
             >

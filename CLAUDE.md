@@ -380,11 +380,11 @@ loading raw TypeScript out of `node_modules`.
 
 **`apps/mobile` (wired in SEN-10):**
 
-| Consumer                           | Resolves to         | Because                                                                                                                                                                     |
-| ---------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Metro (the app bundle)             | `src/` via an alias | Package exports are off (gotcha 2), so `metro.config.js` aliases each imported subpath to its `source` entry, read from the package's own exports map. Only `./kuru` today. |
-| `tsc` / typecheck                  | `src/` via `types`  | `moduleResolution: bundler` plus `allowImportingTsExtensions`.                                                                                                              |
-| `node --test` (`src/**/*.test.ts`) | `src/` via `source` | The test script passes `--conditions=source`. `@sente/mandate` is a devDependency so specs can run the API's own `parseMandate`.                                            |
+| Consumer                           | Resolves to         | Because                                                                                                                                                                                                 |
+| ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metro (the app bundle)             | `src/` via an alias | Package exports are off (gotcha 2), so `metro.config.js` aliases each imported subpath to its `source` entry, read from the package's own exports map. `@sente/venues/kuru` and `@sente/presets` today. |
+| `tsc` / typecheck                  | `src/` via `types`  | `moduleResolution: bundler` plus `allowImportingTsExtensions`.                                                                                                                                          |
+| `node --test` (`src/**/*.test.ts`) | `src/` via `source` | The test script passes `--conditions=source`. `@sente/mandate` is a devDependency so specs can run the API's own `parseMandate`.                                                                        |
 
 Metro loads the TS sources, not `dist/`, so the app needs no package build first, and the `./x.ts`
 specifiers resolve literally (Metro tries the exact path before appending extensions). An alias
