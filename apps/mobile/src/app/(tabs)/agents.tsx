@@ -1,23 +1,30 @@
 /**
- * Your agents, one card each (SEN-58): is it working, and is it making money.
- * A card carries the agent's sigil, what it trades, its status, the balance in
- * its own wallet, today's P&L and its last move as a stone.
+ * The Agents tab (SEN-114, plan U-8; agents.html → "Agents tab"): three
+ * segments on one screen.
  *
- * The header also carries the two screens that left the dock in SEN-109: the
- * Board, until this tab folds it in as "Top" (U-8), and Account, until Home
- * grows the avatar it moves behind (U-7).
+ * - **Presets** — the catalog as cards, each preset drawn as a joseki with
+ *   its risk as three stones and its cohort line with the sample it came
+ *   from. Guardian is featured. Works signed out and before `GET /presets`
+ *   exists, from the catalog bundled out of `@sente/presets`.
+ * - **Yours** — the SEN-58 roster, grouped by what you can do: working agents
+ *   open the cockpit; a stopped agent's one job left is giving the money back
+ *   (SEN-17), so that is its inline action.
+ * - **Top** — the Board (SEN-26), folded in from its stack screen, with the
+ *   user's best ranked agent pinned above the dock.
  *
- * A revoked agent that still holds funds says so and offers the return inline
- * (SEN-17): "how do I get my money back" has the same one-tap answer after the
- * agent has stopped, so the roster is where it is asked.
+ * Account sits behind the header's button until Home grows its avatar (U-7).
+ * `?segment=yours|top` opens a segment directly.
  */
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { modelLabel, type Agent, type AgentSummary } from '@/agents/api';
+import { modelLabel, type Agent, type AgentSummary, type LeaderboardRow } from '@/agents/api';
 import { signedPnl } from '@/agents/ledger';
 import { MoveLine } from '@/agents/MoveLine';
+import { yourBest } from '@/agents/top';
+import { BestRow, TopBoard, useBoard } from '@/agents/TopBoard';
 import {
   describeMove,
   formatHolding,
@@ -30,107 +37,291 @@ import {
 } from '@/agents/usage';
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
 import { useWalletHoldings } from '@/agents/useWalletHoldings';
+import {
+  FEATURED_PRESET_ID,
+  matchesFilter,
+  PRESET_FILTERS,
+  type PresetFilter,
+} from '@/presets/cards';
+import { FeaturedPreset, PresetCard } from '@/presets/PresetCard';
+import { usePresets, type PresetsState } from '@/presets/usePresets';
 import { useSession } from '@/session';
 import { isoDate } from '@/ui/format';
 import { Pill, Sigil } from '@/ui/goban';
-import { Button, Card, IconButton, Loading, Notice, Screen, Segmented } from '@/ui/kit';
-import { color, text } from '@/ui/theme';
+import { Icon } from '@/ui/icons';
+import {
+  Button,
+  Card,
+  Chip,
+  Chips,
+  DOCK,
+  IconButton,
+  Loading,
+  Notice,
+  Screen,
+  Section,
+  Segmented,
+} from '@/ui/kit';
+import { color, font, RADIUS, text } from '@/ui/theme';
 
-type Filter = 'all' | 'active' | 'revoked';
+type Segment = 'presets' | 'yours' | 'top';
+
+const SEGMENTS: readonly { value: Segment; label: string }[] = [
+  { value: 'presets', label: 'Presets' },
+  { value: 'yours', label: 'Yours' },
+  { value: 'top', label: 'Top' },
+];
+
+function isSegment(value: unknown): value is Segment {
+  return value === 'presets' || value === 'yours' || value === 'top';
+}
 
 export default function AgentsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { agents: api } = useSession();
-  // Refetches on focus: after a hire, an amend or a revoke, the list has to say so.
-  const { state, refreshing, refresh } = useAgentsOverview();
-  const [filter, setFilter] = useState<Filter>('all');
+  const params = useLocalSearchParams<{ segment?: string }>();
+  const [segment, setSegment] = useState<Segment>(
+    isSegment(params.segment) ? params.segment : 'presets',
+  );
 
-  const agents = state.kind === 'loaded' ? state.agents : null;
-  const holdings = useWalletHoldings(agents);
+  const presets = usePresets();
+  // Refetches on focus: after a hire, an amend or a revoke, the list has to say so.
+  const yours = useAgentsOverview();
+  const top = useBoard(segment === 'top');
+
+  const best = useMemo(
+    () => (top.state.kind === 'loaded' ? yourBest(top.state.board.ranked, top.owned) : null),
+    [top.state, top.owned],
+  );
 
   const hire = () => router.push('/agents/new');
-  const open = (agent: Agent, sheet?: 'return') =>
-    router.push({
-      pathname: '/agents/[id]',
-      params: sheet ? { id: agent.id, sheet } : { id: agent.id },
-    });
+  // `/presets/[id]` is U-9's screen; until it lands the push reaches the
+  // not-found route. The cast is for typed routes, which only know files that
+  // exist today.
+  const openPreset = (id: string) => router.push(`/presets/${encodeURIComponent(id)}` as Href);
+  const openLedger = (row: LeaderboardRow) =>
+    router.push({ pathname: '/agents/[id]/ledger', params: { id: row.agentId } });
 
-  const counts = useMemo(() => {
-    const active = agents?.filter((agent) => agent.status === 'active').length ?? 0;
-    return { all: agents?.length ?? 0, active, revoked: (agents?.length ?? 0) - active };
-  }, [agents]);
-  const shown = agents?.filter((agent) => filter === 'all' || agent.status === filter) ?? [];
-  const now = Date.now();
+  const refreshing =
+    segment === 'presets' ? presets.refreshing : segment === 'yours' ? yours.refreshing : false;
+  const onRefresh = !api
+    ? undefined
+    : segment === 'presets'
+      ? () => void presets.refresh()
+      : segment === 'yours'
+        ? () => void yours.refresh()
+        : () => void top.load();
+
+  const pinned = segment === 'top' && best !== null;
 
   return (
-    <Screen tabbed refreshing={refreshing} onRefresh={api ? () => void refresh() : undefined}>
-      <View style={styles.header}>
-        <Text style={text.display}>Agents</Text>
-        <View style={styles.actions}>
-          <IconButton icon="board" label="Board" onPress={() => router.push('/leaderboard')} />
-          <IconButton icon="account" label="Account" onPress={() => router.push('/account')} />
-          {api ? <Button label="Hire" kind="primary" size="sm" icon="plus" onPress={hire} /> : null}
-        </View>
-      </View>
-
-      {!api ? (
-        <Notice
-          title="Sign in first"
-          detail="Agents belong to your passkey account. Sign in, then come back."
-        />
-      ) : state.kind === 'loading' ? (
-        <Loading />
-      ) : state.kind === 'failed' ? (
-        <>
-          <Notice tone="error" title={state.title} detail={state.detail} />
-          <Button label="Try again" onPress={() => void refresh()} style={styles.cta} />
-        </>
-      ) : state.agents.length === 0 ? (
-        <Card style={styles.empty}>
-          <Text style={text.title}>Hire your first agent</Text>
-          <Text style={text.dim}>
-            An agent trades for you inside a mandate you set: which markets, how much per deposit,
-            how large an order, and until when. The enclave won’t sign anything past it.
-          </Text>
-          <Button label="Hire an agent" kind="primary" icon="plus" onPress={hire} />
-        </Card>
-      ) : (
-        <>
-          <View style={styles.filter}>
-            <Segmented
-              options={[
-                { value: 'all', label: `All ${counts.all}` },
-                { value: 'active', label: `Active ${counts.active}` },
-                { value: 'revoked', label: `Revoked ${counts.revoked}` },
-              ]}
-              value={filter}
-              onChange={setFilter}
-            />
-          </View>
-          <View style={styles.list}>
-            {shown.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                summary={state.summaries.get(agent.id)}
-                holdings={holdings.get(agent.id)}
-                now={now}
-                onOpen={() => open(agent)}
-                onReturn={() => open(agent, 'return')}
-              />
-            ))}
-            {shown.length === 0 ? (
-              <Text style={[text.dim, styles.none]}>
-                {filter === 'active' ? 'No active agents.' : 'No revoked agents.'}
-              </Text>
+    <View style={styles.fill}>
+      <Screen tabbed refreshing={refreshing} onRefresh={onRefresh}>
+        <View style={styles.header}>
+          <Text style={text.display}>Agents</Text>
+          <View style={styles.actions}>
+            <IconButton icon="account" label="Account" onPress={() => router.push('/account')} />
+            {api ? (
+              <Button label="Hire" kind="primary" size="sm" icon="plus" onPress={hire} />
             ) : null}
           </View>
-        </>
-      )}
-    </Screen>
+        </View>
+        <View style={styles.segments}>
+          <Segmented options={SEGMENTS} value={segment} onChange={setSegment} />
+        </View>
+
+        {segment === 'presets' ? (
+          <PresetsSegment
+            presets={presets.state.presets}
+            stats={presets.state.stats}
+            onOpen={openPreset}
+          />
+        ) : !api ? (
+          <Notice
+            title="Sign in first"
+            detail="Agents belong to your passkey account. Sign in, then come back."
+          />
+        ) : segment === 'yours' ? (
+          <YoursSegment
+            overview={yours}
+            onHire={hire}
+            onBrowse={() => setSegment('presets')}
+            onOpen={(agent, sheet) =>
+              router.push({
+                pathname: '/agents/[id]',
+                params: sheet ? { id: agent.id, sheet } : { id: agent.id },
+              })
+            }
+          />
+        ) : (
+          <>
+            <TopBoard
+              state={top.state}
+              owned={top.owned}
+              onOpen={openLedger}
+              onRetry={() => void top.load()}
+            />
+            {/* Room for the pinned row, so it never covers the last one. */}
+            {pinned ? <View style={styles.pinSpace} /> : null}
+          </>
+        )}
+      </Screen>
+
+      {pinned ? (
+        <View style={[styles.pinned, { bottom: insets.bottom + DOCK.lift + DOCK.height + 10 }]}>
+          <BestRow row={best.row} label={best.label} onPress={openLedger} />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
+// ─── Presets ────────────────────────────────────────────────────────────────
+
+function PresetsSegment({
+  presets,
+  stats,
+  onOpen,
+}: {
+  presets: PresetsState['presets'];
+  stats: PresetsState['stats'];
+  onOpen: (id: string) => void;
+}) {
+  const [filter, setFilter] = useState<PresetFilter>('all');
+  // The featured card stands in for Guardian under "All" only; under any other
+  // chip Guardian is an ordinary card if it matches, so no filter hides it.
+  const featured =
+    filter === 'all' ? presets.find((preset) => preset.id === FEATURED_PRESET_ID) : undefined;
+  const shown = presets.filter((preset) => preset !== featured && matchesFilter(preset, filter));
+
+  return (
+    <>
+      {featured ? (
+        <View style={styles.featured}>
+          <FeaturedPreset
+            preset={featured}
+            stats={stats.get(featured.id)}
+            onPress={() => onOpen(featured.id)}
+          />
+        </View>
+      ) : null}
+      <View style={styles.chips}>
+        <Chips>
+          {PRESET_FILTERS.map((option) => (
+            <Chip
+              key={option.value}
+              label={option.label}
+              selected={filter === option.value}
+              onPress={() => setFilter(option.value)}
+            />
+          ))}
+        </Chips>
+      </View>
+      <View style={styles.list}>
+        {shown.map((preset) => (
+          <PresetCard
+            key={preset.id}
+            preset={preset}
+            stats={stats.get(preset.id)}
+            onPress={() => onOpen(preset.id)}
+          />
+        ))}
+        {shown.length === 0 ? <Text style={text.dim}>No presets match.</Text> : null}
+      </View>
+    </>
+  );
+}
+
+// ─── Yours ──────────────────────────────────────────────────────────────────
+
+function YoursSegment({
+  overview,
+  onHire,
+  onBrowse,
+  onOpen,
+}: {
+  overview: ReturnType<typeof useAgentsOverview>;
+  onHire: () => void;
+  onBrowse: () => void;
+  onOpen: (agent: Agent, sheet?: 'return') => void;
+}) {
+  const { state, refresh } = overview;
+  const agents = state.kind === 'loaded' ? state.agents : null;
+  const holdings = useWalletHoldings(agents);
+  const now = Date.now();
+
+  if (state.kind === 'loading') return <Loading />;
+  if (state.kind === 'failed') {
+    return (
+      <>
+        <Notice tone="error" title={state.title} detail={state.detail} />
+        <Button label="Try again" onPress={() => void refresh()} style={styles.cta} />
+      </>
+    );
+  }
+  if (state.agents.length === 0) {
+    return (
+      <Card style={styles.empty}>
+        <Text style={text.title}>Hire your first agent</Text>
+        <Text style={text.dim}>
+          An agent trades for you inside a mandate you set: which markets, how much per deposit, how
+          large an order, and until when. The enclave won’t sign anything past it.
+        </Text>
+        <Button label="Start from a preset" kind="primary" onPress={onBrowse} />
+        <Button label="Write your own" kind="soft" icon="plus" onPress={onHire} />
+      </Card>
+    );
+  }
+
+  const working = state.agents.filter((agent) => agent.status === 'active');
+  const stopped = state.agents.filter((agent) => agent.status !== 'active');
+  const card = (agent: Agent) => (
+    <AgentCard
+      key={agent.id}
+      agent={agent}
+      summary={state.summaries.get(agent.id)}
+      holdings={holdings.get(agent.id)}
+      now={now}
+      onOpen={() => onOpen(agent)}
+      onReturn={() => onOpen(agent, 'return')}
+    />
+  );
+
+  return (
+    <>
+      {working.length > 0 ? (
+        <Section label="Working">
+          <View style={styles.cards}>{working.map(card)}</View>
+        </Section>
+      ) : null}
+      {stopped.length > 0 ? (
+        <Section label="Stopped">
+          <View style={styles.cards}>{stopped.map(card)}</View>
+        </Section>
+      ) : null}
+      <Pressable
+        accessibilityRole="button"
+        onPress={onBrowse}
+        style={({ pressed }) => [styles.another, pressed && styles.pressed]}
+      >
+        <View style={styles.anotherIcon}>
+          <Icon name="plus" size={18} color={color.purpleHi} />
+        </View>
+        <View style={styles.grow}>
+          <Text style={styles.anotherTitle}>Hire another</Text>
+          <Text style={text.dim}>Start from a preset, or fork one from Top</Text>
+        </View>
+      </Pressable>
+    </>
+  );
+}
+
+/**
+ * One agent, one card (SEN-58): its sigil, what it trades, its status, the
+ * balance in its own wallet, today's P&L and its last move as a stone. A
+ * revoked agent that still holds funds offers the return inline (SEN-17).
+ */
 function AgentCard({
   agent,
   summary,
@@ -224,6 +415,7 @@ function AgentCard({
 }
 
 const styles = StyleSheet.create({
+  fill: { flex: 1, backgroundColor: color.ink },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -231,11 +423,33 @@ const styles = StyleSheet.create({
     marginTop: 44,
   },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  filter: { marginTop: 18 },
-  list: { marginTop: 16, gap: 12 },
+  segments: { marginTop: 12 },
+  featured: { marginTop: 16 },
+  chips: { marginTop: 14 },
+  list: { marginTop: 12, gap: 12 },
+  cards: { gap: 12, marginTop: 8 },
   cta: { marginTop: 20 },
   empty: { marginTop: 24, gap: 12 },
-  none: { marginTop: 8 },
+  another: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginTop: 22,
+    padding: 14,
+    borderRadius: RADIUS.board,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: color.lineStrong,
+  },
+  anotherIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: color.well,
+  },
+  anotherTitle: { fontFamily: font.displaySemibold, fontSize: 15, color: color.text },
   top: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   grow: { flex: 1, gap: 2 },
   dim: { color: color.textDim },
@@ -248,4 +462,16 @@ const styles = StyleSheet.create({
   },
   hairline: { height: 1, backgroundColor: color.line, marginVertical: 12 },
   pressed: { opacity: 0.85 },
+  pinSpace: { height: 84 },
+  pinned: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 18,
+    backgroundColor: '#221C44',
+    borderWidth: 1,
+    borderColor: color.purple,
+  },
 });

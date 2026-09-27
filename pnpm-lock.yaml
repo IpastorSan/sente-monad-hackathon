@@ -163,6 +163,9 @@ importers:
       '@scure/bip39':
         specifier: ^2.4.0
         version: 2.4.0
+      '@sente/presets':
+        specifier: workspace:*
+        version: link:../../packages/presets
       '@sente/venues':
         specifier: workspace:*
         version: link:../../packages/venues
