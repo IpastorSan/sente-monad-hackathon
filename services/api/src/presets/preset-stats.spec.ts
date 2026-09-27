@@ -186,6 +186,56 @@ describe('presetStats', () => {
     expect(stats).toMatchObject({ n: 5, returnN: 5, medianPnl30d: '0', medianReturn30d: '0' });
   });
 
+  // SEN-137: the test above has a median P&L of 0, so a return that ignored
+  // capital, or divided the median P&L by the median capital, still passed.
+  // Here every agent has its own P&L and its own capital.
+  function varied(rows: readonly (readonly [pnl: string, ...deposits: AgentEvent[]])[]) {
+    const agents: CohortRecord[] = [];
+    const events = new Map<string, AgentEvent[]>();
+    rows.forEach(([pnl, ...deposits], i) => {
+      const id = `v${i}`;
+      agents.push(agent(id));
+      events.set(id, [verdict(id, pnl), ...deposits.map((e) => ({ ...e, agentId: id }))]);
+    });
+    return presetStats({ presetId: 'guardian', agents, events, truncation: new Map(), now: NOW });
+  }
+
+  it('takes the exact median of each agent’s P&L ÷ its own capital, then floors it', () => {
+    const stats = varied([
+      ['-5', deposit('', '10')], // -0.5
+      ['1', deposit('', '100')], // 0.01
+      ['0.2', deposit('', '0.7')], // 2/7 = 0.285714…
+      ['10', deposit('', '20'), deposit('', '10', 'AUSD')], // 1/3: USDC and AUSD both capital
+      ['3', deposit('', '2')], // 1.5
+      ['40', deposit('', '20')], // 2
+    ]);
+    // (2/7 + 1/3) / 2 = 13/42 = 0.3095238…, floored at 6 places. P&L ÷ nothing
+    // would give 2, median P&L ÷ median capital 2/15, rounding 0.309524.
+    expect(stats).toMatchObject({
+      n: 6,
+      returnN: 6,
+      medianPnl30d: '2',
+      medianReturn30d: '0.309523',
+    });
+  });
+
+  it('floors a negative median return away from zero', () => {
+    const stats = varied([
+      ['-1', deposit('', '3')], // -1/3
+      ['-2', deposit('', '1')], // -2
+      ['-10', deposit('', '100')], // -0.1
+      ['5', deposit('', '10')], // 0.5
+      ['-50', deposit('', '10')], // -5
+    ]);
+    // -0.3333…: truncating would say -0.333333, a smaller loss than the truth.
+    expect(stats).toMatchObject({
+      n: 5,
+      returnN: 5,
+      medianPnl30d: '-2',
+      medianReturn30d: '-0.333334',
+    });
+  });
+
   it('counts revoked-in-window and customised agents, and an idle one as 0', () => {
     const agents = [
       agent('a'),

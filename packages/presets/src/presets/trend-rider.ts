@@ -166,8 +166,11 @@ export const trendRider: PresetDefinition = {
     CADENCE_SECONDS[str(p, 'cadence') as keyof typeof CADENCE_SECONDS],
   suggestedMandate(p) {
     const market = str(p, 'market');
-    // The one order is the entry: margin x leverage.
-    const biggest = (WIDE_COLLATERAL * num(p, 'sizePct') * num(p, 'leverage')) / 100;
+    // The one order is the entry: margin x leverage, valued by the cap at its
+    // slippage ceiling, so a full-size entry fits its own cap (SEN-137).
+    const biggest =
+      (WIDE_COLLATERAL * num(p, 'sizePct') * num(p, 'leverage') * (1 + ENTRY_SLIPPAGE_PCT / 100)) /
+      100;
     return {
       tier: 'wide',
       venues: ['perpl'],

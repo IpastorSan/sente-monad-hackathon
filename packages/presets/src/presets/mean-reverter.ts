@@ -213,8 +213,11 @@ export const meanReverter: PresetDefinition = {
     const market = str(p, 'market');
     const spot = isSpot(market);
     // The largest order is the target of the biggest entry, so the cap is
-    // raised above Standard's when the size needs it.
-    const biggest = (STANDARD_DEPOSIT * num(p, 'sizePct') * (1 + targetPct(p) / 100)) / 100;
+    // raised above Standard's when the size needs it. The entry is valued at
+    // its slippage ceiling and the target marks up that fill (SEN-137).
+    const biggest =
+      (STANDARD_DEPOSIT * num(p, 'sizePct') * (1 + SLIPPAGE_PCT / 100) * (1 + targetPct(p) / 100)) /
+      100;
     return {
       tier: 'standard',
       venues: [spot ? 'kuru' : 'perpl'],

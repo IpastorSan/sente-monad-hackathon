@@ -129,3 +129,28 @@ test('neither median: the running count and the sample, no figure', () => {
     kind: 'none',
   });
 });
+
+// SEN-137: the server floors the median return so rounding only ever makes a
+// preset look worse; the card must not round it back up.
+test('the median return is floored to the shown place, never rounded up', () => {
+  const figure = (medianReturn30d: string) => statsLine(stats({ medianReturn30d }))?.figure;
+  // 30.9523 % — half-up would print +31.0 %, more than the agents made.
+  assert.deepEqual(figure('0.309523'), { kind: 'median', value: '+30.9%', direction: 'up' });
+  // A loss floors away from zero: −1.2345 % is −1.3 %, not the kinder −1.2 %.
+  assert.deepEqual(figure('-0.012345'), { kind: 'median', value: '−1.3%', direction: 'down' });
+  assert.deepEqual(figure('-0.000001'), { kind: 'median', value: '−0.1%', direction: 'down' });
+  // Under a tenth of a percent up prints as 0.0, untinted.
+  assert.deepEqual(figure('0.000999'), { kind: 'median', value: '0.0%', direction: 'flat' });
+  // Exact on the digits: 0.29 × 100 in a float is 28.999…, which would floor to 28.9.
+  assert.deepEqual(figure('0.29'), { kind: 'median', value: '+29.0%', direction: 'up' });
+  assert.deepEqual(figure('-0.29'), { kind: 'median', value: '−29.0%', direction: 'down' });
+  assert.deepEqual(figure('0'), { kind: 'median', value: '0.0%', direction: 'flat' });
+});
+
+test('the median P&L stand-in is floored to the cent too', () => {
+  const figure = (medianPnl30d: string) =>
+    statsLine(stats({ medianReturn30d: null, medianPnl30d }))?.figure;
+  assert.deepEqual(figure('4.109'), { kind: 'median', value: '≈ +$4.10', direction: 'up' });
+  assert.deepEqual(figure('-0.001'), { kind: 'median', value: '≈ −$0.01', direction: 'down' });
+  assert.deepEqual(figure('1234.5'), { kind: 'median', value: '≈ +$1,234.50', direction: 'up' });
+});

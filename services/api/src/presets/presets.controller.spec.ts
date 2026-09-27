@@ -129,6 +129,66 @@ describe('PresetsController', () => {
     }
   });
 
+  // SEN-137: the test above has n=1, so every median is null and a controller
+  // that never handed deposits to `presetStats` would still pass it.
+  it("passes each agent's own deposits through to the median return", async () => {
+    const now = Date.UTC(2026, 8, 27);
+    const spy = jest.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const events = new InMemoryAgentEventLog();
+      // P&L, capital: returns 0.1, 0.2, 0.25, 0.5 and 2 — median 0.25.
+      const rows: [string, string][] = [
+        ['1', '10'],
+        ['4', '20'],
+        ['10', '40'],
+        ['40', '80'],
+        ['20', '10'],
+      ];
+      const records: Partial<AgentRecord>[] = [];
+      for (const [i, [pnl, capital]] of rows.entries()) {
+        const agentId = `g${i}`;
+        await events.append({
+          agentId,
+          kind: 'deposit',
+          at: now - 40 * 86_400_000,
+          detail: { asset: 'USDC', amount: capital },
+        });
+        await events.append({
+          agentId,
+          kind: 'verdict',
+          at: now - 1000,
+          detail: { realisedPnl: pnl, pnlAsset: 'USDC' },
+        });
+        records.push({
+          id: agentId,
+          status: 'active',
+          createdAt: new Date(now - 50 * 86_400_000),
+          updatedAt: new Date(now - 50 * 86_400_000),
+          preset: { id: 'guardian', version: 1, params: {}, customized: false },
+        });
+      }
+      // Another preset's agent: its deposit must not become g0's capital.
+      await events.append({
+        agentId: 'other',
+        kind: 'deposit',
+        at: now - 40 * 86_400_000,
+        detail: { asset: 'USDC', amount: '1000' },
+      });
+
+      const stats = await new PresetsController(storeOf(records), events).presetStats('guardian');
+
+      // Without the deposits, returnN is 0 and the median return null.
+      expect(stats).toMatchObject({
+        n: 5,
+        returnN: 5,
+        medianPnl30d: '10',
+        medianReturn30d: '0.25',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("says when the log has dropped an agent's oldest events, rather than dividing by what is left (SEN-129)", async () => {
     const now = Date.UTC(2026, 8, 27);
     const spy = jest.spyOn(Date, 'now').mockReturnValue(now);

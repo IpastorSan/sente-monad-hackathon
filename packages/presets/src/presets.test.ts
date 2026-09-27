@@ -152,6 +152,24 @@ for (const def of listPresets()) {
       assert.ok(rendered > 0, def.id);
     });
 
+    // SEN-137: an order the strategy tells the agent to place but its own
+    // suggested mandate refuses is a preset that cannot do what it says. The
+    // size is read off the rendered text, not the preset's own formula.
+    it('never tells the agent to place an order bigger than its suggested maxOrderNotional', () => {
+      for (const raw of [{}, ...extremes(def)]) {
+        const result = renderPreset(def.id, raw);
+        if (!result.ok) continue;
+        const mandate = def.suggestedMandate(result.params);
+        const biggest = biggestStatedOrder(def.id, result.strategy, mandate);
+        const cap = Number(mandate.maxOrderNotional);
+        // The relative epsilon only absorbs float noise in the product.
+        assert.ok(
+          biggest <= cap * (1 + 1e-12),
+          `${def.id} ${JSON.stringify(raw)}: an order of ${biggest} on a cap of ${cap}`,
+        );
+      }
+    });
+
     it('is deterministic', () => {
       assert.deepEqual(renderPreset(def.id, {}), renderPreset(def.id, {}));
     });
@@ -185,6 +203,67 @@ for (const def of listPresets()) {
       }
     });
   });
+}
+
+/**
+ * The largest order a rendered strategy tells its agent to place, in quote
+ * units, valued the way the order cap values it (services/api
+ * `agents/tools/registry.ts`, `orderNotional`): a buy at its slippage ceiling,
+ * a sell at the book. Read from the text and the mandate's own capital, so a
+ * preset whose formula forgets a factor the text applies is caught (SEN-137).
+ */
+function biggestStatedOrder(id: string, text: string, mandate: SuggestedMandate): number {
+  const pick = (pattern: RegExp): number => {
+    const found = pattern.exec(text)?.[1];
+    assert.ok(found !== undefined, `${id}: the text no longer matches ${String(pattern)}`);
+    return Number(found);
+  };
+  const pct = (pattern: RegExp) => pick(pattern) / 100;
+  const perplMargin = () =>
+    Number(mandate.perplCollateral) * pct(/with ([\d.]+)% of your AUSD collateral as margin/);
+  switch (id) {
+    case 'guardian':
+      // Sold when the bid reaches the upper line, so the book is at least there.
+      return pick(/sell up to ([\d.]+) \w+/) * pick(/at or above ([\d.]+) \w+/);
+    case 'dca-stacker': {
+      const buy = /this buy is double: ([\d.]+)/.test(text)
+        ? pick(/this buy is double: ([\d.]+)/)
+        : pick(/then buy ([\d.]+) \w+/);
+      return buy * (1 + pct(/slippage limit ([\d.]+)% above the best ask/));
+    }
+    case 'trend-rider':
+      return (
+        perplMargin() *
+        pick(/at ([\d.]+)x leverage/) *
+        (1 + pct(/slippage limit ([\d.]+)% past the best price/))
+      );
+    case 'funding-harvester': {
+      // The short is a sell (at the book); the hedge buys the same size at its ceiling.
+      const short = perplMargin() * pick(/at ([\d.]+)x leverage/);
+      return /buy the same size/.test(text)
+        ? short * (1 + pct(/buy the same size .*?slippage limit ([\d.]+)% above/))
+        : short;
+    }
+    case 'range-trader':
+    case 'mean-reverter': {
+      if (/AUSD collateral/.test(text)) {
+        // Perpl: the entry at its ceiling, then the reduce-only target past it.
+        const entry =
+          perplMargin() *
+          pick(/at ([\d.]+)x leverage/) *
+          (1 + pct(/slippage limit ([\d.]+)% past the best price/));
+        return entry * (1 + pct(/closing it at ([\d.]+)% from your entry/));
+      }
+      // Kuru: the budget buys at up to its ceiling, and the target sells that
+      // size at a markup on a fill that may be the ceiling.
+      const budget =
+        Number(mandate.depositCaps[0]?.amount) * pct(/buy at market with at most ([\d.]+)% of/);
+      const buy = budget * (1 + pct(/slippage limit ([\d.]+)% above the best ask/));
+      return buy * (1 + pct(/at ([\d.]+)% above your fill price/));
+    }
+    default:
+      assert.fail(`${id}: no reading of its order size; add one`);
+  }
 }
 
 /**
@@ -464,7 +543,7 @@ describe('render snapshots', () => {
     });
   }
 
-  it('SEN-72 suggested mandates at their defaults', () => {
+  it('suggested mandates at their defaults', () => {
     const mandate = (id: string): SuggestedMandate => {
       const def = getPreset(id);
       assert.ok(def);
@@ -520,18 +599,8 @@ describe('render snapshots', () => {
       expiryDays: 7,
       softRules: ['one position at a time'],
     });
-  });
-
-  it('suggested mandates at their defaults', () => {
-    const range = getPreset('range-trader');
-    const guard = getPreset('guardian');
-    assert.ok(range && guard);
-    const defaults = (def: PresetDefinition): Params => {
-      const r = resolveParams(def, {});
-      assert.ok(r.ok);
-      return r.params;
-    };
-    assert.deepEqual(range.suggestedMandate(defaults(range)), {
+    // SEN-137: Range Trader and Guardian were pinned in a second, duplicate test.
+    assert.deepEqual(mandate('range-trader'), {
       tier: 'standard',
       venues: ['kuru'],
       kuruMarkets: ['MON-USDC'],
@@ -543,7 +612,7 @@ describe('render snapshots', () => {
       expiryDays: 7,
       softRules: ['one position at a time'],
     });
-    assert.deepEqual(guard.suggestedMandate(defaults(guard)), {
+    assert.deepEqual(mandate('guardian'), {
       tier: 'cautious',
       venues: ['kuru'],
       kuruMarkets: ['MON-USDC'],
