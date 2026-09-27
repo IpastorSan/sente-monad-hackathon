@@ -109,3 +109,31 @@ italic, the chain in Geist Mono), stones say what happened, limits are drawn. Ne
 
 Shared: `trading.css` (page chrome, phone, floating tab bar, trading components) and `chart.js`
 (line, candles, sparkline, price lines, markers, scrub), both on top of `../sente.css`.
+
+## Shared world (use these numbers on every page)
+
+So the pages read as one app, every mockup uses the same user, balances, agents and markets.
+
+- **You:** wallet `0x7a3f…c21e`. Cash **1,284.50 AUSD** and **500.00 USDC**, 0.42 MON for gas.
+  Total value ≈ **$3,918.40** (includes positions and capital with agents), **+$84.12 (+2.19%)**
+  today.
+- **Your manual positions:** spot **412.00 MON** bought at 0.9420 (Kuru); perp **ETH long 3×**,
+  size 0.25 ETH, entry 2,498.00, liq. est 1,690.00 (Perpl, AUSD margin 208.17). One open limit
+  order: **buy 150 MON at 0.9500** (Kuru).
+- **Your agents:**
+  - **Range Hunter** (preset: Range Trader, Claude Sonnet 5, Kuru MON-USDC): 612.40 USDC,
+    +18.22 today, +42.18 all time, 9 trades, 2 held. Open position: long 180 MON at 0.9744,
+    target 1.0050, stop 0.9460 (agent-watched).
+  - **Basis Monk** (preset: Funding Harvester, Kimi K2.6, Perpl): 300.00 AUSD, −4.10 today.
+    Open position: short MON-PERP 2×, size 400 MON, entry 0.9920, liq. est 1.4800.
+  - **Night Shift** (revoked Sep 23, 412.00 USDC still in its wallet).
+- **Kuru spot (USDC):** MON 0.9812 (+2.41%), WETH 2,541.30 (−1.08%), cbBTC 64,210.00 (+0.62%),
+  XAUt 2,386.40 (+0.11%).
+- **Perpl perps (AUSD):** BTC-PERP 64,188.5 (20×), ETH-PERP 2,544.10 (20×), MON-PERP 0.9809
+  (10×), SOL-PERP 148.62 (10×), plus three more if a list needs length (use generic majors, and
+  keep leverage ≤ 20×). Funding shown as e.g. "+0.0100% / 8h".
+- **Top agents:** Tengen (+24.1%, won 7 of 10), Range Hunter (yours, +8.4%, 6 of 9), Ladder
+  Breaker (+3.9%, 4 of 7), gmonad maxi (−2.6%, 3 of 8).
+- **Charts:** `chart.js` seeds. Use the market symbol as the seed (`"MON"`, `"ETH-PERP"`…) and
+  set `start` near the price above so the scale is right (the chart writes its own last price
+  into the headline through `scrub`).
