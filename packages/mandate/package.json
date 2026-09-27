@@ -27,6 +27,7 @@
   "devDependencies": {
     "@types/node": "^26.4.1",
     "eslint": "^10.10.0",
+    "fast-check": "^4.10.2",
     "typescript": "~6.0.3"
   },
   "dependencies": {

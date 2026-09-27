@@ -72,7 +72,11 @@ export function formatFixedAtoms(
   const shown = Math.max(0, Math.min(places, decimals));
   const { sign, whole, fraction } = split(atoms, decimals);
   const truncated = fraction.slice(0, shown);
-  return `${sign}${group ? groupThousands(whole) : whole}${truncated ? `.${truncated}` : ''}`;
+  // SEN-139: the sign follows the figure shown, not the atoms. Truncating
+  // -0.009 to two places leaves nothing negative on screen, and "-0.00" reads
+  // as a debt that does not exist.
+  const shownZero = /^0*$/.test(whole + truncated);
+  return `${shownZero ? '' : sign}${group ? groupThousands(whole) : whole}${truncated ? `.${truncated}` : ''}`;
 }
 
 /** Sign, whole part, and the full zero-padded fraction. No rounding anywhere. */

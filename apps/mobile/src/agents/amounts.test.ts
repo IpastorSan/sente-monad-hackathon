@@ -55,6 +55,8 @@ test('formatFixedAtoms truncates toward zero rather than rounding a balance up',
   assert.equal(formatFixedAtoms(9_000n, 6, { places: 2 }), '0.00');
   assert.equal(formatFixedAtoms(1_999_999n, 6, { places: 2 }), '1.99');
   assert.equal(formatFixedAtoms(-1_999_999n, 6, { places: 2 }), '-1.99');
+  // SEN-139: a negative that truncates to nothing is shown unsigned, never "-0.00".
+  assert.equal(formatFixedAtoms(-9_000n, 6, { places: 2 }), '0.00');
   assert.equal(formatFixedAtoms(999_999_999_999_999_999n, 18, { places: 4 }), '0.9999');
 });
 
