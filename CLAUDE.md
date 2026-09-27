@@ -395,6 +395,13 @@ loading raw TypeScript out of `node_modules`.
 | `tsc` / typecheck                  | `src/` via `types`  | `moduleResolution: bundler` plus `allowImportingTsExtensions`.                                                                                                                                          |
 | `node --test` (`src/**/*.test.ts`) | `src/` via `source` | The test script passes `--conditions=source`. `@sente/mandate` is a devDependency so specs can run the API's own `parseMandate`.                                                                        |
 
+One mobile spec reaches into the API on purpose: `src/trade/contract.test.ts` (SEN-125) runs the
+server's `trade/kuru-planner.ts`, `trade/idempotency-key.ts`, `wallet/send/sponsored-send.ts` and
+`agents/privy/privy.client.ts` by relative path against the phone's verifier. Those four (and what
+they import) must stay erasable syntax with `.ts` specifiers, or `pnpm run test` breaks in
+`apps/mobile`, not in the API. It lives here rather than in jest because the API's `rootDir: ./src`
+would make its `tsc` reject a spec importing `apps/mobile/src`.
+
 Metro loads the TS sources, not `dist/`, so the app needs no package build first, and the `./x.ts`
 specifiers resolve literally (Metro tries the exact path before appending extensions). An alias
 bundles everything its subpath re-exports: `./kuru` brings the Kuru adapter and

@@ -79,6 +79,7 @@ import {
   type KuruIntent,
   type KuruPlanRefusalReason,
 } from './kuru-planner';
+import { tradeIdempotencyKey } from './idempotency-key';
 import { fundsAfter, TradeOutcomes } from './outcome';
 import { StepExecutor } from './step-executor';
 import { TRADE_CONFIG, type TradeConfig } from './trade.config';
@@ -92,16 +93,7 @@ export type PerplOnboardIntent = {
 };
 export type TradeIntent = KuruIntent | PerplOnboardIntent;
 
-/**
- * The `privy-idempotency-key` of step `stepIndex`. MUST equal the phone's
- * `tradeIdempotencyKey` (`apps/mobile/src/trade/envelope.ts`) byte for byte:
- * the phone refuses to sign a payload whose key differs, and Privy drops a
- * repeat of the same key for 24h, which is what makes a replayed signature
- * harmless.
- */
-export function tradeIdempotencyKey(clientTradeId: string, stepIndex: number): string {
-  return `sente-trade:${clientTradeId}:${stepIndex}`;
-}
+export { tradeIdempotencyKey };
 
 /**
  * Every way a trade request is refused. Part of the API contract — the app
