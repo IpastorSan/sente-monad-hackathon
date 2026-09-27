@@ -504,6 +504,133 @@ describe('AgentsService', () => {
         ).resolves.toMatchObject({ id: agent.id });
       });
 
+      // SEN-130: the cross-user test above never crossed AGENTS, so dropping the
+      // subject check in `takePrepared` broke nothing. Committing A's signed
+      // PATCH through B would change A's policy and record the mandate on B, and
+      // the layer-1 gate would then enforce a mandate neither enclave holds.
+      it('will not commit a prepare made for another agent of the same user', async () => {
+        const { service, wallets, store } = await deviceSetup();
+        const { agent: a } = await service.hire(ALICE, hireInput());
+        const { agent: b } = await service.hire(ALICE, hireInput({ name: 'Other' }));
+        const before = await persisted(store, 'alice');
+        const policies = new Map(wallets.policies);
+
+        const amendOnA = await service.prepareMandateAmend(
+          ALICE,
+          a.id,
+          mandateInput({ venues: ['kuru'], maxOrderNotional: '900' }),
+        );
+        const amend = await refusal(
+          service.commitMandateAmend(ALICE, b.id, {
+            prepareId: amendOnA.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(amend.reason).toBe('mandate_prepare_not_found');
+
+        const revokeOnA = await service.prepareRevoke(ALICE, a.id);
+        const revoke = await refusal(
+          service.commitRevoke(ALICE, b.id, {
+            prepareId: revokeOnA.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(revoke.reason).toBe('mandate_prepare_not_found');
+
+        // Nothing sent, and neither agent changed: both still active, both
+        // mandates as hired, both enclaves holding the rules they started with.
+        expect(wallets.policyUpdates).toHaveLength(0);
+        expect(wallets.policies).toEqual(policies);
+        expect(await persisted(store, 'alice')).toBe(before);
+      });
+
+      it('refuses an amend signed before a revocation, committed after it', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const exit = compileRevocationRules(agent.mandate);
+        const amend = await service.prepareMandateAmend(
+          ALICE,
+          agent.id,
+          mandateInput({ maxOrderNotional: '900' }),
+        );
+        const revoke = await service.prepareRevoke(ALICE, agent.id);
+        await service.commitRevoke(ALICE, agent.id, {
+          prepareId: revoke.prepareId,
+          signature: SIGNATURE,
+        });
+
+        const late = await refusal(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: amend.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        // The revoke prepare replaced the amend (one live prepare per agent), so
+        // the amend is gone before the revoked-status check is even reached.
+        expect(late.reason).toBe('mandate_prepare_not_found');
+        // The enclave still holds only the way out; the mandate is the hired one.
+        expect(wallets.policies.get(agent.policyId)).toEqual(exit);
+        expect(await service.get(ALICE, agent.id)).toMatchObject({
+          status: 'revoked',
+          policyCleared: true,
+          mandate: agent.mandate,
+        });
+      });
+
+      // The status check in `commitMandateAmend` is the second lock on the same
+      // door: it is what still holds if a revocation ever lands without
+      // superseding the amend's prepare (another path, another process).
+      it('refuses a live amend prepare once the agent is revoked by any path', async () => {
+        const { service, wallets, store } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const amend = await service.prepareMandateAmend(
+          ALICE,
+          agent.id,
+          mandateInput({ maxOrderNotional: '900' }),
+        );
+        await store.update(agent.id, { status: 'revoked', revokedAt: new Date() });
+
+        const late = await refusal(
+          service.commitMandateAmend(ALICE, agent.id, {
+            prepareId: amend.prepareId,
+            signature: SIGNATURE,
+          }),
+        );
+        expect(late.reason).toBe('agent_revoked');
+        expect(wallets.policyUpdates).toHaveLength(0);
+        expect((await service.get(ALICE, agent.id)).mandate).toEqual(agent.mandate);
+      });
+
+      it('refuses to prepare an amend on a revoked agent, cleared or not', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const revoke = await service.prepareRevoke(ALICE, agent.id);
+        // The enclave refuses the revoke: the agent is revoked, its policy not
+        // yet emptied — the state a user retries from.
+        wallets.updatePolicyError = new Error('enclave down');
+        await service
+          .commitRevoke(ALICE, agent.id, { prepareId: revoke.prepareId, signature: SIGNATURE })
+          .catch(() => undefined);
+        wallets.updatePolicyError = undefined;
+        expect(await service.get(ALICE, agent.id)).toMatchObject({
+          status: 'revoked',
+          policyCleared: false,
+        });
+
+        const uncleared = await refusal(
+          service.prepareMandateAmend(ALICE, agent.id, mandateInput()),
+        );
+        expect(uncleared.reason).toBe('agent_revoked');
+
+        const retry = await service.prepareRevoke(ALICE, agent.id);
+        await service.commitRevoke(ALICE, agent.id, {
+          prepareId: retry.prepareId,
+          signature: SIGNATURE,
+        });
+        const cleared = await refusal(service.prepareMandateAmend(ALICE, agent.id, mandateInput()));
+        expect(cleared.reason).toBe('agent_revoked');
+      });
+
       it('leaves only the way out on a signed revoke, and stops the agent first', async () => {
         const { service, wallets } = await deviceSetup();
         const { agent } = await service.hire(ALICE, hireInput());
