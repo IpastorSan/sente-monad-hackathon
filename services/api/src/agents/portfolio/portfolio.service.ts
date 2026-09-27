@@ -50,6 +50,19 @@ import {
 /** How long one agent's portfolio is served from memory. */
 export const AGENT_PORTFOLIO_TTL_MS = 3_000;
 
+/**
+ * How long the Perpl section is served from memory when reading it would open
+ * a throwaway socket (SEN-122). Each such read signs in on a fresh trading
+ * socket, and Perpl's budget is ~10 requests/min (plan-backend "Findings" #2);
+ * at the portfolio's 3 s that is up to 20 sign-ins a minute per watched agent.
+ * A read that borrows the agent's running socket costs no sign-in, so it
+ * follows the portfolio's 3 s instead.
+ */
+export const AGENT_PERPL_TTL_MS = 30_000;
+
+/** How old a last good Perpl read may be and still stand in, flagged stale, for a failed one. */
+export const AGENT_PERPL_STALE_MS = 120_000;
+
 /** Everything the service reads through: the seam the spec fakes. */
 export interface AgentPortfolioReaders {
   readonly wallet: TokenBalanceReader;
@@ -64,6 +77,8 @@ export interface AgentPortfolioReaders {
     agent: AgentIdentity,
     read: (venue: PerplAccountVenue | undefined) => Promise<T>,
   ) => Promise<T>;
+  /** Whether `withPerplVenue` would borrow the agent's running socket rather than open one. */
+  readonly holdsPerplSocket: (agent: AgentIdentity) => boolean;
   readonly perplAccountInfo: PerplAccountInfoReader;
   readonly events: Pick<AgentEventLog, 'list'>;
   readonly marks: Pick<MarketDataService, 'mark'>;
@@ -82,6 +97,8 @@ export class AgentPortfolioService {
   readonly #readers: AgentPortfolioReaders;
   readonly #now: () => number;
   readonly #cache = new Map<string, { at: number; value: Promise<AgentPortfolioDto> }>();
+  readonly #perplCache = new Map<string, { at: number; value: Promise<PerplSection> }>();
+  readonly #perplLastGood = new Map<string, PerplSection & { ok: true; asOf: number }>();
 
   constructor(@Inject(AGENT_PORTFOLIO_READERS) readers: AgentPortfolioReaders) {
     this.#readers = readers;
@@ -100,6 +117,12 @@ export class AgentPortfolioService {
 
     for (const [id, entry] of this.#cache) {
       if (now - entry.at >= AGENT_PORTFOLIO_TTL_MS) this.#cache.delete(id);
+    }
+    for (const [id, entry] of this.#perplCache) {
+      if (now - entry.at >= AGENT_PERPL_TTL_MS) this.#perplCache.delete(id);
+    }
+    for (const [id, last] of this.#perplLastGood) {
+      if (now - last.asOf > AGENT_PERPL_STALE_MS) this.#perplLastGood.delete(id);
     }
     const value = this.#read(agent, now);
     this.#cache.set(agent.id, { at: now, value });
@@ -124,14 +147,7 @@ export class AgentPortfolioService {
       this.#section('kuru', agent.id, () =>
         readKuruAccount(this.#readers.kuruVenue(agent.address)),
       ),
-      this.#section('perpl', agent.id, async () => {
-        // Not in the mandate means the agent cannot trade there, so any
-        // account it has is not this agent's business to show.
-        if (!agent.mandate.venues.includes('perpl')) return { status: 'not_in_mandate' as const };
-        return this.#readers.withPerplVenue(identity, (venue) =>
-          readPerplAccount(agent.address, { accountInfo: this.#readers.perplAccountInfo, venue }),
-        );
-      }),
+      this.#perpl(agent, identity, asOf),
       this.#events(agent.id),
       // Every market's mark, alongside the sections rather than after them:
       // four cached reads cost less than another round trip.
@@ -153,6 +169,57 @@ export class AgentPortfolioService {
       holdings,
       totals: totals(wallet, kuru, perpl, holdings),
     };
+  }
+
+  /**
+   * The Perpl section, single-flight per agent for {@link AGENT_PERPL_TTL_MS}
+   * unless the agent's run holds a socket to borrow (SEN-122). A failed read
+   * is kept for the full window too: retrying every 3 s is exactly the traffic
+   * that trips Perpl's rate limit.
+   */
+  #perpl(agent: AgentRecord, identity: AgentIdentity, now: number): Promise<PerplSection> {
+    // Not in the mandate means the agent cannot trade there, so any
+    // account it has is not this agent's business to show.
+    if (!agent.mandate.venues.includes('perpl')) {
+      return Promise.resolve({ ok: true, status: 'not_in_mandate' });
+    }
+    const borrowed = this.#readers.holdsPerplSocket(identity);
+    const hit = this.#perplCache.get(agent.id);
+    if (!borrowed && hit && now - hit.at < AGENT_PERPL_TTL_MS) return hit.value;
+
+    // A borrowed read refreshes the cache as well, so once the run's socket
+    // idles out the next poll starts from a recent value instead of a sign-in.
+    const value = this.#readPerpl(agent, identity, now);
+    this.#perplCache.set(agent.id, { at: now, value });
+    void value.then((section) => {
+      // Without credentials the read was chain-only and opened no socket:
+      // nothing to ration, so the next portfolio read goes to the chain again.
+      const socketless = section.ok && section.status !== 'ok' && !section.stale;
+      if (socketless && this.#perplCache.get(agent.id)?.value === value) {
+        this.#perplCache.delete(agent.id);
+      }
+    });
+    return value;
+  }
+
+  async #readPerpl(
+    agent: AgentRecord,
+    identity: AgentIdentity,
+    now: number,
+  ): Promise<PerplSection> {
+    const fresh = await this.#section('perpl', agent.id, async () => ({
+      ...(await this.#readers.withPerplVenue(identity, (venue) =>
+        readPerplAccount(agent.address, { accountInfo: this.#readers.perplAccountInfo, venue }),
+      )),
+      asOf: now,
+    }));
+    if (fresh.ok) {
+      this.#perplLastGood.set(agent.id, fresh);
+      return fresh;
+    }
+    const last = this.#perplLastGood.get(agent.id);
+    if (last && now - last.asOf <= AGENT_PERPL_STALE_MS) return { ...last, stale: true };
+    return fresh;
   }
 
   /**
@@ -234,6 +301,8 @@ export class AgentPortfolioService {
   }
 }
 
+type PerplSection = AgentPortfolioDto['perpl'];
+
 function totals(
   wallet: AgentPortfolioDto['wallet'],
   kuru: AgentPortfolioDto['kuru'],
@@ -294,7 +363,7 @@ function messageOf(error: unknown): string {
 /** The real readers over the agents' public client and venues. */
 export function agentPortfolioReaders(
   client: PublicClient,
-  venues: Pick<AgentVenues, 'readPerpl'>,
+  venues: Pick<AgentVenues, 'readPerpl' | 'holdsPerpl'>,
   events: Pick<AgentEventLog, 'list'>,
   marks: Pick<MarketDataService, 'mark'>,
 ): AgentPortfolioReaders {
@@ -303,6 +372,7 @@ export function agentPortfolioReaders(
     kuruVenue: (address) => kuruAccountVenue(client, address),
     // Never `venues.forAgent`: that keeps the socket open (SEN-122).
     withPerplVenue: (agent, read) => venues.readPerpl(agent, read),
+    holdsPerplSocket: (agent) => venues.holdsPerpl(agent),
     perplAccountInfo: (address) => perplAccountInfo(client, address),
     events,
     marks,

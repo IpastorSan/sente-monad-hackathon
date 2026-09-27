@@ -110,8 +110,8 @@ export class AgentVenues {
     agent: AgentIdentity,
     read: (perpl: PerplVenue | undefined) => Promise<T>,
   ): Promise<T> {
-    const live = this.#entries.get(agent.agentId);
-    if (live?.perpl && live.walletId === agent.walletId) return read(live.perpl);
+    const live = this.#entries.get(agent.agentId)?.perpl;
+    if (live && this.holdsPerpl(agent)) return read(live);
 
     const credentials = await this.#secrets.getPerplCredentials(agent.agentId);
     if (!credentials) return read(undefined);
@@ -121,6 +121,15 @@ export class AgentVenues {
     } finally {
       perpl.close();
     }
+  }
+
+  /**
+   * Whether the agent's run holds a Perpl socket `readPerpl` would borrow;
+   * `false` means a read would open (and sign in on) a throwaway one.
+   */
+  holdsPerpl(agent: AgentIdentity): boolean {
+    const live = this.#entries.get(agent.agentId);
+    return live?.perpl !== undefined && live.walletId === agent.walletId;
   }
 
   /** Close the agent's Perpl socket and drop its venues — on revoke, or when idle. */
