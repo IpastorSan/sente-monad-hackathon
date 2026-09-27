@@ -37,7 +37,18 @@ const MON = KURU_TESTNET_TOKENS.MON.address as Address;
 const POLICY_ID = 'policy00000000000000test';
 /** The owner's own wallet: the only address a compiled mandate lets funds reach. */
 const OWNER = getAddress(`0x${'c'.repeat(40)}`);
+/**
+ * Somebody else (SEN-124). The fixtures above use `OWNER` on both sides — as the
+ * mandate's `returnTo` and as the phone's wallet — which is exactly why no test
+ * could see a server naming another address; this one lets the two differ.
+ */
+const ATTACKER = getAddress(`0x${'a'.repeat(40)}`);
 
+/**
+ * A mandate as the phone holds one in practice: its `returnTo` is the owner's
+ * wallet, because the API sets it from the signed-in account (SEN-17) and an
+ * amend is refused without it (SEN-124).
+ */
 function mandate(over: Partial<AgentMandate> = {}): AgentMandate {
   return {
     version: 1,
@@ -47,8 +58,15 @@ function mandate(over: Partial<AgentMandate> = {}): AgentMandate {
     kuru: { markets: [MARKET_A], maxDepositAtoms: { [USDC]: 1_000_000_000n } },
     perpl: { maxCollateralAtoms: 500_000_000n, maxLeverage: 5, markets: ['BTC-PERP'] },
     maxOrderNotional: '250',
+    returnTo: OWNER,
     ...over,
   };
+}
+
+/** A mandate with no way out at all — every agent hired before SEN-17. */
+function noExit(over: Partial<AgentMandate> = {}): AgentMandate {
+  const { returnTo: _none, ...rest } = mandate(over);
+  return rest;
 }
 
 /** The API's own compiler, reduced to the form `expectedPolicyRules` produces. */
@@ -93,10 +111,18 @@ function payloadFor(
   };
 }
 
-const amend = (m: AgentMandate): MandateChangeIntent => ({
+const amend = (m: AgentMandate, ownWallet: Address | null = OWNER): MandateChangeIntent => ({
   kind: 'amend',
   policyId: POLICY_ID,
   mandate: m,
+  ownWallet,
+});
+
+const revoke = (m: AgentMandate, ownWallet: Address | null = OWNER): MandateChangeIntent => ({
+  kind: 'revoke',
+  policyId: POLICY_ID,
+  mandate: m,
+  ownWallet,
 });
 
 test('the mirrored compiler still agrees with @sente/mandate, mandate by mandate', () => {
@@ -114,9 +140,10 @@ test('the mirrored compiler still agrees with @sente/mandate, mandate by mandate
     }),
     mandate({ expiresAt: 1_900_000_000 }),
     // The way out (SEN-17): one transfer rule per token, and none of them expires.
-    mandate({ returnTo: OWNER }),
-    mandate({ venues: ['kuru'], returnTo: OWNER }),
-    mandate({ venues: [], returnTo: OWNER }),
+    // `mandate()` carries one; these carry none, so both shapes stay pinned.
+    noExit(),
+    noExit({ venues: ['kuru'] }),
+    noExit({ venues: [] }),
   ];
   for (const m of cases) {
     assert.deepEqual(
@@ -134,7 +161,7 @@ test('a payload that is exactly the mandate’s own rules is approved', () => {
 
 test('a revoke is approved only when it leaves exactly the way out', () => {
   const m = mandate({ returnTo: OWNER });
-  const intent: MandateChangeIntent = { kind: 'revoke', policyId: POLICY_ID, mandate: m };
+  const intent = revoke(m);
 
   // The recovery rules, and nothing else: an exit stays open (SEN-17).
   assert.deepEqual(verifyPolicyPatch(payloadFor({ revoke: m }), intent), { ok: true });
@@ -159,15 +186,9 @@ test('a revoke is approved only when it leaves exactly the way out', () => {
 
   // A mandate with no exit still revokes to nothing at all — every agent hired
   // before SEN-17 is in that state.
-  const noExit = mandate({ venues: ['perpl'] });
-  assert.deepEqual(
-    verifyPolicyPatch(payloadFor(null), {
-      kind: 'revoke',
-      policyId: POLICY_ID,
-      mandate: noExit,
-    }),
-    { ok: true },
-  );
+  assert.deepEqual(verifyPolicyPatch(payloadFor(null), revoke(noExit({ venues: ['perpl'] }))), {
+    ok: true,
+  });
 });
 
 test('the mirrored revocation rules still agree with @sente/mandate', () => {
@@ -176,8 +197,8 @@ test('the mirrored revocation rules still agree with @sente/mandate', () => {
     mandate({ venues: ['kuru'], returnTo: OWNER }),
     mandate({ venues: ['perpl'], returnTo: OWNER }),
     mandate({ venues: [], returnTo: OWNER }),
-    mandate(),
-    mandate({ venues: ['perpl'] }),
+    noExit(),
+    noExit({ venues: ['perpl'] }),
   ]) {
     assert.deepEqual(
       normalise(expectedRevocationRules(m)),
@@ -260,11 +281,75 @@ test('a DENY rule is refused rather than reasoned about', () => {
 test('AUSD is the token the Perpl approval rule names', () => {
   // Pins the mirrored constant through the check that uses it, not just in
   // isolation: a wrong AUSD address would refuse every Perpl mandate.
-  const m = mandate({ venues: ['perpl'] });
+  // The rule search runs on a mandate with no exit, so the AUSD return rule
+  // cannot stand in for the approval rule this is about.
   assert.ok(
-    expectedPolicyRules(m).some((rule) =>
+    expectedPolicyRules(noExit({ venues: ['perpl'] })).some((rule) =>
       rule.conditions.some((c) => c.endsWith(`|${AUSD.address}`)),
     ),
   );
+  const m = mandate({ venues: ['perpl'] });
   assert.deepEqual(verifyPolicyPatch(payloadFor(m), amend(m)), { ok: true });
+});
+
+// SEN-124 (test-audit finding #1). Every case below lets the mandate's
+// `returnTo`, the payload's `transfer.to` and the phone's own wallet differ,
+// which the fixtures above never do.
+
+test('a revoke whose stored returnTo is not this phone’s wallet is refused, however consistent', () => {
+  // The server's agent names the attacker, and its payload is compiled from that
+  // very mandate, so rule-set equality alone holds. Only the pin catches it.
+  const served = mandate({ returnTo: ATTACKER });
+  const result = verifyPolicyPatch(payloadFor({ revoke: served }), revoke(served, OWNER));
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.problem, /not your wallet/);
+
+  // `transfer.to` varied on its own: the right mandate with rules paying the
+  // attacker, and the attacker's mandate with rules paying the owner.
+  const typed = mandate({ returnTo: OWNER });
+  assert.equal(verifyPolicyPatch(payloadFor({ revoke: served }), revoke(typed)).ok, false);
+  assert.equal(verifyPolicyPatch(payloadFor({ revoke: typed }), revoke(served)).ok, false);
+
+  // The owner spelled in lowercase is still the owner: the pin compares
+  // addresses, so it does not refuse the one destination it exists to allow.
+  const lower = mandate({ returnTo: OWNER.toLowerCase() as Address });
+  assert.deepEqual(verifyPolicyPatch(payloadFor({ revoke: lower }), revoke(lower)), { ok: true });
+});
+
+test('an amend whose returnTo is not this phone’s wallet is refused, however consistent', () => {
+  const served = mandate({ returnTo: ATTACKER });
+  const result = verifyPolicyPatch(payloadFor(served), amend(served, OWNER));
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.problem, /not your wallet/);
+
+  const typed = mandate({ returnTo: OWNER });
+  assert.equal(verifyPolicyPatch(payloadFor(served), amend(typed)).ok, false);
+  assert.equal(verifyPolicyPatch(payloadFor(typed), amend(served)).ok, false);
+
+  const lower = mandate({ returnTo: OWNER.toLowerCase() as Address });
+  assert.deepEqual(verifyPolicyPatch(payloadFor(lower), amend(lower)), { ok: true });
+});
+
+test('a phone that does not know its wallet refuses, and never falls back to returnTo', () => {
+  const m = mandate({ returnTo: OWNER });
+  for (const [payload, intent] of [
+    [payloadFor(m), amend(m, null)],
+    [payloadFor({ revoke: m }), revoke(m, null)],
+    // Even a revoke that could send nothing anywhere: with no wallet there is
+    // nothing to check a destination against, so nothing is signed.
+    [payloadFor(null), revoke(noExit(), null)],
+  ] as const) {
+    const result = verifyPolicyPatch(payload, intent);
+    assert.equal(result.ok, false, intent.kind);
+    assert.match(result.ok ? '' : result.problem, /doesn’t know your wallet/);
+  }
+});
+
+test('an amend that names no way out is refused', () => {
+  // The API fills in a `returnTo` the phone did not send, so whatever transfer
+  // rules it compiled could only be taken on faith.
+  const bare = noExit();
+  const result = verifyPolicyPatch(payloadFor(bare), amend(bare));
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.problem, /no way out/);
 });

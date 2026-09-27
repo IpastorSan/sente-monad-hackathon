@@ -39,6 +39,11 @@
  *    conditions, compared as `field_source|field|operator|value`. Not a subset,
  *    not "nothing worse than" — equal. One extra rule is one extra thing the
  *    agent could sign.
+ * 7. `returnTo` is THIS PHONE'S wallet (SEN-124). Before anything else, the
+ *    mandate's `returnTo` must equal `intent.ownWallet` — the user's Privy
+ *    wallet as the session registered it with this phone's device key — and the
+ *    transfer rules are then built from that address, never from the mandate's
+ *    copy. See {@link pinReturnTo}.
  *
  * The comparison ignores each condition's `abi` and `typed_data` blobs, which
  * say how Privy decodes calldata to evaluate a condition. A wrong one can only
@@ -276,10 +281,60 @@ export function expectedRevocationRules(mandate: AgentMandate): ExpectedRule[] {
  * A revoke carries the mandate too, since SEN-17: what it leaves behind is that
  * mandate's own way out, so the phone needs the mandate to know which rules to
  * expect — the same copy it would check an amend against.
+ *
+ * `ownWallet` is the signed-in user's own wallet as THIS PHONE knows it
+ * (`session.wallet.address`: the Privy wallet registered under this phone's
+ * device key), or `null` when the phone does not know it yet (SEN-124). It is
+ * required rather than optional so no caller can forget it: a missing pin has
+ * to be a decision someone typed, and `null` is refused.
  */
-export type MandateChangeIntent =
-  | { kind: 'amend'; policyId: string; mandate: AgentMandate }
-  | { kind: 'revoke'; policyId: string; mandate: AgentMandate };
+export type MandateChangeIntent = {
+  kind: 'amend' | 'revoke';
+  policyId: string;
+  mandate: AgentMandate;
+  ownWallet: Address | null;
+};
+
+/**
+ * The address the recovery rules may pay, pinned to the phone's own knowledge
+ * of the user's wallet (SEN-124, test-audit finding #1).
+ *
+ * Why this exists: the rule-set comparison proves the payload matches the
+ * mandate, but for a revoke the mandate IS the server's (`agent.mandate`), and
+ * for an amend its `returnTo` used to come from the server's copy too
+ * (`formFromMandate`). A compromised API could therefore name an attacker as
+ * `returnTo`, compile matching `transfer.to == attacker` rules, and the phone
+ * would sign non-expiring rules that let the agent send every ERC-20 away. So
+ * the destination is checked against the one address the phone did not take
+ * from the agent: its own registered wallet.
+ *
+ * - No known wallet → refused. Never a fallback to the mandate's value: that
+ *   value is exactly what is not trusted.
+ * - An amend must name the wallet: the phone built that mandate from it, and
+ *   the API fills the same address in when it is left out, so a missing one
+ *   could only produce rules the phone would then have to take on faith.
+ * - A revoke of a mandate with NO `returnTo` (hired before SEN-17) stays
+ *   allowed: it compiles no transfer rule at all, so it can send nothing to
+ *   anyone.
+ */
+function pinReturnTo(
+  intent: MandateChangeIntent,
+): { ok: true; mandate: AgentMandate } | { ok: false; problem: string } {
+  if (!intent.ownWallet) return refuse('this phone doesn’t know your wallet yet');
+  const named = intent.mandate.returnTo;
+  if (!named) {
+    return intent.kind === 'amend'
+      ? refuse('it names no way out to your wallet')
+      : { ok: true, mandate: intent.mandate };
+  }
+  if (!isAddressEqual(named, intent.ownWallet)) {
+    return refuse(`it sends this agent’s funds to ${named}, which is not your wallet`);
+  }
+  // The mandate to build the expected rules from, with the destination replaced
+  // by the phone's own copy: equal to the mandate's by the check above, but the
+  // expected `transfer.to` then never depends on the server's value at all.
+  return { ok: true, mandate: { ...intent.mandate, returnTo: getAddress(intent.ownWallet) } };
+}
 
 /**
  * Does `payload` do exactly what `intent` says, and nothing else?
@@ -316,11 +371,14 @@ export function verifyPolicyPatch(
   const rules = (body as { rules?: unknown }).rules;
   if (!Array.isArray(rules)) return refuse('its body sets no rules');
 
+  // SEN-124: the destination is checked against the phone's own wallet, and the
+  // expected transfer rules are built from that wallet, not the server's copy.
+  const pinned = pinReturnTo(intent);
+  if (!pinned.ok) return pinned;
+  const { mandate } = pinned;
   return compareRules(
     rules,
-    intent.kind === 'revoke'
-      ? expectedRevocationRules(intent.mandate)
-      : expectedPolicyRules(intent.mandate),
+    intent.kind === 'revoke' ? expectedRevocationRules(mandate) : expectedPolicyRules(mandate),
   );
 }
 
@@ -428,13 +486,14 @@ export function amendMandateWithApproval(
   api: AgentsApi,
   agent: Agent,
   mandate: AgentMandate,
+  ownWallet: Address | null,
   sign: Approver | null,
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
   return approveChange(
     api,
     agent,
-    { kind: 'amend', policyId: agent.policyId, mandate },
+    { kind: 'amend', policyId: agent.policyId, mandate, ownWallet },
     sign,
     prepared,
   );
@@ -446,17 +505,20 @@ export function amendMandateWithApproval(
  *
  * The mandate the check compares against is the STORED one, `agent.mandate` — the
  * revoke is not a change to it, so there is no other copy that could be meant.
+ * That copy comes from the server, which is why `ownWallet` is passed separately
+ * and its `returnTo` is checked against it (SEN-124).
  */
 export function revokeWithApproval(
   api: AgentsApi,
   agent: Agent,
+  ownWallet: Address | null,
   sign: Approver | null,
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
   return approveChange(
     api,
     agent,
-    { kind: 'revoke', policyId: agent.policyId, mandate: agent.mandate },
+    { kind: 'revoke', policyId: agent.policyId, mandate: agent.mandate, ownWallet },
     sign,
     prepared,
   );
@@ -478,6 +540,11 @@ async function approveChange(
   prepared?: PreparedMandateChange,
 ): Promise<Agent> {
   if (!sign) throw new NoDeviceKeyError('changing this agent’s mandate');
+  // SEN-124: a destination that cannot pass is refused before asking the API to
+  // prepare anything. `verifyPolicyPatch` runs the same check again below, so a
+  // `prepared` change handed in from a screen is held to it too.
+  const pinned = pinReturnTo(intent);
+  if (!pinned.ok) throw new MandateApprovalRefusedError(pinned.problem);
   const amending = intent.kind === 'amend';
   const change =
     prepared ??
