@@ -10,6 +10,7 @@ import type { ApiCandles, ApiDepth, ApiMarket, ApiOpenOrder } from './api.ts';
 import { KURU_TESTNET_MARKETS, type KuruMarketConfig } from './constants.ts';
 import {
   bucketStart,
+  kuruSlippageBound,
   simulateQuote,
   toDepth,
   toKlines,
@@ -17,7 +18,8 @@ import {
   toOpenOrder,
   toPlacedOrder,
 } from './mapping.ts';
-import type { KuruMarketParams, KuruOrderOutcome } from './orders.ts';
+import { KuruOrderError, type KuruMarketParams, type KuruOrderOutcome } from './orders.ts';
+import { fromUnits, precisionDecimals, toUnits } from './units.ts';
 
 const market = (symbol: string): KuruMarketConfig => {
   const found = KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol);
@@ -70,7 +72,37 @@ test('toMarket: precisions become decimal increments, the notional floor comes t
     minSize: '0.00000001',
     minNotional: '10',
     venueSymbol: 'MONUSDC',
+    makerFee: '0.0004',
+    takerFee: '0.0007',
   });
+});
+
+test('toMarket: fee pps scale by 10^7 into fractions of notional (SEN-63)', () => {
+  const api = (takerFeePps: number, makerFeePps: number): ApiMarket => ({
+    marketAddress: '0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61',
+    symbol: 'MONUSDC',
+    baseToken: {
+      tokenAddress: '0x0000000000000000000000000000000000000000',
+      symbol: 'MON',
+      decimals: 18,
+    },
+    quoteToken: {
+      tokenAddress: '0xee0722ead54f1b4fe97be399be43bc0226a6f97e',
+      symbol: 'USDC',
+      decimals: 6,
+    },
+    status: 'active',
+    pricePrecision: '1000000',
+    sizePrecision: '100000000',
+    tickSize: '1',
+    minQuoteNotionalX18: '10000000000000000000',
+    takerFeePps,
+    makerFeePps,
+  });
+  const fees = (m: { takerFee?: string; makerFee?: string }) => [m.takerFee, m.makerFee];
+  assert.deepEqual(fees(toMarket(api(0, 0), MON_USDC)), ['0', '0']);
+  assert.deepEqual(fees(toMarket(api(1, 25), MON_USDC)), ['0.0000001', '0.0000025']);
+  assert.deepEqual(fees(toMarket(api(10_000_000, 5_000_000), MON_USDC)), ['1', '0.5']);
 });
 
 test('toDepth: book units to decimals, best first, clamped, sequence kept', () => {
@@ -340,4 +372,63 @@ test('toPlacedOrder: an IOC that fills in full, in part, or not at all', () => {
 
 test('toPlacedOrder: a crossing POST_ONLY is skipped, which reads as rejected', () => {
   assert.equal(placed({ timeInForce: 'POST_ONLY' }).status, 'rejected');
+});
+
+/**
+ * The adapter's `#slippageBound` rounding as it stood before SEN-63 lifted it
+ * into `kuruSlippageBound`, kept verbatim so the lift is pinned as a no-op.
+ */
+function legacySlippageBound(
+  best: bigint,
+  side: 'buy' | 'sell',
+  maxSlippage: string,
+  params: Pick<KuruMarketParams, 'pricePrecision' | 'tickSize'>,
+): string {
+  const WAD = 10n ** 18n;
+  const slippage = toUnits(maxSlippage, 18, 'maxSlippage');
+  const pd = precisionDecimals(params.pricePrecision);
+  const tick = params.tickSize;
+  if (side === 'buy') {
+    const bound = (best * (WAD + slippage)) / WAD;
+    return fromUnits(bound - (bound % tick), pd);
+  }
+  if (slippage >= WAD) throw new KuruOrderError('maxSlippage must be below 1 for a sell');
+  const raw = (best * (WAD - slippage) + WAD - 1n) / WAD;
+  return fromUnits(raw % tick === 0n ? raw : raw + tick - (raw % tick), pd);
+}
+
+test('kuruSlippageBound: buys floor and sells ceil onto the tick', () => {
+  const params = { pricePrecision: 1_000_000n, tickSize: 10n };
+  // 1.00 + 1.5% = 1.015 exactly, on a tick.
+  assert.equal(kuruSlippageBound(1_000_000n, 'buy', '0.015', params), '1.015');
+  // 1.00 + 0.0015% = 1.000015 -> floored to 1.00001, never above the allowance.
+  assert.equal(kuruSlippageBound(1_000_000n, 'buy', '0.000015', params), '1.00001');
+  // 1.00 - 0.0015% = 0.999985 -> ceiled to 0.99999, never below the allowance.
+  assert.equal(kuruSlippageBound(1_000_000n, 'sell', '0.000015', params), '0.99999');
+  // A sub-atom slippage on a sell still rounds up to the best price, not below it.
+  assert.equal(kuruSlippageBound(1_000_000n, 'sell', '0.0000000001', params), '1');
+  assert.throws(() => kuruSlippageBound(1_000_000n, 'sell', '1', params), KuruOrderError);
+});
+
+test('kuruSlippageBound equals the pre-SEN-63 private bound at edge ticks', () => {
+  const cases = [
+    { pricePrecision: 1_000_000n, tickSize: 1n },
+    { pricePrecision: 1_000_000n, tickSize: 10n },
+    { pricePrecision: 100n, tickSize: 7n },
+  ];
+  const bests = [1n, 7n, 9n, 10n, 11n, 999_999n, 1_000_000n, 1_000_001n, 4_294_967_294n];
+  const slippages = ['0', '0.000000000000000001', '0.00001', '0.0001', '0.01', '0.5', '0.999999'];
+  for (const params of cases) {
+    for (const best of bests) {
+      for (const maxSlippage of slippages) {
+        for (const side of ['buy', 'sell'] as const) {
+          assert.equal(
+            kuruSlippageBound(best, side, maxSlippage, params),
+            legacySlippageBound(best, side, maxSlippage, params),
+            `${side} best=${best} slippage=${maxSlippage} tick=${params.tickSize}`,
+          );
+        }
+      }
+    }
+  }
 });

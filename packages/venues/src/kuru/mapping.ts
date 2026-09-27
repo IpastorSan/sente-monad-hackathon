@@ -3,6 +3,7 @@
  * `mapping.test.ts` pins every conversion without a network.
  */
 import type {
+  Decimal,
   Depth,
   Kline,
   KlineInterval,
@@ -18,6 +19,7 @@ import type { ApiCandles, ApiDepth, ApiMarket, ApiOpenOrder, CandleInterval } fr
 import type { KuruMarketConfig } from './constants.ts';
 import {
   formatOrderId,
+  KuruOrderError,
   PPS_DENOMINATOR,
   type KuruMarketParams,
   type KuruOrderOutcome,
@@ -43,6 +45,9 @@ export function toMarket(api: ApiMarket, config: KuruMarketConfig): Market {
     minSize: step,
     minNotional: fromUnits(BigInt(api.minQuoteNotionalX18), 18),
     venueSymbol: api.symbol,
+    // Parts per 10^7 -> a fraction of notional (SEN-63).
+    makerFee: ratioToDecimal(BigInt(api.makerFeePps), PPS_DENOMINATOR),
+    takerFee: ratioToDecimal(BigInt(api.takerFeePps), PPS_DENOMINATOR),
   };
 }
 
@@ -270,6 +275,35 @@ export function simulateQuote(input: QuoteInput): Quote {
     ),
     timestamp: input.observedAt,
   };
+}
+
+const WAD = 10n ** 18n;
+
+/**
+ * The worst acceptable price for a taker order: `best` (the opposite side's
+ * best price, in book units) moved `maxSlippage` against us, onto a tick.
+ * Buys floor (never pay more than allowed), sells ceil (never sell for less).
+ *
+ * Pure so the adapter's market orders and a displayed bound (SEN-63) share one
+ * rounding rule; the caller owns reading `best` and rejecting an empty side.
+ */
+export function kuruSlippageBound(
+  best: bigint,
+  side: Side,
+  maxSlippage: Decimal,
+  params: Pick<KuruMarketParams, 'pricePrecision' | 'tickSize'>,
+): Decimal {
+  const slippage = toUnits(maxSlippage, 18, 'maxSlippage');
+  const pd = precisionDecimals(params.pricePrecision);
+  const tick = params.tickSize;
+
+  if (side === 'buy') {
+    const bound = (best * (WAD + slippage)) / WAD;
+    return fromUnits(bound - (bound % tick), pd);
+  }
+  if (slippage >= WAD) throw new KuruOrderError('maxSlippage must be below 1 for a sell');
+  const raw = (best * (WAD - slippage) + WAD - 1n) / WAD;
+  return fromUnits(raw % tick === 0n ? raw : raw + tick - (raw % tick), pd);
 }
 
 export type PlacedOrderInput = {
