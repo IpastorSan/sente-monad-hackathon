@@ -14,8 +14,8 @@
  */
 import type { MarketParamSpec, SuggestedMandate } from '@sente/presets';
 
-import { amountLabel } from '../agents/leaderboard.ts';
-import { formatPct, pctDirection, type Direction } from '../ui/tradingFormat.ts';
+import { signedFigure } from '../ui/money.ts';
+import type { Direction } from '../ui/tradingFormat.ts';
 
 import type { PresetDto, PresetStatsDto } from './api.ts';
 
@@ -137,34 +137,58 @@ export function statsLine(stats: PresetStatsDto | null | undefined): StatsLine |
     return { running, figure: { kind: 'too-new' }, sample: sample(stats.n) };
   }
   if (stats.medianReturn30d !== null) {
-    const pct = Number(stats.medianReturn30d) * 100;
-    if (Number.isFinite(pct)) {
+    const figure = flooredFigure(stats.medianReturn30d, 2, 1);
+    if (figure) {
       return {
         running,
-        figure: { kind: 'median', value: formatPct(pct, 1), direction: pctDirection(pct, 1) },
+        figure: { kind: 'median', value: `${figure.text}%`, direction: figure.tone ?? 'flat' },
         sample: sample(stats.returnN),
       };
     }
   }
   if (stats.medianPnl30d !== null) {
-    const pnl = Number(stats.medianPnl30d);
-    if (Number.isFinite(pnl)) {
-      // The sign comes from the rounded cents, so "+$0.00" is never printed in mint.
-      const cents = Math.round(pnl * 100);
-      const direction: Direction = cents === 0 ? 'flat' : cents > 0 ? 'up' : 'down';
-      const sign = direction === 'up' ? '+' : direction === 'down' ? '−' : '';
+    const figure = flooredFigure(stats.medianPnl30d, 0, 2);
+    if (figure) {
       return {
         running,
         figure: {
           kind: 'median',
-          value: `≈ ${sign}$${amountLabel(stats.medianPnl30d)}`,
-          direction,
+          value: `≈ ${figure.sign}$${figure.magnitude}`,
+          direction: figure.tone ?? 'flat',
         },
         sample: sample(stats.n),
       };
     }
   }
   return { running, figure: { kind: 'none' }, sample: sample(stats.n) };
+}
+
+/**
+ * `value × 10^shift` floored to `places` decimals, towards −∞, as a signed
+ * figure; `null` for anything but a plain decimal. The server floors the
+ * median so rounding can only make a preset look worse (SEN-76); re-rounding
+ * it half-up here undid that — `0.309523` printed `+31.0%` (SEN-137). So the
+ * card floors again, on the digits: a float `× 100` would put `0.29` at
+ * `28.999…` and floor a true 29.0 down to 28.9.
+ */
+function flooredFigure(value: string, shift: number, places: number) {
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/u.exec(value.trim());
+  if (!match) return null;
+  const [, sign = '', whole = '0', fraction = ''] = match;
+  const units = BigInt(`${sign === '-' ? '-' : ''}${whole}${fraction}`);
+  // units / 10^fraction.length × 10^shift, in units of 10^-places
+  const exponent = places + shift - fraction.length;
+  let floored: bigint;
+  if (exponent >= 0) floored = units * 10n ** BigInt(exponent);
+  else {
+    const divisor = 10n ** BigInt(-exponent);
+    floored = units / divisor; // truncates towards zero…
+    if (units % divisor !== 0n && units < 0n) floored -= 1n; // …so step a loss down
+  }
+  const magnitude = (floored < 0n ? -floored : floored).toString().padStart(places + 1, '0');
+  const cut = magnitude.length - places;
+  const exact = `${floored < 0n ? '-' : ''}${magnitude.slice(0, cut)}.${magnitude.slice(cut)}`;
+  return signedFigure(exact, places);
 }
 
 function sample(n: number): string {

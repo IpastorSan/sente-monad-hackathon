@@ -31,6 +31,9 @@ const MIN_RANGE_PCT = 2;
 const STANDARD_DEPOSIT = 100;
 const STANDARD_MAX_ORDER = 50;
 
+/** How far above the best ask the entry buy may fill, in %. */
+const ENTRY_SLIPPAGE_PCT = 0.5;
+
 function render(p: Params): { strategy: string; systemPrompt: string } {
   const market = str(p, 'market');
   const { base, quote } = marketAssets(market);
@@ -55,7 +58,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
     '',
     'Every run:',
     `1. Read the ${lookback.label} high and low of ${market} from ${lookback.candles} candles ${klinesHint('kuru', lookback)}. If the read fails, or the range is under ${MIN_RANGE_PCT}% wide, do not buy this run and say why.`,
-    `2. If you hold no ${base} (dust under 1 ${quote} does not count) and have no open orders, and the mid price is within ${band}% of the range low: record a thesis, then buy at market with at most ${size}% of your ${quote}, slippage limit 0.5% above the best ask.`,
+    `2. If you hold no ${base} (dust under 1 ${quote} does not count) and have no open orders, and the mid price is within ${band}% of the range low: record a thesis, then buy at market with at most ${size}% of your ${quote}, slippage limit ${ENTRY_SLIPPAGE_PCT}% above the best ask.`,
     `3. Right after a buy, place a GTC limit sell of the ${base} you bought at ${formatNumber(target)}% above your fill price. That order is the target, and its price tells later runs the entry: entry = its price ÷ ${targetFactor}.`,
     `4. If you hold ${base}: the stop is ${stop}% below the entry. If the best bid is at or below it, cancel the resting sell and sell all your ${base} at market. If you hold ${base} but no resting sell, you cannot know the entry: sell it at market.`,
     '5. Otherwise do nothing.',
@@ -182,7 +185,15 @@ export const rangeTrader: PresetDefinition = {
     const { quote } = marketAssets(market);
     // The largest order is the target sell of the biggest buy the strategy
     // plans, so the cap is raised above Standard's when the size needs it.
-    const biggest = (STANDARD_DEPOSIT * num(p, 'sizePct') * (1 + num(p, 'target') / 100)) / 100;
+    // The cap values a buy at its slippage ceiling, and the target marks up a
+    // fill that may be that ceiling: without the slippage factor a full-size
+    // buy's own target was refused (SEN-137).
+    const biggest =
+      (STANDARD_DEPOSIT *
+        num(p, 'sizePct') *
+        (1 + ENTRY_SLIPPAGE_PCT / 100) *
+        (1 + num(p, 'target') / 100)) /
+      100;
     return {
       tier: 'standard',
       venues: ['kuru'],
