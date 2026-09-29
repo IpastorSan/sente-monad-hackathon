@@ -9,8 +9,9 @@
  * Prices stay decimal strings; only display-only ratios (a change, a spread's
  * percent, a pressure split) go through a float.
  */
-import type { Agent, AgentPortfolioDto } from '../agents/api.ts';
+import type { Agent, AgentFill, AgentPortfolioDto } from '../agents/api.ts';
 import { marketFor } from '../agents/mandate.ts';
+import type { PortfolioFill } from '../trade/types.ts';
 import { formatPrice as formatPlaces, priceDecimals } from '../ui/chart/geometry.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPrice, pctChange } from '../ui/tradingFormat.ts';
@@ -465,4 +466,133 @@ export function signedAmount(value: Decimal): string | null {
 
 function trimZeros(value: Decimal): string {
   return value.includes('.') ? value.replace(/\.?0+$/, '') : value;
+}
+
+// ---------------------------------------------------------------------------
+// Fills on the chart (SEN-157)
+// ---------------------------------------------------------------------------
+
+/**
+ * One fill in this market, yours or one of your agents', in the one shape the
+ * chart's stones and the "Fills on MON" list both read. Yours come from
+ * `GET /portfolio/fills` (one row per venue match), your agents' from
+ * `GET /agents/fills` (one row per order, at its average price).
+ */
+export type MarketFill = {
+  key: string;
+  /** White stone for you, purple for an agent: the ledger's language. */
+  who: 'you' | 'agent';
+  /** `You`, or the agent's name. */
+  name: string;
+  side: 'buy' | 'sell' | null;
+  price: Decimal | null;
+  size: Decimal;
+  /** Epoch ms. */
+  at: number;
+};
+
+/** Your fills in `symbol`, whatever else the page held. */
+export function yourFills(fills: readonly PortfolioFill[], symbol: string): MarketFill[] {
+  return fills
+    .filter((fill) => fill.symbol === symbol)
+    .map((fill) => ({
+      key: `you:${fill.venue}:${fill.venueTradeId}`,
+      who: 'you',
+      name: 'You',
+      side: fill.side,
+      price: fill.price,
+      size: fill.size,
+      at: fill.timestamp,
+    }));
+}
+
+/** Your agents' fills in `symbol`. */
+export function agentsFills(fills: readonly AgentFill[], symbol: string): MarketFill[] {
+  return fills
+    .filter((fill) => fill.symbol === symbol)
+    .map((fill) => ({
+      key: `agent:${fill.seq}`,
+      who: 'agent',
+      name: fill.agentName,
+      side: fill.side,
+      price: fill.price,
+      size: fill.size,
+      at: fill.at,
+    }));
+}
+
+/** Both sources, newest first, at most `limit`: the list is a glance, not the ledger. */
+export function mergeFills(
+  mine: readonly MarketFill[],
+  agents: readonly MarketFill[],
+  limit = 5,
+): MarketFill[] {
+  return [...mine, ...agents].sort((a, b) => b.at - a.at).slice(0, limit);
+}
+
+/** What `Chart`'s `markers` takes; restated here so this file stays free of React Native. */
+export type FillMarker = { index: number; who: 'you' | 'agent' };
+
+/**
+ * Each fill placed on the sample it happened in: the last candle that opened
+ * at or before it. A fill before the first candle, or after the last one
+ * closed, is outside the visible range and dropped — pinning it to an edge
+ * would draw a trade at a time it never happened. Several fills in one candle
+ * by the same actor on the same side are one stone: at this scale they would
+ * sit on top of each other anyway, and the list below has the detail.
+ */
+export function fillMarkers(
+  fills: readonly MarketFill[],
+  klines: readonly KlineDto[],
+): FillMarker[] {
+  const last = klines[klines.length - 1];
+  if (last === undefined) return [];
+  const seen = new Set<string>();
+  const markers: FillMarker[] = [];
+  for (const fill of fills) {
+    if (fill.at > last.closeTime) continue;
+    const index = candleAt(klines, fill.at);
+    if (index < 0) continue;
+    const key = `${index}:${fill.who}:${fill.side ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    markers.push({ index, who: fill.who });
+  }
+  return markers;
+}
+
+/** The last kline with `openTime <= at`, or -1. Klines are oldest first. */
+function candleAt(klines: readonly KlineDto[], at: number): number {
+  let lo = 0;
+  let hi = klines.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if ((klines[mid] as KlineDto).openTime <= at) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found;
+}
+
+/** `Range Hunter bought 180 at 0.9744`, `You sold 12`: one list row. */
+export function fillLine(fill: MarketFill, tick: Decimal): string {
+  const verb = fill.side === 'buy' ? 'bought' : fill.side === 'sell' ? 'sold' : 'filled';
+  const price = fill.price === null ? null : (formatPrice(fill.price, tick) ?? fill.price);
+  return `${fill.name} ${verb} ${trimZeros(fill.size)}${price === null ? '' : ` at ${price}`}`;
+}
+
+const FILL_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** `now`, `4m`, `3h` inside a day; `Sep 23` past it, as the study's list reads. */
+export function fillWhen(at: number, now: number): string {
+  const ago = Math.max(0, now - at);
+  if (ago < 60_000) return 'now';
+  if (ago < 3_600_000) return `${Math.floor(ago / 60_000)}m`;
+  if (ago < FILL_DAY_MS) return `${Math.floor(ago / 3_600_000)}h`;
+  const d = new Date(at);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }

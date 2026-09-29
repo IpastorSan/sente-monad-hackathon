@@ -629,6 +629,29 @@ describe('AgentsController', () => {
       }
     });
 
+    it("serves one market's fills across the caller's agents only (SEN-157)", async () => {
+      const { controller, events, alpha, beta, mallory } = await seeded();
+      const fill = (agentId: string, at: number, symbol = 'MON-USDC') =>
+        events.append({
+          agentId,
+          at,
+          kind: 'fill',
+          tool: 'place_market',
+          detail: { venue: 'kuru', symbol, side: 'buy', filledSize: '180', averageFillPrice: '1' },
+        });
+      await fill(alpha.id, 1_000);
+      await fill(beta.id, 3_000);
+      await fill(beta.id, 4_000, 'ETH-USDC');
+      await fill(mallory.id, 5_000);
+
+      const { fills } = await controller.fills({ venue: 'kuru', symbol: 'MON-USDC' });
+      expect(fills.map((f) => [f.agentName, f.at])).toEqual([
+        ['Beta', 3_000],
+        ['Alpha', 1_000],
+      ]);
+      expect((await controller.fills({ symbol: 'MON-USDC', since: 2_000 })).fills).toHaveLength(1);
+    });
+
     /**
      * Route precedence can only be proved through the router: a controller
      * method called directly never goes near `:id`. So this boots the real
@@ -678,6 +701,13 @@ describe('AgentsController', () => {
         expect(activity.status).toBe(200);
         expect(activity.body).toMatchObject({ events: [{ kind: 'refusal', agentName: 'Beta' }] });
         expect(await get('/agents/activity?limit=51')).toMatchObject({ status: 400 });
+
+        // SEN-157: `fills` is declared before `:id` too.
+        expect(await get('/agents/fills?venue=kuru&symbol=MON-USDC')).toMatchObject({
+          status: 200,
+          body: { fills: [] },
+        });
+        expect(await get('/agents/fills?limit=101')).toMatchObject({ status: 400 });
 
         // `:id` still routes, and still refuses what is not a UUID.
         expect(await get(`/agents/${h.alpha.id}`)).toMatchObject({

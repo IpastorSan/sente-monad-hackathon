@@ -6,11 +6,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { Agent, AgentPortfolioDto } from '../agents/api.ts';
+import type { Agent, AgentFill, AgentPortfolioDto } from '../agents/api.ts';
 import { KURU_MARKETS } from '../agents/mandate.ts';
+import type { PortfolioFill } from '../trade/types.ts';
 
 import type { DepthDto, KlineDto, MarketDto, TickerDto } from './api.ts';
 import {
+  agentsFills,
   agentsFor,
   agentStake,
   assetHeader,
@@ -20,8 +22,13 @@ import {
   countdown,
   defaultView,
   feeLabel,
+  fillLine,
+  fillMarkers,
+  fillWhen,
   fundingView,
   headline,
+  mergeFills,
+  yourFills,
   linePoints,
   parseVenue,
   placesFor,
@@ -385,4 +392,101 @@ test('an agent’s stake: a perp position, a spot holding, or honestly none', ()
   assert.deepEqual(agentStake(spot, MON), { line: 'Holds 180 MON at 0.9744', pnl: '1.22' });
   assert.deepEqual(agentStake(portfolio({}), MON), { line: 'No position right now', pnl: null });
   assert.deepEqual(agentStake(null, ETH), { line: 'Allowed to trade here', pnl: null });
+});
+
+// ─── Fills on the chart (SEN-157) ──────────────────────────────────────────
+
+function mine(at: number, over: Partial<PortfolioFill> = {}): PortfolioFill {
+  return {
+    venue: 'kuru',
+    tradeId: `t-${at}`,
+    venueTradeId: `v-${at}`,
+    orderId: null,
+    symbol: 'MON-USDC',
+    side: 'buy',
+    price: '0.9459',
+    size: '212',
+    transactionHash: null,
+    timestamp: at,
+    ...over,
+  };
+}
+
+function theirs(seq: number, at: number, over: Partial<AgentFill> = {}): AgentFill {
+  return {
+    seq,
+    agentId: 'a-1',
+    agentName: 'Range Hunter',
+    venue: 'kuru',
+    symbol: 'MON-USDC',
+    side: 'buy',
+    price: '0.9744',
+    size: '180.000',
+    orderId: null,
+    txHash: null,
+    at,
+    ...over,
+  };
+}
+
+test('fills map onto the candle they happened in; outside the visible range they are dropped', () => {
+  const k = candles(4);
+  const fills = [
+    ...yourFills(
+      [mine(k[0]!.openTime - 1), mine(k[1]!.openTime), mine(k[3]!.closeTime)],
+      'MON-USDC',
+    ),
+    ...agentsFills(
+      [theirs(1, k[2]!.openTime + 90_000), theirs(2, k[3]!.closeTime + 1)],
+      'MON-USDC',
+    ),
+  ];
+  assert.deepEqual(fillMarkers(fills, k), [
+    { index: 1, who: 'you' },
+    { index: 3, who: 'you' },
+    { index: 2, who: 'agent' },
+  ]);
+  assert.deepEqual(fillMarkers(fills, []), []);
+});
+
+test('several fills in one candle collapse to one stone per actor and side', () => {
+  const k = candles(3);
+  const at = k[1]!.openTime;
+  const fills = [
+    ...yourFills([mine(at), mine(at + 1), mine(at + 2, { side: 'sell' })], 'MON-USDC'),
+    ...agentsFills([theirs(1, at + 3), theirs(2, at + 4)], 'MON-USDC'),
+  ];
+  assert.deepEqual(fillMarkers(fills, k), [
+    { index: 1, who: 'you' },
+    { index: 1, who: 'you' },
+    { index: 1, who: 'agent' },
+  ]);
+});
+
+test('only this market: fills in another symbol never reach the chart or the list', () => {
+  const other = [mine(1, { symbol: 'ETH-USDC' }), mine(2, { symbol: null })];
+  assert.deepEqual(yourFills(other, 'MON-USDC'), []);
+  assert.deepEqual(agentsFills([theirs(1, 1, { symbol: 'ETH-USDC' })], 'MON-USDC'), []);
+});
+
+test('the list: newest first across both, capped, in the study words', () => {
+  const now = new Date(2026, 8, 29, 12).getTime();
+  const sep23 = new Date(2026, 8, 23, 12).getTime();
+  const sep21 = new Date(2026, 8, 21, 12).getTime();
+  const list = mergeFills(
+    yourFills([mine(sep23), mine(sep21, { price: '0.938', size: '200' })], 'MON-USDC'),
+    agentsFills([theirs(7, now - 3 * 3_600_000)], 'MON-USDC'),
+    2,
+  );
+  assert.deepEqual(
+    list.map((f) => [f.key, fillLine(f, MON.tickSize), fillWhen(f.at, now)]),
+    [
+      ['agent:7', 'Range Hunter bought 180 at 0.9744', '3h'],
+      [`you:kuru:v-${sep23}`, 'You bought 212 at 0.9459', 'Sep 23'],
+    ],
+  );
+  const sold = { ...list[0]!, side: 'sell' as const, price: null };
+  assert.equal(fillLine(sold, MON.tickSize), 'Range Hunter sold 180');
+  assert.equal(fillWhen(now - 30_000, now), 'now');
+  assert.equal(fillWhen(now - 4 * MIN, now), '4m');
 });

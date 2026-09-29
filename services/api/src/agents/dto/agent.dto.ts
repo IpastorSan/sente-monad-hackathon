@@ -30,6 +30,7 @@ import type { ReturnOutcome } from '../recovery/return-funds.service';
 import type { CommitTimes, ConsensusState } from '../../chain/consensus.service';
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
+import type { AgentFillDto, FillVenue } from '../events/market-fills';
 import type { AgentMandateOwnerMode } from '../agents.config';
 import {
   AGENT_SCHEDULE_MAX_SECONDS,
@@ -352,6 +353,45 @@ export class AgentActivityQueryDto {
   @Min(1)
   @Max(AGENT_ACTIVITY_MAX_LIMIT)
   limit?: number;
+}
+
+/**
+ * `GET /agents/fills` (SEN-157): one market's fills across the caller's
+ * agents, for the asset chart's stones. Capped like the activity feed: the
+ * chart shows a window, not a ledger.
+ */
+export const AGENT_FILLS_DEFAULT_LIMIT = 50;
+export const AGENT_FILLS_MAX_LIMIT = 100;
+
+export class AgentFillsQueryDto {
+  @IsOptional()
+  @IsIn(['kuru', 'perpl'])
+  venue?: FillVenue;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  symbol?: string;
+
+  /** Unix ms: only fills at or after it. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  since?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(AGENT_FILLS_MAX_LIMIT)
+  limit?: number;
+}
+
+export interface AgentFillsResponseDto {
+  /** Newest first, across every agent the caller owns, revoked ones included. */
+  fills: AgentFillDto[];
 }
 
 // ---------------------------------------------------------------------------

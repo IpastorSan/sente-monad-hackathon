@@ -467,6 +467,19 @@ test('portfolio and schedule read their routes, and a missing route reads as nul
   );
 });
 
+test('fills scopes to one market, and a missing route reads as null (SEN-157)', async () => {
+  const { api, calls } = recordingApi(
+    { status: 200, body: { fills: [] } },
+    { status: 404, body: { statusCode: 404, message: 'Cannot GET', error: 'Not Found' } },
+  );
+  assert.deepEqual(await api.fills({ venue: 'kuru', symbol: 'MON-USDC', limit: 50 }), []);
+  assert.equal(await api.fills(), null);
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.url}`),
+    [`GET ${BASE}/agents/fills?venue=kuru&symbol=MON-USDC&limit=50`, `GET ${BASE}/agents/fills`],
+  );
+});
+
 test('portfolio still throws a 404 that is about the agent', async () => {
   const { api } = recordingApi({
     status: 404,

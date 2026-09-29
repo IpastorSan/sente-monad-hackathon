@@ -6,7 +6,9 @@
  * Top to bottom: the price, written by the chart's scrub so the two can't
  * disagree; the chart with its ranges and a line/candles toggle; the change
  * grid; your position; the agents of yours allowed to trade this market; the
- * market's stats (and funding, for a perp); the book's pressure. Sell/Buy
+ * market's stats (and funding, for a perp); the book's pressure; the latest
+ * fills here, yours and your agents', which are also the chart's stones
+ * (SEN-157). Sell/Buy
  * (Short/Long) stay pinned at the bottom, and once the hero scrolls away the
  * price condenses into a header so Buy is never pressed blind.
  *
@@ -33,6 +35,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Agent } from '@/agents/api';
 import type { KlineDto, MarketDto, VenueId } from '@/markets/api';
 import {
+  agentsFills,
   agentsFor,
   agentStake,
   assetHeader,
@@ -40,11 +43,15 @@ import {
   changeGrid,
   compactAmount,
   defaultView,
+  fillLine,
+  fillMarkers,
+  fillWhen,
   fundingView,
   GRID_QUERY,
   headline,
   linePoints,
   livePrice,
+  mergeFills,
   parseVenue,
   placesFor,
   PRESSURE_LEVELS,
@@ -53,17 +60,21 @@ import {
   signedAmount,
   statRows,
   windowBase,
+  yourFills,
   type AgentStake,
   type AssetRange,
   type ChartKind,
+  type MarketFill,
 } from '@/markets/asset';
 import { useDepth, useKlines, useMarkets, useTicker } from '@/markets/hooks';
 import { flipFavourite, readFavourites } from '@/markets/localLists';
 import { marketKey } from '@/markets/select';
+import { usePolling } from '@/markets/usePolling';
 import { useSession } from '@/session';
+import { isUnavailable, TradeApiError } from '@/trade/api';
 import { useTradingEnabled } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
-import { Sigil } from '@/ui/goban';
+import { Sigil, Stone } from '@/ui/goban';
 import { Button, Card, Loading, Notice, Section, Sheet, TopBar } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import {
@@ -159,8 +170,14 @@ function Asset({
   const agents = useAgentsTrading(market);
   const position = useYourPositionUntilPortfolio(market);
   const trading = useTradingEnabled();
+  const fills = useMarketFills(market, trading);
 
   const bars = klines.data?.klines ?? NO_BARS;
+  const markers = useMemo(() => fillMarkers(fills.all, bars), [fills.all, bars]);
+  const recentFills = useMemo(
+    () => mergeFills(fills.yours, fills.agents),
+    [fills.yours, fills.agents],
+  );
   const live = livePrice(ticker.data);
   const head = headline(bars, live, range, scrub);
   const places = placesFor(market, head.price);
@@ -176,6 +193,7 @@ function Asset({
     klines.refresh();
     grid.refresh();
     depth.refresh();
+    fills.refresh();
   };
 
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -257,6 +275,7 @@ function Asset({
               points={kind === 'line' ? points : undefined}
               klines={kind === 'candles' ? bars : undefined}
               levels={position?.levels}
+              markers={markers}
               prevClose={kind === 'line' ? prevClose : undefined}
               height={CHART_HEIGHT}
               // A perp's liquidation line sits far from the price; with `fit`
@@ -370,6 +389,19 @@ function Asset({
               <PressureSide side="Bids" sums={sums} unit={market.base} />
               <PressureSide side="Asks" sums={sums} />
             </View>
+          </Section>
+        ) : null}
+
+        {recentFills.length > 0 ? (
+          <Section label={`Fills on ${header.title}`}>
+            {recentFills.map((fill, i) => (
+              <FillRow
+                key={fill.key}
+                fill={fill}
+                tick={market.tickSize}
+                divider={i < recentFills.length - 1}
+              />
+            ))}
           </Section>
         ) : null}
       </ScrollView>
@@ -498,7 +530,97 @@ function useAgentsTrading(market: MarketDto): AgentRow[] | null {
   return rows;
 }
 
+/** A fills read is re-asked this often: a glance at recent moves, not a live tape. */
+const FILLS_MS = 30_000;
+const FILLS_LIMIT = 50;
+const NO_FILLS: readonly MarketFill[] = [];
+
+type MarketFills = {
+  /** `NO_FILLS` also when unknown: nothing is drawn rather than a claim of none. */
+  yours: readonly MarketFill[];
+  agents: readonly MarketFill[];
+  all: readonly MarketFill[];
+  refresh: () => void;
+};
+
+/**
+ * This market's fills, yours and your agents' (SEN-157). Each source is shown
+ * only once it has answered, and hidden when it can't: yours need manual
+ * trading on (`/portfolio/fills` is behind the flag), and an API without the
+ * route, or a Perpl account with no read key linked, is "not available here",
+ * not "you never traded". Your agents' fills are theirs, so they show whether
+ * or not you may trade by hand.
+ */
+function useMarketFills(market: MarketDto, trading: boolean): MarketFills {
+  const { trade, agents: api } = useSession();
+  const key = marketKey(market);
+  const { venue, symbol } = market;
+
+  const yoursPolled = usePolling(
+    trading && trade ? `fills:you:${key}` : null,
+    () =>
+      trade!.fills({ venue, symbol, limit: FILLS_LIMIT }).then(
+        (page) => page.fills,
+        (error: unknown) => {
+          // Answers that mean "there is nothing to show here", not "retry".
+          if (isUnavailable(error) || isFillsGap(error)) return null;
+          throw error;
+        },
+      ),
+    { intervalMs: FILLS_MS },
+  );
+  const agentsPolled = usePolling(
+    api ? `fills:agents:${key}` : null,
+    () => api!.fills({ venue, symbol, limit: FILLS_LIMIT }),
+    { intervalMs: FILLS_MS },
+  );
+
+  const rawYours = trading ? yoursPolled.data : null;
+  const rawAgents = agentsPolled.data;
+  const yours = useMemo(
+    () => (rawYours ? yourFills(rawYours, symbol) : NO_FILLS),
+    [rawYours, symbol],
+  );
+  const agents = useMemo(
+    () => (rawAgents ? agentsFills(rawAgents, symbol) : NO_FILLS),
+    [rawAgents, symbol],
+  );
+  const all = useMemo(() => [...yours, ...agents], [yours, agents]);
+  const { refresh: refreshYours } = yoursPolled;
+  const { refresh: refreshAgents } = agentsPolled;
+  const refresh = useCallback(() => {
+    refreshYours();
+    refreshAgents();
+  }, [refreshYours, refreshAgents]);
+  return { yours, agents, all, refresh };
+}
+
+/**
+ * `/portfolio/fills` refusals that are a state, not a failure: trading
+ * switched off since the flag was read, or Perpl with no read key (SEN-151).
+ * `perpl_unavailable` is a real failure and keeps the last answer on screen.
+ */
+function isFillsGap(error: unknown): boolean {
+  return (
+    error instanceof TradeApiError &&
+    (error.reason === 'trading_disabled' || error.reason === 'perpl_unlinked')
+  );
+}
+
 // ─── Pieces ─────────────────────────────────────────────────────────────────
+
+/** One line of "Fills on MON": your white stone or the agent's purple one, what, and when. */
+function FillRow({ fill, tick, divider }: { fill: MarketFill; tick: string; divider: boolean }) {
+  return (
+    <View style={[styles.fill, divider && styles.divider]}>
+      <Stone kind={fill.who === 'you' ? 'deposit' : 'trade'} />
+      <Text style={[text.body, styles.grow]} numberOfLines={1}>
+        {fillLine(fill, tick)}
+      </Text>
+      <Text style={styles.asofText}>{fillWhen(fill.at, Date.now())}</Text>
+    </View>
+  );
+}
 
 function Missing({
   onBack,
@@ -716,6 +838,7 @@ const styles = StyleSheet.create({
   agentRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   cockpit: { marginTop: 10, textAlign: 'right', color: color.purpleHi },
   stat: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10 },
+  fill: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
   divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.line },
   asofText: { fontFamily: font.chain, fontSize: 11, lineHeight: 14, color: color.textFaint },
   pressureLegend: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
