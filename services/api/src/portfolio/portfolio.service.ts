@@ -12,10 +12,14 @@
  * as a `SectionResult` (SEN-123), so a venue that is down costs that section
  * only.
  *
- * Nothing is cached or stored: every call re-reads chain and venue state, so a
- * restart can never misreport a balance (plan "Persistence").
+ * Nothing is stored: every call re-reads chain and venue state, so a restart
+ * can never misreport a balance (plan "Persistence"). The one thing held in
+ * memory is a short-lived Perpl read (SEN-151): with the user's read key
+ * linked, each Perpl read signs in on a fresh trading socket, and Perpl's
+ * budget is ~10 requests a minute.
  */
 import { Inject, Injectable, Logger, type Provider } from '@nestjs/common';
+import { PERPL_NETWORKS, PerplVenue, type PerplFillRecord } from '@sente/venues/perpl';
 import { BaseError, type Address, type PublicClient } from 'viem';
 
 import {
@@ -30,6 +34,7 @@ import {
 import { perplAccountInfo } from '../agents/venues/perpl-agent';
 import type { Principal } from '../auth/principal';
 import { TradeStore, type Trade } from '../trade/trade-store';
+import { USER_VENUE_SECRETS, type UserVenueSecretStore } from '../trade/user-venue-secrets';
 import { ViemTokenBalanceReader, type TokenBalanceReader } from '../wallet/balances/token-balances';
 import {
   USER_WALLET_REGISTRY,
@@ -54,19 +59,49 @@ export interface UserPortfolioReaders {
   readonly kuruVenue: (address: Address) => KuruAccountVenue;
   readonly perplAccountInfo: PerplAccountInfoReader;
   /**
-   * The user's read-scoped Perpl venue, `undefined` while the server holds no
-   * read key. M-T18 (enrollment) is what will return one; until it lands this
-   * is always `undefined`, so every existing account reads as `unlinked`.
+   * Runs `read` against a Perpl venue signed in with the user's read-scoped
+   * key (SEN-100), `undefined` while the server holds none. A callback so the
+   * reader owns the venue's lifetime: the socket is closed once `read`
+   * settles, never left open between polls (SEN-151, as SEN-122 for agents).
    */
-  readonly perplReadVenue: (
+  readonly withPerplReadVenue: <T>(
     userId: string,
-    address: Address,
-  ) => Promise<PerplAccountVenue | undefined>;
+    read: (venue: PerplUserVenue | undefined) => Promise<T>,
+  ) => Promise<T>;
   readonly trades: Pick<TradeStore, 'listRecent'>;
   readonly now?: () => number;
 }
 
 export const USER_PORTFOLIO_READERS = Symbol('USER_PORTFOLIO_READERS');
+
+/** What the user's Perpl reads need: the account read plus the signed REST fills. */
+export type PerplUserVenue = PerplAccountVenue & Pick<PerplVenue, 'getFills'>;
+
+/**
+ * How long a linked user's Perpl section (and a page of Perpl fills) is served
+ * from memory (SEN-151). Each read signs in with the read key, and Perpl's
+ * budget is ~10 requests/min; the phone polls `/portfolio` every 10 s.
+ */
+export const USER_PERPL_TTL_MS = 30_000;
+
+/** How old a last good Perpl read may be and still stand in, flagged stale, for a failed one. */
+export const USER_PERPL_STALE_MS = 120_000;
+
+export type PortfolioRefusalReason = 'invalid_cursor' | 'perpl_unlinked' | 'perpl_unavailable';
+
+/** A `/portfolio` refusal the controller turns into a clean 4xx/5xx with this `reason`. */
+export class PortfolioRefusedError extends Error {
+  readonly reason: PortfolioRefusalReason;
+
+  constructor(reason: PortfolioRefusalReason, message: string) {
+    super(message);
+    this.name = 'PortfolioRefusedError';
+    this.reason = reason;
+  }
+}
+
+type PerplSection = PortfolioDto['perpl'];
+type Cached<T> = { at: number; value: Promise<T> };
 
 export const FILLS_DEFAULT_LIMIT = 50;
 
@@ -89,6 +124,9 @@ export class UserPortfolioService {
   readonly #readers: UserPortfolioReaders;
   readonly #now: () => number;
   readonly #logger = new Logger(UserPortfolioService.name);
+  readonly #perplCache = new Map<string, Cached<PerplSection>>();
+  readonly #perplLastGood = new Map<string, PerplSection & { ok: true; asOf: number }>();
+  readonly #perplFillsCache = new Map<string, Cached<FillsPageDto>>();
 
   constructor(@Inject(USER_PORTFOLIO_READERS) readers: UserPortfolioReaders) {
     this.#readers = readers;
@@ -115,16 +153,65 @@ export class UserPortfolioService {
       // `account` = the wallet: for a user the Privy wallet is the AccountCore
       // root (plan §2), not the retired Kernel address gotcha 9 describes.
       this.#section('kuru', userId, () => readKuruAccount(this.#readers.kuruVenue(address))),
-      this.#section('perpl', userId, async () =>
-        toPerplSection(
-          await readPerplAccount(address, {
-            accountInfo: this.#readers.perplAccountInfo,
-            venue: this.#readers.perplReadVenue(userId, address),
-          }),
-        ),
-      ),
+      this.#perpl(userId, address, asOf),
     ]);
     return { asOf, wallet, kuru, perpl };
+  }
+
+  /**
+   * The Perpl section, single-flight per user for {@link USER_PERPL_TTL_MS}
+   * (SEN-151). A failed read is kept for the window too: retrying every poll
+   * is exactly the traffic that trips Perpl's rate limit.
+   */
+  #perpl(userId: string, address: Address, now: number): Promise<PerplSection> {
+    this.#prune(now);
+    const key = `${userId}:${address}`;
+    const hit = this.#perplCache.get(key);
+    if (hit && now - hit.at < USER_PERPL_TTL_MS) return hit.value;
+
+    const value = this.#readPerpl(key, userId, address, now);
+    this.#perplCache.set(key, { at: now, value });
+    void value.then((section) => {
+      // Without a read key the read was chain-only and signed nothing in:
+      // nothing to ration, and a key linked a second later must show at once.
+      const socketless = section.ok && section.status !== 'ok' && !section.stale;
+      if (socketless && this.#perplCache.get(key)?.value === value) this.#perplCache.delete(key);
+    });
+    return value;
+  }
+
+  async #readPerpl(
+    key: string,
+    userId: string,
+    address: Address,
+    now: number,
+  ): Promise<PerplSection> {
+    const fresh = await this.#section('perpl', userId, async () => ({
+      ...toPerplSection(
+        await this.#readers.withPerplReadVenue(userId, (venue) =>
+          readPerplAccount(address, { accountInfo: this.#readers.perplAccountInfo, venue }),
+        ),
+      ),
+      asOf: now,
+    }));
+    if (fresh.ok) {
+      this.#perplLastGood.set(key, fresh);
+      return fresh;
+    }
+    const last = this.#perplLastGood.get(key);
+    if (last && now - last.asOf <= USER_PERPL_STALE_MS) return { ...last, stale: true };
+    return fresh;
+  }
+
+  #prune(now: number): void {
+    for (const cache of [this.#perplCache, this.#perplFillsCache]) {
+      for (const [key, entry] of cache) {
+        if (now - entry.at >= USER_PERPL_TTL_MS) cache.delete(key);
+      }
+    }
+    for (const [key, last] of this.#perplLastGood) {
+      if (now - last.asOf > USER_PERPL_STALE_MS) this.#perplLastGood.delete(key);
+    }
   }
 
   /**
@@ -137,14 +224,27 @@ export class UserPortfolioService {
    * fill price (an order with no cancel that no longer rests was filled, at
    * some price), so they are left out rather than guessed at.
    *
-   * Perpl: signed REST `fills` need the read key M-T18 enrolls; empty until
-   * then.
+   * Perpl (`venue=perpl`): Perpl's signed REST `fills`, read with the user's
+   * read key (SEN-151), so every fill of the account — the phone's own orders
+   * included, which never pass through `/trade`. Without a key it refuses
+   * `perpl_unlinked` rather than answer an empty page that would read as "no
+   * fills"; a Perpl failure is `perpl_unavailable`.
+   *
+   * No `venue` means Kuru, as it always has: the two venues page with
+   * different cursors, so the phone asks for each.
    */
   async fills(principal: Principal, query: FillsQueryDto = {}): Promise<FillsPageDto> {
-    await this.#bound(principal);
+    const { address } = await this.#bound(principal);
     const limit = query.limit ?? FILLS_DEFAULT_LIMIT;
+    if (query.venue === 'perpl') {
+      return this.#perplFills(principal.userId, address, query.cursor, limit);
+    }
+    // The cursor is opaque on the wire since Perpl's own is not a number;
+    // Kuru's is still an offset.
+    if (query.cursor !== undefined && !/^\d{1,9}$/.test(query.cursor)) {
+      throw new PortfolioRefusedError('invalid_cursor', 'Not a Kuru fills cursor');
+    }
     const offset = query.cursor === undefined ? 0 : Number(query.cursor);
-    if (query.venue === 'perpl') return { fills: [], next: null };
 
     const all = this.#readers.trades
       .listRecent(principal.userId, ALL_TRADES)
@@ -152,6 +252,51 @@ export class UserPortfolioService {
     const page = all.slice(offset, offset + limit);
     const end = offset + page.length;
     return { fills: page, next: end < all.length ? String(end) : null };
+  }
+
+  /** A page of Perpl fills, single-flight and cached like the section (SEN-151). */
+  #perplFills(
+    userId: string,
+    address: Address,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<FillsPageDto> {
+    const now = this.#now();
+    this.#prune(now);
+    const key = `${userId}:${address}:${cursor ?? ''}:${limit}`;
+    const hit = this.#perplFillsCache.get(key);
+    if (hit && now - hit.at < USER_PERPL_TTL_MS) return hit.value;
+
+    const value = this.#readers
+      .withPerplReadVenue(userId, (venue) =>
+        venue
+          ? venue.getFills({ count: limit, ...(cursor ? { page: cursor } : {}) })
+          : Promise.resolve(undefined),
+      )
+      .then(
+        (page) => {
+          if (!page) {
+            throw new PortfolioRefusedError(
+              'perpl_unlinked',
+              'No Perpl read key is linked for this account',
+            );
+          }
+          return { fills: page.fills.map(perplFillDto), next: page.next };
+        },
+        (error: unknown) => {
+          this.#logger.warn(`User ${userId}: Perpl fills read failed: ${messageOf(error)}`);
+          throw new PortfolioRefusedError('perpl_unavailable', messageOf(error));
+        },
+      );
+    this.#perplFillsCache.set(key, { at: now, value });
+    value.catch((error: unknown) => {
+      // Unlinked signed nothing in, and a key linked a second later must show at once.
+      const unlinked = error instanceof PortfolioRefusedError && error.reason === 'perpl_unlinked';
+      if (unlinked && this.#perplFillsCache.get(key)?.value === value) {
+        this.#perplFillsCache.delete(key);
+      }
+    });
+    return value;
   }
 
   async #section<T extends object>(
@@ -206,6 +351,22 @@ function toPerplSection(
   }
 }
 
+/** Perpl's fills are the account's, not a `/trade`'s: there is no trade id of ours to name. */
+function perplFillDto(fill: PerplFillRecord): FillDto {
+  return {
+    venue: 'perpl',
+    tradeId: null,
+    venueTradeId: fill.tradeId ?? fill.orderId,
+    orderId: fill.orderId,
+    symbol: fill.symbol,
+    side: fill.side,
+    price: fill.price,
+    size: fill.size,
+    transactionHash: fill.txHash ?? null,
+    timestamp: fill.timestamp,
+  };
+}
+
 /** A trade's decoded fills; none for a trade whose result is not recorded (yet). */
 function kuruFills(trade: TradeWithSummary): FillDto[] {
   if (trade.kind !== 'kuru.place' || !trade.result) return [];
@@ -233,11 +394,12 @@ function kuruFills(trade: TradeWithSummary): FillDto[] {
 export const userPortfolioProviders: Provider[] = [
   {
     provide: USER_PORTFOLIO_READERS,
-    inject: [USER_WALLET_REGISTRY, MONAD_PUBLIC_CLIENT, TradeStore],
+    inject: [USER_WALLET_REGISTRY, MONAD_PUBLIC_CLIENT, TradeStore, USER_VENUE_SECRETS],
     useFactory: (
       registry: UserWalletRegistry,
       client: PublicClient,
       trades: TradeStore,
+      secrets: UserVenueSecretStore,
     ): UserPortfolioReaders => ({
       registry,
       // The agent token list, not `/wallet`'s three: a user who withdraws a
@@ -246,10 +408,28 @@ export const userPortfolioProviders: Provider[] = [
       wallet: new ViemTokenBalanceReader(client, AGENT_WALLET_TOKENS),
       kuruVenue: (address) => kuruAccountVenue(client, address),
       perplAccountInfo: (address) => perplAccountInfo(client, address),
-      // M-T18 holds the read key; until it lands there is never one.
-      perplReadVenue: () => Promise.resolve(undefined),
+      withPerplReadVenue: (userId, read) => withPerplReadVenue(secrets, userId, read),
       trades,
     }),
   },
   UserPortfolioService,
 ];
+
+/**
+ * A throwaway Perpl venue on the user's read key (SEN-151), closed once `read`
+ * settles. The phone's trade key is never here: the server holds none (SEN-100).
+ */
+async function withPerplReadVenue<T>(
+  secrets: Pick<UserVenueSecretStore, 'getPerplRead'>,
+  userId: string,
+  read: (venue: PerplUserVenue | undefined) => Promise<T>,
+): Promise<T> {
+  const credentials = await secrets.getPerplRead(userId);
+  if (!credentials) return read(undefined);
+  const venue = new PerplVenue({ credentials, network: PERPL_NETWORKS.testnet });
+  try {
+    return await read(venue);
+  } finally {
+    venue.close();
+  }
+}

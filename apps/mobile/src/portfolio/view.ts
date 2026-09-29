@@ -710,7 +710,7 @@ function fillRow(fill: PortfolioFill): FillRow {
   const unit = fill.symbol === null ? '' : spot ? ` ${base}` : ` ${fill.symbol}`;
   const size = spot && base !== null ? amountText(fill.size, base) : fill.size;
   return {
-    key: `${fill.venue}:${fill.tradeId}:${fill.venueTradeId}`,
+    key: `${fill.venue}:${fill.tradeId ?? ''}:${fill.venueTradeId}`,
     side: fill.side === 'buy' ? 'Buy' : fill.side === 'sell' ? 'Sell' : null,
     title: `${size}${unit}`,
     detail: `at ${fill.price} · ${spot ? 'Kuru spot' : 'Perpl'}`,
@@ -718,6 +718,45 @@ function fillRow(fill: PortfolioFill): FillRow {
     tx: fill.transactionHash !== null ? shortHash(fill.transactionHash) : null,
     hash: fill.transactionHash,
   };
+}
+
+/**
+ * When your perp numbers were read, on the phone's clock (SEN-151). The server
+ * caches a linked Perpl read for up to 30 s, so the section's own `asOf` can
+ * trail the portfolio's; the gap between the two server stamps is moved onto
+ * `fetchedAt` so a server clock ahead of the phone cannot read as the future.
+ * `stale`: Perpl's latest read failed and this is the last good one.
+ */
+export function perplReadAt(
+  portfolio: Portfolio | null,
+  fetchedAt: number | null,
+): { at: number | null; stale: boolean } {
+  const perpl = portfolio?.perpl;
+  if (fetchedAt === null || !perpl?.ok || perpl.asOf === undefined) {
+    return { at: fetchedAt, stale: false };
+  }
+  const lag = Math.max(0, portfolio!.asOf - perpl.asOf);
+  return { at: fetchedAt - lag, stale: perpl.stale === true };
+}
+
+/**
+ * Why Perpl's fills are not in the list (SEN-151), from how `/portfolio/fills?venue=perpl`
+ * answered: `unlinked` (409 `perpl_unlinked`, the server holds no read key)
+ * or `unread` (Perpl, or the route, did not answer). `null` when they are in.
+ */
+export type PerplFillsGap = 'unlinked' | 'unread' | null;
+
+export function perplFillsGap(result: PromiseSettledResult<unknown>): PerplFillsGap {
+  if (result.status === 'fulfilled') return null;
+  const reason = (result.reason as { reason?: unknown } | null)?.reason;
+  return reason === 'perpl_unlinked' ? 'unlinked' : 'unread';
+}
+
+/** The line under "Your fills" that says Perpl's are missing, not absent. */
+export function perplFillsNote(gap: PerplFillsGap): string | null {
+  if (gap === 'unlinked') return 'Perpl fills show here once Perpl is linked.';
+  if (gap === 'unread') return 'Perpl didn’t answer, so its fills are left out for now.';
+  return null;
 }
 
 function shortHash(hash: string): string {

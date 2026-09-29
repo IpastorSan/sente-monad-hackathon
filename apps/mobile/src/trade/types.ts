@@ -206,6 +206,13 @@ export type PerplPortfolioSection = {
   /** Only with `ok`; absent means unknown, not none. */
   readonly positions?: readonly PositionDto[];
   readonly openOrders?: readonly OrderDto[];
+  /**
+   * When Perpl was read (SEN-151): a linked account's section is cached for
+   * up to 30 s, so it can lag the portfolio's own `asOf`. Absent from older APIs.
+   */
+  readonly asOf?: number;
+  /** The latest read failed and this is the last good one, from `asOf`. */
+  readonly stale?: true;
 };
 
 /**
@@ -229,11 +236,11 @@ export type Portfolio = {
   readonly perpl: SectionResult<PerplPortfolioSection>;
 };
 
-/** One of the user's own fills, from a `/trade` they placed. */
+/** One of the user's own fills: Kuru from a `/trade` they placed, Perpl off the account. */
 export type PortfolioFill = {
   readonly venue: PortfolioVenue;
-  /** Our trade id (`/trade/:tradeId`) that produced the fill. */
-  readonly tradeId: string;
+  /** Our trade id (`/trade/:tradeId`); `null` for Perpl, whose orders skip `/trade` (SEN-151). */
+  readonly tradeId: string | null;
   /** The venue's own id for the match. */
   readonly venueTradeId: string;
   readonly orderId: string | null;
@@ -244,7 +251,7 @@ export type PortfolioFill = {
   readonly size: string;
   /** The transaction that carried the fill, when the step recorded one. */
   readonly transactionHash: string | null;
-  /** Unix ms. When the trade recorded the result, not the block time. */
+  /** Unix ms. Kuru: when the trade recorded the result. Perpl: the block time. */
   readonly timestamp: number;
 };
 

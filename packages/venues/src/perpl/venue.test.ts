@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { toOrder, toPosition, type ResolvedMarket } from './venue.ts';
-import type { PerplMarket, PerplOrder, PerplPosition } from './wire.ts';
+import { toFill, toOrder, toPosition, type ResolvedMarket } from './venue.ts';
+import type { PerplFill, PerplMarket, PerplOrder, PerplPosition } from './wire.ts';
 
 /** BTC as testnet configures it: 1 price decimal, 5 size decimals, MMF 25 (= 4%). */
 function btc(maintenanceMargin = 2500): ResolvedMarket {
@@ -119,4 +119,35 @@ test('a failed order with no on-chain id is identified by its rq', () => {
   assert.equal(order.id, 'rq:9');
   assert.equal(order.status, 'rejected');
   assert.equal(order.side, 'buy');
+});
+
+test('fills map side from the order type, scale price, size and fee, and key on the log (SEN-151)', () => {
+  const raw: PerplFill = {
+    at: { b: 9_999, t: 30, txid: 'cd'.repeat(32), l: 4 },
+    mkt: 16,
+    acc: 493,
+    oid: 42,
+    t: 1, // OpenLong: a buy
+    l: 2, // taker
+    p: 771_081,
+    s: 250,
+    f: '-1500', // a 0.0015 AUSD rebate
+  };
+  assert.deepEqual(toFill(raw, btc()), {
+    orderId: '42',
+    tradeId: `0x${'cd'.repeat(32)}:4`,
+    symbol: 'BTC-PERP',
+    side: 'buy',
+    price: '77108.1',
+    size: '0.0025',
+    fee: '-0.0015',
+    feeAsset: 'AUSD',
+    maker: false,
+    timestamp: 30,
+    blockNumber: 9_999,
+    txHash: `0x${'cd'.repeat(32)}`,
+  });
+  // No price on the wire: left out, never reported as a fill at zero.
+  const { p: _price, ...unpriced } = raw;
+  assert.equal(toFill(unpriced, btc()), undefined);
 });

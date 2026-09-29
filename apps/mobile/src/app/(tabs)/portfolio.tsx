@@ -50,6 +50,7 @@ import {
   fillDays,
   holdings,
   orderRows,
+  perplFillsNote,
   sectionFailure,
   seriesChange,
   shown,
@@ -373,11 +374,13 @@ function History({
   now: number;
 }) {
   const days = fillDays(fills.fills, now);
+  const perplNote = perplFillsNote(fills.perplGap);
   return (
     <View style={styles.section}>
       <Text style={text.label}>Your fills</Text>
       <Text style={[text.caption, styles.historyNote]}>
         Only what you traded. Your agents' fills stay in their own ledgers.
+        {perplNote ? ` ${perplNote}` : ''}
       </Text>
       {days.length === 0 ? (
         <Text style={[text.dim, styles.empty]}>No fills yet.</Text>
