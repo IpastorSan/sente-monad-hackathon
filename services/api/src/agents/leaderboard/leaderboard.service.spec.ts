@@ -306,6 +306,21 @@ describe('LeaderboardService', () => {
     expect(board.tooFewTrades[0]!.theses).toEqual({ settled: 2, held: 1, open: 1 });
   });
 
+  it('marks the SEN-22 reading partial once the log has dropped events (SEN-159)', async () => {
+    // A cap of 5 drops the first thesis and its two fills: the win is gone.
+    const events = new InMemoryAgentEventLog(5);
+    await recordTrail(events, 'a');
+    const { service } = await setup({
+      agents: [agent({ id: 'a', address: NIGHT })],
+      accounts: [account({ address: NIGHT.toLowerCase() })],
+      events,
+    });
+
+    const board = await service.leaderboard();
+
+    expect(board.tooFewTrades[0]!.theses).toEqual({ settled: 1, held: 0, open: 1, partial: true });
+  });
+
   it('leaves revoked agents off the board: their mandate is empty', async () => {
     const { service, indexer } = await setup({
       agents: [

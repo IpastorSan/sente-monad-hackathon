@@ -8,6 +8,7 @@ import type { AgentMandate, AgentPortfolioDto, AgentScheduleStatusDto } from './
 import {
   bestTrades,
   cockpitStats,
+  countsSince,
   equitySeries,
   historyDays,
   largestOrderLine,
@@ -84,6 +85,14 @@ test('cockpitStats: won of settled, average hold, held from the summary when the
     liveSince: '—',
   });
   assert.equal(cockpitStats(trades, entries, undefined, '2026-09-21T00:00:00Z').held, '1');
+});
+
+test('cockpitStats says since when the summary counts only part of the history (SEN-159)', () => {
+  const summary = { held: 4, countsPartial: { since: Date.parse('2026-09-03T12:00:00Z') } };
+  assert.equal(cockpitStats([], [], summary, '2026-09-01T00:00:00Z').held, '4 since Sep 3');
+  assert.equal(countsSince(summary), ' since Sep 3');
+  assert.equal(countsSince({}), '');
+  assert.equal(countsSince(undefined), '');
 });
 
 test('signedParts splits the sign off for the big number', () => {

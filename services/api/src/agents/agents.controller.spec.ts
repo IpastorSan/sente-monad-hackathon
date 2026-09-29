@@ -550,6 +550,21 @@ describe('AgentsController', () => {
       expect(summary!.pnl).toEqual({ last24h: '3', allTime: '3', allTimePartial: true });
     });
 
+    it('marks the counts partial on the wire once the log has dropped events (SEN-159)', async () => {
+      const h = setup(undefined, new InMemoryAgentEventLog(2));
+      const { agent } = await h.controller.hire(
+        body({ name: 'Busy' }) as unknown as CreateAgentDto,
+      );
+      for (const at of [1_000, 2_000, 3_000]) {
+        await h.events.append({ agentId: agent.id, kind: 'fill', at, detail: {} });
+      }
+
+      const [summary] = (await h.controller.summaries()).summaries;
+
+      // Three fills happened; the log holds two, and says from when.
+      expect(summary).toMatchObject({ trades: 2, countsPartial: { since: 2_000 } });
+    });
+
     it('answers a user with no agents with empty lists, not an error', async () => {
       const { controller, as } = await seeded();
       as('carol');

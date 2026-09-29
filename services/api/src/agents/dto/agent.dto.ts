@@ -661,6 +661,14 @@ export interface AgentSummaryDto {
   /** `thesis` events. */
   theses: number;
   /**
+   * Sent only when the server's log has dropped some of the agent's oldest
+   * events (SEN-159): `trades`, `held` and `theses` then count only what is
+   * still held, i.e. everything since `since` (epoch ms). OPTIONAL so an older
+   * client keeps working; one that knows it should say "since <date>" rather
+   * than show the counts as the agent's whole history.
+   */
+  countsPartial?: { since: number };
+  /**
    * Realised P&L summed from `verdict` events, as exact decimal strings in quote
    * units — Kuru's USDC and Perpl's AUSD summed as one unit, as the leaderboard
    * does. `'0'` when nothing has settled. `last24h` is the verdicts whose `at`

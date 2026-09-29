@@ -281,6 +281,13 @@ test('without the board, your agent falls back to its own trade count', () => {
   assert.equal(mine!.caption, 'Yours · 1 trade');
 });
 
+test('a trade count the server only partly holds says since when (SEN-159)', () => {
+  const partial = { trades: 12, countsPartial: { since: Date.parse('2026-09-03T00:00:00Z') } };
+  const summaries = new Map<string, AgentSummary>([['a1', partial as AgentSummary]]);
+  const [mine] = searchAgents([agent('a1', 'Range Hunter', [MON_BOOK])], summaries, null);
+  assert.equal(mine!.caption, 'Yours · 12 trades since Sep 3');
+});
+
 test('"mon" finds your MON agent through the market it trades', () => {
   const agents = searchAgents([agent('a1', 'Range Hunter', [MON_BOOK])], new Map(), null);
   const results = search('mon', [MON, MON_PERP, BTC_PERP], agents);

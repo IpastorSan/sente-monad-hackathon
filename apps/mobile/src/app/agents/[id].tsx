@@ -46,6 +46,7 @@ import {
   bestTrades,
   CADENCES,
   cockpitStats,
+  countsSince,
   COCKPIT_TABS,
   EQUITY_RANGES,
   equitySeries,
@@ -927,7 +928,7 @@ function MandateCard({
             </Text>
           </ProofRow>
           <ProofRow label="Held orders that broke its limits">
-            <Pill tone="held" label={`Held ${summary?.held ?? 0}`} />
+            <Pill tone="held" label={`Held ${summary?.held ?? 0}${countsSince(summary)}`} />
           </ProofRow>
           <ProofRow label="Largest order" last>
             <Text style={[text.strong, text.num]}>{largestOrderLine(summary, mandate)}</Text>

@@ -7,6 +7,7 @@
  */
 import type { Agent, AgentSummary, Leaderboard } from '../agents/api.ts';
 import { roiLabel, venueLabel, wonLabel } from '../agents/leaderboard.ts';
+import { countsSince } from '../agents/cockpit.ts';
 import { marketFor } from '../agents/mandate.ts';
 import { glyphFor } from '../ui/tradingFormat.ts';
 
@@ -217,7 +218,8 @@ export function searchAgents(
 
 function summaryLine(summary: AgentSummary | undefined): string {
   if (summary === undefined) return '';
-  return summary.trades === 1 ? '1 trade' : `${summary.trades} trades`;
+  const count = summary.trades === 1 ? '1 trade' : `${summary.trades} trades`;
+  return `${count}${countsSince(summary)}`;
 }
 
 function roiOf(roi: number | null): SearchAgent['roi'] {

@@ -267,3 +267,34 @@ describe('summariseEvents over a truncated log (SEN-129)', () => {
     expect(b.pnl).toEqual({ last24h: '5', allTime: '5' });
   });
 });
+
+describe('summariseEvents counts over a truncated log (SEN-159)', () => {
+  it('marks trades, held and theses partial, since the oldest event still held', async () => {
+    const log = new InMemoryAgentEventLog(3);
+    // Four fills, then a refusal and a thesis: the cap of 3 drops the first three fills.
+    for (const [kind, at] of [
+      ['fill', 1_000],
+      ['fill', 2_000],
+      ['fill', 3_000],
+      ['fill', 4_000],
+      ['refusal', 5_000],
+      ['thesis', 6_000],
+    ] as const) {
+      await log.append({
+        agentId: 'a',
+        kind,
+        at,
+        detail: {},
+        ...(kind === 'refusal' ? { layer: 'sente' as const } : {}),
+      });
+    }
+    await log.append({ agentId: 'b', kind: 'fill', at: 7_000, detail: {} });
+
+    const a = summariseEvents(await log.list('a'), NOW, await log.truncation('a'));
+    const b = summariseEvents(await log.list('b'), NOW, await log.truncation('b'));
+
+    expect(a).toMatchObject({ trades: 1, held: 1, theses: 1, countsPartial: { since: 4_000 } });
+    expect(b.trades).toBe(1);
+    expect(b).not.toHaveProperty('countsPartial');
+  });
+});
