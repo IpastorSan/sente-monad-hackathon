@@ -18,6 +18,7 @@ import { useSession } from '@/session';
 import type { Portfolio, PortfolioFill, PortfolioVenue } from '@/trade/types';
 import { useTradingEnabled } from '@/trade/useTradingEnabled';
 
+import type { FillCoverage } from './closed';
 import {
   appendSample,
   perplFillsGap,
@@ -80,7 +81,11 @@ export function useFills(trading: boolean): {
   perplGap: PerplFillsGap;
   loadingMore: boolean;
   hasMore: boolean;
+  /** The last older page failed; cleared by the next try. */
+  moreFailed: boolean;
   loadMore: () => void;
+  /** How much of each venue's history is in `fills` (SEN-154: only a whole one can be replayed). */
+  coverage: FillCoverage;
 } {
   const { trade } = useSession();
   const first = usePolling(
@@ -102,6 +107,7 @@ export function useFills(trading: boolean): {
   );
   const [older, setOlder] = useState<FillPages | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [moreFailed, setMoreFailed] = useState(false);
 
   // A new fill at the top shifts every page, so older pages stitched to the
   // previous first page may no longer line up with it: drop them. A poll that
@@ -118,6 +124,7 @@ export function useFills(trading: boolean): {
   const loadMore = useCallback(() => {
     if (!trade || (next.kuru === null && next.perpl === null) || loadingMore) return;
     setLoadingMore(true);
+    setMoreFailed(false);
     const page = (venue: PortfolioVenue) => {
       const cursor = next[venue];
       return cursor === null
@@ -132,7 +139,10 @@ export function useFills(trading: boolean): {
         }));
         setLoadingMore(false);
       },
-      () => setLoadingMore(false),
+      () => {
+        setLoadingMore(false);
+        setMoreFailed(true);
+      },
     );
   }, [trade, next, loadingMore]);
 
@@ -141,7 +151,29 @@ export function useFills(trading: boolean): {
     perplGap: first.data?.perplGap ?? null,
     loadingMore,
     hasMore: next.kuru !== null || next.perpl !== null,
+    moreFailed,
     loadMore,
+    coverage: fillCoverage(first, next),
+  };
+}
+
+/**
+ * Per venue: nothing yet, failed, more pages behind the cursor, or all in.
+ * Perpl's refusal (`perplGap`) is its own; Kuru's first page failing fails the
+ * whole read, so it is the poll's error.
+ */
+function fillCoverage(
+  first: Polled<FillPages & { perplGap: PerplFillsGap }>,
+  next: FillCursors,
+): FillCoverage {
+  if (first.data === null) {
+    const state = first.error !== null ? 'unread' : 'loading';
+    return { kuru: state, perpl: state };
+  }
+  const gap = first.data.perplGap;
+  return {
+    kuru: next.kuru !== null ? 'paging' : 'complete',
+    perpl: gap !== null ? gap : next.perpl !== null ? 'paging' : 'complete',
   };
 }
 

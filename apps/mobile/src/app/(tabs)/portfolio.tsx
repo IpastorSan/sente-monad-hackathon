@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
 
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
+import { ClosedPositions } from '@/portfolio/ClosedPositions';
 import { useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
 import { EXTERNAL_WITHDRAW_ENABLED } from '@/portfolio/withdraw';
@@ -83,6 +84,7 @@ export default function PortfolioScreen() {
   const fills = useFills(user.trading);
   const [hidden, toggleHidden] = useHideBalances();
   const [tab, setTab] = useState<Tab>('positions');
+  const [positionsView, setPositionsView] = useState<'open' | 'closed'>('open');
   const [fundOpen, setFundOpen] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [kuruWithdrawOpen, setKuruWithdrawOpen] = useState(false);
@@ -121,6 +123,7 @@ export default function PortfolioScreen() {
   const change = seriesChange(series);
   const now = Date.now();
   const orders = user.trading ? orderRows(user.portfolio, tickerList, now) : [];
+  const openCount = held ? held.spot.length + held.perps.length : 0;
 
   const refresh = async () => {
     setRefreshing(true);
@@ -215,49 +218,73 @@ export default function PortfolioScreen() {
           {tab === 'positions' || !user.portfolio ? (
             <View style={styles.section}>
               <View style={styles.between}>
-                <Text style={text.label}>Your positions</Text>
+                {user.portfolio ? (
+                  // SEN-154: closed positions come from your fills, which only
+                  // exist with trading on, so the toggle does too.
+                  <View style={styles.openClosed}>
+                    <Segmented
+                      options={[
+                        {
+                          value: 'open',
+                          label: openCount ? `Open ${openCount}` : 'Open',
+                        },
+                        { value: 'closed', label: 'Closed' },
+                      ]}
+                      value={positionsView}
+                      onChange={setPositionsView}
+                    />
+                  </View>
+                ) : (
+                  <Text style={text.label}>Your positions</Text>
+                )}
                 {user.portfolio ? <AsOf at={user.polled.asOf} paused={user.polled.stale} /> : null}
               </View>
-              <Unread sections={held.unread} />
-              {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
-                <Text style={[text.dim, styles.empty]}>
-                  {user.portfolio
-                    ? 'No open positions. Tap Trade to place your first order.'
-                    : 'Nothing but cash in your wallet yet.'}
-                </Text>
-              ) : null}
-              {held.perps.map((p, i) => (
-                <PerpPositionRow
-                  key={`perpl:${p.position.symbol}`}
-                  symbol={p.position.symbol}
-                  side={p.position.side}
-                  leverage={p.position.leverage}
-                  size={p.position.size}
-                  entry={p.position.entryPrice}
-                  value={p.value}
-                  pnl={p.position.unrealizedPnl}
-                  pct={p.pctOnMargin}
-                  hidden={hidden}
-                  onPress={() => openPosition('perpl', p.position.symbol)}
-                  last={i === held.perps.length - 1 && held.spot.length === 0}
-                />
-              ))}
-              {held.spot.map((s, i) => (
-                <SpotPositionRow
-                  key={`kuru:${s.asset}`}
-                  {...s}
-                  hidden={hidden}
-                  onPress={() => openPosition('kuru', s.asset)}
-                  last={i === held.spot.length - 1}
-                />
-              ))}
-              <Agents
-                state={overview.state}
-                group={group}
-                hidden={hidden}
-                onOpen={openAgent}
-                onHire={() => router.push('/agents')}
-              />
+              {user.portfolio && positionsView === 'closed' ? (
+                <ClosedPositions fills={fills} hidden={hidden} />
+              ) : (
+                <>
+                  <Unread sections={held.unread} />
+                  {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
+                    <Text style={[text.dim, styles.empty]}>
+                      {user.portfolio
+                        ? 'No open positions. Tap Trade to place your first order.'
+                        : 'Nothing but cash in your wallet yet.'}
+                    </Text>
+                  ) : null}
+                  {held.perps.map((p, i) => (
+                    <PerpPositionRow
+                      key={`perpl:${p.position.symbol}`}
+                      symbol={p.position.symbol}
+                      side={p.position.side}
+                      leverage={p.position.leverage}
+                      size={p.position.size}
+                      entry={p.position.entryPrice}
+                      value={p.value}
+                      pnl={p.position.unrealizedPnl}
+                      pct={p.pctOnMargin}
+                      hidden={hidden}
+                      onPress={() => openPosition('perpl', p.position.symbol)}
+                      last={i === held.perps.length - 1 && held.spot.length === 0}
+                    />
+                  ))}
+                  {held.spot.map((s, i) => (
+                    <SpotPositionRow
+                      key={`kuru:${s.asset}`}
+                      {...s}
+                      hidden={hidden}
+                      onPress={() => openPosition('kuru', s.asset)}
+                      last={i === held.spot.length - 1}
+                    />
+                  ))}
+                  <Agents
+                    state={overview.state}
+                    group={group}
+                    hidden={hidden}
+                    onOpen={openAgent}
+                    onHire={() => router.push('/agents')}
+                  />
+                </>
+              )}
             </View>
           ) : tab === 'orders' ? (
             <View style={styles.section}>
@@ -643,6 +670,7 @@ const styles = StyleSheet.create({
   hero: { marginTop: 12, gap: 6 },
   between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   tabs: { marginTop: 20 },
+  openClosed: { width: 172 },
   section: { marginTop: 16 },
   empty: { marginTop: 10 },
   unread: { marginTop: 10 },

@@ -18,6 +18,7 @@ import { color, font, RADIUS, text } from '@/ui/theme';
 import { SideTag, TokenGlyph } from '@/ui/trading';
 import { formatPct, pctDirection, type Direction } from '@/ui/tradingFormat';
 
+import type { ClosedRow } from './closed';
 import {
   amountText,
   approxUsd,
@@ -366,6 +367,39 @@ export function PerpPositionRow({
       }
       under={<PnlLine pnl={pnl} pct={pct} hidden={hidden} />}
       onPress={onPress}
+      last={last}
+    />
+  );
+}
+
+/**
+ * A closed round trip (SEN-154): the same row as an open one, with the
+ * realised P&L where the value was and the percent and dates under it. Not
+ * pressable: the position page is about what you hold now.
+ */
+export function ClosedPositionRow({ row, last }: { row: ClosedRow; last?: boolean }) {
+  return (
+    <PosRow
+      lead={<TokenGlyph symbol={row.title} />}
+      title={
+        row.spot ? (
+          <>
+            {row.title} <SpotTag />
+          </>
+        ) : (
+          <>
+            {row.title} <SideTag side={row.direction} />
+          </>
+        )
+      }
+      caption={row.caption}
+      value={
+        <>
+          <Text style={{ color: TONE[row.tone] }}>{row.pnl}</Text>{' '}
+          <Text style={text.dim}>{row.pnlAsset}</Text>
+        </>
+      }
+      under={<Text style={[text.dim, text.num]}>{row.under}</Text>}
       last={last}
     />
   );
