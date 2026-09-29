@@ -24,13 +24,14 @@ import { describeTradeError, runTrade, type TradeFlowState } from '@/trade/flow'
 import { Button, Chip, Chips, Field, Notice, Row, Sheet } from '@/ui/kit';
 import { color, RADIUS, text } from '@/ui/theme';
 import { balanceOf } from '@/wallet/api';
-import { describeSendError, sendSponsored } from '@/wallet/send';
+import { sendSponsored } from '@/wallet/send';
 
 import {
   amountLabel,
   checkAmount,
   checkRecipient,
   classifyCode,
+  describeWithdrawError,
   KURU_WITHDRAW_TOKENS,
   kuruAvailable,
   kuruResult,
@@ -184,7 +185,7 @@ export function WithdrawSheet({
         setNotice(outcome);
       }
     } catch (caught) {
-      setNotice({ tone: 'error', ...describeSendError(caught) });
+      setNotice({ tone: 'error', ...describeWithdrawError(caught) });
     } finally {
       setBusy(false);
     }

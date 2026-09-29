@@ -25,6 +25,7 @@ import { Share, StyleSheet, Text, View } from 'react-native';
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
 import { useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
+import { EXTERNAL_WITHDRAW_ENABLED } from '@/portfolio/withdraw';
 import { KuruWithdrawSheet, WithdrawSheet } from '@/portfolio/WithdrawSheets';
 import {
   AgentsGroup,
@@ -185,7 +186,8 @@ export default function PortfolioScreen() {
             venueCash={held.venueCash}
             hidden={hidden}
             onAddFunds={() => setFundOpen(true)}
-            onWithdraw={() => setWithdrawOpen(true)}
+            // SEN-153: hidden until the API allows outside recipients (see the flag).
+            onWithdraw={EXTERNAL_WITHDRAW_ENABLED ? () => setWithdrawOpen(true) : undefined}
             // SEN-153: the Kuru withdrawal is a `/trade` intent, so it is only
             // offered while manual trading is on and Kuru actually answered.
             onKuruWithdraw={
@@ -289,12 +291,14 @@ export default function PortfolioScreen() {
           onShare={() => void Share.share({ message: address })}
         />
       ) : null}
-      <WithdrawSheet
-        visible={withdrawOpen}
-        agents={agents}
-        onClose={() => setWithdrawOpen(false)}
-        onSettled={() => void refresh()}
-      />
+      {EXTERNAL_WITHDRAW_ENABLED ? (
+        <WithdrawSheet
+          visible={withdrawOpen}
+          agents={agents}
+          onClose={() => setWithdrawOpen(false)}
+          onSettled={() => void refresh()}
+        />
+      ) : null}
       {user.trading ? (
         <KuruWithdrawSheet
           visible={kuruWithdrawOpen}

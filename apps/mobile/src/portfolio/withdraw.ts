@@ -24,13 +24,29 @@ import { getAddress, isAddress, isAddressEqual, type Address } from 'viem';
 import { formatAtoms, parseAmount } from '../agents/amounts.ts';
 import { AUSD, KURU_TOKENS, type Token } from '../agents/mandate.ts';
 import type { BalanceDto } from '../agents/api.ts';
+import { WalletApiError } from '../wallet/api.ts';
 import type { ConfirmationStatus } from '../wallet/confirmation.ts';
+import { describeSendError } from '../wallet/send.ts';
 import { shortAddress } from '../ui/format.ts';
 
 const USDC = KURU_TOKENS.find((token) => token.symbol === 'USDC') as Token;
 
 /** What the wallet → address sheet offers: the two stablecoins, never MON (see header). */
 export const WITHDRAW_TOKENS: readonly Token[] = [USDC, AUSD];
+
+/**
+ * Whether the Portfolio cash card offers "Withdraw" (your wallet → an address
+ * you type). OFF, deliberately: the API's `POST /wallet/send/prepare` only
+ * composes transfers to the caller's own wallet or one of their agents and
+ * refuses anything else with `send_recipient_not_allowed` (SEN-42,
+ * `services/api/src/wallet/user-wallet.service.ts#recipientOrRefuse`). A flow
+ * the server always refuses is not shipped. Turning this on needs a
+ * server-side decision to allow outside recipients first — that rule also
+ * bounds what a stolen device key can move through our API — and only then
+ * this flag. The sheet, its rules and their tests stay ready for that day.
+ * The Kuru account → wallet flow is not behind this flag.
+ */
+export const EXTERNAL_WITHDRAW_ENABLED = false;
 
 /**
  * What can leave the Kuru account through `kuru.withdraw`: the cash the card
@@ -373,4 +389,22 @@ export function kuruResult(
         final: true,
       };
   }
+}
+
+/**
+ * A failed send, in withdraw words. The one refusal worth its own copy is the
+ * server's recipient rule (see `EXTERNAL_WITHDRAW_ENABLED`): if a send to an
+ * outside address ever reaches it, the user should read that as today's
+ * limit, not as a mistake they made. Everything else is `describeSendError`.
+ */
+export function describeWithdrawError(error: unknown): { title: string; detail: string } {
+  if (error instanceof WalletApiError && error.reason === 'send_recipient_not_allowed') {
+    return {
+      title: 'Sends to other addresses aren’t available yet',
+      detail:
+        'For now Sente only sends from your wallet to your own wallet or to an agent you hired. ' +
+        'Nothing was sent.',
+    };
+  }
+  return describeSendError(error);
 }

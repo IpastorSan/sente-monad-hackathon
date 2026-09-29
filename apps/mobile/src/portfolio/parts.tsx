@@ -122,7 +122,8 @@ export function CashCard({
   venueCash: readonly VenueCash[];
   hidden: boolean;
   onAddFunds: () => void;
-  onWithdraw: () => void;
+  /** Opens wallet → typed address (SEN-153); absent while `EXTERNAL_WITHDRAW_ENABLED` is off. */
+  onWithdraw?: (() => void) | undefined;
   /**
    * Opens Kuru account → wallet (SEN-153). Absent while manual trading is off,
    * since the withdrawal runs through `/trade`: the line then stays plain text.
@@ -170,7 +171,15 @@ export function CashCard({
       })}
       <View style={styles.cashButtons}>
         <ButtonRow>
-          <Button label="Withdraw" kind="soft" size="sm" onPress={onWithdraw} style={styles.grow} />
+          {onWithdraw ? (
+            <Button
+              label="Withdraw"
+              kind="soft"
+              size="sm"
+              onPress={onWithdraw}
+              style={styles.grow}
+            />
+          ) : null}
           <Button
             label="Add funds"
             kind="primary"

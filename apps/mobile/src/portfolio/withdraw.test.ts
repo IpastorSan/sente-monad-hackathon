@@ -6,10 +6,13 @@ import { getAddress, type Address } from 'viem';
 
 import { parseAmount } from '../agents/amounts.ts';
 import { AUSD } from '../agents/mandate.ts';
+import { WalletApiError } from '../wallet/api.ts';
 import {
   checkAmount,
   checkRecipient,
   classifyCode,
+  describeWithdrawError,
+  EXTERNAL_WITHDRAW_ENABLED,
   KNOWN_RECIPIENTS_MAX,
   KURU_WITHDRAW_TOKENS,
   kuruAvailable,
@@ -184,4 +187,21 @@ test('kuruResult: pending is never a failure', () => {
   const pending = kuruResult('pending', 1n, USDC);
   assert.equal(pending.tone, 'info');
   assert.equal(pending.final, true);
+});
+
+test('the typed-address withdraw stays off until the server allows outside recipients', () => {
+  // Flip only with the SEN-42 server rule (`send_recipient_not_allowed`) changed.
+  assert.equal(EXTERNAL_WITHDRAW_ENABLED, false);
+});
+
+test('describeWithdrawError explains the recipient rule plainly', () => {
+  const refused = describeWithdrawError(
+    new WalletApiError(403, 'send_recipient_not_allowed', 'neither your wallet nor your agents'),
+  );
+  assert.match(refused.title, /aren’t available yet/);
+  assert.match(refused.detail, /your own wallet or to an agent/);
+  assert.match(refused.detail, /Nothing was sent/);
+  // Anything else keeps the shared send copy.
+  const other = describeWithdrawError(new WalletApiError(400, 'send_amount_invalid', 'x'));
+  assert.equal(other.title, 'Check the amount');
 });
