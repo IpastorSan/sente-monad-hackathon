@@ -249,6 +249,13 @@ export type PortfolioFill = {
   readonly side: 'buy' | 'sell' | null;
   readonly price: string;
   readonly size: string;
+  /**
+   * What the fill cost in `feeAsset`, positive paid, negative a rebate
+   * (SEN-162). Kuru's is its order's one fee split across the fills by
+   * notional. `null` when the venue did not report it: unknown, not zero.
+   */
+  readonly fee: string | null;
+  readonly feeAsset: string | null;
   /** The transaction that carried the fill, when the step recorded one. */
   readonly transactionHash: string | null;
   /** Unix ms. Kuru: when the trade recorded the result. Perpl: the block time. */

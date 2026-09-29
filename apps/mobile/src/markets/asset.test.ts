@@ -406,6 +406,8 @@ function mine(at: number, over: Partial<PortfolioFill> = {}): PortfolioFill {
     side: 'buy',
     price: '0.9459',
     size: '212',
+    fee: null,
+    feeAsset: null,
     transactionHash: null,
     timestamp: at,
     ...over,

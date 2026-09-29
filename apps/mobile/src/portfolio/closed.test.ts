@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
   closedList,
+  closedNotes,
   closedRow,
   closedTotal,
   closedPositions,
@@ -55,7 +56,7 @@ test('a buy then a sell of the same size is one closed long, P&L exact', () => {
   assert.equal(p?.openedAt, 1);
   assert.equal(p?.closedAt, 2);
   assert.ok(Math.abs((p?.pct ?? 0) - 18.1818) < 0.001);
-  // No fee on the route yet: said, not assumed to be zero.
+  // A fill with no fee: said, not assumed to be zero.
   assert.equal(p?.feesIncluded, false);
 });
 
@@ -275,4 +276,34 @@ test('closedRow: exact money, both dates, and hiding keeps the percent', () => {
   assert.match(masked.under, /^\+18\.18%/u);
   assert.equal(closedTotal('-2.675', false), '−$2.68');
   assert.equal(closedTotal(null, false), null);
+});
+
+test('closedNotes: "before fees" only when a trip has a fill without its fee (SEN-162)', () => {
+  const paid = { fee: '0.01', feeAsset: 'USDC' };
+  const after = closedList([fill('buy', '1', '1', 1, paid), fill('sell', '1', '2', 2, paid)], ALL);
+  assert.equal(after.feesIncluded, true);
+  assert.equal(after.total, '0.98');
+  assert.deepEqual(closedNotes(after), []);
+
+  // One fill of one trip with its fee unreported (`null` on the route) is enough.
+  const before = closedList(
+    [
+      fill('buy', '1', '1', 1, paid),
+      fill('sell', '1', '2', 2, paid),
+      perp('buy', '1', '10', 3, { fee: '0.01', feeAsset: 'AUSD' }),
+      perp('sell', '1', '11', 4, { fee: null, feeAsset: null }),
+    ],
+    ALL,
+  );
+  assert.deepEqual(
+    before.positions.map((p) => [p.venue, p.feesIncluded]),
+    [
+      ['perpl', false],
+      ['kuru', true],
+    ],
+  );
+  assert.deepEqual(closedNotes(before), [
+    'Some fills didn’t report their fee, so those positions are before fees.',
+    'Perp funding is not included.',
+  ]);
 });

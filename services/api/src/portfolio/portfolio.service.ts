@@ -19,8 +19,9 @@
  * budget is ~10 requests a minute.
  */
 import { Inject, Injectable, Logger, type Provider } from '@nestjs/common';
+import { KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { PERPL_NETWORKS, PerplVenue, type PerplFillRecord } from '@sente/venues/perpl';
-import { BaseError, type Address, type PublicClient } from 'viem';
+import { BaseError, formatUnits, parseUnits, type Address, type PublicClient } from 'viem';
 
 import {
   AGENT_WALLET_TOKENS,
@@ -369,6 +370,8 @@ function perplFillDto(fill: PerplFillRecord): FillDto {
     side: fill.side,
     price: fill.price,
     size: fill.size,
+    fee: fill.fee,
+    feeAsset: fill.feeAsset,
     transactionHash: fill.txHash ?? null,
     timestamp: fill.timestamp,
   };
@@ -383,7 +386,8 @@ function kuruFills(trade: TradeWithSummary): FillDto[] {
   const carrier = trade.steps.find(
     (step) => (step.kind === 'place' || step.kind === 'batch') && step.transactionHash,
   );
-  return result.fills.map((fill) => ({
+  const fees = kuruFeeShares(result.fee, result.fills, KURU_TESTNET_TOKENS.USDC.decimals);
+  return result.fills.map((fill, i) => ({
     venue: 'kuru',
     tradeId: trade.id,
     venueTradeId: fill.tradeId,
@@ -392,9 +396,43 @@ function kuruFills(trade: TradeWithSummary): FillDto[] {
     side,
     price: fill.price,
     size: fill.size,
+    fee: fees[i]!,
+    feeAsset: result.feeAsset,
     transactionHash: carrier?.transactionHash ?? null,
     timestamp: trade.updatedAt.getTime(),
   }));
+}
+
+/** Digits after the point, so each decimal parses without rounding. */
+function places(value: string): number {
+  return value.split('.')[1]?.length ?? 0;
+}
+
+/**
+ * A Kuru placement's one fee split across its fills (SEN-162). The decoded
+ * result keeps a single taker fee — `feeAtoms` floors the summed notional
+ * once — so no per-fill fee exists to report. Each fill gets the share of its
+ * notional (`price × size`), floored at the fee token's atom (`atomDecimals`,
+ * USDC's 6: nothing finer is ever charged), and the last fill takes what
+ * flooring left over: the shares always add up to exactly `fee`, so netting
+ * every fill of a trip nets the order's whole fee, no more.
+ */
+export function kuruFeeShares(
+  fee: string,
+  fills: readonly { price: string; size: string }[],
+  atomDecimals: number,
+): string[] {
+  if (fills.length === 0) return [];
+  const feeScale = Math.max(places(fee), atomDecimals);
+  const total = parseUnits(fee, feeScale);
+  const priceScale = Math.max(...fills.map((f) => places(f.price)));
+  const sizeScale = Math.max(...fills.map((f) => places(f.size)));
+  const weights = fills.map((f) => parseUnits(f.price, priceScale) * parseUnits(f.size, sizeScale));
+  const sum = weights.reduce((a, b) => a + b, 0n);
+  // A zero notional has nothing to weigh by; the whole fee rides on the last fill.
+  const shares = weights.map((w) => (sum === 0n ? 0n : (total * w) / sum));
+  shares[shares.length - 1] = total - shares.slice(0, -1).reduce((a, b) => a + b, 0n);
+  return shares.map((atoms) => formatUnits(atoms, feeScale));
 }
 
 /** Nest wiring: the real readers over the wallet module's Monad client. */
