@@ -23,6 +23,7 @@ import {
 } from './agents.config';
 import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
+import { restingFillProviders } from './fills/resting-fill.providers';
 import { agentPortfolioProviders } from './portfolio/portfolio.service';
 import {
   DeviceMandateOwners,
@@ -177,6 +178,8 @@ const authProvider: Provider = {
     ...agentToolsProviders,
     // The Tool Runner loop, POST /agents/:id/run and AGENT_TICK_SECONDS (SEN-8).
     ...agentRunnerProviders,
+    // Later fills of resting Kuru orders onto the event log (SEN-149).
+    ...restingFillProviders,
     // AgentPortfolioService (SEN-78): after the venue and tool providers,
     // whose AgentVenues and AGENT_EVENTS it reads through.
     ...agentPortfolioProviders,

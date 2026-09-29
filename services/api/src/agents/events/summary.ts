@@ -19,7 +19,7 @@
  * | trades / held / theses | `fill` / `refusal` / `thesis` | the count; no field is read  |
  *
  * - `realisedPnl` / `pnlAsset` are `events/verdict.ts#Verdict`, spread into
- *   the event's `detail` by `tools/gate.ts#recordVerdict`. It is ONE field on
+ *   the event's `detail` by `events/settle-fill.ts#recordVerdictFor`. It is ONE field on
  *   both venues: Kuru's is the FIFO cost basis over the thesis's fills and
  *   Perpl's is the venue's own `dpnl` less funding, both net of fees, and
  *   `settle` has already reduced either to the same signed decimal string.

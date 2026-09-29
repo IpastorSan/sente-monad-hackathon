@@ -93,6 +93,15 @@ export class AgentTools {
     return this.#options.precheck;
   }
 
+  /**
+   * The per-agent write lock, for writers of the log outside a tool call: the
+   * resting-fill watcher (SEN-149) appends fills and verdicts under it, so its
+   * "is this verdict already on the log?" check cannot race the gate's.
+   */
+  get writeLock(): KeyedMutex {
+    return this.#writeLock;
+  }
+
   context(agent: AgentRecord, options: { runId?: string } = {}): ToolContext {
     const { store, venuesFor, events, precheck, marketData } = this.#options;
     return {

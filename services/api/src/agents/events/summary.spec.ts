@@ -40,7 +40,7 @@ function order(notional: string, over: Record<string, unknown> = {}): AgentEvent
 
 /**
  * A `verdict` event whose detail is what `settle` really produced for these
- * events, as `tools/gate.ts#recordVerdict` spreads it — so the summary is
+ * events, as `events/settle-fill.ts#recordVerdictFor` spreads it — so the summary is
  * tested against the producer's field names, not a copy of them.
  */
 function verdictOf(events: AgentEvent[], at: number): AgentEvent {
