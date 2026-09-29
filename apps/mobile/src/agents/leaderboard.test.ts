@@ -84,6 +84,11 @@ test('the theses reading carries its own denominator and is never a percentage',
   assert.equal(thesisLabel({ settled: 12, held: 7, open: 2 }), '7 of 12 theses held · 2 open');
   assert.equal(thesisLabel({ settled: 0, held: 0, open: 1 }), 'no settled theses · 1 open');
   assert.equal(thesisLabel({ settled: 0, held: 0, open: 0 }), 'no settled theses');
+  // SEN-159: a log that dropped events says its count is partial.
+  assert.equal(
+    thesisLabel({ settled: 3, held: 2, open: 1, partial: true }),
+    '2 of 3 theses held · 1 open · partial',
+  );
 });
 
 test('the venues are named, and an agent with none says it is not indexed', () => {

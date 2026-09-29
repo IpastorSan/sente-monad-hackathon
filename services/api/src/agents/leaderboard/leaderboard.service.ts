@@ -126,10 +126,15 @@ export class LeaderboardService {
   /**
    * The SEN-22 reading. `settle` is a pure function of the events already in
    * the log, so a restart empties this and leaves the indexer's numbers
-   * standing — which is why `n` does not come from here.
+   * standing — which is why `n` does not come from here. Past the log's cap
+   * it is partial too, and says so (SEN-159).
    */
   private async thesesOf(agentId: string): Promise<LeaderboardThesesDto> {
-    const verdicts = settle(await this.events.list(agentId));
+    const [events, truncation] = await Promise.all([
+      this.events.list(agentId),
+      this.events.truncation(agentId),
+    ]);
+    const verdicts = settle(events);
     let settled = 0;
     let held = 0;
     let open = 0;
@@ -141,7 +146,7 @@ export class LeaderboardService {
       settled += 1;
       if (verdict.held) held += 1;
     }
-    return { settled, held, open };
+    return { settled, held, open, ...(truncation.evicted > 0 ? { partial: true as const } : {}) };
   }
 
   /**

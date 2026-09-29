@@ -125,6 +125,16 @@ export function settledTrades(entries: readonly LedgerEntry[]): SettledTrade[] {
   return trades;
 }
 
+/**
+ * ` since Sep 3` when the server's log has dropped the agent's oldest events,
+ * else nothing (SEN-159). Every count read off the summary carries it, so a
+ * truncated agent's counts never pass for its whole history.
+ */
+export function countsSince(summary: Pick<AgentSummary, 'countsPartial'> | undefined): string {
+  const since = summary?.countsPartial?.since;
+  return since === undefined ? '' : ` since ${shortDate(since)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Overview: stats
 
@@ -144,7 +154,7 @@ export type CockpitStats = {
 export function cockpitStats(
   trades: readonly SettledTrade[],
   entries: readonly LedgerEntry[],
-  summary: Pick<AgentSummary, 'held'> | undefined,
+  summary: Pick<AgentSummary, 'held' | 'countsPartial'> | undefined,
   createdAt: string,
 ): CockpitStats {
   const won = trades.filter((trade) => trade.tone === 'up').length;
@@ -155,7 +165,7 @@ export function cockpitStats(
   return {
     won: trades.length > 0 ? `${won} of ${trades.length}` : '—',
     avgHold: avg !== null ? formatDuration(avg) : '—',
-    held: groupThousands(String(held)),
+    held: `${groupThousands(String(held))}${countsSince(summary)}`,
     liveSince: Number.isFinite(since) ? shortDate(since) : '—',
   };
 }

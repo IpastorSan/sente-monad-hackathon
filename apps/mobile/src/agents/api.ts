@@ -360,6 +360,13 @@ export type AgentSummary = {
   held: number;
   theses: number;
   /**
+   * Present when the server's event log has dropped the agent's oldest events
+   * (SEN-159): `trades`, `held` and `theses` then count only what it still
+   * holds, from `since` (epoch ms) on. Shown as "since <date>" beside every
+   * count, never as the agent's whole history.
+   */
+  countsPartial?: { since: number };
+  /**
    * Realised P&L from the agent's verdicts, as exact decimal strings in quote
    * units — USDC and AUSD summed as one unit, as the leaderboard does. `"0"`
    * when nothing has settled. `allTimePartial` (SEN-129) is `true` when the
@@ -412,7 +419,11 @@ export type LeaderboardRow = {
   capitalDeployedUsd: string;
   roi: number | null;
   /** The SEN-22 reading: per thesis, with its own denominator. */
-  theses: { settled: number; held: number; open: number };
+  /**
+   * The event log's reading. `partial` (SEN-159) is `true` when the log has
+   * dropped the agent's oldest events, so these cover only what it still holds.
+   */
+  theses: { settled: number; held: number; open: number; partial?: true };
 };
 
 /** Whether the numbers exist at all. `unconfigured` and `unreachable` carry no rows. */

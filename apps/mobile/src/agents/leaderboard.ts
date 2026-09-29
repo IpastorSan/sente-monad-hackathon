@@ -23,6 +23,8 @@ export type Theses = {
   readonly settled: number;
   readonly held: number;
   readonly open: number;
+  /** `true` when the server's log dropped some of the agent's events (SEN-159). */
+  readonly partial?: true;
 };
 
 /**
@@ -84,8 +86,10 @@ export function venueLabel(venues: readonly string[]): string {
  */
 export function thesisLabel(theses: Theses): string {
   const open = theses.open > 0 ? ` · ${groupThousands(String(theses.open))} open` : '';
-  if (theses.settled === 0) return `no settled theses${open}`;
-  return `${theses.held} of ${groupThousands(String(theses.settled))} theses held${open}`;
+  // SEN-159: the log dropped this agent's oldest events, so say the count is not all of it.
+  const tail = `${open}${theses.partial ? ' · partial' : ''}`;
+  if (theses.settled === 0) return `no settled theses${tail}`;
+  return `${theses.held} of ${groupThousands(String(theses.settled))} theses held${tail}`;
 }
 
 /** `3 settled trades` — the threshold sentence for an unranked row. */

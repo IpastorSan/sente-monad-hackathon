@@ -33,6 +33,13 @@ export interface LeaderboardThesesDto {
   readonly held: number;
   /** Theses whose position has not come back to zero. */
   readonly open: number;
+  /**
+   * Present, and `true`, only when the event log has dropped some of the
+   * agent's oldest events (SEN-159): the counts above then cover only the
+   * theses still held, and a thesis whose opening fills were dropped may read
+   * as settled or open wrongly. The indexer's `n` is unaffected.
+   */
+  readonly partial?: true;
 }
 
 export interface LeaderboardRowDto {

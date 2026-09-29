@@ -65,6 +65,14 @@ export interface AgentEventSummary {
   /** `thesis` events. */
   readonly theses: number;
   /**
+   * Present only when the log has dropped some of the agent's oldest events
+   * (SEN-159): `trades`, `held` and `theses` then count only what it still
+   * holds, which is everything from `since` (epoch ms, the `at` of the oldest
+   * event still held) on. Without it a truncated agent's counts would read as
+   * its whole history — a silent undercount.
+   */
+  readonly countsPartial?: { readonly since: number };
+  /**
    * Exact decimal strings in quote units; `'0'` when nothing has settled.
    * `allTimePartial` is present, and `true`, only when the log has dropped
    * some of the agent's oldest events (SEN-129): `allTime` then sums only the
@@ -145,6 +153,9 @@ export function summariseEvents(
     trades,
     held,
     theses,
+    ...(truncation.evicted > 0
+      ? { countsPartial: { since: countsSince(events, truncation) } }
+      : {}),
     pnl: {
       last24h: decimalString(last24h),
       allTime: decimalString(allTime),
@@ -153,6 +164,16 @@ export function summariseEvents(
     largestOrderNotional: largest,
     lastEvent,
   };
+}
+
+/**
+ * From when a truncated log's counts are whole. Eviction is oldest-first, so
+ * the oldest event still held marks it; an agent whose every event was dropped
+ * (not reachable while the cap keeps the newest, but cheap to answer) falls
+ * back to the newest dropped one.
+ */
+function countsSince(events: readonly AgentEvent[], truncation: AgentEventTruncation): number {
+  return events[0]?.at ?? truncation.newestEvictedAt ?? 0;
 }
 
 /**
