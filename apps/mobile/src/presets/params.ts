@@ -33,6 +33,7 @@ import {
 } from '@sente/presets';
 import type { Address } from 'viem';
 
+import type { AgentMandate, HireAgentRequest } from '../agents/api.ts';
 import { KURU_MARKETS, type MandateForm } from '../agents/mandate.ts';
 import { presetValues, type PresetId as TierId, type PresetValues } from '../agents/presets.ts';
 
@@ -499,15 +500,17 @@ export function tierValues(
 
 // ─── Review ─────────────────────────────────────────────────────────────────
 
-/** Bounds the API puts on an agent's own cadence (SEN-67, `AGENT_SCHEDULE_*_SECONDS`). */
+/**
+ * Bounds the API puts on an agent's own cadence (SEN-67, `AGENT_SCHEDULE_*_SECONDS`).
+ * A week since SEN-158, so a weekly DCA Stacker is hired with its schedule.
+ */
 export const SCHEDULE_MIN_SECONDS = 60;
-export const SCHEDULE_MAX_SECONDS = DAY_SECONDS;
+export const SCHEDULE_MAX_SECONDS = 7 * DAY_SECONDS;
 
 /**
  * The schedule a hire sends, or `null` when the cadence is outside what the
- * API accepts — a weekly DCA today. Clamping it to daily would make it buy
- * seven times as often as the person chose, so it is hired without one and
- * the review says so.
+ * API accepts. Clamping it would make it run more or less often than the
+ * person chose, so it is hired without one and the review says so.
  */
 export function scheduleFor(seconds: number): { everySeconds: number } | null {
   return Number.isInteger(seconds) &&
@@ -515,6 +518,29 @@ export function scheduleFor(seconds: number): { everySeconds: number } | null {
     seconds <= SCHEDULE_MAX_SECONDS
     ? { everySeconds: seconds }
     : null;
+}
+
+/**
+ * The `POST /agents` body the review sends. No strategy or prompt: the API
+ * renders them from these params with the catalog version this phone
+ * previewed, and refuses if it moved. The preset's cadence goes along as the
+ * agent's schedule — pure so a spec can pin that a weekly DCA carries one
+ * (SEN-158; SEN-116 hired it without).
+ */
+export function presetHireRequest(
+  def: PresetDefinition,
+  draft: Draft,
+  params: Params,
+  fields: { name: string; model: string; mandate: AgentMandate },
+): HireAgentRequest {
+  const schedule = scheduleFor(def.suggestedCadenceSeconds(params));
+  return {
+    name: fields.name.trim(),
+    model: fields.model,
+    mandate: fields.mandate,
+    preset: { id: def.id, version: def.version, params: { ...rawParams(def, draft) } },
+    ...(schedule ? { schedule } : {}),
+  };
 }
 
 /** `96 runs a day`, `1 run a day`, `1 run a week`. */

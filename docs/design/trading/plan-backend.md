@@ -340,7 +340,7 @@ limit: int 1..200 (default 48) }` → `{ interval, volumeIsEstimate, candles: [{
 
 - **Modify:** `store/agent-store.ts` (`AgentRecord.schedule?: { readonly everySeconds: number }`,
   `'schedule'` in `AgentPatch`); `dto/agent.dto.ts` (`ScheduleDto { everySeconds: number|null }`
-  with `@IsInt @Min(60) @Max(86400)` or null; `CreateAgentDto.schedule?`;
+  with `@IsInt @Min(60) @Max(604800)` (a week since SEN-158) or null; `CreateAgentDto.schedule?`;
   `AgentResponseDto.schedule: {everySeconds} | null`); `agents.service.ts`
   (`setSchedule(principal, id, everySeconds|null): Promise<AgentRecord>`, owner-scoped, revoked →
   409 `agent_revoked`; hire accepts `schedule`; fork does NOT copy it — it spends the forker's
@@ -680,7 +680,7 @@ interface AgentPortfolioDto {
 }
 
 // Schedule
-// PATCH /agents/:id/schedule  body { everySeconds: number | null } (60..86400; null = manual only) → AgentResponseDto
+// PATCH /agents/:id/schedule  body { everySeconds: number | null } (60..604800; null = manual only) → AgentResponseDto
 // AgentResponseDto += { schedule: { everySeconds: number } | null }; CreateAgentDto += { schedule?: { everySeconds: number } }
 interface AgentScheduleStatusDto {
   // GET /agents/:id/schedule

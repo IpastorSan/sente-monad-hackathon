@@ -305,7 +305,7 @@ export class AgentsController {
 
   /**
    * Set or clear the agent's own run cadence (SEN-67). `{ everySeconds: null }`
-   * clears it. 400 outside 60..86400 s, 404 `agent_not_found` for someone
+   * clears it. 400 outside 60..604800 s (a minute to a week, SEN-158), 404 `agent_not_found` for someone
    * else's agent, 409 `agent_revoked`.
    */
   @Patch(':id/schedule')

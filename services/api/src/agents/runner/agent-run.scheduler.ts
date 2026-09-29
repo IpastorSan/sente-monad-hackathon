@@ -45,8 +45,8 @@ export interface AgentScheduleStatusDto {
  *
  * - `lastStart` is seeded from the durable event log's last `run` event
  *   (SEN-65), so a restart neither re-runs every agent at once nor forgets
- *   one; an agent with no history gets a random offset within its cadence,
- *   for the same reason.
+ *   one — nor, for a weekly agent, runs it early or skips a week (SEN-158).
+ *   An agent with no history is phased from its hire (`unrunStart`).
  * - Due runs go through a concurrency limiter
  *   (`AGENT_SCHEDULE_MAX_CONCURRENT`), then through `ScheduleGuard` (credits
  *   and the daily cap). A held-back agent keeps its `lastStart`, so it is
@@ -210,8 +210,7 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
   /**
    * The agent's `lastStart`, seeding it on first sight from the durable log:
    * the last `run` of any trigger, and today's scheduled runs for the daily
-   * cap. With no history, a random point in the last cadence, so agents
-   * hired together, or all of them after a restart, spread out.
+   * cap. With no history, see `unrunStart`.
    */
   private async seed(agent: AgentRecord, everySeconds: number, now: number): Promise<number> {
     const known = this.lastStart.get(agent.id);
@@ -228,7 +227,9 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     const raced = this.lastStart.get(agent.id);
     if (raced !== undefined) return raced;
     const last = runs.at(-1);
-    const start = last ? startedAtOf(last) : now - Math.random() * everySeconds * 1000;
+    const start = last
+      ? startedAtOf(last)
+      : unrunStart(agent.createdAt.getTime(), everySeconds, now);
     this.lastStart.set(agent.id, start);
     this.guard.seedStarts(
       agent.id,
@@ -262,6 +263,28 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     if (next) next();
     else this.active--;
   }
+}
+
+/** The most a never-run agent's first start is pulled forward to spread agents out. */
+const AGENT_SCHEDULE_SPREAD_SECONDS = 3_600;
+
+/**
+ * `lastStart` for an agent that has never run: the latest cadence boundary
+ * counted from its hire, pulled back by a random spread so agents hired
+ * together don't all fire on the same poll.
+ *
+ * Phased from the hire rather than from boot (SEN-158): with weekly cadences
+ * a random point in the last cadence meant a restart re-rolled a never-run
+ * agent's first run anywhere in the next 7 days — immediately, or a week
+ * late. Counting from `createdAt` gives the same answer on every boot. The
+ * spread is capped at an hour, since a week-wide one would be the same
+ * re-roll again.
+ */
+function unrunStart(createdAt: number, everySeconds: number, now: number): number {
+  const cadence = everySeconds * 1000;
+  const boundary = createdAt + Math.max(0, Math.floor((now - createdAt) / cadence)) * cadence;
+  const spread = Math.min(everySeconds, AGENT_SCHEDULE_SPREAD_SECONDS) * 1000;
+  return boundary - Math.random() * spread;
 }
 
 /** When the run started: its summary's `startedAt`, else when it was logged. */

@@ -51,8 +51,8 @@ import {
   guardianLines,
   initialDraft,
   LEVEL_NOTE,
+  presetHireRequest,
   LEVEL_TAG,
-  rawParams,
   readBackParams,
   runsLabel,
   scheduleFor,
@@ -346,15 +346,9 @@ function Configure({ def }: { def: PresetDefinition }) {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      // No strategy or prompt: the API renders them from these params with
-      // the catalog version this phone previewed, and refuses if it moved.
-      const result = await api.hire({
-        name: name.trim(),
-        model,
-        mandate: mandateResult.mandate,
-        preset: { id: def.id, version: def.version, params: { ...rawParams(def, draft) } },
-        ...(schedule ? { schedule } : {}),
-      });
+      const result = await api.hire(
+        presetHireRequest(def, draft, params, { name, model, mandate: mandateResult.mandate }),
+      );
       // The agent exists from here on; a failed transfer is reported on the
       // hired screen, never as a failed hire.
       const funded = funding ? await fund(result.agent.address) : null;
@@ -551,7 +545,7 @@ function Configure({ def }: { def: PresetDefinition }) {
             ) : (
               <Notice
                 title="It won’t run on its own"
-                detail={`${cadenceSeconds !== null ? cadenceLabel(cadenceSeconds) : 'This cadence'} is longer than agents can be scheduled today (once a day at most), so it is hired without a schedule. Start each run from its page.`}
+                detail={`${cadenceSeconds !== null ? cadenceLabel(cadenceSeconds) : 'This cadence'} is outside what agents can be scheduled at (once a minute to once a week), so it is hired without a schedule. Start each run from its page.`}
               />
             )}
           </Section>
