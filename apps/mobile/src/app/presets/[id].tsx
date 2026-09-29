@@ -2,9 +2,10 @@
  * A preset's detail (SEN-116, plan U-9; agents.html → "Hire Range Trader",
  * "Preset detail" and "…scrolled: live record").
  *
- * Everything here is drawn at the preset's default parameters from the copy
- * of `@sente/presets` bundled into the app — the same code the API renders a
- * hire with — so "How it decides" and "What it will be told" are the agent's
+ * Everything here is drawn at the preset's default parameters from
+ * `GET /presets` — the API's own render — or, until it answers or where the
+ * route is missing, from the copy of `@sente/presets` bundled into the app
+ * (SEN-160). So "How it decides" and "What it will be told" are the agent's
  * actual text, quoted, not a description of it. Configure changes the
  * parameters.
  *
@@ -22,6 +23,7 @@ import { PresetsApi, type PresetStatsDto } from '@/presets/api';
 import { cadenceLabel, defaultMarkets, riskOf, statsLine, venueLine } from '@/presets/cards';
 import { presetToDto } from '@/presets/catalog';
 import { cantDo, decisionSteps } from '@/presets/params';
+import { useHirePreset } from '@/presets/usePresets';
 import { useSession } from '@/session';
 import { Joseki } from '@/ui/joseki';
 import { Button, Notice, Screen, Section, TopBar } from '@/ui/kit';
@@ -35,8 +37,21 @@ type StatsState = { kind: 'loading' } | { kind: 'ready'; stats: PresetStatsDto }
 export default function PresetDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const def = id ? getPreset(id) : undefined;
-  const preset = useMemo(() => (def ? presetToDto(def) : null), [def]);
+  const bundled = useMemo(() => {
+    const found = id ? getPreset(id) : undefined;
+    return found ? presetToDto(found) : null;
+  }, [id]);
+  // SEN-160: the server's copy when it answers — the text quoted here is then
+  // the one a hire is rendered with. The bundle shows until it does, and
+  // stands in for good only when the route is missing.
+  const { state: served } = useHirePreset(id);
+  const preset =
+    served.kind === 'ready' || served.kind === 'update-app'
+      ? served.dto
+      : served.kind === 'missing'
+        ? null
+        : bundled;
+  const presetId = preset?.id;
 
   const session = useSession();
   const signedIn = session.agents !== null;
@@ -45,7 +60,7 @@ export default function PresetDetailScreen() {
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    if (!def) return;
+    if (!presetId) return;
     if (!signedIn) {
       setStats({ kind: 'none' });
       return;
@@ -53,7 +68,7 @@ export default function PresetDetailScreen() {
     let cancelled = false;
     // Any failure — no route yet, a preset the server doesn't know, a blip —
     // means no record on screen. A missing number is honest; a zero is not.
-    new PresetsApi({ auth }).stats(def.id).then(
+    new PresetsApi({ auth }).stats(presetId).then(
       (value) => {
         if (!cancelled) setStats({ kind: 'ready', stats: value });
       },
@@ -64,9 +79,9 @@ export default function PresetDetailScreen() {
     return () => {
       cancelled = true;
     };
-  }, [def, signedIn, auth]);
+  }, [presetId, signedIn, auth]);
 
-  if (!def || !preset) {
+  if (!preset) {
     return (
       <Screen>
         <TopBar back={{ label: 'Presets', onPress: () => router.back() }} />
@@ -84,17 +99,20 @@ export default function PresetDetailScreen() {
   const strategyLines = preset.defaults.strategy.split('\n').filter((line) => line.trim() !== '');
   const steps = decisionSteps(preset.defaults.strategy);
   const shown = expanded ? strategyLines : strategyLines.slice(0, COLLAPSED_LINES);
-  const configure = () => router.push(`/presets/${encodeURIComponent(def.id)}/configure` as Href);
+  const configure = () =>
+    router.push(`/presets/${encodeURIComponent(preset.id)}/configure` as Href);
 
   return (
-    <Screen footer={<Button label={`Configure ${def.name}`} kind="primary" onPress={configure} />}>
+    <Screen
+      footer={<Button label={`Configure ${preset.name}`} kind="primary" onPress={configure} />}
+    >
       <TopBar back={{ label: 'Presets', onPress: () => router.back() }} />
 
       <View style={styles.hero}>
-        <Joseki presetId={def.id} large width={300} height={74} />
+        <Joseki presetId={preset.id} large width={300} height={74} />
         <View style={styles.heroFoot}>
           <View style={styles.heroCopy}>
-            <Text style={[text.display, styles.name]}>{def.name}</Text>
+            <Text style={[text.display, styles.name]}>{preset.name}</Text>
             <Text style={text.caption}>
               {[
                 venueLine(preset),
@@ -118,7 +136,7 @@ export default function PresetDetailScreen() {
         </View>
       </View>
 
-      <Text style={[text.dim, styles.description]}>{def.description}</Text>
+      <Text style={[text.dim, styles.description]}>{preset.description}</Text>
 
       {steps.length > 0 ? (
         <Section label="How it decides">
@@ -159,7 +177,7 @@ export default function PresetDetailScreen() {
       <LiveRecord state={stats} />
 
       <Section label="What it can’t do">
-        {cantDo(def.id).map((line) => (
+        {cantDo(preset.id).map((line) => (
           <View key={line} style={styles.step}>
             <Text style={[text.caption, styles.stepNumber]}>—</Text>
             <Text style={[text.dim, styles.stepText]}>{line}</Text>

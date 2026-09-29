@@ -16,19 +16,22 @@
  * - Review: name, model, cadence, and an amount to fund with. Hiring sends
  *   `{preset: {id, version, params}, schedule}` and no strategy text, so the
  *   API renders the same text this phone previewed (and refuses if the
- *   catalog version moved). Funding is then the same passkey-approved
+ *   catalog version moved — so the version and specs come from
+ *   `GET /presets`, not the bundle; see `presets/served.ts`, SEN-160).
+ *   Funding is then the same passkey-approved
  *   sponsored transfer the agent page's Fund sheet sends.
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View, type GestureResponderEvent } from 'react-native';
 
-import { getPreset, type Params, type ParamSpec, type PresetDefinition } from '@sente/presets';
+import type { Params, ParamSpec, PresetDefinition } from '@sente/presets';
 
 import { formatAtoms, parseAmount } from '@/agents/amounts';
 import {
   AGENT_LIMITS,
   AGENT_MODELS,
+  AgentsApiError,
   describeAgentsError,
   type HireAgentResult,
 } from '@/agents/api';
@@ -65,6 +68,7 @@ import {
   type LevelKind,
   type ParamControl,
 } from '@/presets/params';
+import { useHirePreset } from '@/presets/usePresets';
 import { useSession } from '@/session';
 import { shortAddress } from '@/ui/format';
 import { Icon } from '@/ui/icons';
@@ -107,24 +111,40 @@ type FundOutcome = { tone: 'ok' | 'info' | 'error'; title: string; detail?: stri
 export default function ConfigurePresetScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const def = id ? getPreset(id) : undefined;
+  // SEN-160: the version and specs come from `GET /presets`, so a preset bump
+  // on the server doesn't turn every hire from this build into a refusal.
+  const { state, reload } = useHirePreset(id);
 
-  if (!def) {
-    return (
-      <Screen>
-        <TopBar back={{ label: 'Presets', onPress: () => router.back() }} />
+  if (state.kind === 'ready') return <Configure def={state.def} reload={reload} />;
+  const back = { label: 'Presets', onPress: () => router.back() };
+  return (
+    <Screen
+      {...(state.kind === 'error'
+        ? { footer: <Button label="Try again" kind="primary" onPress={reload} /> }
+        : {})}
+    >
+      <TopBar back={back} />
+      {state.kind === 'loading' ? (
+        <Text style={[text.caption, styles.after]}>Loading the preset…</Text>
+      ) : state.kind === 'error' ? (
+        <Notice tone="error" title="The preset catalog didn’t load" detail={state.message} />
+      ) : state.kind === 'update-app' ? (
+        <Notice
+          title={`Update the app to hire ${state.dto.name}`}
+          detail={`${state.dto.name} changed on Sente (version ${state.dto.version}) in a way this version of the app can’t show. Update the app to configure and hire it; nothing has been sent.`}
+        />
+      ) : (
         <Notice
           tone="error"
           title="No such preset"
           detail="It may have left the catalog. Go back and pick another."
         />
-      </Screen>
-    );
-  }
-  return <Configure def={def} />;
+      )}
+    </Screen>
+  );
 }
 
-function Configure({ def }: { def: PresetDefinition }) {
+function Configure({ def, reload }: { def: PresetDefinition; reload: () => void }) {
   const router = useRouter();
   const { agents: api, auth, wallet, walletApi, markets: marketsApi } = useSession();
 
@@ -360,6 +380,11 @@ function Configure({ def }: { def: PresetDefinition }) {
       const funded = funding ? await fund(result.agent.address) : null;
       setHired({ result, fund: funded });
     } catch (error) {
+      if (error instanceof AgentsApiError && error.reason === 'preset_invalid') {
+        // SEN-160: the catalog may have moved since this screen loaded it.
+        // Ask again; the draft stays, now checked against what came back.
+        reload();
+      }
       setSubmitError(describeAgentsError(error));
     } finally {
       setSubmitting(false);
