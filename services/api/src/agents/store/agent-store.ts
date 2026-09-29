@@ -157,9 +157,14 @@ export interface AgentPreset {
   readonly customized: boolean;
 }
 
-/** Bounds of `AgentSchedule.everySeconds`: once a minute to once a day (SEN-67). */
+/**
+ * Bounds of `AgentSchedule.everySeconds`: once a minute (SEN-67) to once a
+ * week. The ceiling was a day until SEN-158, which left a weekly DCA Stacker
+ * hired with no schedule at all; a longer cadence spends fewer credits, so
+ * only the floor protects the owner, and `ScheduleGuard` still caps a day.
+ */
 export const AGENT_SCHEDULE_MIN_SECONDS = 60;
-export const AGENT_SCHEDULE_MAX_SECONDS = 86_400;
+export const AGENT_SCHEDULE_MAX_SECONDS = 7 * 86_400;
 
 export interface AgentSchedule {
   readonly everySeconds: number;

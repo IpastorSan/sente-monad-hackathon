@@ -199,6 +199,50 @@ describe('AgentRunScheduler (SEN-71)', () => {
     ]);
   });
 
+  describe('weekly cadences (SEN-158)', () => {
+    const WEEK = 604_800;
+    const DAY_MS = 86_400_000;
+
+    it('after a restart, runs a weekly agent a week after its last run: not now, not a week late', async () => {
+      jest.useFakeTimers({ now: T0 });
+      const h = await setup({ agents: [{ schedule: { everySeconds: WEEK } }] });
+      const agent = h.agents[0]!;
+      await h.ran(agent.id, T0 - 3 * DAY_MS);
+
+      expect(await h.scheduler.status(agent)).toMatchObject({
+        nextRunAt: new Date(T0 + 4 * DAY_MS).toISOString(),
+      });
+      expect(await h.scheduler.poll()).toEqual([]);
+      jest.setSystemTime(T0 + 4 * DAY_MS - 1);
+      expect(await h.scheduler.poll()).toEqual([]);
+      jest.setSystemTime(T0 + 4 * DAY_MS);
+      expect(await h.scheduler.poll()).toEqual([
+        { agentId: agent.id, ran: true, stopReason: 'end_turn' },
+      ]);
+    });
+
+    it('phases a never-run weekly agent from its hire, so every boot agrees on its first run', async () => {
+      jest.useFakeTimers({ now: T0 });
+      jest.spyOn(Math, 'random').mockReturnValue(1);
+      const hiredAt = T0 - 3 * DAY_MS;
+      const h = await setup({
+        agents: [{ schedule: { everySeconds: WEEK }, createdAt: new Date(hiredAt) }],
+      });
+      const agent = h.agents[0]!;
+
+      // At most an hour of spread, however long the cadence.
+      const first = hiredAt + 7 * DAY_MS - 3_600_000;
+      expect(await h.scheduler.status(agent)).toMatchObject({
+        nextRunAt: new Date(first).toISOString(),
+      });
+      expect(await h.scheduler.poll()).toEqual([]);
+      jest.setSystemTime(first);
+      expect(await h.scheduler.poll()).toEqual([
+        { agentId: agent.id, ran: true, stopReason: 'end_turn' },
+      ]);
+    });
+  });
+
   it('runs at most AGENT_SCHEDULE_MAX_CONCURRENT at once, the rest as slots free up', async () => {
     jest.useFakeTimers({ now: T0 });
     jest.spyOn(Math, 'random').mockReturnValue(1);

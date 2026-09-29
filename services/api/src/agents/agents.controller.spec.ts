@@ -895,14 +895,15 @@ describe('AgentsController', () => {
     });
 
     it('accepts the bounds and null', async () => {
-      for (const everySeconds of [60, 86_400, null]) {
+      // A week is the ceiling since SEN-158; a day is no longer an edge.
+      for (const everySeconds of [60, 86_400, 604_800, null]) {
         await expect(schedule({ everySeconds })).resolves.toEqual({ everySeconds });
       }
     });
 
     it.each([
       ['59 s', { everySeconds: 59 }],
-      ['86,401 s', { everySeconds: 86_401 }],
+      ['604,801 s', { everySeconds: 604_801 }],
       ['a fraction', { everySeconds: 90.5 }],
       ['a string', { everySeconds: '300' }],
       ['a missing field', {}],
@@ -920,6 +921,12 @@ describe('AgentsController', () => {
       await expect(
         create(body({ schedule: { everySeconds: 60, extra: true } })),
       ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(create(body({ schedule: { everySeconds: 604_801 } }))).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(create(body({ schedule: { everySeconds: 604_800 } }))).resolves.toMatchObject({
+        schedule: { everySeconds: 604_800 },
+      });
     });
   });
 

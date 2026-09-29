@@ -23,6 +23,7 @@ import {
   initialDraft,
   levelKind,
   marketOptions,
+  presetHireRequest,
   rawParams,
   readBackParams,
   runsLabel,
@@ -256,7 +257,9 @@ test('another tier chip keeps the preset’s market and moves only the limits', 
 test('schedule: within the API’s bounds, or none rather than a clamped cadence', () => {
   assert.deepEqual(scheduleFor(900), { everySeconds: 900 });
   assert.deepEqual(scheduleFor(DAY), { everySeconds: DAY });
-  assert.equal(scheduleFor(7 * DAY), null);
+  // A week is the API's ceiling since SEN-158; past it, none rather than clamped.
+  assert.deepEqual(scheduleFor(7 * DAY), { everySeconds: 7 * DAY });
+  assert.equal(scheduleFor(7 * DAY + 1), null);
   assert.equal(scheduleFor(30), null);
   assert.equal(runsLabel(900), '96 runs a day');
   assert.equal(runsLabel(DAY), '1 run a day');
@@ -310,4 +313,37 @@ test('Guardian lines start 10% either side of the live price, and pass resolvePa
   assert.ok(high);
   assert.ok(Math.abs(high.sellAbove / 2763.574 - 1) < 0.005);
   assert.ok(Math.abs(high.sellBelow / 2261.106 - 1) < 0.005);
+});
+
+test('hire: a weekly DCA Stacker is hired with a weekly schedule (SEN-158)', () => {
+  const dca = preset('dca-stacker');
+  const draft = { ...initialDraft(dca), every: 'week' };
+  const checked = checkParams(dca, draft);
+  assert.ok(checked.ok);
+  const suggested = suggestedValues(dca.suggestedMandate(checked.params), NOW, OWNER);
+  const mandate = mandateToSend(suggested.form, suggested.expiryDays, NOW);
+  assert.ok(mandate.ok);
+
+  const request = presetHireRequest(dca, draft, checked.params, {
+    name: '  Steady Stack ',
+    model: 'anthropic/claude-sonnet-5',
+    mandate: mandate.mandate,
+  });
+  assert.deepEqual(request.schedule, { everySeconds: 604_800 });
+  assert.equal(request.name, 'Steady Stack');
+  assert.equal(request.preset?.id, 'dca-stacker');
+  assert.equal(request.preset?.params['every'], 'week');
+  assert.equal(request.strategy, undefined);
+
+  const daily = { ...draft, every: 'day' };
+  const dailyParams = checkParams(dca, daily);
+  assert.ok(dailyParams.ok);
+  assert.deepEqual(
+    presetHireRequest(dca, daily, dailyParams.params, {
+      name: 'x',
+      model: 'm',
+      mandate: mandate.mandate,
+    }).schedule,
+    { everySeconds: 86_400 },
+  );
 });
