@@ -115,11 +115,20 @@ export function CashCard({
   venueCash,
   hidden,
   onAddFunds,
+  onWithdraw,
+  onKuruWithdraw,
 }: {
   cash: readonly CashLine[];
   venueCash: readonly VenueCash[];
   hidden: boolean;
   onAddFunds: () => void;
+  /** Opens wallet → typed address (SEN-153); absent while `EXTERNAL_WITHDRAW_ENABLED` is off. */
+  onWithdraw?: (() => void) | undefined;
+  /**
+   * Opens Kuru account → wallet (SEN-153). Absent while manual trading is off,
+   * since the withdrawal runs through `/trade`: the line then stays plain text.
+   */
+  onKuruWithdraw?: (() => void) | undefined;
 }) {
   return (
     <Card style={styles.cash}>
@@ -137,14 +146,40 @@ export function CashCard({
           <Text style={text.caption}>{line.purpose}</Text>
         </View>
       ))}
-      {venueCash.map((line) => (
-        <Text key={`${line.venue}:${line.asset}`} style={[text.caption, text.num]}>
-          + {shown(amountText(line.amount, line.asset), hidden)} {line.asset}{' '}
-          {VENUE_PLACE[line.venue]}
-        </Text>
-      ))}
+      {venueCash.map((line) => {
+        const figure = (
+          <Text style={[text.caption, text.num]}>
+            + {shown(amountText(line.amount, line.asset), hidden)} {line.asset}{' '}
+            {VENUE_PLACE[line.venue]}
+          </Text>
+        );
+        const key = `${line.venue}:${line.asset}`;
+        return line.venue === 'kuru' && onKuruWithdraw ? (
+          <Pressable
+            key={key}
+            accessibilityRole="button"
+            accessibilityLabel={`Move ${line.asset} from your Kuru account to your wallet`}
+            onPress={onKuruWithdraw}
+            style={styles.venueLine}
+          >
+            {figure}
+            <Text style={[text.caption, styles.venueAction]}>Move to wallet</Text>
+          </Pressable>
+        ) : (
+          <View key={key}>{figure}</View>
+        );
+      })}
       <View style={styles.cashButtons}>
         <ButtonRow>
+          {onWithdraw ? (
+            <Button
+              label="Withdraw"
+              kind="soft"
+              size="sm"
+              onPress={onWithdraw}
+              style={styles.grow}
+            />
+          ) : null}
           <Button
             label="Add funds"
             kind="primary"
@@ -535,6 +570,8 @@ const styles = StyleSheet.create({
   cash: { marginTop: 18, paddingTop: 12 },
   cashLine: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   cashButtons: { marginTop: 8 },
+  venueLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  venueAction: { color: color.purple },
   pos: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   posDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.line },
   posMain: { flex: 1, minWidth: 0, gap: 2 },

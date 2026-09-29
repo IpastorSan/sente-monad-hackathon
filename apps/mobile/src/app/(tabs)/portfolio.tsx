@@ -25,6 +25,8 @@ import { Share, StyleSheet, Text, View } from 'react-native';
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
 import { useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
+import { EXTERNAL_WITHDRAW_ENABLED } from '@/portfolio/withdraw';
+import { KuruWithdrawSheet, WithdrawSheet } from '@/portfolio/WithdrawSheets';
 import {
   AgentsGroup,
   AllocationBar,
@@ -82,6 +84,8 @@ export default function PortfolioScreen() {
   const [hidden, toggleHidden] = useHideBalances();
   const [tab, setTab] = useState<Tab>('positions');
   const [fundOpen, setFundOpen] = useState(false);
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
+  const [kuruWithdrawOpen, setKuruWithdrawOpen] = useState(false);
   const [cancelling, setCancelling] = useState<OrderRow | null>(null);
 
   // With trading off the cash comes from the wallet session; re-read it on
@@ -183,6 +187,13 @@ export default function PortfolioScreen() {
             venueCash={held.venueCash}
             hidden={hidden}
             onAddFunds={() => setFundOpen(true)}
+            // SEN-153: hidden until the API allows outside recipients (see the flag).
+            onWithdraw={EXTERNAL_WITHDRAW_ENABLED ? () => setWithdrawOpen(true) : undefined}
+            // SEN-153: the Kuru withdrawal is a `/trade` intent, so it is only
+            // offered while manual trading is on and Kuru actually answered.
+            onKuruWithdraw={
+              user.trading && user.portfolio?.kuru.ok ? () => setKuruWithdrawOpen(true) : undefined
+            }
           />
 
           {user.trading && user.portfolio ? (
@@ -279,6 +290,22 @@ export default function PortfolioScreen() {
           address={address}
           onClose={() => setFundOpen(false)}
           onShare={() => void Share.share({ message: address })}
+        />
+      ) : null}
+      {EXTERNAL_WITHDRAW_ENABLED ? (
+        <WithdrawSheet
+          visible={withdrawOpen}
+          agents={agents}
+          onClose={() => setWithdrawOpen(false)}
+          onSettled={() => void refresh()}
+        />
+      ) : null}
+      {user.trading ? (
+        <KuruWithdrawSheet
+          visible={kuruWithdrawOpen}
+          balances={user.portfolio?.kuru.ok ? user.portfolio.kuru.balances : null}
+          onClose={() => setKuruWithdrawOpen(false)}
+          onSettled={() => void refresh()}
         />
       ) : null}
       <CancelSheet
