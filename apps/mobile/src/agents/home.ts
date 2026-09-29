@@ -12,7 +12,7 @@
  * SEN-113 (plan U-7) made Home trading-first: the total, the markets strip,
  * the watchlist, the movers and the idle-cash nudge are chosen here too.
  */
-import type { Decimal, MarketDto } from '../markets/api.ts';
+import type { Decimal, MarketDto, TickerDto } from '../markets/api.ts';
 import { asPercent, priceOf } from '../markets/marketsView.ts';
 import {
   changeOf,
@@ -21,6 +21,14 @@ import {
   type MarketKey,
   type TickerIndex,
 } from '../markets/select.ts';
+import {
+  allocation,
+  allocationParts,
+  holdings,
+  type Holdings,
+  type WalletAmount,
+} from '../portfolio/view.ts';
+import type { Portfolio } from '../trade/types.ts';
 
 import { formatFixedAtoms } from './amounts.ts';
 import type { ActivityEvent, Agent, AgentSummary } from './api.ts';
@@ -192,14 +200,16 @@ export type TotalValue = {
 };
 
 /**
- * The hero: wallet cash plus capital with agents, summed exactly. `null` until
- * the wallet has answered, because a total without the user's own cash would
- * be the smaller half passed off as the whole.
+ * The hero with manual trading OFF: wallet cash plus capital with agents,
+ * summed exactly. `null` until the wallet has answered, because a total
+ * without the user's own cash would be the smaller half passed off as the
+ * whole.
  *
- * Positions the user opens themselves are NOT in it: that needs `GET
- * /portfolio` (M-T19), which does not exist yet, and the sentence says so
- * rather than letting the number imply it. Same for an agent read only from
- * its wallet: its venue account and positions are missing, and named.
+ * Positions the user opens themselves are NOT in it: without the trading flag
+ * `GET /portfolio` is never asked for, and the sentence says so rather than
+ * letting the number imply it. Same for an agent read only from its wallet:
+ * its venue account and positions are missing, and named. With trading on,
+ * `tradingTotal` is the hero instead (SEN-155).
  */
 export function totalValue(
   cash: readonly { symbol: string; amount: string }[] | null,
@@ -207,22 +217,100 @@ export function totalValue(
 ): TotalValue | null {
   if (cash === null) return null;
   const stables = cash.filter((balance) => CASH_SYMBOLS.includes(balance.symbol));
-  const read = agents.flatMap((agent) => (agent.source === 'unread' ? [] : [agent]));
+  const { read, walletOnly } = splitAgents(agents);
   const total =
     sumDecimals([...stables.map((b) => b.amount), ...read.map((agent) => agent.value)]) ?? '0';
-  const walletOnly = read.filter((agent) => agent.source === 'wallet').length;
-  const unread = agents.length - read.length;
 
   const what = agents.length === 0 ? 'Your USDC and AUSD' : 'Your USDC and AUSD plus your agents’';
   const missing =
     walletOnly > 0 ? 'your own positions or your agents’ open trades' : 'your own positions';
-  const left =
-    unread === 0
-      ? ''
-      : ` ${unread === 1 ? 'One agent' : `${unread} agents`} couldn’t be read and ${
-          unread === 1 ? 'is' : 'are'
-        } left out.`;
-  return { total, includes: `${what}. Not yet ${missing}.${left}` };
+  const left = unreadAgents(agents.length - read.length);
+  return { total, includes: `${what}. Not yet ${missing}.${left === null ? '' : ` ${left}`}` };
+}
+
+function splitAgents(agents: readonly AgentCapital[]) {
+  const read = agents.flatMap((agent) => (agent.source === 'unread' ? [] : [agent]));
+  return { read, walletOnly: read.filter((agent) => agent.source === 'wallet').length };
+}
+
+function unreadAgents(unread: number): string | null {
+  if (unread === 0) return null;
+  return `${unread === 1 ? 'One agent' : `${unread} agents`} couldn’t be read and ${
+    unread === 1 ? 'is' : 'are'
+  } left out.`;
+}
+
+/**
+ * Your own side of the total with manual trading on (SEN-155): Portfolio's
+ * `holdings`, and whether `/portfolio` answered at all. `unread` means the
+ * route refused or failed outright, so `held` has only the wallet and BOTH
+ * venue accounts are unknown — named, never summed as zero.
+ */
+export type OwnHoldings = { held: Holdings; venues: 'read' | 'unread' };
+
+/**
+ * Your holdings exactly as the Portfolio tab builds them, or `null` while a
+ * read the figure needs is still out (the wallet, `/portfolio`, the tickers),
+ * so the hero waits rather than flashing a smaller total and then jumping.
+ *
+ * `tickers` is `null` until they answer and `[]` when they failed: spot then
+ * reads as unpriced and is named, as Portfolio names it.
+ */
+export function ownHoldings(
+  portfolio: { data: Portfolio | null; error: Error | null; unavailable: boolean },
+  wallet: readonly WalletAmount[] | null,
+  tickers: readonly TickerDto[] | null,
+): OwnHoldings | null {
+  if (wallet === null || tickers === null) return null;
+  const failed = portfolio.error !== null || portfolio.unavailable;
+  if (portfolio.data === null && !failed) return null;
+  return {
+    held: holdings(wallet, portfolio.data, tickers),
+    venues: portfolio.data === null ? 'unread' : 'read',
+  };
+}
+
+/**
+ * The hero with manual trading ON (SEN-155): Portfolio's own total — cash in
+ * the wallet and parked in Kuru and Perpl, spot at the Kuru price, perps as
+ * margin plus unrealised P&L — plus capital with agents. It goes through
+ * `allocationParts` and `allocation`, the very functions behind the Portfolio
+ * hero, so the two tabs cannot disagree on the same data (`home.test.ts`).
+ *
+ * That is also why wallet MON counts here, at its Kuru price, where the
+ * trading-off total skips it as gas: Portfolio lists it as a spot holding,
+ * and Home must add up to what Portfolio shows.
+ */
+export function tradingTotal(
+  own: OwnHoldings | null,
+  agents: readonly AgentCapital[],
+): TotalValue | null {
+  if (own === null) return null;
+  const { held, venues } = own;
+  const { read, walletOnly } = splitAgents(agents);
+  const agentsUsd = read.length > 0 ? (sumDecimals(read.map((agent) => agent.value)) ?? '0') : null;
+  const { total } = allocation(allocationParts(held, agentsUsd));
+
+  const venuesLeft =
+    venues === 'unread'
+      ? ['Kuru', 'Perpl']
+      : held.unread.flatMap((s) => (s === 'kuru' ? ['Kuru'] : s === 'perpl' ? ['Perpl'] : []));
+  const notes = [
+    `Your cash, spot at Kuru prices and perps (margin + P&L)${
+      agents.length === 0 ? '' : ', plus your agents’'
+    }.`,
+    walletOnly > 0 ? 'Not yet your agents’ open trades.' : null,
+    // The cash then comes from `/wallet` (see `useUserPortfolio`), which is
+    // real, but tokens only `/portfolio` lists may be missing (SEN-123).
+    held.unread.includes('wallet') ? 'Some wallet tokens may be left out.' : null,
+    held.unpriced.length > 0 ? `Leaves out ${held.unpriced.join(', ')}: no Kuru price.` : null,
+    venuesLeft.length > 0
+      ? `Leaves out ${venuesLeft.join(' and ')}: ${venuesLeft.length === 1 ? 'it' : 'they'} didn’t answer.`
+      : null,
+    held.perpsUnknown ? 'Perp positions are left out until Perpl is linked.' : null,
+    unreadAgents(agents.length - read.length),
+  ];
+  return { total, includes: notes.filter((note) => note !== null).join(' ') };
 }
 
 /**
