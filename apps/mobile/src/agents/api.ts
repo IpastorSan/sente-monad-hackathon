@@ -379,6 +379,34 @@ export type AgentSummary = {
 export type ActivityEvent = WireAgentEvent & { agentName: string };
 
 /**
+ * One row of `GET /agents/fills` (SEN-157): a `fill` event from one of the
+ * caller's agents, flattened. Mirrors the API's `events/market-fills.ts`.
+ */
+export type AgentFill = {
+  /** The event's log `seq`: stable, so a list key. */
+  seq: number;
+  agentId: string;
+  agentName: string;
+  venue: 'kuru' | 'perpl';
+  symbol: string;
+  side: 'buy' | 'sell' | null;
+  /** The order's average fill price. */
+  price: string | null;
+  size: string;
+  orderId: string | null;
+  txHash: string | null;
+  /** Epoch ms the fill was recorded. */
+  at: number;
+};
+
+export type AgentFillsQuery = {
+  venue?: 'kuru' | 'perpl';
+  symbol?: string;
+  since?: number;
+  limit?: number;
+};
+
+/**
  * One row of `GET /leaderboard` (SEN-26).
  *
  * `n` is the denominator of `winRate` and `capitalDeployedUsd` of `roi`; the
@@ -747,6 +775,23 @@ export class AgentsApi {
       `/agents/activity${limit !== undefined ? `?limit=${limit}` : ''}`,
     );
     return page.events ?? [];
+  }
+
+  /**
+   * `GET /agents/fills` (SEN-157) — one market's fills across the user's
+   * agents, newest first. `null` while the route is not deployed, so the asset
+   * chart hides the agents' stones instead of claiming they never traded.
+   */
+  async fills(query: AgentFillsQuery = {}): Promise<AgentFill[] | null> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    const search = params.toString();
+    const page = await this.optional(
+      this.request<{ fills?: AgentFill[] }>('GET', `/agents/fills${search ? `?${search}` : ''}`),
+    );
+    return page === null ? null : (page.fills ?? []);
   }
 
   /**

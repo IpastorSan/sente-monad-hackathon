@@ -8,7 +8,17 @@
  * change the other.
  */
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, Matches, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 import type {
   BalanceDto,
@@ -100,6 +110,13 @@ export class FillsQueryDto {
   @IsOptional()
   @IsIn(['kuru', 'perpl'])
   venue?: VenueId;
+
+  /** One market's fills, e.g. for the asset chart's stones (SEN-157). */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  symbol?: string;
 
   /**
    * Opaque; whatever the previous page's `next` was. Printable ASCII only

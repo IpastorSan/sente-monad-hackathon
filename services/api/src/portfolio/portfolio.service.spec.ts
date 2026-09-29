@@ -414,6 +414,24 @@ describe('UserPortfolioService.fills', () => {
     });
   });
 
+  it('scopes to one market before paging (SEN-157)', async () => {
+    const { service, store } = harness();
+    store.put(trade('a', NOW - 10_000, { result: RESULT }), new Date(NOW));
+    store.put(
+      trade('c', NOW - 1_000, { result: RESULT, summary: { market: 'ETH-USDC', side: 'sell' } }),
+      new Date(NOW),
+    );
+
+    const page = await service.fills(ALICE, { symbol: 'MON-USDC', limit: 2 });
+    expect(page).toEqual({
+      fills: [
+        expect.objectContaining({ tradeId: 'a', venueTradeId: 't1' }),
+        expect.objectContaining({ tradeId: 'a', venueTradeId: 't2' }),
+      ],
+      next: null,
+    });
+  });
+
   it('refuses Perpl fills without a read key rather than answer "none" (SEN-151)', async () => {
     const { service, store } = harness();
     store.put(trade('a', NOW - 10_000, { result: RESULT }), new Date(NOW));
@@ -478,6 +496,22 @@ describe('UserPortfolioService.fills', () => {
     now += USER_PERPL_TTL_MS;
     await service.fills(ALICE, { venue: 'perpl', limit: 20 });
     expect(getFills).toHaveBeenCalledTimes(3);
+  });
+
+  it("filters a Perpl page to one market and keeps Perpl's cursor (SEN-157)", async () => {
+    const eth = { ...PERPL_FILL, tradeId: 'eth:1', symbol: 'ETH-PERP' };
+    const perpl = fakePerpl({
+      getFills: () => Promise.resolve({ fills: [PERPL_FILL, eth], next: 'np-1' }),
+    });
+    const { service } = harness({ withPerplReadVenue: perpl.reader });
+
+    const page = await service.fills(ALICE, { venue: 'perpl', symbol: 'ETH-PERP' });
+    expect(page).toEqual({
+      fills: [expect.objectContaining({ venueTradeId: 'eth:1' })],
+      next: 'np-1',
+    });
+    // The cached page is not the filtered one.
+    expect((await service.fills(ALICE, { venue: 'perpl' })).fills).toHaveLength(2);
   });
 
   it('a failed Perpl fills read is perpl_unavailable', async () => {

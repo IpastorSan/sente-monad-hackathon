@@ -237,7 +237,12 @@ export class UserPortfolioService {
     const { address } = await this.#bound(principal);
     const limit = query.limit ?? FILLS_DEFAULT_LIMIT;
     if (query.venue === 'perpl') {
-      return this.#perplFills(principal.userId, address, query.cursor, limit);
+      const page = await this.#perplFills(principal.userId, address, query.cursor, limit);
+      // SEN-157: Perpl pages by its own cursor, so a market is filtered out of
+      // each page after the read (and after the cache, which stays per page):
+      // a page may come back short, but `next` still walks the whole history.
+      if (query.symbol === undefined) return page;
+      return { ...page, fills: page.fills.filter((fill) => fill.symbol === query.symbol) };
     }
     // The cursor is opaque on the wire since Perpl's own is not a number;
     // Kuru's is still an offset.
@@ -248,7 +253,9 @@ export class UserPortfolioService {
 
     const all = this.#readers.trades
       .listRecent(principal.userId, ALL_TRADES)
-      .flatMap((trade) => kuruFills(trade));
+      .flatMap((trade) => kuruFills(trade))
+      // SEN-157: filtered before paging, so a market's page is full, not a sparse slice of everyone's.
+      .filter((fill) => query.symbol === undefined || fill.symbol === query.symbol);
     const page = all.slice(offset, offset + limit);
     const end = offset + page.length;
     return { fills: page, next: end < all.length ? String(end) : null };

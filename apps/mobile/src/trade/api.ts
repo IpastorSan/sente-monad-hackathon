@@ -80,7 +80,13 @@ export type TradeApiOptions = {
 };
 
 /** `cursor` is the previous page's `next`; `limit` is 1..100 (the API's default is 50). */
-export type FillsQuery = { venue?: PortfolioVenue; cursor?: string; limit?: number };
+export type FillsQuery = {
+  venue?: PortfolioVenue;
+  /** One market's fills (SEN-157). */
+  symbol?: string;
+  cursor?: string;
+  limit?: number;
+};
 
 type Query = Record<string, string | number | undefined>;
 
@@ -132,7 +138,7 @@ export class TradeApi {
     return this.request('GET', '/portfolio');
   }
 
-  /** `GET /portfolio/fills?venue=&cursor=&limit=` (M-T19): the user's own fills, newest first. */
+  /** `GET /portfolio/fills?venue=&symbol=&cursor=&limit=` (M-T19): the user's own fills, newest first. */
   fills(query: FillsQuery = {}): Promise<PortfolioFills> {
     return this.request('GET', '/portfolio/fills', { query });
   }

@@ -24,7 +24,9 @@ import { AgentsService } from './agents.service';
 import {
   AgentActivityQueryDto,
   AgentEventsQueryDto,
+  AgentFillsQueryDto,
   AgentIdParamDto,
+  AGENT_FILLS_DEFAULT_LIMIT,
   AGENT_ACTIVITY_DEFAULT_LIMIT,
   AGENT_EVENTS_DEFAULT_LIMIT,
   AmendMandateDto,
@@ -43,6 +45,7 @@ import {
   type AgentActivityResponseDto,
   type AgentEventResponseDto,
   type AgentEventsResponseDto,
+  type AgentFillsResponseDto,
   type AgentListResponseDto,
   type AgentResponseDto,
   type HireAgentResponseDto,
@@ -52,6 +55,7 @@ import {
 } from './dto/agent.dto';
 import type { AgentPortfolioDto } from '../venues/dto/markets.dto';
 import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
+import { marketFills } from './events/market-fills';
 import { latestEvents, summariseEvents } from './events/summary';
 import { AgentPortfolioService } from './portfolio/portfolio.service';
 import { ReturnFundsService } from './recovery/return-funds.service';
@@ -122,7 +126,7 @@ export class AgentsController {
   }
 
   /**
-   * ROUTE ORDER IS LOAD-BEARING for the next two: Express matches routes in the
+   * ROUTE ORDER IS LOAD-BEARING for the next three (`fills`, SEN-157, too): Express matches routes in the
    * order Nest registers them, which is declaration order, so `summaries` and
    * `activity` are declared BEFORE `@Get(':id')`. After it, `:id` would capture
    * them and the UUID pipe would answer a 400 for a route that exists.
@@ -186,6 +190,34 @@ export class AgentsController {
           ...this.withConsensus(toAgentEventResponse(event)),
           agentName: names.get(event.agentId) ?? '',
         })),
+      };
+    });
+  }
+
+  /**
+   * One market's fills across the caller's agents (SEN-157): the purple
+   * stones on the asset chart and its "Fills on" list. Owner-scoped like
+   * `activity` (only the caller's agents are read) and declared before `:id`
+   * for the same reason. Not behind the manual-trading flag: an agent's fills
+   * exist whether or not its owner may trade by hand.
+   */
+  @Get('fills')
+  async fills(@Query() query: AgentFillsQueryDto): Promise<AgentFillsResponseDto> {
+    return this.guard(async () => {
+      const agents = await this.agents.list(this.auth.principal());
+      const logs = await Promise.all(
+        agents.map(async (agent) => ({
+          agent,
+          events: await this.events.list(agent.id, { kind: 'fill' }),
+        })),
+      );
+      return {
+        fills: marketFills(logs, {
+          venue: query.venue,
+          symbol: query.symbol,
+          since: query.since,
+          limit: query.limit ?? AGENT_FILLS_DEFAULT_LIMIT,
+        }),
       };
     });
   }
