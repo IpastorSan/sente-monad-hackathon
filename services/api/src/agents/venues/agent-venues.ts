@@ -6,6 +6,16 @@
  * - `perpl` only once the agent holds Perpl credentials (onboarded and
  *   enrolled through {@link PerplAgentAccounts}); absent otherwise.
  *
+ * On-demand enrollment (SEN-148): no API path used to enroll an agent's Perpl
+ * key, so every agent read as `not_enrolled`. Callers that know Perpl is in the
+ * agent's mandate pass `enrollPerpl`, and the first such use with no stored
+ * key enrolls one through `PerplAgentAccounts.credentials()` — single-flight
+ * per agent, stored in the durable secret store, reused ever after (an
+ * account holds at most 16 keys). A failure is remembered for
+ * `enrollRetryMs` and reported as `perplUnavailable`, so a portfolio polled
+ * every few seconds does not become an enrollment storm. Only exercised
+ * against real Perpl and Privy once deployed; the specs run on fakes.
+ *
  * A Perpl venue holds a long-lived authenticated socket, so the set is cached
  * per agent and torn down after `idleMs` without a `forAgent` call, or at once
  * on `release(agentId)` (revocation). Callers should ask `forAgent` per task
@@ -21,21 +31,35 @@ import {
   type PerplCredentials,
   type PerplNetwork,
 } from '@sente/venues/perpl';
-import type { PublicClient } from 'viem';
+import { BaseError, type PublicClient } from 'viem';
 
 import type { AgentSecretStore } from './agent-secret-store.ts';
 import type { AgentIdentity, AgentTransactionSender } from './agent-transactions.ts';
+import type { PerplAgentAccounts } from './perpl-agent.ts';
 import { PrivyKuruSubmitter } from './privy-kuru-submitter.ts';
 
 export interface AgentVenueSet {
   readonly kuru: KuruVenue;
   readonly perpl?: PerplVenue;
+  /** Why `perpl` is absent when an on-demand enrollment was tried and failed. */
+  readonly perplUnavailable?: string;
+}
+
+/** Whether a caller may enroll a Perpl key: only when Perpl is in the agent's mandate. */
+export interface PerplAccessOptions {
+  readonly enrollPerpl?: boolean;
 }
 
 export interface AgentVenuesOptions {
   readonly publicClient: PublicClient;
   readonly sender: AgentTransactionSender;
   readonly secrets: AgentSecretStore;
+  /** Enrolls on demand. Without it, only already-stored keys are used. */
+  readonly perplAccounts?: Pick<PerplAgentAccounts, 'credentials'>;
+  /** How long a failed enrollment is not retried. Default 10 min. */
+  readonly enrollRetryMs?: number;
+  readonly now?: () => number;
+  readonly logger?: { warn(message: string): void };
   /** Defaults to testnet. */
   readonly perplNetwork?: PerplNetwork;
   /** Close an agent's Perpl socket after this long without use. Default 5 min. */
@@ -51,28 +75,44 @@ interface Entry {
   timer?: ReturnType<typeof setTimeout>;
 }
 
+/** Stored credentials, or why there are none (`reason` only after a failed enrollment). */
+interface PerplAccess {
+  readonly credentials?: PerplCredentials;
+  readonly reason?: string;
+}
+
 export const AGENT_VENUES_IDLE_MS = 5 * 60_000;
+export const PERPL_ENROLL_RETRY_MS = 10 * 60_000;
 
 export class AgentVenues {
   readonly #publicClient: PublicClient;
   readonly #sender: AgentTransactionSender;
   readonly #secrets: AgentSecretStore;
+  readonly #accounts: Pick<PerplAgentAccounts, 'credentials'> | undefined;
+  readonly #enrollRetryMs: number;
+  readonly #now: () => number;
+  readonly #logger: { warn(message: string): void } | undefined;
   readonly #idleMs: number;
   readonly #createPerpl: (credentials: PerplCredentials) => PerplVenue;
   readonly #entries = new Map<string, Entry>();
+  readonly #enrollFailures = new Map<string, { readonly at: number; readonly reason: string }>();
 
   constructor(options: AgentVenuesOptions) {
     this.#publicClient = options.publicClient;
     this.#sender = options.sender;
     this.#secrets = options.secrets;
+    this.#accounts = options.perplAccounts;
+    this.#enrollRetryMs = options.enrollRetryMs ?? PERPL_ENROLL_RETRY_MS;
+    this.#now = options.now ?? Date.now;
+    this.#logger = options.logger;
     this.#idleMs = options.idleMs ?? AGENT_VENUES_IDLE_MS;
     const network = options.perplNetwork ?? PERPL_NETWORKS.testnet;
     this.#createPerpl =
       options.createPerplVenue ?? ((credentials) => new PerplVenue({ credentials, network }));
   }
 
-  async forAgent(agent: AgentIdentity): Promise<AgentVenueSet> {
-    const credentials = await this.#secrets.getPerplCredentials(agent.agentId);
+  async forAgent(agent: AgentIdentity, options: PerplAccessOptions = {}): Promise<AgentVenueSet> {
+    const { credentials, reason } = await this.#perplAccess(agent, options);
 
     // Synchronous from here: no await between reading and writing the cache.
     let entry = this.#entries.get(agent.agentId);
@@ -93,7 +133,10 @@ export class AgentVenues {
     if (!entry.perpl && credentials) entry.perpl = this.#createPerpl(credentials);
 
     this.#touch(agent.agentId, entry);
-    return entry.perpl ? { kuru: entry.kuru, perpl: entry.perpl } : { kuru: entry.kuru };
+    if (entry.perpl) return { kuru: entry.kuru, perpl: entry.perpl };
+    return reason === undefined
+      ? { kuru: entry.kuru }
+      : { kuru: entry.kuru, perplUnavailable: reason };
   }
 
   /**
@@ -104,17 +147,19 @@ export class AgentVenues {
    * stayed open. Here a socket the agent's own run already holds is borrowed
    * as is — its idle timer untouched — and otherwise a throwaway venue is
    * built for this one read and closed after it. `read` gets `undefined`
-   * when the agent holds no Perpl credentials.
+   * when the agent holds no Perpl credentials, and with it the reason when an
+   * on-demand enrollment failed.
    */
   async readPerpl<T>(
     agent: AgentIdentity,
-    read: (perpl: PerplVenue | undefined) => Promise<T>,
+    read: (perpl: PerplVenue | undefined, unavailable?: string) => Promise<T>,
+    options: PerplAccessOptions = {},
   ): Promise<T> {
     const live = this.#entries.get(agent.agentId)?.perpl;
     if (live && this.holdsPerpl(agent)) return read(live);
 
-    const credentials = await this.#secrets.getPerplCredentials(agent.agentId);
-    if (!credentials) return read(undefined);
+    const { credentials, reason } = await this.#perplAccess(agent, options);
+    if (!credentials) return read(undefined, reason);
     const perpl = this.#createPerpl(credentials);
     try {
       return await read(perpl);
@@ -151,9 +196,42 @@ export class AgentVenues {
     for (const agentId of [...this.#entries.keys()]) this.release(agentId);
   }
 
+  async #perplAccess(agent: AgentIdentity, options: PerplAccessOptions): Promise<PerplAccess> {
+    const held = await this.#secrets.getPerplCredentials(agent.agentId);
+    if (held) return { credentials: held };
+    if (!options.enrollPerpl || !this.#accounts) return {};
+
+    const failed = this.#enrollFailures.get(agent.agentId);
+    if (failed && this.#now() - failed.at < this.#enrollRetryMs) return { reason: failed.reason };
+    try {
+      // Single-flight lives in PerplAgentAccounts: concurrent first uses from
+      // a run and a portfolio poll share one enrollment.
+      const credentials = await this.#accounts.credentials(agent);
+      this.#enrollFailures.delete(agent.agentId);
+      return { credentials };
+    } catch (error) {
+      const reason = `Perpl enrollment failed: ${messageOf(error)}`;
+      this.#enrollFailures.set(agent.agentId, { at: this.#now(), reason });
+      this.#logger?.warn(
+        `agent ${agent.agentId}: ${reason}; not retried for ${Math.round(this.#enrollRetryMs / 1000)} s`,
+      );
+      return { reason };
+    }
+  }
+
   #touch(agentId: string, entry: Entry): void {
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => this.release(agentId), this.#idleMs);
     entry.timer.unref?.();
   }
+}
+
+/**
+ * The short message only: this reason reaches the phone and the logs, and
+ * viem's full message carries the RPC URL, which can hold a provider key.
+ * Nothing on the enrollment path puts the API secret in an error.
+ */
+function messageOf(error: unknown): string {
+  if (error instanceof BaseError) return error.shortMessage;
+  return error instanceof Error ? error.message : String(error);
 }

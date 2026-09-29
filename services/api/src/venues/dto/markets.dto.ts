@@ -214,6 +214,8 @@ export interface AgentPortfolioDto {
           balances: BalanceDto[];
           positions: null;
           openOrders: null;
+          // SEN-148: why the agent holds no Perpl key after a failed enrollment.
+          reason?: string;
         }
       | { status: 'no_account' }
       | { status: 'not_in_mandate' }

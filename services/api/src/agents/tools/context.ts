@@ -17,6 +17,8 @@ export interface ToolVenues {
   readonly kuru: KuruToolVenue;
   /** Absent until the agent's wallet has enrolled a Perpl API key. */
   readonly perpl?: PerpsVenue;
+  /** Why `perpl` is absent after a failed on-demand enrollment (SEN-148). */
+  readonly perplUnavailable?: string;
 }
 
 /**

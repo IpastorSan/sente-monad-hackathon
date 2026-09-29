@@ -36,10 +36,10 @@ export function sealPerplCredentials(credentials: PerplCredentials): PerplCreden
 }
 
 /**
- * PERSISTENCE: in memory, like the gas drip's ledger — this repo has no
- * database yet. A restart forgets every key, and the next use enrolls a new
- * one (an account holds at most 16 active keys). A durable store must encrypt
- * at rest; rebind AGENT_SECRETS and nothing else changes.
+ * PERSISTENCE: in memory — what the API binds when `STATE_DIR` is unset, and
+ * what specs and live scripts use. A restart forgets every key, and the next
+ * use enrolls a new one (an account holds at most 16 active keys). With
+ * `STATE_DIR` set the API binds `FileAgentSecretStore` instead (SEN-148).
  */
 export class InMemoryAgentSecretStore implements AgentSecretStore {
   readonly #perpl = new Map<string, PerplCredentials>();

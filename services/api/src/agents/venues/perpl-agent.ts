@@ -226,16 +226,21 @@ export class PerplAgentAccounts {
    * otherwise enrolled once (a Privy-signed EIP-712 message) and stored.
    * Never enrolls for an address without a Perpl account.
    */
-  async credentials(agent: AgentIdentity): Promise<PerplCredentials> {
-    const held = await this.#secrets.getPerplCredentials(agent.agentId);
-    if (held) return held;
-
-    let enrolling = this.#enrolling.get(agent.agentId);
-    if (!enrolling) {
-      enrolling = this.#enroll(agent).finally(() => this.#enrolling.delete(agent.agentId));
-      this.#enrolling.set(agent.agentId, enrolling);
+  credentials(agent: AgentIdentity): Promise<PerplCredentials> {
+    // The store read happens INSIDE the single flight (SEN-148). Read outside
+    // it, a caller whose read resolved just before a finishing enrollment
+    // stored its key would find the flight already gone and enroll a second
+    // key: a burnt slot out of the account's 16.
+    let pending = this.#enrolling.get(agent.agentId);
+    if (!pending) {
+      pending = this.#heldOrEnroll(agent).finally(() => this.#enrolling.delete(agent.agentId));
+      this.#enrolling.set(agent.agentId, pending);
     }
-    return enrolling;
+    return pending;
+  }
+
+  async #heldOrEnroll(agent: AgentIdentity): Promise<PerplCredentials> {
+    return (await this.#secrets.getPerplCredentials(agent.agentId)) ?? this.#enroll(agent);
   }
 
   async #enroll(agent: AgentIdentity): Promise<PerplCredentials> {

@@ -12,7 +12,7 @@ import {
 import type { AgentWalletProvider } from '../agent-wallet.provider';
 import { EnclaveRefusedError } from '../agents.errors';
 import type { PrivyTransactionRequest } from '../privy/agent-wallet';
-import { InMemoryAgentSecretStore } from './agent-secret-store';
+import { InMemoryAgentSecretStore, type AgentSecretStore } from './agent-secret-store';
 import { AgentTransactionSender, type AgentChainClient } from './agent-transactions';
 import {
   PERPL_ONBOARDING_GAS,
@@ -21,6 +21,7 @@ import {
   PerplOnboardingError,
   perplAccountInfo,
 } from './perpl-agent';
+import { perplEnrollPayload as payload } from './testing/perpl-enroll-fake';
 
 const AGENT = {
   agentId: 'agent-1',
@@ -48,50 +49,13 @@ const CONTEXT = {
   markets: [],
 } as unknown as PerplContext;
 
-function payload(address: string) {
-  return {
-    typed_data: {
-      types: {
-        EIP712Domain: [
-          { name: 'name', type: 'string' },
-          { name: 'version', type: 'string' },
-          { name: 'chainId', type: 'uint256' },
-          { name: 'verifyingContract', type: 'address' },
-          { name: 'salt', type: 'bytes32' },
-        ],
-        PerplRegisterApiKey: [
-          { name: 'signer', type: 'address' },
-          { name: 'statement', type: 'string' },
-          { name: 'publicKey', type: 'string' },
-          { name: 'scope', type: 'string' },
-          { name: 'label', type: 'string' },
-          { name: 'time', type: 'uint64' },
-        ],
-      },
-      primaryType: 'PerplRegisterApiKey',
-      domain: {
-        name: 'perpl.xyz',
-        version: '1',
-        chainId: '0x279f',
-        verifyingContract: '0x0000000000000000000000000000000000000000',
-        salt: '0x00000000000000000000000000000000000000006aa2f731368ca5c38d4d3fb0',
-      },
-      message: {
-        signer: address,
-        statement:
-          'I authorize the creation of Perpl API key with the specified scope and parameters',
-        publicKey: 'k',
-        scope: '3',
-        label: 'x',
-        time: '0x1a08c959a61',
-      },
-    },
-    mac: '0xmac',
-  };
-}
-
 function harness(
-  options: { accountId?: bigint | null; reverted?: number; refuseTypedData?: boolean } = {},
+  options: {
+    accountId?: bigint | null;
+    reverted?: number;
+    refuseTypedData?: boolean;
+    secrets?: AgentSecretStore;
+  } = {},
 ) {
   let accountId = options.accountId ?? null;
   const signedTxs: PrivyTransactionRequest[] = [];
@@ -158,7 +122,7 @@ function harness(
     );
   }) as typeof fetch;
 
-  const secrets = new InMemoryAgentSecretStore();
+  const secrets = options.secrets ?? new InMemoryAgentSecretStore();
   const accounts = new PerplAgentAccounts({
     sender: new AgentTransactionSender({ wallets, chain }),
     wallets,
@@ -247,6 +211,34 @@ describe('PerplAgentAccounts.credentials', () => {
     const keys = await Promise.all([1, 2, 3].map(() => h.accounts.credentials(AGENT)));
     expect(h.enrollments).toBe(1);
     expect(new Set(keys.map((k) => k.apiKey))).toEqual(new Set(['key-1']));
+  });
+
+  it('does not enroll a second key for a caller that arrives as the first one finishes', async () => {
+    // SEN-148: the store read used to sit outside the single flight, so a
+    // caller whose read resolved before the key was stored enrolled again.
+    // A store whose reads answer what it held when asked, but late: the second
+    // caller asks mid-enrollment (nothing held) and hears back after the first
+    // enrollment has stored its key and left the flight.
+    const inner = new InMemoryAgentSecretStore();
+    let slow = false;
+    const secrets: AgentSecretStore = {
+      getPerplCredentials: async (agentId) => {
+        const held = await inner.getPerplCredentials(agentId);
+        if (slow && !held) await new Promise((resolve) => setTimeout(resolve, 50));
+        return held;
+      },
+      putPerplCredentials: (agentId, credentials) =>
+        inner.putPerplCredentials(agentId, credentials),
+      deleteAgent: (agentId) => inner.deleteAgent(agentId),
+    };
+    const h = harness({ accountId: 493n, secrets });
+    const first = h.accounts.credentials(AGENT);
+    await new Promise((resolve) => setImmediate(resolve));
+    slow = true;
+    const late = h.accounts.credentials(AGENT);
+    const keys = await Promise.all([first, late]);
+    expect(h.enrollments).toBe(1);
+    expect(keys.map((k) => k.apiKey)).toEqual(['key-1', 'key-1']);
   });
 
   it('refuses to enroll an address with no Perpl account, before signing anything', async () => {

@@ -83,11 +83,13 @@ export interface AgentPortfolioReaders {
    * Runs `read` against the agent's credentialed Perpl venue (`undefined` when
    * it holds no API key). A callback rather than a getter so the reader, not
    * the service, owns the socket's lifetime: a polled portfolio must not keep
-   * the agent's trading socket open (SEN-122).
+   * the agent's trading socket open (SEN-122). Only called for an agent with
+   * Perpl in its mandate, so a missing key is enrolled on demand (SEN-148);
+   * `unavailable` says why when that failed.
    */
   readonly withPerplVenue: <T>(
     agent: AgentIdentity,
-    read: (venue: PerplAccountVenue | undefined) => Promise<T>,
+    read: (venue: PerplAccountVenue | undefined, unavailable?: string) => Promise<T>,
   ) => Promise<T>;
   /** Whether `withPerplVenue` would borrow the agent's running socket rather than open one. */
   readonly holdsPerplSocket: (agent: AgentIdentity) => boolean;
@@ -220,8 +222,12 @@ export class AgentPortfolioService {
     now: number,
   ): Promise<PerplSection> {
     const fresh = await this.#section('perpl', agent.id, async () => ({
-      ...(await this.#readers.withPerplVenue(identity, (venue) =>
-        readPerplAccount(agent.address, { accountInfo: this.#readers.perplAccountInfo, venue }),
+      ...(await this.#readers.withPerplVenue(identity, (venue, unavailable) =>
+        readPerplAccount(agent.address, {
+          accountInfo: this.#readers.perplAccountInfo,
+          venue,
+          unavailable,
+        }),
       )),
       asOf: now,
     }));
@@ -402,7 +408,7 @@ export function agentPortfolioReaders(
     wallet: new ViemTokenBalanceReader(client, AGENT_WALLET_TOKENS),
     kuruVenue: (address) => kuruAccountVenue(client, address),
     // Never `venues.forAgent`: that keeps the socket open (SEN-122).
-    withPerplVenue: (agent, read) => venues.readPerpl(agent, read),
+    withPerplVenue: (agent, read) => venues.readPerpl(agent, read, { enrollPerpl: true }),
     holdsPerplSocket: (agent) => venues.holdsPerpl(agent),
     perplAccountInfo: (address) => perplAccountInfo(client, address),
     events,

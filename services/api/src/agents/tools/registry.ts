@@ -96,7 +96,8 @@ export class VenueUnavailableError extends Error {
 function requirePerpl(venues: ToolVenues) {
   if (!venues.perpl) {
     throw new VenueUnavailableError(
-      'Perpl is not set up for this agent yet: its wallet has not enrolled a Perpl API key',
+      'Perpl is not set up for this agent yet: its wallet has not enrolled a Perpl API key' +
+        (venues.perplUnavailable ? ` (${venues.perplUnavailable})` : ''),
     );
   }
   return venues.perpl;
