@@ -24,8 +24,9 @@
  *
  * The eye hides every figure for trading in public; the choice is kept on the
  * device and shared with Portfolio (`portfolio/hideBalances.ts`). Account lives behind
- * the avatar. The study's bell is left out: there is no notification feed
- * behind it, and a purple dot is an event, so it cannot be decoration.
+ * the avatar. The bell opens Alerts (SEN-156) and carries the count of alerts
+ * this device has not seen; with none it carries nothing, because a purple
+ * badge is an event and cannot be decoration.
  *
  * The address is the user's PRIVY WALLET (SEN-40), not the passkey EOA and not
  * the old Kernel account: it is the address to fund. "Add funds" is a sheet
@@ -68,6 +69,7 @@ import {
 } from '@/agents/home';
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
 import type { ActivityEvent } from '@/agents/api';
+import { useAlerts } from '@/agents/useAlerts';
 import type { MarketDto, TickerDto } from '@/markets/api';
 import { useMarkets, useTickers } from '@/markets/hooks';
 import { readFavourites } from '@/markets/localLists';
@@ -87,6 +89,7 @@ import { Chart } from '@/ui/chart/Chart';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
 import { formatBalance, shortAddress } from '@/ui/format';
 import { Sigil, Stone } from '@/ui/goban';
+import { Icon } from '@/ui/icons';
 import {
   Button,
   ButtonRow,
@@ -116,16 +119,15 @@ const STABLES = FUNDING_TOKENS.filter(
   (token) => token.symbol === 'USDC' || token.symbol === 'AUSD',
 );
 
-/** The route's own maximum: the day's verdicts for the chart, and the latest move. */
-const ACTIVITY_PAGE = 50;
-
 export default function Home() {
   const router = useRouter();
   // The session lives in <SessionProvider> so the agent screens share it. The
   // tabs layout only renders this once it is signed in.
   const { wallet } = useSession();
   const overview = useAgentsOverview();
-  const activity = useActivity();
+  // One poll of `/agents/activity` feeds the bell, the latest move and the chart.
+  const feed = useAlerts();
+  const activity = useActivity(feed.events);
   const markets = useMarkets();
   const tickers = useTickers();
   // The same preference as Portfolio's eye (SEN-144): hide here, hidden there.
@@ -176,7 +178,8 @@ export default function Home() {
     markets.refresh();
     tickers.refresh();
     if (user.trading) user.polled.refresh();
-    await Promise.all([wallet.refresh(), overview.refresh(), activity.refresh()]);
+    feed.polled.refresh();
+    await Promise.all([wallet.refresh(), overview.refresh()]);
     setRefreshing(false);
   };
 
@@ -241,16 +244,32 @@ export default function Home() {
             </Text>
           </View>
         </Pressable>
-        <Pressable
-          accessibilityRole="switch"
-          accessibilityState={{ checked: hidden }}
-          accessibilityLabel="Hide balances"
-          hitSlop={8}
-          onPress={toggleHidden}
-          style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-        >
-          <EyeIcon off={hidden} />
-        </Pressable>
+        <View style={styles.aside}>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: hidden }}
+            accessibilityLabel="Hide balances"
+            hitSlop={8}
+            onPress={toggleHidden}
+            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+          >
+            <EyeIcon off={hidden} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={feed.badge !== null ? `Alerts, ${feed.badge} unread` : 'Alerts'}
+            hitSlop={8}
+            onPress={() => router.push('/alerts')}
+            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+          >
+            <Icon name="bell" size={18} color={color.textDim} />
+            {feed.badge !== null ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{feed.badge}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        </View>
       </View>
 
       <Hero
@@ -838,34 +857,16 @@ function MoverCard({
 // ─── Activity ───────────────────────────────────────────────────────────────
 
 /**
- * The latest events across every agent: the newest one Home can word is the
- * latest move, and the whole page feeds the realised-P&L chart. The route is
- * from SEN-56 and may not be deployed, so any failure reads as "no activity":
- * both are left out, never shown as an error on the home screen.
+ * The latest events across every agent, from the Alerts poll (SEN-156): the
+ * newest one Home can word is the latest move, and the whole page feeds the
+ * realised-P&L chart. The route is from SEN-56 and may not be deployed, so a
+ * failure reads as "no activity": both are left out, never shown as an error
+ * on the home screen.
  */
-function useActivity(): {
+function useActivity(events: ActivityEvent[]): {
   events: ActivityEvent[];
   move: LatestMove | null;
-  refresh: () => Promise<void>;
 } {
-  const { agents: api } = useSession();
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-
-  const refresh = useCallback(async () => {
-    if (!api) return;
-    try {
-      setEvents(await api.activity(ACTIVITY_PAGE));
-    } catch {
-      setEvents([]);
-    }
-  }, [api]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void refresh();
-    }, [refresh]),
-  );
-
   const move = useMemo(() => {
     for (const event of events) {
       const found = latestMove(event);
@@ -874,7 +875,7 @@ function useActivity(): {
     return null;
   }, [events]);
 
-  return { events, move, refresh };
+  return { events, move };
 }
 
 /** One ledger event as a sentence, with its stone, and the ramp if it landed in a block. */
@@ -1003,4 +1004,20 @@ const styles = StyleSheet.create({
   moveStone: { marginTop: 4 },
   moveHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
   moveTime: { fontSize: 11, color: color.textFaint },
+  // The count on the bell: purple, because an unseen alert is an event.
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: color.purple,
+    borderWidth: 2,
+    borderColor: color.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: { fontFamily: font.semibold, fontSize: 10, lineHeight: 12, color: color.text },
 });
