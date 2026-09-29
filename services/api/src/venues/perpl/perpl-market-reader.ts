@@ -407,6 +407,9 @@ function resolveOrNotFound(context: PerplContext, symbol: string): ResolvedMarke
  * Perpl counts the interval in blocks, and the seconds figure is nominal (one
  * observed gap was 2,643 s against 2,580). A market with no event yet, or no
  * usable interval, has no funding to show rather than a made-up zero.
+ *
+ * The sign passes through as is: Perpl's positive `rate` means longs pay
+ * shorts, the same as `TickerDto` (SEN-150, docs/perpl.md "Funding sign").
  */
 function fundingOf(m: ResolvedMarket): TickerDto['funding'] {
   const event = m.raw.funding;

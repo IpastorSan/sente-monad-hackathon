@@ -70,8 +70,9 @@ export interface TickerDto {
   change24h: Decimal | null;
   change24hPct: Decimal | null; // pct as a fraction
   quoteVolume24h: Decimal | null;
-  // rate: fraction per interval, positive = longs pay shorts. Perpl fills it from /pub/context
-  // (SEN-145); nextAt is an estimate there, the interval being counted in blocks. Kuru: null.
+  // rate: fraction per interval, positive = longs pay shorts (Perpl's own sign, SEN-150). Perpl
+  // fills it from /pub/context (SEN-145); nextAt is an estimate there, the interval being counted
+  // in blocks. Kuru: null.
   funding: { rate: Decimal; intervalHours: number; nextAt: number | null } | null;
   stale: boolean;
   asOf: number;

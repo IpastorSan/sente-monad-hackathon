@@ -223,6 +223,26 @@ describe('PerplMarketReader', () => {
       });
     });
 
+    // SEN-150: TickerDto says positive = longs pay shorts, and Perpl's `rate` means the same:
+    // its docs say so, the SDK debits longs for a positive payment, and in 244 live events
+    // `ppl` (payment per lot) had `rate`'s sign every time (docs/perpl.md "Funding sign").
+    // So the sign must pass through untouched; flipping it would turn Funding Harvester around.
+    it('passes the funding sign through as Perpl publishes it: positive = longs pay (SEN-150)', async () => {
+      const cases = [
+        // Live events from 2026-09-29, `ppl` kept to show it carries the rate's sign.
+        { event: { at: { b: 1 }, rate: 30, idx: 838_289, ppl: 25 }, rate: '0.00003' },
+        { event: { at: { b: 1 }, rate: -30, idx: 453_292, ppl: -135 }, rate: '-0.00003' },
+        { event: { at: { b: 1 }, rate: 0, idx: 5_724, ppl: 0 }, rate: '0' },
+      ];
+      for (const { event, rate } of cases) {
+        const { reader, data } = setup();
+        const ctx = context();
+        ctx.markets[0].funding = event;
+        data.context.mockResolvedValue(ctx);
+        expect((await reader.ticker('BTC-PERP')).funding?.rate).toBe(rate);
+      }
+    });
+
     it('serves every market from one context read within 3 s', async () => {
       const { reader, data } = setup();
       await reader.tickers();

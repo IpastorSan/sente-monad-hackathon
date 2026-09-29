@@ -147,3 +147,58 @@ the collateral's 6 decimals next to the socket's balances. Comparing the two the
   requests a minute.
 - The `orl` → `index` comment in `PerplMarketReader` is now confirmed. The doc comments in `rest.ts`
   and `ws.ts` that said Perpl has no REST book have been corrected.
+
+## Funding sign — SEN-150, 2026-09-29
+
+**Verdict: a positive `rate` means longs pay shorts; negative, shorts pay longs.** This is the
+usual rule, and it is what SEN-145 assumed. `TickerDto.funding.rate` passes Perpl's `rate` through
+with its sign, so nothing changed in code. A spec in `perpl-market-reader.spec.ts` pins it. The
+evidence comes from three independent sources, and none of it needed funds or credentials:
+
+1. **Perpl's docs say so, twice** (`PerplFoundation/perpl-docs` at `3173c42`):
+   - `docs/exchange/funding.md`: "The direction of payment depends on whether the funding rate is
+     positive (payment flows from long positions to short positions) or negative (payment flows in
+     the opposite direction)."
+   - `docs/exchange/price-indices.md`: "When the perpetual trades above spot, longs pay shorts".
+     The rate formula is `f_t = (max(P_impact_bid − P_spot, 0) − max(P_spot − P_impact_ask, 0)) /
+P_spot`, averaged over the interval and clamped. It is positive exactly when the book sits
+     above the spot index. The payment is `Q · F · P_spot`, charged against the spot index, not
+     the mark.
+2. **The Rust SDK applies it with that sign** (`PerplFoundation/dex-sdk` at `01b9910`).
+   `Position::apply_funding_payment` (`crates/sdk/src/state/position.rs`) is commented "Positive
+   funding payment means longs pay shorts". It adds `−payment · size` to a long's `premium_pnl` and
+   `+payment · size` to a short's. The payment and the rate come from the same contract event,
+   `FundingEventCompleted { actualRatePct100k, fundingPaymentPNS }` (`state/exchange.rs`). Its own
+   tests assert that a positive payment gives a long −10 and a short +10.
+3. **The API's `rate` has the same sign as that payment.** `FundingEvent.ppl` is the per-lot payment
+   (`types.md`: "Payment per lot", signed `SPrice`), and `sum` is the funding sum from `funding.md`.
+   In every market's 24 h history (`GET /api/v1/market-data/funding/:from-:to`, 244 events on 8
+   markets, 135 positive, 46 negative and 63 zero), the following held:
+   - `sign(ppl) == sign(rate)` in 244 of 244 events.
+   - `ppl ≈ rate · 10⁻⁶ · idx · div` to within truncation. For example, BTC `30 · 844713 / 10⁶ = 25.3`
+     and `ppl` was 25. For SOL, `−10 · 12043 · 1000 / 10⁶ = −120.4` and `ppl` was −120.
+   - `sum[n] − sum[n−1] == ppl[n]` in 236 of 236 consecutive pairs.
+
+   So the API's `rate` is the rate behind the payment the SDK debits from longs when it is
+   positive. The API does not flip the sign between the contract and the JSON.
+
+**The market snapshot agrees but proves little.** In one `/pub/context` read (16:57 UTC), the
+latest `rate` matched the sign of `mid − orl` wherever the book was clearly off the index: BTC +30
+(mid 83,844.5 against orl 83,834.3), ETH +30, ZEC +40 (the bid itself above `orl`) and LIT −30
+(mid below `orl`). NEAR was −40 with its mid 0.0002 above `orl`, but its bid was below `orl`, so the
+top-of-book impact premium was 0. The rate is an average over the whole interval, measured with
+$1,000 impact prices, so a single snapshot can only agree with it, not settle it. That is why the
+verdict rests on (1)–(3).
+
+**Still open: SEN-82's funded probe.** Everything above is about the published rate. How our
+adapter reads the funding a position has _realized_ has not been observed live. That is the
+trading socket's `fnd`, which `toPosition` treats as "received > 0" and negates into
+`fundingPaid`. With a funded position held across one funding event, the probe should check:
+
+- Long, event `rate > 0`: `fnd` falls by about `size · ppl / div` (in price units, converted to
+  collateral), so `fundingPaid > 0`. A short in the same event gets the mirror image.
+- `rate < 0`: all of the above with the signs flipped.
+- `fnd` moves only at the event block (`feb`), not between events.
+
+If `fnd` turns out to be "paid > 0", then only `venue.ts`'s negation is wrong. The published rate's
+sign and the Funding Harvester's direction stay as they are.
