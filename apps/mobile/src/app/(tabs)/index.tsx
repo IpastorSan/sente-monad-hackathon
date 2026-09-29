@@ -6,13 +6,17 @@
  * Home and keeps what still fits: the wallet balances, the Add funds sheet
  * and the latest move with its consensus ramp.
  *
- * THE TOTAL IS NOT A PORTFOLIO VALUE YET. It is wallet cash (USDC + AUSD) plus
- * the capital with your agents; positions you open yourself need `GET
- * /portfolio` (M-T19), which does not exist. So it reads "≈ $" (two different
- * dollars added up) and the line under it says exactly what it counts. An
- * agent's capital comes from `GET /agents/:id/portfolio` and, while that
- * route is not deployed, from the stablecoins in the agent's wallet, which
- * the sentence then names as missing its open trades.
+ * With manual trading on, the total is the Portfolio tab's own total (SEN-155):
+ * cash, spot at Kuru prices and perps (margin + unrealised P&L) from `GET
+ * /portfolio`, plus the capital with your agents, valued by the same
+ * `portfolio/view.ts` functions so the two tabs agree. A venue or section
+ * that did not answer is named under the figure, never counted as zero.
+ * With trading off it is wallet cash (USDC + AUSD) plus the capital with your
+ * agents, and says it leaves your own positions out. Either way it reads
+ * "≈ $" (different dollars added up) and the line under it says exactly
+ * what it counts. An agent's capital comes from `GET /agents/:id/portfolio`
+ * and, while that route is not deployed, from the stablecoins in the agent's
+ * wallet, which the sentence then names as missing its open trades.
  *
  * The chart under the total is the agents' realised P&L over the day, not the
  * total's history — there is no equity history on the wire — and it is
@@ -48,20 +52,23 @@ import {
   homeAgents,
   idleCash,
   latestMove,
+  ownHoldings,
   realisedSeries,
   realisedToday,
   sinceLabel,
   stableAmount,
   tickerItems,
   totalValue,
+  tradingTotal,
   watchlist,
   type AgentCapital,
   type AgentMarket,
   type LatestMove,
+  type OwnHoldings,
 } from '@/agents/home';
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
 import type { ActivityEvent } from '@/agents/api';
-import type { MarketDto } from '@/markets/api';
+import type { MarketDto, TickerDto } from '@/markets/api';
 import { useMarkets, useTickers } from '@/markets/hooks';
 import { readFavourites } from '@/markets/localLists';
 import { asPercent, priceOf, sparkPoints, venueLine } from '@/markets/marketsView';
@@ -74,6 +81,7 @@ import {
 } from '@/markets/select';
 import { useSparklines } from '@/markets/useSparklines';
 import { useHideBalances } from '@/portfolio/hideBalances';
+import { useUserPortfolio } from '@/portfolio/usePortfolio';
 import { useSession } from '@/session';
 import { Chart } from '@/ui/chart/Chart';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
@@ -144,12 +152,30 @@ export default function Home() {
   // With no roster there is nothing to add, and the agents section below says
   // why; the hero still shows the cash rather than a spinner forever.
   const capital = overview.state.kind === 'failed' ? NO_CAPITAL : read;
+  // SEN-155: with trading on, the total counts your own positions too, read
+  // and valued exactly as the Portfolio tab reads and values them.
+  const user = useUserPortfolio();
+  const tickersFailed = tickers.error !== null || tickers.unavailable;
+  const tickerList = tickers.data?.tickers ?? (tickersFailed ? NO_TICKERS : null);
+  const { data: portfolio, error: portfolioError, unavailable } = user.polled;
+  const own = useMemo(
+    () =>
+      user.trading
+        ? ownHoldings(
+            { data: portfolio, error: portfolioError, unavailable },
+            user.wallet,
+            tickerList,
+          )
+        : null,
+    [user.trading, portfolio, portfolioError, unavailable, user.wallet, tickerList],
+  );
 
   const refresh = async () => {
     setRefreshing(true);
     setPulls((n) => n + 1);
     markets.refresh();
     tickers.refresh();
+    if (user.trading) user.polled.refresh();
     await Promise.all([wallet.refresh(), overview.refresh(), activity.refresh()]);
     setRefreshing(false);
   };
@@ -230,6 +256,8 @@ export default function Home() {
       <Hero
         wallet={wallet}
         capital={capital}
+        trading={user.trading}
+        own={own}
         summaries={summaries}
         events={activity.events}
         hidden={hidden}
@@ -352,6 +380,7 @@ export default function Home() {
 
 const EMPTY_SUMMARIES: ReadonlyMap<string, AgentSummary> = new Map();
 const NO_CAPITAL: readonly AgentCapital[] = [];
+const NO_TICKERS: readonly TickerDto[] = [];
 
 type Router = ReturnType<typeof useRouter>;
 
@@ -378,6 +407,8 @@ function uniqueMarkets(markets: readonly MarketDto[]): MarketDto[] {
 function Hero({
   wallet,
   capital,
+  trading,
+  own,
   summaries,
   events,
   hidden,
@@ -386,6 +417,10 @@ function Hero({
 }: {
   wallet: UseUserWallet;
   capital: readonly AgentCapital[] | null;
+  /** Manual trading is on: the total takes your own positions (SEN-155). */
+  trading: boolean;
+  /** `null` until `/portfolio` and the tickers have answered, or with trading off. */
+  own: OwnHoldings | null;
   summaries: ReadonlyMap<string, AgentSummary>;
   events: readonly ActivityEvent[];
   hidden: boolean;
@@ -393,7 +428,12 @@ function Hero({
   onShare: () => void;
 }) {
   const held = wallet.wallet;
-  const total = capital === null ? null : totalValue(held?.balances ?? null, capital);
+  const total =
+    capital === null
+      ? null
+      : trading
+        ? tradingTotal(own, capital)
+        : totalValue(held?.balances ?? null, capital);
   const day = realisedToday(summaries);
   const series = useMemo(
     () => realisedSeries(events, day?.value ?? null, Date.now()),

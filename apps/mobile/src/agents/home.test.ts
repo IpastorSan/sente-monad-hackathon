@@ -4,8 +4,17 @@ import { test } from 'node:test';
 
 import type { MarketDto, TickerDto } from '../markets/api.ts';
 import { indexTickers, marketKey } from '../markets/select.ts';
+import { agentGroup, allocation, allocationParts, holdings } from '../portfolio/view.ts';
+import type { Portfolio } from '../trade/types.ts';
 
-import type { ActivityEvent, Agent, AgentMandate, AgentSummary } from './api.ts';
+import type {
+  ActivityEvent,
+  Agent,
+  AgentMandate,
+  AgentPortfolioDto,
+  AgentSummary,
+  PositionDto,
+} from './api.ts';
 import {
   agentMarkets,
   atWork,
@@ -19,7 +28,9 @@ import {
   sinceLabel,
   stableAmount,
   tickerItems,
+  ownHoldings,
   totalValue,
+  tradingTotal,
   watchlist,
 } from './home.ts';
 import { KURU_MARKETS } from './mandate.ts';
@@ -171,6 +182,154 @@ test('totalValue waits for the wallet and names what it leaves out', () => {
   assert.equal(
     totalValue(cashOf('0', '0'), [])?.includes,
     'Your USDC and AUSD. Not yet your own positions.',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The total with trading on (SEN-155)
+
+function kuruTicker(symbol: string, last: string): TickerDto {
+  return { venue: 'kuru', symbol, last, mid: null } as TickerDto;
+}
+
+const PRICES = [kuruTicker('MON-USDC', '0.9812')];
+
+const ETH_PERP: PositionDto = {
+  symbol: 'ETH-PERP',
+  side: 'long',
+  size: '0.25',
+  entryPrice: '2498.00',
+  markPrice: '2544.10',
+  liquidationPriceEst: '1690.00',
+  leverage: 3,
+  margin: '208.17',
+  unrealizedPnl: '11.53',
+  realizedPnl: null,
+  fundingPaid: '0.38',
+  quote: 'AUSD',
+  updatedAt: NOW,
+};
+
+function userPortfolio(overrides: Partial<Portfolio> = {}): Portfolio {
+  return {
+    asOf: NOW,
+    wallet: {
+      ok: true,
+      balances: [
+        { symbol: 'MON', address: '0x0', decimals: 18, raw: '0', amount: '412.42' },
+        { symbol: 'USDC', address: '0x1', decimals: 6, raw: '0', amount: '500' },
+        { symbol: 'AUSD', address: '0x2', decimals: 6, raw: '0', amount: '1284.5' },
+      ],
+    },
+    kuru: {
+      ok: true,
+      accountId: '7',
+      balances: [{ asset: 'USDC', available: '0', locked: '142.5', total: '142.5' }],
+      openOrders: [],
+    },
+    perpl: {
+      ok: true,
+      status: 'ok',
+      accountId: '9',
+      balances: [{ asset: 'AUSD', available: '100', locked: '0', total: '308.17' }],
+      positions: [ETH_PERP],
+      openOrders: [],
+    },
+    ...overrides,
+  };
+}
+
+/** What `useUserPortfolio` hands both screens as the wallet. */
+function walletOf(p: Portfolio) {
+  return p.wallet.ok ? p.wallet.balances.map(({ symbol, amount }) => ({ symbol, amount })) : [];
+}
+
+function read(data: Portfolio | null, error: Error | null = null) {
+  return { data, error, unavailable: false };
+}
+
+function agentPortfolio(approxUsd: string): AgentPortfolioDto {
+  return {
+    totals: { approxUsd },
+    perpl: { ok: false, error: 'n/a' },
+    holdings: [],
+  } as unknown as AgentPortfolioDto;
+}
+
+test('Home’s total is the Portfolio tab’s total for the same data (SEN-155)', () => {
+  const p = userPortfolio();
+  // The Portfolio tab's hero, as `portfolio.tsx` computes it.
+  const held = holdings(walletOf(p), p, PRICES);
+  const group = agentGroup([
+    { agent: agent('a'), portfolio: agentPortfolio('612.4') },
+    { agent: agent('b'), portfolio: agentPortfolio('300') },
+  ]);
+  const portfolioTotal = allocation(allocationParts(held, group.total)).total;
+
+  const home = tradingTotal(ownHoldings(read(p), walletOf(p), PRICES), [
+    { source: 'portfolio', value: '612.4' },
+    { source: 'portfolio', value: '300' },
+  ]);
+  assert.equal(home?.total, portfolioTotal);
+  // Cash 1784.5 + Kuru 142.5 + Perpl free 100.00 + MON 404.666504 + perp
+  // 219.70 + agents 912.4: every part, exactly.
+  assert.equal(home?.total, '3563.766504');
+  assert.equal(
+    home?.includes,
+    'Your cash, spot at Kuru prices and perps (margin + P&L), plus your agents’.',
+  );
+});
+
+test('the trading total waits for /portfolio and the tickers instead of jumping', () => {
+  const p = userPortfolio();
+  assert.equal(ownHoldings(read(null), walletOf(p), PRICES), null, '/portfolio still out');
+  assert.equal(ownHoldings(read(p), walletOf(p), null), null, 'tickers still out');
+  assert.equal(ownHoldings(read(p), null, PRICES), null, 'wallet still out');
+  assert.equal(tradingTotal(null, []), null);
+});
+
+test('a /portfolio that failed leaves both venues out and says so, never as zero', () => {
+  const wallet = walletOf(userPortfolio());
+  const total = tradingTotal(ownHoldings(read(null, new Error('503')), wallet, PRICES), []);
+  // Wallet cash and MON only: nothing from Kuru or Perpl.
+  assert.equal(total?.total, '2189.166504');
+  assert.equal(
+    total?.includes,
+    'Your cash, spot at Kuru prices and perps (margin + P&L). Leaves out Kuru and Perpl: they didn’t answer.',
+  );
+  const refused = ownHoldings({ data: null, error: null, unavailable: true }, wallet, PRICES);
+  assert.equal(refused?.venues, 'unread');
+});
+
+test('a failed section, an unpriced token, unlinked perps and unread agents are all named', () => {
+  const p = userPortfolio({
+    perpl: { ok: false, error: 'socket refused' },
+  });
+  const perplDown = tradingTotal(ownHoldings(read(p), walletOf(p), []), [
+    { source: 'wallet', value: '5' },
+    { source: 'unread' },
+  ]);
+  // No tickers: MON is unpriced, so it is named rather than valued at zero.
+  assert.equal(perplDown?.total, '1932.0');
+  assert.equal(
+    perplDown?.includes,
+    'Your cash, spot at Kuru prices and perps (margin + P&L), plus your agents’. Not yet your agents’ open trades. Leaves out MON: no Kuru price. Leaves out Perpl: it didn’t answer. One agent couldn’t be read and is left out.',
+  );
+
+  const unlinked = userPortfolio({
+    wallet: { ok: false, error: 'rpc' },
+    perpl: {
+      ok: true,
+      status: 'unlinked',
+      accountId: '9',
+      balances: [{ asset: 'AUSD', available: '50', locked: '0', total: '50' }],
+    },
+  });
+  const noPerps = tradingTotal(ownHoldings(read(unlinked), cashOf('10', '0'), PRICES), []);
+  assert.equal(noPerps?.total, '202.912104');
+  assert.equal(
+    noPerps?.includes,
+    'Your cash, spot at Kuru prices and perps (margin + P&L). Some wallet tokens may be left out. Perp positions are left out until Perpl is linked.',
   );
 });
 
