@@ -52,12 +52,15 @@
 
 import { existsSync } from 'node:fs';
 
+import { dirname } from 'node:path';
+
 import { getAddress } from 'viem';
 
 import type { UserWallet } from '../src/agents/privy/user-wallet.ts';
 import { PrivyClient, PrivyError } from '../src/agents/privy/privy.client.ts';
 import type { KeyQuorum } from '../src/agents/privy/key-quorum.ts';
 import { STATE_DIR_VAR, statePath } from '../src/state/json-file.ts';
+import { acquireStateDirLock } from '../src/state/state-dir-lock.ts';
 import { FileUserWalletRegistry } from '../src/wallet/store/file-user-wallet-registry.ts';
 import { envFileFromArgs } from './env-file.ts';
 
@@ -231,6 +234,11 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // The API loads this file once and rewrites it from memory, so a bind made
+  // while it runs would be overwritten by its next save. Taking the same
+  // STATE_DIR lock refuses that instead, naming the running API (SEN-161).
+  // Released by the lock's own exit hook.
+  acquireStateDirLock(dirname(registryPath!));
   const registry = new FileUserWalletRegistry(registryPath!);
   const result = await registry.bind({
     userId: userId!,

@@ -1,6 +1,7 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
 import { statePath } from '../../state/json-file';
+import { StateDirLease, StateModule } from '../../state/state.module';
 import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './agent-store';
 import { FileAgentStore } from './file-agent-store';
 
@@ -12,7 +13,9 @@ import { FileAgentStore } from './file-agent-store';
  */
 const agentStoreProvider: Provider = {
   provide: AGENT_STORE,
-  useFactory: (): AgentStore => {
+  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
+  inject: [StateDirLease],
+  useFactory: (_lease: StateDirLease): AgentStore => {
     const path = statePath('agents');
     if (!path) return new InMemoryAgentStore();
     const store = new FileAgentStore(path);
@@ -35,6 +38,7 @@ const agentStoreProvider: Provider = {
  * So the store moves down here, under both of them, and neither owns it.
  */
 @Module({
+  imports: [StateModule],
   providers: [agentStoreProvider],
   exports: [AGENT_STORE],
 })
