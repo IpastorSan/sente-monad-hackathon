@@ -24,7 +24,7 @@ import {
 import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
 import { restingFillProviders } from './fills/resting-fill.providers';
-import { agentPortfolioProviders } from './portfolio/portfolio.service';
+import { AgentPortfolioService, agentPortfolioProviders } from './portfolio/portfolio.service';
 import {
   DeviceMandateOwners,
   MANDATE_OWNERS,
@@ -198,6 +198,8 @@ const authProvider: Provider = {
     ...agentVenuesExports,
     ...agentToolsExports,
     ...agentRunnerExports,
+    // SEN-152: the value history snapshots each agent through its cached portfolio.
+    AgentPortfolioService,
   ],
 })
 export class AgentsModule {}

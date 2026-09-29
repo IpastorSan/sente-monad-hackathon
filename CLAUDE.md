@@ -483,7 +483,7 @@ correctly against a stale constant. Consequences:
 ### 14. One API process per `STATE_DIR`
 
 With `STATE_DIR` set, the API persists to files there: `user-wallets.json`, `agents.json`,
-`agent-events.jsonl`, `agent-secrets.json`. Each store loads its file once at boot and then writes
+`agent-events.jsonl`, `agent-secrets.json`, `value-history.jsonl` (SEN-152). Each store loads its file once at boot and then writes
 from memory, so two processes on one directory silently overwrite each other (lost agents, lost
 wallet bindings, an interleaved event log). SEN-161 enforces a **single writer**: `StateDirLease`
 (`services/api/src/state/state.module.ts`) takes `<STATE_DIR>/api.lock` (pid + hostname) before

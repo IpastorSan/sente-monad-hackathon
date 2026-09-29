@@ -21,6 +21,7 @@
  * Nothing here verifies what `prepare` returns. That is `verifyKuru.ts`'s job,
  * and the flow (M-T21) must run it before any step is signed.
  */
+import type { HistoryRange, ValueHistory } from '../portfolio/history.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 import type {
   Portfolio,
@@ -141,6 +142,11 @@ export class TradeApi {
   /** `GET /portfolio/fills?venue=&symbol=&cursor=&limit=` (M-T19): the user's own fills, newest first. */
   fills(query: FillsQuery = {}): Promise<PortfolioFills> {
     return this.request('GET', '/portfolio/fills', { query });
+  }
+
+  /** `GET /portfolio/history?range=` (SEN-152): the recorded ≈ $ total, oldest first. */
+  valueHistory(range: HistoryRange): Promise<ValueHistory> {
+    return this.request('GET', '/portfolio/history', { query: { range } });
   }
 
   /** One request, and at most one silent re-authentication — see `WalletApi`. */
