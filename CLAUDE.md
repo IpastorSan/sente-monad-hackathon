@@ -480,6 +480,19 @@ correctly against a stale constant. Consequences:
 - A probe that signs only our own constant proves nothing about the live shape (SEN-3 missed this
   for exactly that reason); the SEN-6 live script signs the payload Perpl actually serves.
 
+### 14. One API process per `STATE_DIR`
+
+With `STATE_DIR` set, the API persists to files there: `user-wallets.json`, `agents.json`,
+`agent-events.jsonl`, `agent-secrets.json`. Each store loads its file once at boot and then writes
+from memory, so two processes on one directory silently overwrite each other (lost agents, lost
+wallet bindings, an interleaved event log). SEN-161 enforces a **single writer**: `StateDirLease`
+(`services/api/src/state/state.module.ts`) takes `<STATE_DIR>/api.lock` (pid + hostname) before
+any store opens and releases it on shutdown. A second process refuses to boot and names the holder.
+A lock left by a hard kill is taken over only when the same host shows its pid is dead. Otherwise
+delete the lock file by hand, after checking. This covers the API, the live scripts that boot
+`AppModule`, and `privy:recover --apply`. Scaling the API past one replica needs a shared store
+first. A second replica will not work just because the lock allows it.
+
 ---
 
 ## Conventions

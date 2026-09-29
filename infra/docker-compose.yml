@@ -38,6 +38,11 @@ services:
     # alias deploy.sh also tags, so a rollback is a re-`up` with the old tag.
     image: sente-api:${SENTE_API_TAG:-latest}
     container_name: sente-api
+    # SEN-161: the STATE_DIR lock records the holder's hostname, and a lock
+    # left by a hard kill is only taken over on the SAME host. Docker's default
+    # hostname is the container id, new on every deploy, so without this a
+    # killed container would lock the next image out of its own state.
+    hostname: sente-api
     # Restart on crash AND on boot, but never fight a deliberate `docker stop`.
     restart: unless-stopped
     # The dozen-odd secrets, delivered out of band by ../infra/push-secrets.sh:

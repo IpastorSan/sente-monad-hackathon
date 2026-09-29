@@ -7,6 +7,7 @@ import { AgentStoreModule } from '../agents/store/agent-store.module';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { statePath } from '../state/json-file';
+import { StateDirLease, StateModule } from '../state/state.module';
 import {
   TOKEN_BALANCES,
   ViemTokenBalanceReader,
@@ -157,7 +158,9 @@ const preparedStoreProvider: Provider = {
  */
 const userWalletRegistryProvider: Provider = {
   provide: USER_WALLET_REGISTRY,
-  useFactory: (): UserWalletRegistry => {
+  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
+  inject: [StateDirLease],
+  useFactory: (_lease: StateDirLease): UserWalletRegistry => {
     const path = statePath('user-wallets');
     if (!path) return new InMemoryUserWalletRegistry();
     const registry = new FileUserWalletRegistry(path);
@@ -236,7 +239,7 @@ const authProvider: Provider = {
   // records — is this address an agent of the caller's? The store lives below
   // both modules precisely so this is not an import of `AgentsModule`, which
   // imports this one.
-  imports: [AgentStoreModule],
+  imports: [AgentStoreModule, StateModule],
   controllers: [WalletController],
   providers: [
     configProvider,

@@ -40,6 +40,7 @@ import {
   agentRunnerImports,
   agentRunnerProviders,
 } from './runner/agent-runner.providers';
+import { StateModule } from '../state/state.module';
 import { AlchemyModule } from '../webhooks/alchemy.module';
 import { AgentStoreModule } from './store/agent-store.module';
 import {
@@ -154,6 +155,9 @@ const authProvider: Provider = {
     ChainModule,
     WalletModule,
     AgentStoreModule,
+    // StateModule: the STATE_DIR lock the event log and the Perpl key store
+    // are opened under (SEN-161).
+    StateModule,
     AlchemyModule,
     // VenuesModule: MarketDataService, the marks the agent portfolio values
     // spot holdings at (SEN-78). It imports nothing from agents.

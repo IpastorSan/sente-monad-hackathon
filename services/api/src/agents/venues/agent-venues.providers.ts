@@ -3,6 +3,7 @@ import { createPublicClient, http, type PublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
 import { statePath } from '../../state/json-file';
+import { StateDirLease } from '../../state/state.module';
 import { AGENT_WALLETS, type AgentWalletProvider } from '../agent-wallet.provider';
 import {
   AGENT_SECRETS,
@@ -56,7 +57,12 @@ export const agentVenuesProviders: Provider[] = [
         }),
       }) as PublicClient,
   },
-  { provide: AGENT_SECRETS, useFactory: () => agentSecretStore() },
+  {
+    provide: AGENT_SECRETS,
+    // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
+    inject: [StateDirLease],
+    useFactory: (_lease: StateDirLease) => agentSecretStore(),
+  },
   {
     provide: AgentTransactionSender,
     inject: [AGENT_WALLETS, AGENT_PUBLIC_CLIENT],

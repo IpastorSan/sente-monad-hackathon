@@ -30,6 +30,11 @@ async function bootstrap(): Promise<void> {
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   if (trustProxy > 0) app.set('trust proxy', trustProxy);
+  // SEN-161. SIGTERM/SIGINT run `app.close()`, which is what releases the
+  // STATE_DIR lock (`state/state.module.ts`). Without it `docker stop` — node is
+  // pid 1 in the image, which ignores a signal it has no handler for — waits
+  // out the grace period and SIGKILLs, leaving a lock behind on every deploy.
+  app.enableShutdownHooks();
 
   // SEN-30. Registered BEFORE `listen()`, which is what makes it narrow: Nest
   // mounts its own body parsers inside `app.init()`, so this reaches Express

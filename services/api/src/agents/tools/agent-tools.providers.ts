@@ -2,7 +2,7 @@ import { join } from 'node:path';
 
 import { Logger, type Provider } from '@nestjs/common';
 
-import { stateDir } from '../../state/json-file';
+import { StateDirLease } from '../../state/state.module';
 import { MarketDataService } from '../../venues/market-data.service';
 import { VenuesModule } from '../../venues/venues.module';
 
@@ -66,9 +66,11 @@ const erc8004Provider: Provider = {
  */
 const agentEventsProvider: Provider = {
   provide: AGENT_EVENTS,
-  inject: [ERC8004_WRITER],
-  useFactory: (reputation: Erc8004Reputation): AgentEventLog => {
-    const dir = stateDir();
+  // StateDirLease: the log is only opened once this process holds the
+  // STATE_DIR lock, so a second API cannot interleave appends (SEN-161).
+  inject: [ERC8004_WRITER, StateDirLease],
+  useFactory: (reputation: Erc8004Reputation, lease: StateDirLease): AgentEventLog => {
+    const dir = lease.dir;
     if (!dir) return new ReputationEventLog(new InMemoryAgentEventLog(), reputation);
     const log = new FileAgentEventLog(join(dir, AGENT_EVENTS_FILE));
     Logger.log(`${log.size} agent event(s) loaded from ${log.path}`, 'AgentEventLog');
