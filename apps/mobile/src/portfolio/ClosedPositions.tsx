@@ -13,7 +13,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Button, Loading, Notice } from '@/ui/kit';
 import { text } from '@/ui/theme';
 
-import { closedList, closedRow, closedTotal } from './closed';
+import { closedList, closedNotes, closedRow, closedTotal } from './closed';
 import { ClosedPositionRow } from './parts';
 import type { useFills } from './usePortfolio';
 
@@ -36,10 +36,7 @@ export function ClosedPositions({
 
   if (list.reading) return <Loading />;
   const total = closedTotal(list.total, hidden);
-  const notes = [
-    list.feesIncluded ? null : 'Before fees: your fills don’t carry their fee yet.',
-    list.positions.some((p) => p.venue === 'perpl') ? 'Perp funding is not included.' : null,
-  ].filter(Boolean);
+  const notes = closedNotes(list);
 
   return (
     <View>

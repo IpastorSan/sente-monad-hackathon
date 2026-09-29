@@ -14,6 +14,7 @@ import { WalletRefusedError } from '../wallet/wallet.errors';
 import { PortfolioController } from './portfolio.controller';
 import { PortfolioModule } from './portfolio.module';
 import {
+  kuruFeeShares,
   USER_PERPL_STALE_MS,
   USER_PERPL_TTL_MS,
   PortfolioRefusedError,
@@ -390,9 +391,36 @@ describe('UserPortfolioService.fills', () => {
       side: 'buy',
       price: '3.5',
       size: '1',
+      // A single-fill result carries the whole fee (SEN-162).
+      fee: '0.01',
+      feeAsset: 'USDC',
       transactionHash: `0x${'c'.padStart(64, '0')}`,
       timestamp: NOW - 1_000 + 1,
     });
+  });
+
+  it("splits a Kuru result's fee across its fills by notional, summing exactly (SEN-162)", async () => {
+    const { service, store } = harness();
+    store.put(trade('a', NOW - 10_000, { result: RESULT }), new Date(NOW));
+
+    const page = await service.fills(ALICE);
+    // 0.01 × 3.5/7.1 = 0.0049295… floors to 0.004929 USDC; the last fill takes the rest.
+    expect(page.fills.map((f) => [f.venueTradeId, f.fee, f.feeAsset])).toEqual([
+      ['t1', '0.004929', 'USDC'],
+      ['t2', '0.005071', 'USDC'],
+    ]);
+  });
+
+  it('kuruFeeShares: exact at the atom, whatever the split (SEN-162)', () => {
+    const fills = [
+      { price: '1', size: '1' },
+      { price: '1', size: '1' },
+      { price: '1', size: '1' },
+    ];
+    expect(kuruFeeShares('0.000001', fills, 6)).toEqual(['0', '0', '0.000001']);
+    expect(kuruFeeShares('0.1', fills, 6)).toEqual(['0.033333', '0.033333', '0.033334']);
+    expect(kuruFeeShares('0', fills, 6)).toEqual(['0', '0', '0']);
+    expect(kuruFeeShares('0.5', [], 6)).toEqual([]);
   });
 
   it('pages with an opaque cursor', async () => {
@@ -477,6 +505,9 @@ describe('UserPortfolioService.fills', () => {
           side: 'sell',
           price: '77108.1',
           size: '0.0025',
+          // Perpl reports each fill's own fee (SEN-162).
+          fee: '0.01',
+          feeAsset: 'AUSD',
           transactionHash: `0x${'cd'.repeat(32)}`,
           timestamp: NOW - 5_000,
         },

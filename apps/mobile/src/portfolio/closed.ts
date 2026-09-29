@@ -22,9 +22,9 @@
  * - Fees follow the verdict file's fee rule (SEN-128): realised on the fill
  *   that paid them, the WHOLE fee, quote as it arrives, any other asset read
  *   as base at that fill's price. A fill that flips a perp pays one fee for
- *   two trips, so it is split between them by size. `/portfolio/fills` does
- *   not carry fees yet, so today every trip is "before fees" and says so
- *   (`feesIncluded`); the arithmetic is ready for the day it does.
+ *   two trips, so it is split between them by size. `/portfolio/fills`
+ *   carries each fill's fee (SEN-162); a trip with any fill whose fee is
+ *   unknown is "before fees" and says so (`feesIncluded`, `closedNotes`).
  * - Perpl funding is not in fills at all, so a perp's realised P&L here is
  *   price and fees only.
  *
@@ -119,17 +119,15 @@ function text({ atoms, scale }: Dec): string {
 // The replay
 
 /**
- * A fill as the replay reads it. `fee`/`feeAsset` are not on
- * `/portfolio/fills` yet (SEN-154); when a fill has no `fee` at all its trip
- * is marked before fees rather than counted as fee-free.
+ * A fill as the replay reads it. A fill with no `fee` (`null`, or absent in
+ * a hand-built one) marks its trip before fees rather than counting as
+ * fee-free (SEN-162).
  */
 export type ClosableFill = Pick<
   PortfolioFill,
   'venue' | 'tradeId' | 'venueTradeId' | 'symbol' | 'side' | 'price' | 'size' | 'timestamp'
-> & {
-  readonly fee?: string | null;
-  readonly feeAsset?: string | null;
-};
+> &
+  Partial<Pick<PortfolioFill, 'fee' | 'feeAsset'>>;
 
 export type ClosedPosition = {
   key: string;
@@ -439,6 +437,20 @@ export function closedList(fills: readonly ClosableFill[], coverage: FillCoverag
     gaps,
     reading: coverage.kuru === 'loading' || coverage.perpl === 'loading',
   };
+}
+
+/**
+ * The sentences under the list. "Before fees" only when some trip shown has
+ * a fill whose fee the venue did not report (SEN-162): once fills carry
+ * fees, every other trip's P&L is already after them.
+ */
+export function closedNotes(list: Pick<ClosedList, 'positions' | 'feesIncluded'>): string[] {
+  const notes: string[] = [];
+  if (!list.feesIncluded) {
+    notes.push('Some fills didn’t report their fee, so those positions are before fees.');
+  }
+  if (list.positions.some((p) => p.venue === 'perpl')) notes.push('Perp funding is not included.');
+  return notes;
 }
 
 // ---------------------------------------------------------------------------

@@ -94,6 +94,15 @@ export interface FillDto {
   side: 'buy' | 'sell' | null;
   price: Decimal;
   size: Decimal;
+  /**
+   * What the fill cost, in `feeAsset`; positive is paid, negative a rebate
+   * (SEN-162). Perpl: the venue's own per-fill fee. Kuru: the placement's
+   * taker fee split across its fills by notional (see `kuruFeeShares`), since
+   * the decoded result keeps one fee for the whole order. `null` only when
+   * the venue did not report one — never read it as zero.
+   */
+  fee: Decimal | null;
+  feeAsset: string | null;
   /** The transaction that carried the fill, when the step recorded one. */
   transactionHash: string | null;
   /** Unix ms. Kuru: when the trade recorded the result, not the block time. Perpl: the block time. */
