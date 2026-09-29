@@ -6,7 +6,7 @@ import { TradingEnabledGuard } from '../trade/trade.controller';
 import { TradeModule } from '../trade/trade.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { PortfolioController } from './portfolio.controller';
-import { userPortfolioProviders } from './portfolio.service';
+import { UserPortfolioService, userPortfolioProviders } from './portfolio.service';
 
 /** AUTH: the same seam `wallet/` and `trade/` use. */
 const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
@@ -20,5 +20,7 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
   imports: [WalletModule, TradeModule],
   controllers: [PortfolioController],
   providers: [authProvider, SessionAuthGuard, TradingEnabledGuard, ...userPortfolioProviders],
+  // SEN-152: the value history values a user through the same service, and its caches.
+  exports: [UserPortfolioService],
 })
 export class PortfolioModule {}

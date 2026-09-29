@@ -14,9 +14,10 @@
  * read-only: an agent's funds are the agent's, so a row opens its cockpit.
  *
  * The total is computed on the phone (`portfolio/view.ts`): USDC and AUSD at
- * $1, anything else at its Kuru last price, and it always says "≈ $". There
- * is no value history on the server, so the line under it is what this
- * phone observed since the app opened, and the caption says exactly that.
+ * $1, anything else at its Kuru last price, and it always says "≈ $". The
+ * line under it is the server's recorded history over 1D / 1W / 1M / ALL
+ * (SEN-152, `portfolio/ValueHero.tsx`); until that has a point, it is what
+ * this phone observed since the app opened, and the caption says exactly that.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -38,36 +39,28 @@ import {
   PerpPositionRow,
   SpotPositionRow,
 } from '@/portfolio/parts';
-import {
-  useAgentPortfolios,
-  useFills,
-  useObservedValue,
-  useUserPortfolio,
-} from '@/portfolio/usePortfolio';
+import { useAgentPortfolios, useFills, useUserPortfolio } from '@/portfolio/usePortfolio';
+import { ValueHero } from '@/portfolio/ValueHero';
 import {
   agentGroup,
   allocation,
   allocationParts,
   amountText,
-  clock,
   fillDays,
   holdings,
   orderRows,
   perplFillsNote,
   sectionFailure,
-  seriesChange,
   shown,
-  signedUsd,
   type Holdings,
   type OrderRow,
   type PortfolioSection,
 } from '@/portfolio/view';
 import { useSession } from '@/session';
 import { describeTradeError, kuruCancelDraft, runTrade, type TradeFlowState } from '@/trade/flow';
-import { Chart } from '@/ui/chart/Chart';
 import { Button, Card, Loading, Notice, Row, Screen, Segmented, Sheet } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
-import { AsOf, BigNumber, ChangeText } from '@/ui/trading';
+import { AsOf } from '@/ui/trading';
 
 type Tab = 'positions' | 'orders' | 'history';
 
@@ -116,11 +109,9 @@ export default function PortfolioScreen() {
     () => (held ? allocation(allocationParts(held, group?.total ?? null)) : null),
     [held, group],
   );
-  // A sample is stamped with the newest data time behind it, so it only moves
-  // when a read lands, never on a re-render.
+  // The hero stamps its live point with the newest data time behind it, so
+  // the line only moves when a read lands, never on a re-render.
   const at = Math.max(user.portfolio?.asOf ?? 0, tickers.asOf ?? 0) || null;
-  const series = useObservedValue(split?.total ?? null, at);
-  const change = seriesChange(series);
   const now = Date.now();
   const orders = user.trading ? orderRows(user.portfolio, tickerList, now) : [];
   const openCount = held ? held.spot.length + held.perps.length : 0;
@@ -161,27 +152,13 @@ export default function PortfolioScreen() {
         )
       ) : (
         <>
-          <View style={styles.hero}>
-            <Text style={text.label}>Total value</Text>
-            <BigNumber value={split.total} prefix="$" approx size="xl" blurred={hidden} />
-            {change !== null ? (
-              <ChangeText
-                pct={change.pct}
-                lead={`${shown(signedUsd(change.delta), hidden)} (`}
-                suffix={`) since ${clock(series[0]?.at ?? now)} UTC`}
-              />
-            ) : null}
-            {series.length > 1 ? (
-              <Chart
-                kind="area"
-                points={series.map((s) => s.usd)}
-                height={128}
-                tone={change?.tone === 'down' ? 'berry' : 'mint'}
-                label="Portfolio value since the app opened"
-              />
-            ) : null}
-            <Text style={text.caption}>{totalNote(held, agentPortfolios === null)}</Text>
-          </View>
+          <ValueHero
+            total={split.total}
+            at={at}
+            trading={user.trading}
+            hidden={hidden}
+            note={totalNote(held, agentPortfolios === null)}
+          />
 
           <AllocationBar split={split} hidden={hidden} />
 
@@ -667,7 +644,6 @@ const styles = StyleSheet.create({
     borderColor: color.line,
     borderRadius: RADIUS.stone,
   },
-  hero: { marginTop: 12, gap: 6 },
   between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   tabs: { marginTop: 20 },
   openClosed: { width: 172 },

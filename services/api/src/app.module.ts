@@ -8,6 +8,7 @@ import { ChainModule } from './chain/chain.module';
 import { CreditsModule } from './credits/credits.module';
 import { GasModule } from './gas/gas.module';
 import { HealthModule } from './health/health.module';
+import { ValueHistoryModule } from './portfolio/history/value-history.module';
 import { PortfolioModule } from './portfolio/portfolio.module';
 import { PresetsModule } from './presets/presets.module';
 import { TradeModule } from './trade/trade.module';
@@ -29,6 +30,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     TradeModule,
     // GET /portfolio and /portfolio/fills (SEN-101), behind the same flag.
     PortfolioModule,
+    // GET /portfolio/history and /agents/:id/history, and the snapshots behind them (SEN-152).
+    ValueHistoryModule,
     VenuesModule,
     AgentsModule,
     // The agent leaderboard (SEN-26): registered performance, read from the
