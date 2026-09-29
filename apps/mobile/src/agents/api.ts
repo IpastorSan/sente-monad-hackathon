@@ -1083,6 +1083,13 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
       case 'return_asset_not_supported':
       case 'return_amount_invalid':
         return { title: 'Sente refused that amount', detail: error.message };
+      case 'preset_invalid':
+        // SEN-160: most often the preset moved on the server since the screen
+        // loaded it; the configure screen reloads it when this comes back.
+        return {
+          title: 'Sente refused these preset settings',
+          detail: `${error.message}. Check the settings and hire again.`,
+        };
       case 'return_gas_insufficient':
         return {
           title: 'The agent can’t pay for the transfer',

@@ -9,12 +9,13 @@
  * entry, and its card shows no stats line.
  */
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useSession } from '@/session';
 
 import { isUnavailable, PresetsApi, type PresetDto, type PresetStatsDto } from './api';
 import { bundledCatalog, type CatalogSource } from './catalog';
+import { loadHirePreset, type HirePreset } from './served';
 
 export type PresetsState = {
   presets: PresetDto[];
@@ -82,4 +83,61 @@ export function usePresets(): {
   }, [load]);
 
   return { state, refreshing, refresh };
+}
+
+export type HirePresetState =
+  | HirePreset
+  | { kind: 'loading' }
+  /** `GET /presets` failed some other way than a missing route: retry rather than guess. */
+  | { kind: 'error'; message: string };
+
+/**
+ * The preset to configure and hire (SEN-160): the server's version and specs
+ * when it serves them, the bundle only when the route is missing. See
+ * `served.ts`. `reload` asks again — after the API refused a hire because
+ * the catalog moved, for one.
+ */
+export function useHirePreset(id: string | undefined): {
+  state: HirePresetState;
+  reload: () => void;
+} {
+  const session = useSession();
+  const signedIn = session.agents !== null;
+  const auth = session.api;
+  const [state, setState] = useState<HirePresetState>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!id) {
+      setState({ kind: 'missing' });
+      return;
+    }
+    let cancelled = false;
+    // A reload keeps what is showing until the answer lands: dropping to
+    // "loading" would unmount the configure form and lose the person's draft.
+    if (attempt === 0) setState({ kind: 'loading' });
+    loadHirePreset(signedIn ? new PresetsApi({ auth }) : null, id).then(
+      (loaded) => {
+        if (!cancelled) setState(loaded);
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        // A failed reload leaves a loaded form alone; the hire's own error says enough.
+        setState((prev) =>
+          prev.kind === 'ready'
+            ? prev
+            : {
+                kind: 'error',
+                message: error instanceof Error ? error.message : 'The preset catalog didn’t load.',
+              },
+        );
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [id, signedIn, auth, attempt]);
+
+  const reload = useCallback(() => setAttempt((n) => n + 1), []);
+  return { state, reload };
 }
