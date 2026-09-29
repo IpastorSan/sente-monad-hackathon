@@ -110,7 +110,11 @@ export const agentToolsProviders: Provider[] = [
         // path, so N agents cost the venue what one screen does.
         marketData,
         venuesFor: (agent) =>
-          venues.forAgent({ agentId: agent.id, walletId: agent.walletId, address: agent.address }),
+          venues.forAgent(
+            { agentId: agent.id, walletId: agent.walletId, address: agent.address },
+            // SEN-148: a run whose mandate allows Perpl enrolls its key on first use.
+            { enrollPerpl: agent.mandate.venues.includes('perpl') },
+          ),
       }),
   },
   {

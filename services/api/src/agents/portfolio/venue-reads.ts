@@ -110,6 +110,8 @@ export type PerplAccountSnapshot =
       balances: BalanceDto[];
       positions: null;
       openOrders: null;
+      /** Why no key is held, when an on-demand enrollment failed (SEN-148). */
+      reason?: string;
     }
   | { status: 'no_account' };
 
@@ -125,6 +127,8 @@ export async function readPerplAccount(
     readonly accountInfo: PerplAccountInfoReader;
     /** A promise is fine: it is awaited alongside the chain read, not before it. */
     readonly venue?: PerplAccountVenue | Promise<PerplAccountVenue | undefined>;
+    /** Why there is no venue, when an enrollment was tried and failed. */
+    readonly unavailable?: string;
   },
 ): Promise<PerplAccountSnapshot> {
   const [info, venue] = await Promise.all([readers.accountInfo(address), readers.venue]);
@@ -139,6 +143,7 @@ export async function readPerplAccount(
       balances: [perplChainBalance(info)],
       positions: null,
       openOrders: null,
+      ...(readers.unavailable === undefined ? {} : { reason: readers.unavailable }),
     };
   }
   const [balances, positions, openOrders] = await Promise.all([

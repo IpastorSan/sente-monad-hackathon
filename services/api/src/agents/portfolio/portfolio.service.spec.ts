@@ -278,6 +278,21 @@ describe('AgentPortfolioService (SEN-78)', () => {
     });
   });
 
+  it('says why an agent is not enrolled when its on-demand enrollment failed (SEN-148)', async () => {
+    const { service } = harness({
+      perplAccountInfo: () =>
+        Promise.resolve({ accountId: 12n, balance: 150_500_000n, locked: 500_000n }),
+      withPerplVenue: (_agent, read) => read(undefined, 'Perpl enrollment failed: 423'),
+    });
+
+    expect((await service.portfolio(agent())).perpl).toMatchObject({
+      ok: true,
+      status: 'not_enrolled',
+      positions: null,
+      reason: 'Perpl enrollment failed: 423',
+    });
+  });
+
   it('says no_account when the address never opened one, and not_in_mandate when Perpl is off', async () => {
     const none = harness({ perplAccountInfo: () => Promise.resolve(null) });
     expect((await none.service.portfolio(agent())).perpl).toEqual({

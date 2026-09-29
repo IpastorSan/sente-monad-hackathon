@@ -72,6 +72,9 @@ AGENT_WRITE_SPACING_MS
 AGENT_RUNNER_THINKING
 AGENT_PRECHECK
 AGENT_MANDATE_OWNER
+# Required: STATE_DIR is pinned on the box, and the API will not boot without
+# it. Encrypts agent-secrets.json (the agents' Perpl keys, SEN-148).
+AGENT_SECRETS_KEY
 
 # --- signals ---
 NANSEN_API_KEY

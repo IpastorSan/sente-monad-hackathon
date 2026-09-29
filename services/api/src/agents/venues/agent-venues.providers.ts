@@ -1,7 +1,8 @@
-import type { Provider } from '@nestjs/common';
+import { Logger, type Provider } from '@nestjs/common';
 import { createPublicClient, http, type PublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
+import { statePath } from '../../state/json-file';
 import { AGENT_WALLETS, type AgentWalletProvider } from '../agent-wallet.provider';
 import {
   AGENT_SECRETS,
@@ -10,10 +11,31 @@ import {
 } from './agent-secret-store';
 import { AgentTransactionSender, agentChainClient } from './agent-transactions';
 import { AgentVenues } from './agent-venues';
+import {
+  AGENT_SECRETS_FILE,
+  FileAgentSecretStore,
+  agentSecretsKey,
+} from './file-agent-secret-store';
 import { PerplAgentAccounts, perplAccountReader } from './perpl-agent';
 
 /** DI token for the Monad public client the agents' venues read and broadcast through. */
 export const AGENT_PUBLIC_CLIENT = Symbol('AGENT_PUBLIC_CLIENT');
+
+/**
+ * In memory unless `STATE_DIR` is set; then encrypted on disk (SEN-148), so a
+ * restart keeps every agent's enrolled Perpl key instead of burning one of
+ * the account's 16 slots on the next use. `agentSecretsKey()` throws without
+ * `AGENT_SECRETS_KEY`, and a wrong key fails the load: both stop the boot.
+ */
+export function agentSecretStore(
+  env: Record<string, string | undefined> = process.env,
+): AgentSecretStore {
+  const path = statePath(AGENT_SECRETS_FILE, env);
+  if (!path) return new InMemoryAgentSecretStore();
+  const store = new FileAgentSecretStore(path, agentSecretsKey(env));
+  Logger.log(`${store.size} agent Perpl key(s) loaded from ${store.path}`, 'AgentSecrets');
+  return store;
+}
 
 /**
  * Nest wiring for the agents' venue accounts (SEN-6). Kept out of the venue
@@ -34,7 +56,7 @@ export const agentVenuesProviders: Provider[] = [
         }),
       }) as PublicClient,
   },
-  { provide: AGENT_SECRETS, useClass: InMemoryAgentSecretStore },
+  { provide: AGENT_SECRETS, useFactory: () => agentSecretStore() },
   {
     provide: AgentTransactionSender,
     inject: [AGENT_WALLETS, AGENT_PUBLIC_CLIENT],
@@ -54,12 +76,21 @@ export const agentVenuesProviders: Provider[] = [
   },
   {
     provide: AgentVenues,
-    inject: [AGENT_PUBLIC_CLIENT, AgentTransactionSender, AGENT_SECRETS],
+    inject: [AGENT_PUBLIC_CLIENT, AgentTransactionSender, AGENT_SECRETS, PerplAgentAccounts],
     useFactory: (
       publicClient: PublicClient,
       sender: AgentTransactionSender,
       secrets: AgentSecretStore,
-    ) => new AgentVenues({ publicClient, sender, secrets }),
+      perplAccounts: PerplAgentAccounts,
+    ) =>
+      new AgentVenues({
+        publicClient,
+        sender,
+        secrets,
+        // SEN-148: the first use that needs Perpl enrolls the agent's key.
+        perplAccounts,
+        logger: new Logger('AgentVenues'),
+      }),
   },
 ];
 
