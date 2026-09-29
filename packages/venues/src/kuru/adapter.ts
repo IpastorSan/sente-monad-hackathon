@@ -16,6 +16,7 @@
 import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
 import {
   erc20Abi,
+  getAbiItem,
   isAddressEqual,
   zeroAddress,
   type Address,
@@ -61,11 +62,14 @@ import {
   toKlines,
   toMarket,
   toOpenOrder,
+  toMakerFill,
   toPlacedOrder,
   type BookLevel,
+  type MakerFill,
 } from './mapping.ts';
 import {
   cancelOrderCall,
+  decodeMakerFills,
   decodeOrderOutcome,
   depositCalls,
   encodeNativeOrder,
@@ -150,6 +154,8 @@ export type KuruBookSnapshot = {
   readonly bestAsk: bigint | null;
   readonly observedAt: number;
 };
+
+const TRADES_PACKED = getAbiItem({ abi: kuruAbi.spotOrderBookAbi, name: 'TradesPacked' });
 
 /** Levels per side read for a quote or a book snapshot. */
 const QUOTE_LEVELS = 100n;
@@ -368,6 +374,31 @@ export class KuruVenue implements Venue {
       const market = wanted.find((m) => isAddressEqual(m.address, api.marketAddress as Address));
       return market ? [toOpenOrder(api, market, observedAt)] : [];
     });
+  }
+
+  /**
+   * Every maker fill on `symbol`'s book in blocks `fromBlock..toBlock`
+   * inclusive, WHOEVER the maker is (SEN-149). A resting order's later fills
+   * appear only in the takers' transactions, and the maker's id is packed into
+   * the log data rather than a topic, so the read cannot be narrowed to one
+   * account: callers read a market once and match every order they watch.
+   *
+   * Chain logs rather than the Data Source's order history or the Gateway's
+   * open orders: the history has no fill event at all, and the open-orders
+   * snapshot only shows a shrinking remainder — neither gives each fill's
+   * size, fee, block or a stable identity to record it once by. Callers keep
+   * the range within their RPC's `eth_getLogs` cap (100 blocks on Monad's
+   * public endpoint).
+   */
+  async makerFills(symbol: MarketSymbol, fromBlock: bigint, toBlock: bigint): Promise<MakerFill[]> {
+    const market = this.market(symbol);
+    const logs = await this.#client.getLogs({
+      address: market.address,
+      event: TRADES_PACKED,
+      fromBlock,
+      toBlock,
+    });
+    return decodeMakerFills(logs, market.address).map((fill) => toMakerFill(fill, market));
   }
 
   /**

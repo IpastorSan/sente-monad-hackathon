@@ -21,6 +21,7 @@ import {
   formatOrderId,
   KuruOrderError,
   PPS_DENOMINATOR,
+  type KuruMakerFill,
   type KuruMarketParams,
   type KuruOrderOutcome,
 } from './orders.ts';
@@ -333,24 +334,82 @@ export type PlacedOrderInput = {
 };
 
 /**
- * Taker fee actually paid on the fills of one execution, in quote-token atoms:
- * `notional × pps / 10_000_000`, where `priceTimesSize` is in book units
- * (scaled `10^(pd+sd)`) and the notional lives in quote atoms. One floor, at
- * the atom — a fee fraction of an atom is never charged, so flooring here
- * cannot overstate it.
+ * Fee actually paid on fills, in quote-token atoms: `notional × pps /
+ * 10_000_000`, where `priceTimesSize` is in book units (scaled `10^(pd+sd)`)
+ * and the notional lives in quote atoms. One floor, at the atom — a fee
+ * fraction of an atom is never charged, so flooring here cannot overstate it.
+ * The taker's rate for a placement's own fills, the maker's for a resting
+ * order's later ones (SEN-149).
  */
-function takerFeeAtoms(
+function feeAtoms(
   priceTimesSize: bigint,
-  takerFeePps: bigint,
+  feePps: bigint,
   pricePrecision: bigint,
   sizePrecision: bigint,
   quoteDecimals: number,
 ): bigint {
   const bookScale = precisionDecimals(pricePrecision) + precisionDecimals(sizePrecision);
   return (
-    (priceTimesSize * takerFeePps * 10n ** BigInt(quoteDecimals)) /
+    (priceTimesSize * feePps * 10n ** BigInt(quoteDecimals)) /
     (PPS_DENOMINATOR * 10n ** BigInt(bookScale))
   );
+}
+
+/**
+ * A resting order's later fill in Sente's decimals (SEN-149), still carrying
+ * whose it was and where on chain it was reported.
+ */
+export type MakerFill = Pick<
+  KuruMakerFill,
+  'makerId' | 'tradeId' | 'transactionHash' | 'logIndex' | 'recordIndex' | 'blockNumber'
+> & {
+  /** Sente's resting-order id, `"<slotIdx>:<orderId>"`. */
+  readonly orderId: string;
+  readonly symbol: string;
+  readonly side: Side;
+  /** A maker fills at its own resting price. */
+  readonly price: Decimal;
+  readonly size: Decimal;
+  /** What is still resting after this fill. */
+  readonly remainingSize: Decimal;
+  /** The maker fee charged on this fill, in the quote token. */
+  readonly fee: Decimal;
+  readonly feeAsset: string;
+};
+
+/**
+ * One decoded maker fill in decimals. The fee is charged in the quote token
+ * for bids and asks alike — a resting bid locks its notional plus maker-fee
+ * headroom in quote (docs/kuru.md: "10.004 USDC locked") — at the maker rate
+ * the trade record itself carries rather than the market's current one.
+ */
+export function toMakerFill(fill: KuruMakerFill, market: KuruMarketConfig): MakerFill {
+  const sd = sizeDecimals(market);
+  return {
+    makerId: fill.makerId,
+    tradeId: fill.tradeId,
+    transactionHash: fill.transactionHash,
+    logIndex: fill.logIndex,
+    recordIndex: fill.recordIndex,
+    blockNumber: fill.blockNumber,
+    orderId: formatOrderId(fill),
+    symbol: market.symbol,
+    side: fill.isBuy ? 'buy' : 'sell',
+    price: fromUnits(fill.price, priceDecimals(market)),
+    size: fromUnits(fill.size, sd),
+    remainingSize: fromUnits(fill.remaining, sd),
+    fee: fromUnits(
+      feeAtoms(
+        fill.price * fill.size,
+        fill.makerFeePps,
+        market.pricePrecision,
+        market.sizePrecision,
+        market.quote.decimals,
+      ),
+      market.quote.decimals,
+    ),
+    feeAsset: market.quote.symbol,
+  };
 }
 
 /** A placement's decoded outcome as a Sente `Order`. */
@@ -370,7 +429,7 @@ export function toPlacedOrder(input: PlacedOrderInput): Order {
   const takerFee =
     outcome.takerFeePps !== undefined && filled > 0n && input.quoteDecimals !== undefined
       ? fromUnits(
-          takerFeeAtoms(
+          feeAtoms(
             priceTimesSize,
             outcome.takerFeePps,
             params.pricePrecision,

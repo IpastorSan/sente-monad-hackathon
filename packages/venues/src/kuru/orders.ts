@@ -480,3 +480,84 @@ export function decodeOrderOutcome(
 
   return { fills, rested, removed, takerFeePps };
 }
+
+/**
+ * A log as `eth_getLogs` returns it: a {@link KuruLog} plus where it sits on
+ * chain. A viem `Log` satisfies it. The `null`s are a pending block's, which a
+ * range read below the head never returns.
+ */
+export type KuruChainLog = KuruLog & {
+  readonly transactionHash: Hex | null;
+  readonly logIndex: number | null;
+  readonly blockNumber: bigint | null;
+};
+
+/**
+ * One fill of a RESTING order, read off the taker's `TradesPacked` (SEN-149).
+ * Book units, like {@link KuruFill}.
+ */
+export type KuruMakerFill = KuruOrderRef & {
+  readonly makerId: bigint;
+  readonly isBuy: boolean;
+  readonly price: bigint;
+  readonly size: bigint;
+  /** The maker order's size left on the book after this match. */
+  readonly remaining: bigint;
+  /** What the maker was charged, parts per ten million of the notional. */
+  readonly makerFeePps: bigint;
+  readonly tradeId: bigint;
+  readonly transactionHash: Hex;
+  readonly logIndex: number;
+  /** Which record of that log: one taker sweep fills several makers in one log. */
+  readonly recordIndex: number;
+  readonly blockNumber: bigint;
+};
+
+/**
+ * Every maker fill on `market` in `logs`, whoever the maker is (SEN-149).
+ *
+ * A resting order's later fills are only ever reported in SOMEONE ELSE's
+ * transaction: the taker's `TradesPacked` carries one record per maker order
+ * it hit, with that maker's account id, slot and order id inside the packed
+ * bytes — not in a topic, so an RPC filter cannot select them. The caller
+ * reads a market's `TradesPacked` logs once and matches every order it
+ * watches against the result. Zero-size bookkeeping records are skipped.
+ */
+export function decodeMakerFills(logs: readonly KuruChainLog[], market: Address): KuruMakerFill[] {
+  const fills: KuruMakerFill[] = [];
+  for (const log of logs) {
+    if (!isAddressEqual(log.address, market) || log.topics.length === 0) continue;
+    const { transactionHash, logIndex, blockNumber } = log;
+    if (transactionHash === null || logIndex === null || blockNumber === null) continue;
+    let event;
+    try {
+      event = decodeEventLog({
+        abi: kuruAbi.spotOrderBookAbi,
+        data: log.data,
+        topics: log.topics as [Hex, ...Hex[]],
+      });
+    } catch {
+      continue; // not an OrderBook event this decoder knows
+    }
+    if (event.eventName !== 'TradesPacked') continue;
+    for (const [recordIndex, trade] of decodeTradesPacked(event.args.packedTrades).entries()) {
+      if (trade.fillSize === 0n) continue;
+      fills.push({
+        makerId: trade.makerId,
+        slotIdx: trade.slotIdx,
+        orderId: trade.orderId,
+        isBuy: trade.makerIsBuy,
+        price: trade.price,
+        size: trade.fillSize,
+        remaining: trade.updatedSize,
+        makerFeePps: BigInt(trade.makerFeePps),
+        tradeId: trade.tradeId,
+        transactionHash,
+        logIndex,
+        recordIndex,
+        blockNumber,
+      });
+    }
+  }
+  return fills;
+}

@@ -22,7 +22,9 @@ steps 1–3 of the build order in `index.html`, for the screens in `brief.md`. G
    into the existing in-memory log.
 4. **Spot cost basis from the log is partial.** `gate.ts` only records fills at placement; a
    resting limit that fills later never produces a `fill` event, and user-funded base assets
-   have no cost. Cost basis carries a `complete` flag.
+   have no cost. Cost basis carries a `complete` flag. _Later fills: closed by SEN-149_ —
+   `agents/fills/resting-fill.watcher.ts` reads the OrderBook's `TradesPacked` logs for agents'
+   resting orders and appends one `fill` per trade record, deduplicated by `tradeKey`.
 
 ## Conventions
 

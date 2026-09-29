@@ -10,8 +10,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { KURU_TESTNET_MARKETS } from './constants.ts';
-import { toPlacedOrder } from './mapping.ts';
-import { decodeOrderOutcome, type KuruMarketParams } from './orders.ts';
+import { toMakerFill, toPlacedOrder } from './mapping.ts';
+import {
+  decodeMakerFills,
+  decodeOrderOutcome,
+  type KuruChainLog,
+  type KuruLog,
+  type KuruMarketParams,
+} from './orders.ts';
 import { RECEIPT_ACCOUNT_ID, RECEIPTS } from './receipts.fixture.ts';
 
 const market = (symbol: string) => KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol)!.address;
@@ -103,5 +109,54 @@ test('logs emitted by any other contract are ignored', () => {
   for (const receipt of Object.values(RECEIPTS)) {
     const outcome = decodeOrderOutcome(receipt.logs, market('WETH-USDC'), RECEIPT_ACCOUNT_ID);
     assert.equal(outcome.fills.length + outcome.rested.length + outcome.removed.length, 0);
+  }
+});
+
+/** A receipt's logs as `eth_getLogs` returns them: located in a block. */
+function located(
+  receipt: {
+    readonly transactionHash: KuruChainLog['transactionHash'];
+    readonly logs: readonly KuruLog[];
+  },
+  blockNumber: bigint,
+): KuruChainLog[] {
+  return receipt.logs.map((log, logIndex) => ({
+    ...log,
+    transactionHash: receipt.transactionHash,
+    logIndex,
+    blockNumber,
+  }));
+}
+
+test('the same IOC read from the maker side: its resting ask filled later (SEN-149)', () => {
+  const fills = decodeMakerFills(located(RECEIPTS.placeMarket, 61_406_913n), MON_USDC);
+  assert.equal(fills.length, 1);
+  const fill = fills[0]!;
+  // Account 47's ask 1:3679 was swept whole by account 62's IOC.
+  assert.equal(fill.makerId, 47n);
+  assert.equal(fill.slotIdx, 1);
+  assert.equal(fill.orderId, 3679n);
+  assert.equal(fill.remaining, 0n);
+  assert.equal(fill.tradeId, 98n);
+  assert.equal(fill.blockNumber, 61_406_913n);
+
+  const monUsdc = KURU_TESTNET_MARKETS.find((m) => m.symbol === 'MON-USDC')!;
+  const decimals = toMakerFill(fill, monUsdc);
+  assert.equal(decimals.orderId, '1:3679');
+  assert.equal(decimals.side, 'sell');
+  assert.equal(decimals.price, '0.030974');
+  assert.equal(decimals.size, '317.73742494');
+  assert.equal(decimals.remainingSize, '0');
+  // The record's own maker rate, 4000 pps, of 9.841599 USDC, floored at the atom.
+  assert.equal(decimals.fee, '0.003936');
+  assert.equal(decimals.feeAsset, 'USDC');
+});
+
+test('maker fills: another book, a pending log, a placement or a cancel read nothing', () => {
+  assert.deepEqual(decodeMakerFills(located(RECEIPTS.placeMarket, 1n), market('WETH-USDC')), []);
+  const pending = located(RECEIPTS.placeMarket, 1n).map((log) => ({ ...log, logIndex: null }));
+  assert.deepEqual(decodeMakerFills(pending, MON_USDC), []);
+  for (const receipt of [RECEIPTS.placeLimit, RECEIPTS.cancel]) {
+    assert.deepEqual(decodeMakerFills(located(receipt, 1n), MON_USDC), []);
   }
 });
