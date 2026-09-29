@@ -19,6 +19,9 @@ import {
   mulDecimal,
   orderRows,
   perpDetail,
+  perplFillsGap,
+  perplFillsNote,
+  perplReadAt,
   sectionFailure,
   seriesChange,
   shown,
@@ -493,4 +496,49 @@ test('findPosition looks up your perp by symbol and your spot by base asset', ()
   assert.equal(findPosition(held, 'kuru', 'MON-USDC')?.kind, 'spot');
   assert.equal(findPosition(held, 'perpl', 'BTC-PERP'), null);
   assert.equal(findPosition(held, 'nope', 'MON'), null);
+});
+
+test('Perpl fills: unlinked and unread say they are missing, never "no fills" (SEN-151)', () => {
+  const unlinked = Object.assign(new Error('409'), { reason: 'perpl_unlinked' });
+  assert.equal(perplFillsGap({ status: 'fulfilled', value: { fills: [], next: null } }), null);
+  assert.equal(perplFillsGap({ status: 'rejected', reason: unlinked }), 'unlinked');
+  assert.equal(perplFillsGap({ status: 'rejected', reason: new Error('502') }), 'unread');
+  assert.equal(perplFillsNote(null), null);
+  assert.match(perplFillsNote('unlinked') ?? '', /once Perpl is linked/u);
+  assert.match(perplFillsNote('unread') ?? '', /left out/u);
+});
+
+test('your perp is as old as its Perpl read, on the phone clock, and paused when stale (SEN-151)', () => {
+  const p = portfolio();
+  const cached = { ...p, asOf: 1_000_000, perpl: { ...p.perpl, asOf: 980_000 } } as Portfolio;
+  // The server's 20 s lag lands on the phone's own fetch time.
+  assert.deepEqual(perplReadAt(cached, 5_000_000), { at: 4_980_000, stale: false });
+  const stale = { ...cached, perpl: { ...cached.perpl, stale: true } } as Portfolio;
+  assert.deepEqual(perplReadAt(stale, 5_000_000), { at: 4_980_000, stale: true });
+  // An older API with no section stamp, or no read yet: the poll's own time.
+  assert.deepEqual(perplReadAt(p, 5_000_000), { at: 5_000_000, stale: false });
+  assert.deepEqual(perplReadAt(null, null), { at: null, stale: false });
+});
+
+test('a Perpl fill has no trade id of ours and still keys uniquely (SEN-151)', () => {
+  const [day] = fillDays(
+    [
+      {
+        venue: 'perpl',
+        tradeId: null,
+        venueTradeId: '0xabc:4',
+        orderId: '42',
+        symbol: 'BTC-PERP',
+        side: 'sell',
+        price: '77108.1',
+        size: '0.0025',
+        transactionHash: '0xabc',
+        timestamp: NOW - 1_000,
+      },
+    ],
+    NOW,
+  );
+  assert.equal(day?.fills[0]?.key, 'perpl::0xabc:4');
+  assert.equal(day?.fills[0]?.title, '0.0025 BTC-PERP');
+  assert.equal(day?.fills[0]?.side, 'Sell');
 });

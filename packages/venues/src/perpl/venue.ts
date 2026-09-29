@@ -26,6 +26,7 @@ import type {
   Decimal,
   Depth,
   DepthQuery,
+  Fill,
   Kline,
   KlineQuery,
   LimitOrderRequest,
@@ -61,9 +62,11 @@ import { PerplTradingSocket, OPEN_ORDER_STATUSES } from './trading.ts';
 import {
   ORDER_FLAGS,
   ORDER_STATUS,
+  LIQUIDITY_SIDE,
   ORDER_TYPE,
   POSITION_SIDE,
   type PerplContext,
+  type PerplFill,
   type PerplL2Book,
   type PerplMarket,
   type PerplOrder,
@@ -239,6 +242,40 @@ export function toPosition(p: PerplPosition, m: ResolvedMarket, markPrice: bigin
   };
 }
 
+/** A Perpl fill with where it landed on chain, which the shared `Fill` has no field for. */
+export type PerplFillRecord = Fill & { blockNumber?: number; txHash?: string };
+
+/** One page of fills, newest first; `next` is Perpl's cursor, `null` at the end. */
+export interface PerplFillsPage {
+  fills: PerplFillRecord[];
+  next: string | null;
+}
+
+/**
+ * Perpl REST fill -> Sente fill (SEN-151). `undefined` for a fill without a
+ * price: the wire marks it optional, and a fill at an unknown price is not
+ * worth reporting as if it were one at zero.
+ */
+export function toFill(f: PerplFill, m: ResolvedMarket): PerplFillRecord | undefined {
+  if (f.p === undefined) return undefined;
+  const hash = txHash(f.at.txid);
+  return {
+    orderId: String(f.oid),
+    // Perpl has no per-match id; the log that carried the fill is unique.
+    tradeId: hash && f.at.l !== undefined ? `${hash}:${f.at.l}` : `${f.oid}:${f.at.b ?? 0}`,
+    symbol: m.symbol,
+    side: orderSide(f.t),
+    price: fromScaled(f.p, m.pd),
+    size: fromScaled(f.s, m.sd),
+    fee: fromScaled(BigInt(f.f), m.cd),
+    feeAsset: m.collateral,
+    maker: f.l === LIQUIDITY_SIDE.Maker,
+    timestamp: f.at.t ?? Date.now(),
+    ...(f.at.b !== undefined ? { blockNumber: f.at.b } : {}),
+    ...(hash ? { txHash: hash } : {}),
+  };
+}
+
 /** A bigint headed for a JSON number frame. Perpl's scaled values fit, but check. */
 function wireNumber(value: bigint, what: string): number {
   const n = Number(value);
@@ -363,6 +400,24 @@ export class PerplVenue implements PerpsVenue {
       positions.push(toPosition(p, m, BigInt(raw.state.mrk)));
     }
     return positions;
+  }
+
+  /**
+   * The account's fills, newest first, off the signed REST history (SEN-151).
+   * REST only: no trading socket is opened, so a read-scoped key serves it.
+   */
+  async getFills(options: { count?: number; page?: string } = {}): Promise<PerplFillsPage> {
+    const [page, context] = await Promise.all([
+      this.rest.history<PerplFill>('fills', options.count ?? 50, options.page),
+      this.context(),
+    ]);
+    const fills: PerplFillRecord[] = [];
+    for (const f of page.d) {
+      const raw = context.markets.find((m) => m.id === f.mkt);
+      const fill = raw ? toFill(f, resolveMarket(context, raw)) : undefined;
+      if (fill) fills.push(fill);
+    }
+    return { fills, next: page.np ? page.np : null };
   }
 
   // --- writes ------------------------------------------------------------

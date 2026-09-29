@@ -28,6 +28,7 @@ import {
   findPosition,
   holdings,
   perpDetail,
+  perplReadAt,
   sectionFailure,
   shown,
   type PerpRow,
@@ -109,7 +110,11 @@ export default function PositionScreen() {
       ) : (
         <>
           {found.kind === 'perp' ? (
-            <PerpHead row={found.row} hidden={hidden} asOf={user.polled.asOf} />
+            <PerpHead
+              row={found.row}
+              hidden={hidden}
+              read={perplReadAt(user.portfolio, user.polled.asOf)}
+            />
           ) : (
             <SpotHead row={found.row} hidden={hidden} asOf={tickers.asOf} />
           )}
@@ -148,7 +153,16 @@ export default function PositionScreen() {
   );
 }
 
-function PerpHead({ row, hidden, asOf }: { row: PerpRow; hidden: boolean; asOf: number | null }) {
+function PerpHead({
+  row,
+  hidden,
+  read,
+}: {
+  row: PerpRow;
+  hidden: boolean;
+  // When Perpl was read, not when the portfolio was: the server caches it (SEN-151).
+  read: { at: number | null; stale: boolean };
+}) {
   const { position } = row;
   const detail = perpDetail(position, hidden);
   const tone =
@@ -182,7 +196,7 @@ function PerpHead({ row, hidden, asOf }: { row: PerpRow; hidden: boolean; asOf: 
             <Text style={pctTone}>{detail.pct}</Text> on{' '}
             {shown(amountText(row.position.margin, 'AUSD'), hidden)} margin ·
           </Text>
-          <AsOf at={asOf} />
+          <AsOf at={read.at} paused={read.stale} />
         </View>
       </View>
     </>

@@ -208,6 +208,25 @@ export interface PerplPosition {
   xp?: number;
 }
 
+/** One entry of the signed REST `GET /v1/trading/fills` (and WS `FillsUpdate`). */
+export interface PerplFill {
+  at: BlockTxLogTimestamp;
+  mkt: number;
+  acc: number;
+  oid: number;
+  /** Order type (`ORDER_TYPE`); the side comes from it. */
+  t: number;
+  /** `LIQUIDITY_SIDE`. */
+  l: number;
+  /** Fill price, scaled by the market's price decimals. */
+  p?: number;
+  /** Filled size, scaled by the market's size decimals. */
+  s: number;
+  /** Fee (negative = rebate), raw collateral units. */
+  f: string;
+  bfa?: string;
+}
+
 export interface PerplStatusResponse {
   mt: 3;
   sid?: number;
@@ -268,6 +287,8 @@ export const ORDER_STATUS = {
 
 export const POSITION_STATUS = { Open: 1 } as const;
 export const POSITION_SIDE = { Long: 1, Short: 2 } as const;
+
+export const LIQUIDITY_SIDE = { Maker: 1, Taker: 2 } as const;
 
 /** The `sr` values worth naming in an error. The full table is in api-docs types.md. */
 export const ORDER_STATUS_REASON: Readonly<Record<number, string>> = {

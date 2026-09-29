@@ -15,10 +15,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent, AgentPortfolioDto } from '@/agents/api';
 import { usePolling, type Polled } from '@/markets/usePolling';
 import { useSession } from '@/session';
-import type { Portfolio, PortfolioFill } from '@/trade/types';
+import type { Portfolio, PortfolioFill, PortfolioVenue } from '@/trade/types';
 import { useTradingEnabled } from '@/trade/useTradingEnabled';
 
-import { appendSample, type ValueSample, type WalletAmount } from './view';
+import {
+  appendSample,
+  perplFillsGap,
+  type PerplFillsGap,
+  type ValueSample,
+  type WalletAmount,
+} from './view';
 
 /** A position's numbers move with the mark; 10 s keeps the as-of honest without hammering RPC. */
 const PORTFOLIO_MS = 10_000;
@@ -58,9 +64,20 @@ export function useUserPortfolio(): UserPortfolio {
   return { trading, portfolio, polled, wallet: walletAmounts };
 }
 
-/** Your fills, newest first, with the older pages the user asked for appended. */
+/** Each venue's cursor for its next, older page; `null` once it has no more (or was not read). */
+type FillCursors = Record<PortfolioVenue, string | null>;
+type FillPages = { fills: PortfolioFill[]; next: FillCursors };
+
+/**
+ * Your fills on both venues, with the older pages the user asked for appended
+ * (`fillDays` orders them). Kuru and Perpl page separately (SEN-151): Perpl's
+ * cursor is its own, so each venue is asked for by name. Perpl's page may be
+ * refused — no read key, or Perpl down — and then the list is Kuru's alone
+ * and `perplGap` says why, rather than the history reading as "no fills".
+ */
 export function useFills(trading: boolean): {
   fills: PortfolioFill[];
+  perplGap: PerplFillsGap;
   loadingMore: boolean;
   hasMore: boolean;
   loadMore: () => void;
@@ -68,26 +85,51 @@ export function useFills(trading: boolean): {
   const { trade } = useSession();
   const first = usePolling(
     trading && trade ? 'portfolio:fills' : null,
-    () => trade!.fills({ limit: FILLS_PAGE }),
+    async (): Promise<FillPages & { perplGap: PerplFillsGap }> => {
+      const [kuru, perpl] = await Promise.allSettled([
+        trade!.fills({ venue: 'kuru', limit: FILLS_PAGE }),
+        trade!.fills({ venue: 'perpl', limit: FILLS_PAGE }),
+      ]);
+      if (kuru.status === 'rejected') throw kuru.reason;
+      const perplPage = perpl.status === 'fulfilled' ? perpl.value : null;
+      return {
+        fills: [...kuru.value.fills, ...(perplPage?.fills ?? [])],
+        next: { kuru: kuru.value.next, perpl: perplPage?.next ?? null },
+        perplGap: perplFillsGap(perpl),
+      };
+    },
     { intervalMs: FILLS_MS },
   );
-  const [older, setOlder] = useState<{ fills: PortfolioFill[]; next: string | null } | null>(null);
+  const [older, setOlder] = useState<FillPages | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   // A new fill at the top shifts every page, so older pages stitched to the
   // previous first page may no longer line up with it: drop them. A poll that
-  // brings back the same newest fill keeps them.
-  const newest = first.data?.fills[0];
-  const head = newest ? `${newest.tradeId}:${newest.venueTradeId}` : null;
+  // brings back the same newest fills keeps them.
+  const head = (['kuru', 'perpl'] as const)
+    .map((venue) => {
+      const newest = first.data?.fills.find((f) => f.venue === venue);
+      return newest ? `${newest.tradeId ?? ''}:${newest.venueTradeId}` : '';
+    })
+    .join('|');
   useEffect(() => setOlder(null), [head]);
 
-  const next = older ? older.next : (first.data?.next ?? null);
+  const next = older ? older.next : (first.data?.next ?? { kuru: null, perpl: null });
   const loadMore = useCallback(() => {
-    if (!trade || next === null || loadingMore) return;
+    if (!trade || (next.kuru === null && next.perpl === null) || loadingMore) return;
     setLoadingMore(true);
-    trade.fills({ limit: FILLS_PAGE, cursor: next }).then(
-      (page) => {
-        setOlder((prev) => ({ fills: [...(prev?.fills ?? []), ...page.fills], next: page.next }));
+    const page = (venue: PortfolioVenue) => {
+      const cursor = next[venue];
+      return cursor === null
+        ? Promise.resolve({ fills: [], next: null })
+        : trade.fills({ venue, limit: FILLS_PAGE, cursor });
+    };
+    Promise.all([page('kuru'), page('perpl')]).then(
+      ([kuru, perpl]) => {
+        setOlder((prev) => ({
+          fills: [...(prev?.fills ?? []), ...kuru.fills, ...perpl.fills],
+          next: { kuru: kuru.next, perpl: perpl.next },
+        }));
         setLoadingMore(false);
       },
       () => setLoadingMore(false),
@@ -96,8 +138,9 @@ export function useFills(trading: boolean): {
 
   return {
     fills: [...(first.data?.fills ?? []), ...(older?.fills ?? [])],
+    perplGap: first.data?.perplGap ?? null,
     loadingMore,
-    hasMore: next !== null,
+    hasMore: next.kuru !== null || next.perpl !== null,
     loadMore,
   };
 }

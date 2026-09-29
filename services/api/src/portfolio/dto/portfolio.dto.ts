@@ -37,6 +37,13 @@ export interface PerplPortfolioSection {
   /** Only with `ok`; absent means unknown, not none. */
   positions?: PositionDto[];
   openOrders?: OrderDto[];
+  /**
+   * When Perpl was read: it can lag the portfolio's own `asOf`, since a linked
+   * account's section is cached for up to 30 s (SEN-151).
+   */
+  asOf?: number;
+  /** The latest read failed and this is the last good one, from `asOf`. */
+  stale?: true;
 }
 
 /**
@@ -63,8 +70,12 @@ export interface PortfolioDto {
 
 export interface FillDto {
   venue: VenueId;
-  /** Our trade id (`/trade/:tradeId`) that produced the fill. */
-  tradeId: string;
+  /**
+   * Our trade id (`/trade/:tradeId`) that produced the fill. `null` for Perpl
+   * (SEN-151): its fills are read off the account, and the phone places Perpl
+   * orders itself, not through `/trade`.
+   */
+  tradeId: string | null;
   /** The venue's own id for the match. */
   venueTradeId: string;
   orderId: string | null;
@@ -75,7 +86,7 @@ export interface FillDto {
   size: Decimal;
   /** The transaction that carried the fill, when the step recorded one. */
   transactionHash: string | null;
-  /** Unix ms. When the trade recorded the result, not the block time. */
+  /** Unix ms. Kuru: when the trade recorded the result, not the block time. Perpl: the block time. */
   timestamp: number;
 }
 
@@ -90,9 +101,13 @@ export class FillsQueryDto {
   @IsIn(['kuru', 'perpl'])
   venue?: VenueId;
 
-  /** Opaque; whatever the previous page's `next` was. */
+  /**
+   * Opaque; whatever the previous page's `next` was. Printable ASCII only
+   * because Perpl's own cursor passes through as-is (SEN-151); Kuru's is
+   * checked for an offset by the service.
+   */
   @IsOptional()
-  @Matches(/^\d{1,9}$/)
+  @Matches(/^[\x21-\x7e]{1,512}$/)
   cursor?: string;
 
   @IsOptional()

@@ -1,11 +1,23 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpException, HttpStatus, Query, UseGuards } from '@nestjs/common';
 
 import { Auth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { TradingEnabledGuard } from '../trade/trade.controller';
 import { tradeRefusalToHttpException } from '../trade/trade.service';
 import { FillsQueryDto, type FillsPageDto, type PortfolioDto } from './dto/portfolio.dto';
-import { UserPortfolioService } from './portfolio.service';
+import {
+  PortfolioRefusedError,
+  UserPortfolioService,
+  type PortfolioRefusalReason,
+} from './portfolio.service';
+
+const REFUSAL_STATUS: Record<PortfolioRefusalReason, HttpStatus> = {
+  invalid_cursor: HttpStatus.BAD_REQUEST,
+  // 409: the account exists or may, but this server holds no read key for it
+  // (SEN-151). Not an empty page, which would read as "no fills".
+  perpl_unlinked: HttpStatus.CONFLICT,
+  perpl_unavailable: HttpStatus.BAD_GATEWAY,
+};
 
 /**
  * The caller's own portfolio (SEN-101, plan-trading M-T19). Identity is the
@@ -39,6 +51,13 @@ export class PortfolioController {
     try {
       return await run();
     } catch (error) {
+      if (error instanceof PortfolioRefusedError) {
+        const statusCode = REFUSAL_STATUS[error.reason];
+        throw new HttpException(
+          { statusCode, reason: error.reason, message: error.message },
+          statusCode,
+        );
+      }
       throw tradeRefusalToHttpException(error);
     }
   }

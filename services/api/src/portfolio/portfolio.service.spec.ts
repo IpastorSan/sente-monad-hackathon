@@ -1,9 +1,10 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
-import type { Balance, Order } from '@sente/venues';
+import type { Balance, Order, Position } from '@sente/venues';
+import type { PerplFillRecord } from '@sente/venues/perpl';
 import { getAddress } from 'viem';
 
-import type { KuruAccountVenue, PerplAccountVenue } from '../agents/portfolio/venue-reads';
+import type { KuruAccountVenue } from '../agents/portfolio/venue-reads';
 import type { Principal } from '../auth/principal';
 import { TradingEnabledGuard } from '../trade/trade.controller';
 import { TradeStore, type Trade } from '../trade/trade-store';
@@ -12,7 +13,14 @@ import type { UserWalletBinding } from '../wallet/store/user-wallet-registry';
 import { WalletRefusedError } from '../wallet/wallet.errors';
 import { PortfolioController } from './portfolio.controller';
 import { PortfolioModule } from './portfolio.module';
-import { UserPortfolioService, type UserPortfolioReaders } from './portfolio.service';
+import {
+  USER_PERPL_STALE_MS,
+  USER_PERPL_TTL_MS,
+  PortfolioRefusedError,
+  UserPortfolioService,
+  type PerplUserVenue,
+  type UserPortfolioReaders,
+} from './portfolio.service';
 
 const ADDRESS = getAddress('0x5555555555555555555555555555555555555555');
 const ALICE = { userId: 'alice' } as Principal;
@@ -45,6 +53,40 @@ function kuru(accountId: bigint, balances: Balance[] = [], orders: Order[] = [])
   return venue;
 }
 
+const POSITION: Position = {
+  symbol: 'BTC-PERP',
+  side: 'long',
+  size: '0.01',
+  entryPrice: '100000',
+  markPrice: '101000',
+  liquidationPrice: '94000',
+  leverage: 10,
+  marginMode: 'isolated',
+  margin: '100',
+  unrealizedPnl: '10',
+  realizedPnl: '0',
+  fundingPaid: '0.12',
+  updatedAt: 5,
+};
+
+/** A fake of the user's read-key Perpl venue (SEN-151); records every sign-in. */
+function fakePerpl(overrides: Partial<PerplUserVenue> = {}) {
+  const venue: PerplUserVenue = {
+    getBalances: () =>
+      Promise.resolve([{ asset: 'AUSD', available: '90', locked: '110', total: '200' }]),
+    getPositions: () => Promise.resolve([POSITION]),
+    getOpenOrders: () => Promise.resolve([{ ...ORDER, id: '77', symbol: 'BTC-PERP' }]),
+    getFills: () => Promise.resolve({ fills: [], next: null }),
+    ...overrides,
+  };
+  const opened: string[] = [];
+  const reader: UserPortfolioReaders['withPerplReadVenue'] = (userId, read) => {
+    opened.push(userId);
+    return read(userId === 'alice' ? venue : undefined);
+  };
+  return { venue, opened, reader };
+}
+
 function harness(overrides: Partial<UserPortfolioReaders> = {}) {
   const store = new TradeStore();
   const readers: UserPortfolioReaders = {
@@ -52,7 +94,7 @@ function harness(overrides: Partial<UserPortfolioReaders> = {}) {
     wallet: { balances: () => Promise.resolve([token('MON', 2n * 10n ** 18n, '2')]) },
     kuruVenue: () => kuru(0n),
     perplAccountInfo: () => Promise.resolve(null),
-    perplReadVenue: () => Promise.resolve(undefined),
+    withPerplReadVenue: (_userId, read) => read(undefined),
     trades: store,
     now: () => NOW,
     ...overrides,
@@ -79,7 +121,7 @@ describe('UserPortfolioService.portfolio', () => {
         ],
       },
       kuru: { ok: true, accountId: null, balances: [], openOrders: [] },
-      perpl: { ok: true, status: 'not_onboarded' },
+      perpl: { ok: true, status: 'not_onboarded', asOf: NOW },
     });
     // Id 0 has nothing to list: no Gateway round trip for it.
     expect(venue.getBalances).not.toHaveBeenCalled();
@@ -141,30 +183,102 @@ describe('UserPortfolioService.portfolio', () => {
       status: 'unlinked',
       accountId: '7',
       balances: [{ asset: 'AUSD', available: '125', locked: '25', total: '150' }],
+      asOf: NOW,
     });
     expect(portfolio.perpl).not.toHaveProperty('positions');
   });
 
-  it('reads Perpl through the read key once one is linked', async () => {
-    const venue: PerplAccountVenue = {
-      getBalances: () =>
-        Promise.resolve([{ asset: 'AUSD', available: '90', locked: '10', total: '100' }]),
-      getPositions: () => Promise.resolve([]),
-      getOpenOrders: () => Promise.resolve([]),
-    };
+  it('reads Perpl balances, positions and orders through the read key once linked (SEN-151)', async () => {
+    const perpl = fakePerpl();
     const { service } = harness({
       perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 1n, locked: 0n }),
-      perplReadVenue: (userId, address) =>
-        Promise.resolve(userId === 'alice' && address === ADDRESS ? venue : undefined),
+      withPerplReadVenue: perpl.reader,
     });
     expect((await service.portfolio(ALICE)).perpl).toEqual({
       ok: true,
       status: 'ok',
       accountId: '7',
-      balances: [{ asset: 'AUSD', available: '90', locked: '10', total: '100' }],
-      positions: [],
-      openOrders: [],
+      balances: [{ asset: 'AUSD', available: '90', locked: '110', total: '200' }],
+      positions: [
+        {
+          symbol: 'BTC-PERP',
+          side: 'long',
+          size: '0.01',
+          entryPrice: '100000',
+          markPrice: '101000',
+          liquidationPriceEst: '94000',
+          leverage: 10,
+          margin: '100',
+          unrealizedPnl: '10',
+          realizedPnl: '0',
+          fundingPaid: '0.12',
+          quote: 'AUSD',
+          updatedAt: 5,
+        },
+      ],
+      openOrders: [expect.objectContaining({ venue: 'perpl', id: '77', symbol: 'BTC-PERP' })],
+      asOf: NOW,
     });
+  });
+
+  it('signs in to Perpl once per 30 s however often the phone polls (SEN-151)', async () => {
+    let now = NOW;
+    const perpl = fakePerpl();
+    const { service } = harness({
+      perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 1n, locked: 0n }),
+      withPerplReadVenue: perpl.reader,
+      now: () => now,
+    });
+    // Concurrent polls share the one read in flight.
+    const [a, b] = await Promise.all([service.portfolio(ALICE), service.portfolio(ALICE)]);
+    expect(perpl.opened).toHaveLength(1);
+    now += 10_000;
+    const c = await service.portfolio(ALICE);
+    expect(perpl.opened).toHaveLength(1);
+    // The section says how old it is; the portfolio's own asOf moves on.
+    for (const read of [a, b, c]) expect(read.perpl).toMatchObject({ status: 'ok', asOf: NOW });
+    expect(c.asOf).toBe(NOW + 10_000);
+    now = NOW + USER_PERPL_TTL_MS;
+    await service.portfolio(ALICE);
+    expect(perpl.opened).toHaveLength(2);
+  });
+
+  it('does not ration an unlinked account: a key linked later shows on the next poll', async () => {
+    let linked = false;
+    const perpl = fakePerpl();
+    const { service } = harness({
+      perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 1n, locked: 0n }),
+      withPerplReadVenue: (userId, read) => (linked ? perpl.reader(userId, read) : read(undefined)),
+    });
+    expect((await service.portfolio(ALICE)).perpl).toMatchObject({ status: 'unlinked' });
+    linked = true;
+    expect((await service.portfolio(ALICE)).perpl).toMatchObject({ status: 'ok' });
+  });
+
+  it('a Perpl failure is a failed section, or the last good read flagged stale (SEN-151)', async () => {
+    let now = NOW;
+    let failing = false;
+    const perpl = fakePerpl({
+      getPositions: () =>
+        failing ? Promise.reject(new Error('Perpl 429')) : Promise.resolve([POSITION]),
+    });
+    const { service } = harness({
+      perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 1n, locked: 0n }),
+      withPerplReadVenue: perpl.reader,
+      now: () => now,
+    });
+
+    await service.portfolio(ALICE);
+    failing = true;
+    now += USER_PERPL_TTL_MS;
+    const stale = await service.portfolio(ALICE);
+    expect(stale.perpl).toMatchObject({ ok: true, status: 'ok', asOf: NOW, stale: true });
+    expect(stale.wallet.ok && stale.kuru.ok).toBe(true);
+
+    now = NOW + USER_PERPL_STALE_MS + USER_PERPL_TTL_MS;
+    const failed = await service.portfolio(ALICE);
+    expect(failed.perpl).toEqual({ ok: false, error: 'Perpl 429' });
+    expect(failed.wallet).toMatchObject({ ok: true });
   });
 
   it('keeps the wallet and Perpl when the Kuru read throws (SEN-123)', async () => {
@@ -185,9 +299,7 @@ describe('UserPortfolioService.portfolio', () => {
   it('isolates a failing wallet and a failing Perpl read too', async () => {
     const { service } = harness({
       wallet: { balances: () => Promise.reject(new Error('balanceOf reverted')) },
-      perplReadVenue: () => {
-        throw new Error('read key vault unreachable');
-      },
+      withPerplReadVenue: () => Promise.reject(new Error('read key vault unreachable')),
       perplAccountInfo: () => Promise.resolve({ accountId: 7n, balance: 1n, locked: 0n }),
     });
 
@@ -295,10 +407,103 @@ describe('UserPortfolioService.fills', () => {
     expect(second).toEqual({ fills: [expect.objectContaining({ tradeId: 'a' })], next: null });
   });
 
-  it('has no Perpl fills until the read key exists', async () => {
+  it('refuses a cursor that is not a Kuru offset', async () => {
+    const { service } = harness();
+    await expect(service.fills(ALICE, { cursor: 'abc' })).rejects.toMatchObject({
+      reason: 'invalid_cursor',
+    });
+  });
+
+  it('refuses Perpl fills without a read key rather than answer "none" (SEN-151)', async () => {
     const { service, store } = harness();
     store.put(trade('a', NOW - 10_000, { result: RESULT }), new Date(NOW));
-    expect(await service.fills(ALICE, { venue: 'perpl' })).toEqual({ fills: [], next: null });
+    await expect(service.fills(ALICE, { venue: 'perpl' })).rejects.toMatchObject({
+      reason: 'perpl_unlinked',
+    });
+  });
+
+  const PERPL_FILL: PerplFillRecord = {
+    orderId: '42',
+    tradeId: `0x${'cd'.repeat(32)}:4`,
+    symbol: 'BTC-PERP',
+    side: 'sell',
+    price: '77108.1',
+    size: '0.0025',
+    fee: '0.01',
+    feeAsset: 'AUSD',
+    maker: true,
+    timestamp: NOW - 5_000,
+    blockNumber: 9_999,
+    txHash: `0x${'cd'.repeat(32)}`,
+  };
+
+  it("reads Perpl fills with the read key, passing Perpl's cursor through (SEN-151)", async () => {
+    let now = NOW;
+    const getFills = jest.fn((options: { count?: number; page?: string } = {}) =>
+      Promise.resolve(
+        options.page ? { fills: [], next: null } : { fills: [PERPL_FILL], next: 'np-1' },
+      ),
+    );
+    const perpl = fakePerpl({ getFills });
+    const { service } = harness({ withPerplReadVenue: perpl.reader, now: () => now });
+
+    const first = await service.fills(ALICE, { venue: 'perpl', limit: 20 });
+    expect(first).toEqual({
+      fills: [
+        {
+          venue: 'perpl',
+          tradeId: null,
+          venueTradeId: `0x${'cd'.repeat(32)}:4`,
+          orderId: '42',
+          symbol: 'BTC-PERP',
+          side: 'sell',
+          price: '77108.1',
+          size: '0.0025',
+          transactionHash: `0x${'cd'.repeat(32)}`,
+          timestamp: NOW - 5_000,
+        },
+      ],
+      next: 'np-1',
+    });
+    expect(getFills).toHaveBeenLastCalledWith({ count: 20 });
+    expect(await service.fills(ALICE, { venue: 'perpl', limit: 20, cursor: 'np-1' })).toEqual({
+      fills: [],
+      next: null,
+    });
+    expect(getFills).toHaveBeenLastCalledWith({ count: 20, page: 'np-1' });
+
+    // The first page again, inside the window: served from memory.
+    await service.fills(ALICE, { venue: 'perpl', limit: 20 });
+    expect(getFills).toHaveBeenCalledTimes(2);
+    now += USER_PERPL_TTL_MS;
+    await service.fills(ALICE, { venue: 'perpl', limit: 20 });
+    expect(getFills).toHaveBeenCalledTimes(3);
+  });
+
+  it('a failed Perpl fills read is perpl_unavailable', async () => {
+    const perpl = fakePerpl({ getFills: () => Promise.reject(new Error('Perpl 503')) });
+    const { service } = harness({ withPerplReadVenue: perpl.reader });
+    await expect(service.fills(ALICE, { venue: 'perpl' })).rejects.toMatchObject({
+      reason: 'perpl_unavailable',
+      message: 'Perpl 503',
+    });
+  });
+});
+
+describe('PortfolioController refusals', () => {
+  it.each([
+    ['perpl_unlinked', 409],
+    ['perpl_unavailable', 502],
+    ['invalid_cursor', 400],
+  ] as const)('%s answers %i with its reason', async (reason, status) => {
+    const service = {
+      fills: () => Promise.reject(new PortfolioRefusedError(reason, 'no')),
+    } as unknown as UserPortfolioService;
+    const controller = new PortfolioController(service, { principal: () => ALICE } as never);
+    await expect(controller.fills({ venue: 'perpl' })).rejects.toMatchObject({
+      status,
+      response: expect.objectContaining({ reason }),
+    });
   });
 });
 
