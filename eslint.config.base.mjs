@@ -15,6 +15,7 @@ import prettier from 'eslint-config-prettier';
 export const ignores = [
   '**/node_modules/**',
   '**/dist/**',
+  '**/dist-web/**',
   '**/build/**',
   '**/.expo/**',
   '**/ios/**',
