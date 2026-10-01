@@ -401,7 +401,7 @@ export function Chart({
               {stone.label !== undefined && markerFont !== null ? (
                 <Text
                   font={markerFont}
-                  x={stone.at.x - markerFont.measureText(stone.label).width / 2}
+                  x={stone.at.x - textWidth(markerFont, stone.label) / 2}
                   y={stone.at.y - 10}
                   text={stone.label}
                   color={color.text}
@@ -429,7 +429,7 @@ export function Chart({
                   width -
                   model.padRight +
                   TAG_GAP +
-                  (model.padRight - 8 - tagFont.measureText(model.lastLabel).width) / 2
+                  (model.padRight - 8 - textWidth(tagFont, model.lastLabel)) / 2
                 }
                 y={model.end.y + 4}
                 text={model.lastLabel}
@@ -531,4 +531,14 @@ function chevron(x: number, y: number, pointsUp: boolean): string {
   return pointsUp
     ? `M${x},${y - 1}L${x + 3.5},${y - 7}L${x + 7},${y - 1}Z`
     : `M${x},${y - 7}L${x + 7},${y - 7}L${x + 3.5},${y - 1}Z`;
+}
+
+/**
+ * Advance width of `text`, for centring a label. Not `font.measureText`:
+ * Skia's web build (CanvasKit) throws "Not implemented on React Native Web"
+ * for it, which takes the whole screen down (SEN-164). Glyph widths are
+ * implemented on both platforms.
+ */
+function textWidth(font: SkFont, text: string): number {
+  return font.getGlyphWidths(font.getGlyphIDs(text)).reduce((sum, w) => sum + w, 0);
 }
