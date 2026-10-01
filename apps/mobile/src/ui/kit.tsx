@@ -18,8 +18,10 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
   type KeyboardTypeOptions,
+  type PressableStateCallbackType,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -42,12 +44,43 @@ export const DOCK = {
   lift: 10,
 } as const;
 
+/**
+ * The desktop shell (SEN-166): on web, a window at least `WIDE_MIN` wide gets
+ * a left rail instead of the dock and a centred column instead of edge-to-edge
+ * rows. Width, not platform alone: a narrowed browser window gets the phone
+ * layout, and Android is never wide, so its tree is the one it always was.
+ */
+const WIDE_MIN = 1024;
+/** The centred column a wide screen reads in. */
+export const CONTENT_MAX = 720;
+/** The left rail's width on a wide screen. */
+export const RAIL = 232;
+
+export function useWide(): boolean {
+  // Called unconditionally, so the hook order is the same on every platform.
+  const { width } = useWindowDimensions();
+  return Platform.OS === 'web' && width >= WIDE_MIN;
+}
+
+/**
+ * Pressable's style callback state. react-native-web also reports `hovered`,
+ * which React Native's types leave out; native never sets it, so a hover style
+ * keyed on it costs Android nothing. (The pointer cursor is free: RNW gives
+ * every enabled Pressable one.)
+ */
+type PressState = PressableStateCallbackType & { hovered?: boolean };
+
+export function isHovered(state: PressableStateCallbackType): boolean {
+  return (state as PressState).hovered === true;
+}
+
 export function Screen({
   children,
   footer,
   refreshing,
   onRefresh,
   tabbed = false,
+  maxWidth = CONTENT_MAX,
 }: {
   children: ReactNode;
   /** Pinned below the scroll area: the step's primary actions. */
@@ -56,16 +89,22 @@ export function Screen({
   onRefresh?: () => void;
   /** Inside the tab navigator: the floating dock covers the bottom inset. */
   tabbed?: boolean;
+  /** The column's width on a wide screen; ignored on a narrow one. */
+  maxWidth?: number;
 }) {
   const insets = useSafeAreaInsets();
-  const bottom = tabbed ? insets.bottom + DOCK.lift + DOCK.height + 24 : insets.bottom + 40;
+  const wide = useWide();
+  // A wide screen has a rail, not a dock, so there is nothing to scroll clear of.
+  const bottom =
+    tabbed && !wide ? insets.bottom + DOCK.lift + DOCK.height + 24 : insets.bottom + 40;
+  const column = wide ? { maxWidth, width: '100%' as const, alignSelf: 'center' as const } : null;
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: footer ? 24 : bottom }]}
+        contentContainerStyle={[styles.content, { paddingBottom: footer ? 24 : bottom }, column]}
         keyboardShouldPersistTaps="handled"
         refreshControl={
           onRefresh ? (
@@ -82,7 +121,9 @@ export function Screen({
         {children}
       </ScrollView>
       {footer ? (
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>{footer}</View>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
+          {column ? <View style={[styles.footerColumn, column]}>{footer}</View> : footer}
+        </View>
       ) : null}
     </KeyboardAvoidingView>
   );
@@ -133,7 +174,11 @@ export function IconButton({
       accessibilityLabel={label}
       hitSlop={8}
       onPress={onPress}
-      style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+      style={(state) => [
+        styles.iconButton,
+        isHovered(state) && styles.iconButtonHover,
+        state.pressed && styles.pressed,
+      ]}
     >
       <Icon name={icon} size={18} color={color.textDim} />
     </Pressable>
@@ -243,12 +288,13 @@ export function Button({
       accessibilityState={{ disabled: inactive, busy }}
       onPress={onPress}
       disabled={inactive}
-      style={({ pressed }) => [
+      style={(state) => [
         styles.button,
         size === 'sm' && styles.buttonSm,
         BUTTON[kind],
+        isHovered(state) && !inactive && BUTTON_HOVER[kind],
         inactive && styles.inactive,
-        pressed && styles.buttonPressed,
+        state.pressed && styles.buttonPressed,
         style,
       ]}
     >
@@ -421,7 +467,11 @@ export function Chip({
       accessibilityRole="radio"
       accessibilityState={{ checked: selected }}
       onPress={onPress}
-      style={({ pressed }) => [styles.chip, selected && styles.chipOn, pressed && styles.pressed]}
+      style={(state) => [
+        styles.chip,
+        selected ? styles.chipOn : isHovered(state) && styles.chipHover,
+        state.pressed && styles.pressed,
+      ]}
     >
       <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
     </Pressable>
@@ -452,7 +502,10 @@ export function Segmented<T extends string>({
             accessibilityRole="radio"
             accessibilityState={{ checked: on }}
             onPress={() => onChange(option.value)}
-            style={[styles.segment, on && styles.segmentOn]}
+            style={(state) => [
+              styles.segment,
+              on ? styles.segmentOn : isHovered(state) && styles.segmentHover,
+            ]}
           >
             <Text style={[styles.segmentText, on && styles.segmentTextOn]} numberOfLines={1}>
               {option.label}
@@ -625,6 +678,14 @@ const BUTTON = StyleSheet.create({
   danger: { borderColor: 'rgba(240, 80, 140, 0.45)' },
 });
 
+/** A step lighter on hover, in the ground's own tones: purple stays an event. */
+const BUTTON_HOVER = StyleSheet.create({
+  primary: { borderColor: color.purpleHi },
+  secondary: { backgroundColor: color.well },
+  soft: { backgroundColor: color.line, borderColor: color.line },
+  danger: { backgroundColor: 'rgba(240, 80, 140, 0.08)' },
+});
+
 const BUTTON_INK: Record<ButtonKind, string> = {
   primary: '#FFFFFF',
   secondary: color.text,
@@ -643,6 +704,7 @@ const styles = StyleSheet.create({
     borderTopColor: color.line,
     backgroundColor: color.ink,
   },
+  footerColumn: { gap: 12 },
   topBar: {
     height: 48,
     flexDirection: 'row',
@@ -660,6 +722,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  iconButtonHover: { backgroundColor: color.well, borderColor: color.lineStrong },
   section: { marginTop: 28, gap: 4 },
   sectionHead: {
     flexDirection: 'row',
@@ -765,6 +828,7 @@ const styles = StyleSheet.create({
     borderColor: color.lineStrong,
     borderRadius: RADIUS.stone,
   },
+  chipHover: { backgroundColor: color.well },
   chipOn: { backgroundColor: color.purpleSoft, borderColor: color.purpleSoft },
   chipText: { fontFamily: font.medium, fontSize: 13, color: color.text },
   chipTextOn: { color: color.purpleDeep },
@@ -781,6 +845,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   segmentOn: { backgroundColor: color.lineStrong },
+  segmentHover: { backgroundColor: color.line },
   segmentText: { fontFamily: font.medium, fontSize: 13, color: color.textDim },
   segmentTextOn: { color: color.text },
   row: {

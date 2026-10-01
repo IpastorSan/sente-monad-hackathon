@@ -20,8 +20,16 @@
  * the app gains no dependency for it. `TabList` must stay a direct child of
  * `Tabs` — the router only finds triggers there — so the pill is the TabList
  * itself and the Trade button is its absolutely placed sibling.
+ *
+ * On a wide web window (`useWide`, SEN-166) the same TabList is restyled as a
+ * left rail — the mark, the four tabs, a full-width Trade stone, and Account at
+ * the foot — and the screen beside it reads in a centred column (`Screen`).
+ * The rail's extras sit inside the TabList: the router ignores children of a
+ * TabList that are not triggers, and renders them. The narrow tree is the dock
+ * exactly as it was.
  */
 import { Redirect, useRouter } from 'expo-router';
+import Head from 'expo-router/head';
 import { TabList, Tabs, TabSlot, TabTrigger, type TabTriggerSlotProps } from 'expo-router/ui';
 import { forwardRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -29,8 +37,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSession } from '@/session';
 import { Icon, type IconName } from '@/ui/icons';
-import { DOCK } from '@/ui/kit';
-import { color, font } from '@/ui/theme';
+import { Mark } from '@/ui/goban';
+import { DOCK, isHovered, RAIL, useWide } from '@/ui/kit';
+import { color, font, RADIUS } from '@/ui/theme';
 
 /** Distance from the screen edges, and between the pill and the button. */
 const EDGE = 14;
@@ -41,9 +50,68 @@ export default function TabsLayout() {
   const router = useRouter();
   const { auth } = useSession();
   const insets = useSafeAreaInsets();
+  const wide = useWide();
 
   if (auth.status === 'restoring') return <View style={styles.ground} />;
   if (auth.status !== 'ready') return <Redirect href="/welcome" />;
+
+  if (wide) {
+    // `row-reverse` puts the TabList (second child) on the left without
+    // reordering the children the router parses.
+    return (
+      <Tabs style={[styles.ground, styles.desktop]}>
+        <TabSlot />
+        <TabList style={styles.rail}>
+          <View style={styles.brand}>
+            <Mark size={30} />
+            <Text style={styles.wordmark}>Sente</Text>
+          </View>
+          <TabTrigger name="index" href="/" asChild>
+            <RailButton icon="home" label="Home" />
+          </TabTrigger>
+          <TabTrigger name="markets" href="/markets" asChild>
+            <RailButton icon="markets" label="Markets" />
+          </TabTrigger>
+          <TabTrigger name="agents" href="/agents" asChild>
+            <RailButton icon="agents" label="Agents" />
+          </TabTrigger>
+          <TabTrigger name="portfolio" href="/portfolio" asChild>
+            <RailButton icon="portfolio" label="Portfolio" />
+          </TabTrigger>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Trade"
+            onPress={() => router.push('/trade')}
+            style={(state) => [
+              styles.railTrade,
+              isHovered(state) && styles.railTradeHover,
+              state.pressed && styles.pressed,
+            ]}
+          >
+            <Icon name="trade" size={20} color={color.text} strokeWidth={2} />
+            <Text style={styles.railTradeLabel}>Trade</Text>
+          </Pressable>
+          <View style={styles.grow} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Account"
+            onPress={() => router.push('/account')}
+            style={(state) => [
+              styles.railItem,
+              isHovered(state) && styles.railItemHover,
+              state.pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.avatar} />
+            <View>
+              <Text style={styles.railLabel}>Account</Text>
+              <Text style={styles.railCaption}>Monad testnet</Text>
+            </View>
+          </Pressable>
+        </TabList>
+      </Tabs>
+    );
+  }
 
   const bottom = insets.bottom + DOCK.lift;
 
@@ -95,6 +163,7 @@ const TabButton = forwardRef<View, TabButtonProps>(function TabButton(
       accessibilityLabel={label}
       style={[styles.tab, isFocused && styles.tabOn]}
     >
+      {isFocused ? <PageTitle label={label} /> : null}
       <Icon name={icon} size={22} color={isFocused ? color.purpleHi : color.textFaint} />
       <Text style={[styles.tabLabel, isFocused && styles.tabLabelOn]} numberOfLines={1}>
         {label}
@@ -103,8 +172,106 @@ const TabButton = forwardRef<View, TabButtonProps>(function TabButton(
   );
 });
 
+/** The browser tab's title on web; `Head` renders nothing on Android. */
+function PageTitle({ label }: { label: string }) {
+  return (
+    <Head>
+      <title>{`${label} · Sente`}</title>
+    </Head>
+  );
+}
+
+/** A tab on the wide rail: icon and label in a row, the page title when focused. */
+const RailButton = forwardRef<View, TabButtonProps>(function RailButton(
+  { icon, label, isFocused, ...props },
+  ref,
+) {
+  return (
+    <Pressable
+      ref={ref}
+      {...props}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: isFocused }}
+      accessibilityLabel={label}
+      style={(state) => [
+        styles.railItem,
+        isFocused ? styles.railItemOn : isHovered(state) && styles.railItemHover,
+      ]}
+    >
+      {isFocused ? <PageTitle label={label} /> : null}
+      <Icon name={icon} size={20} color={isFocused ? color.purpleHi : color.textFaint} />
+      <Text style={[styles.railLabel, !isFocused && styles.railLabelOff]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+});
+
 const styles = StyleSheet.create({
   ground: { flex: 1, backgroundColor: color.ink },
+  desktop: { flexDirection: 'row-reverse' },
+  // The rail is the ground, not a board: a hairline is all that separates it.
+  rail: {
+    width: RAIL,
+    flexDirection: 'column',
+    justifyContent: 'flex-start',
+    gap: 4,
+    paddingHorizontal: 14,
+    paddingTop: 22,
+    paddingBottom: 18,
+    borderRightWidth: 1,
+    borderRightColor: color.line,
+  },
+  brand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 8,
+    marginBottom: 26,
+  },
+  wordmark: {
+    fontFamily: font.display,
+    fontSize: 22,
+    letterSpacing: -0.5,
+    color: color.text,
+  },
+  railItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: RADIUS.stone,
+  },
+  railItemOn: { backgroundColor: 'rgba(131, 110, 249, 0.18)' },
+  railItemHover: { backgroundColor: color.well },
+  railLabel: { fontFamily: font.medium, fontSize: 14, color: color.text },
+  railLabelOff: { color: color.textDim },
+  railCaption: { fontFamily: font.regular, fontSize: 12, color: color.textFaint },
+  railTrade: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 48,
+    marginTop: 18,
+    borderRadius: RADIUS.stone,
+    backgroundColor: color.purple,
+    borderWidth: 1,
+    borderColor: color.purple,
+    boxShadow: '0 12px 30px -10px rgba(131, 110, 249, 0.55)',
+  },
+  railTradeHover: { borderColor: color.purpleHi },
+  railTradeLabel: { fontFamily: font.semibold, fontSize: 15, color: color.text },
+  grow: { flex: 1 },
+  avatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#ECE8FB',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
   // `.dock__tabs` in docs/design/trading/trading.css. No backdrop blur: that
   // would need a native module, and the tinted well reads the same over ink.
   pill: {

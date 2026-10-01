@@ -52,6 +52,7 @@ import { Icon } from '@/ui/icons';
 import {
   Button,
   Card,
+  CONTENT_MAX,
   Chip,
   Chips,
   DOCK,
@@ -61,6 +62,7 @@ import {
   Screen,
   Section,
   Segmented,
+  useWide,
 } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 
@@ -79,6 +81,7 @@ function isSegment(value: unknown): value is Segment {
 export default function AgentsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const wide = useWide();
   const { agents: api } = useSession();
   const params = useLocalSearchParams<{ segment?: string }>();
   const [segment, setSegment] = useState<Segment>(
@@ -169,7 +172,12 @@ export default function AgentsScreen() {
       </Screen>
 
       {pinned ? (
-        <View style={[styles.pinned, { bottom: insets.bottom + DOCK.lift + DOCK.height + 10 }]}>
+        <View
+          style={[
+            styles.pinned,
+            wide ? styles.pinnedWide : { bottom: insets.bottom + DOCK.lift + DOCK.height + 10 },
+          ]}
+        >
           <BestRow row={best.row} label={best.label} onPress={openLedger} />
         </View>
       ) : null}
@@ -474,4 +482,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.purple,
   },
+  // No dock on a wide screen (SEN-166): the row sits at the foot of the column.
+  pinnedWide: { bottom: 20, maxWidth: CONTENT_MAX - 28, marginHorizontal: 'auto' },
 });
