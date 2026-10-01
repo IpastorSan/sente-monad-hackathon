@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { LocalAccount } from 'viem';
 
+import { unboundFetch } from '@/platform/fetch';
 import { API_URL, type SessionAuth } from '@/wallet/api';
 
 export type ChallengeResponse = {
@@ -54,7 +55,7 @@ export class AuthApi {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ baseUrl = API_URL, fetchImpl = fetch }: AuthApiOptions = {}) {
+  constructor({ baseUrl = API_URL, fetchImpl = unboundFetch }: AuthApiOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.fetchImpl = fetchImpl;
   }

@@ -22,6 +22,7 @@
  * and the flow (M-T21) must run it before any step is signed.
  */
 import type { HistoryRange, ValueHistory } from '../portfolio/history.ts';
+import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 import type {
   Portfolio,
@@ -96,7 +97,7 @@ export class TradeApi {
   private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: TradeApiOptions) {
+  constructor({ auth, baseUrl = API_URL, fetchImpl = unboundFetch }: TradeApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.auth = auth;
     this.fetchImpl = fetchImpl;
