@@ -7,10 +7,10 @@
  * output (`derive.ts`), and without it there is no key. The system sheet asks
  * where to save a moment later, which is the only moment the advice is useful.
  *
- * Stored next to the credential hint, in `expo-secure-store`, and just as
+ * Stored next to the credential hint, in `platform/kv`, and just as
  * disposable: losing the flag costs the user one extra read of the tip.
  */
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/platform/kv';
 
 const KEY = 'sente.tip.passkey-manager.v1';
 

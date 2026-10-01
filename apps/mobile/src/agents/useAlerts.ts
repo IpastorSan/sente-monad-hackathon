@@ -8,7 +8,7 @@
  * for nothing. Push notifications are a later step; until then the feed is as
  * fresh as the last poll.
  *
- * The seen marks live in ONE `expo-secure-store` key, as `alerts.ts` describes
+ * The seen marks live in ONE `platform/kv` key, as `alerts.ts` describes
  * them. Not a secret, but the app already links the store and it is where the
  * other device-side lists live (`markets/localLists.ts`). A failed read is "no
  * state" and a failed write is dropped: a stale dot is not worth an error.
@@ -16,7 +16,7 @@
  * different account's agents simply have no marks yet.
  */
 import { useFocusEffect } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/platform/kv';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {

@@ -5,7 +5,7 @@
  * module-level value every screen subscribes to: flip it on the tab and your
  * position screen underneath hides too, with no provider to thread through.
  *
- * Saved with expo-secure-store under ONE key because it is already a native
+ * Saved through `platform/kv` (the secure store) under ONE key because it is already a native
  * module in the app (the passkey hints use it) and no other persistence is;
  * a plain preference does not need the keystore, but a second storage module
  * would mean a dev-client rebuild. Home reads this same hook (SEN-144): it used
@@ -15,7 +15,7 @@
  * Until the stored value is read the figures show: a first frame of dots on
  * every launch would be worse than one frame of numbers for the few who hide.
  */
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/platform/kv';
 import { useSyncExternalStore } from 'react';
 
 const KEY = 'sente.pref.hideBalances.v1';

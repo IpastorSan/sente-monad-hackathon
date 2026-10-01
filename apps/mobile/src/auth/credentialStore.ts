@@ -8,10 +8,12 @@
  * because the key is derived rather than stored, the same passkey rebuilds the
  * same address on a wiped install or a different phone.
  *
- * They live in `expo-secure-store` anyway — the Android Keystore is the right
- * default for anything account-shaped, and it costs nothing.
+ * They live in the secure store (`platform/kv`) anyway — the Android Keystore
+ * is the right default for anything account-shaped, and it costs nothing. On
+ * web that becomes localStorage, which is acceptable precisely because none of
+ * this is a secret.
  */
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/platform/kv';
 
 import type { StoredCredential } from './mera';
 
