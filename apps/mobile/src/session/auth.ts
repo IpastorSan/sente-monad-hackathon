@@ -6,7 +6,7 @@
  * sign the exact string it returns with the Mera viem account, and swap the
  * signature for a bearer token.
  *
- * THE TOKEN IS NEVER PERSISTED. Not in `expo-secure-store`, not in state that
+ * THE TOKEN IS NEVER PERSISTED. Not in `platform/kv`, not in state that
  * outlives the process: a stored token is a credential someone can lift off the
  * device, and this one is worth nothing to keep — the passkey re-derives the
  * key on the next launch, so signing in again costs one HTTP round trip and no

@@ -1,13 +1,13 @@
 /**
  * The two lists the Markets tab keeps on the device (SEN-111): recent searches
- * and favourite markets. `expo-secure-store` because the study says so and the
+ * and favourite markets. `platform/kv` (the secure store) because the study says so and the
  * app already links it — no new native module for a few hundred bytes. Neither
  * list is a secret; a failed read is an empty list and a failed write is
  * dropped, because losing a recent is not worth an error on screen.
  *
  * The parsing and ordering rules are `marketsView.ts`, under test.
  */
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/platform/kv';
 
 import {
   parseFavourites,

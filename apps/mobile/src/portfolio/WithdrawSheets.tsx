@@ -11,7 +11,7 @@
  *   through `runTrade`. Only opened while manual trading is on, since it uses
  *   the `/trade` routes; AccountCore pays the caller, so there is no recipient.
  */
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/platform/kv';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Address } from 'viem';
@@ -54,7 +54,7 @@ type NoticeState = { tone: 'info' | 'ok' | 'error'; title: string; detail?: stri
 // ─── Known recipients ───────────────────────────────────────────────────────
 
 /**
- * "Sent here before", kept on this phone only. expo-secure-store because it
+ * "Sent here before", kept on this phone only. `platform/kv` because it
  * is the one persistence module the app already has (see `hideBalances.ts`);
  * the list is addresses, not secrets. A failed read is an empty list, which
  * errs toward MORE warnings, never fewer.
