@@ -21,6 +21,9 @@
  * sign-in is still prompt-free: `signDigest` and `signPrivyAuthorization` both
  * sign locally from the derived keys, so neither a transaction nor a Privy
  * approval re-prompts for a biometric.
+ *
+ * The same ceremonies run on Android and in a browser; only the WebAuthn
+ * transport differs, and `./webauthnClient` picks it per platform (SEN-165).
  */
 import {
   createPasskeyWithPrfOutput,
@@ -32,7 +35,6 @@ import {
   type PasskeyCredentialTransport,
   type Secp256k1SigningSession,
 } from '@category-labs/mera';
-import { reactNativeWebAuthnClient } from '@category-labs/mera/react-native-webauthn-client';
 import { toViemAccount } from '@category-labs/mera/viem';
 import type { Address, LocalAccount } from 'viem';
 
@@ -43,6 +45,7 @@ import {
   signPrivyAuthorization as signWithDeviceKey,
   type AuthorizationPayload,
 } from './deviceKey';
+import { webAuthnClient } from './webauthnClient';
 
 // PERMANENT (CLAUDE.md). Defined in the React-Native-free `./constants` so a
 // node test can pin it (SEN-138); re-exported so every existing import holds.
@@ -219,7 +222,7 @@ async function deviceKeyPrfOutput(credential: StoredCredential): Promise<Uint8Ar
     credential: toCredentialMetadata(credential),
     prfSalt: prfSaltFor('device'),
     timeout: PASSKEY_TIMEOUT_MS,
-    webAuthnClient: reactNativeWebAuthnClient,
+    webAuthnClient,
   });
   if (asserted.credentialId !== credential.credentialId) {
     zeroize(asserted.prfOutput);
@@ -263,7 +266,7 @@ export async function createWallet({
     user: { name: userName, displayName: displayName ?? userName },
     prfSalt: prfSaltFor('wallet'),
     timeout: PASSKEY_TIMEOUT_MS,
-    webAuthnClient: reactNativeWebAuthnClient,
+    webAuthnClient,
   });
   return openSession({
     prfOutput: created.prfOutput,
@@ -297,7 +300,7 @@ export async function signIn({
     ...(credential !== undefined ? { credential: toCredentialMetadata(credential) } : {}),
     prfSalt: prfSaltFor('wallet'),
     timeout: PASSKEY_TIMEOUT_MS,
-    webAuthnClient: reactNativeWebAuthnClient,
+    webAuthnClient,
   });
   return openSession({
     prfOutput: asserted.prfOutput,
