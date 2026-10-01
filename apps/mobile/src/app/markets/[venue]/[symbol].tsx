@@ -16,6 +16,11 @@
  * rather than faking it; Sell/Buy open the ticket only when
  * `useTradingEnabled` says trading is on (SEN-119). Every choice with a rule
  * behind it is in `markets/asset.ts`, under test; this file only lays out.
+ *
+ * A wide web window (SEN-167) splits the page: the same sections in the same
+ * order on the left, with a taller chart, and on the right the order ticket
+ * itself (`TicketPanel`) for a Kuru market with trading on, else the Sell/Buy
+ * pair that is pinned to the bottom on a phone. Narrow keeps the phone tree.
  */
 import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -72,10 +77,11 @@ import { marketKey } from '@/markets/select';
 import { usePolling } from '@/markets/usePolling';
 import { useSession } from '@/session';
 import { isUnavailable, TradeApiError } from '@/trade/api';
+import { canEmbedTicket, TicketPanel } from '@/trade/TicketScreen';
 import { useTradingEnabled } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { Sigil, Stone } from '@/ui/goban';
-import { Button, Card, Loading, Notice, Section, Sheet, TopBar } from '@/ui/kit';
+import { Button, Card, Loading, Notice, Section, Sheet, TopBar, useWide, WIDE_MAX } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import {
   AsOf,
@@ -91,6 +97,10 @@ import { formatPrice, pctDirection, pressureSplit } from '@/ui/tradingFormat';
 /** Past this scroll offset the hero is gone and the condensed header takes over. */
 const HERO_HEIGHT = 170;
 const CHART_HEIGHT = 210;
+/** The chart on a wide window, where it has a column of its own to fill. */
+const CHART_HEIGHT_WIDE = 380;
+/** The ticket's column on a wide window. */
+const SIDE_WIDTH = 380;
 const CTA_HEIGHT = 50;
 /** A stable empty series, so the line's memo holds before the first answer. */
 const NO_BARS: readonly KlineDto[] = [];
@@ -152,6 +162,7 @@ function Asset({
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const wide = useWide();
   const header = assetHeader(market);
   const initial = defaultView(market);
   const [range, setRange] = useState<AssetRange>(initial.range);
@@ -171,6 +182,7 @@ function Asset({
   const position = useYourPositionUntilPortfolio(market);
   const trading = useTradingEnabled();
   const fills = useMarketFills(market, trading);
+  const chartHeight = wide ? CHART_HEIGHT_WIDE : CHART_HEIGHT;
 
   const bars = klines.data?.klines ?? NO_BARS;
   const markers = useMemo(() => fillMarkers(fills.all, bars), [fills.all, bars]);
@@ -213,197 +225,257 @@ function Asset({
     });
   };
 
+  const refreshControl = (
+    <RefreshControl
+      refreshing={false}
+      onRefresh={refresh}
+      tintColor={color.purpleHi}
+      colors={[color.purple]}
+      progressBackgroundColor={color.board}
+    />
+  );
+  const sideButtons = (
+    <>
+      <SideButton label={header.actions[0]} tone="short" onPress={() => trade('sell')} />
+      <SideButton label={header.actions[1]} tone="long" onPress={() => trade('buy')} />
+    </>
+  );
+  const gatedSheet = (
+    <Sheet
+      visible={gated}
+      title="Trading from your wallet is coming"
+      onClose={() => setGated(false)}
+    >
+      <Text style={text.body}>
+        Soon you'll {header.perp ? 'go long or short' : 'buy and sell'} {header.title} here
+        yourself, from your own wallet. Until then, an agent can trade {market.symbol} for you,
+        inside a mandate the enclave enforces.
+      </Text>
+      <Button
+        label={`Hire an agent for ${header.title}`}
+        kind="primary"
+        onPress={() => {
+          setGated(false);
+          router.push('/agents?segment=presets');
+        }}
+      />
+    </Sheet>
+  );
+
+  const sections = (
+    <>
+      <TopBar
+        back={{ label: 'Markets', onPress: onBack }}
+        right={<StarButton starred={starred} onPress={toggleStar} symbol={market.symbol} />}
+      />
+
+      <View style={styles.identity}>
+        <TokenGlyph symbol={market.base} />
+        <View style={styles.grow}>
+          <Text style={text.title} numberOfLines={1}>
+            {header.title}
+            {header.perp ? ' ' : null}
+            {header.perp ? <PerpTag leverage={market.maxLeverage} /> : null}
+          </Text>
+          <Text style={text.caption}>{header.caption}</Text>
+        </View>
+        <AsOf at={ticker.asOf} paused={ticker.stale} />
+      </View>
+
+      {ticker.stale && ticker.data ? (
+        <View style={styles.banner}>
+          <Notice
+            title={`${venue === 'kuru' ? 'Kuru' : 'Perpl'} prices paused`}
+            detail="Showing the last ones we got and retrying. A ticket re-quotes before you confirm, so a stale price can't fill you."
+          />
+        </View>
+      ) : null}
+
+      <View style={styles.priceLine}>
+        <BigNumber value={head.price ?? '—'} places={places} />
+        <Text style={styles.unit}>{header.unit}</Text>
+      </View>
+      <ChangeText pct={head.pct} suffix={head.suffix} />
+      {header.perp && ticker.data ? (
+        <View style={styles.markIndex}>
+          <MarkIndex label="Mark" value={ticker.data.mark} tick={market.tickSize} />
+          <MarkIndex label="Index" value={ticker.data.index} tick={market.tickSize} />
+        </View>
+      ) : null}
+
+      <View style={styles.chart}>
+        {bars.length > 1 ? (
+          <Chart
+            kind={kind}
+            points={kind === 'line' ? points : undefined}
+            klines={kind === 'candles' ? bars : undefined}
+            levels={position?.levels}
+            markers={markers}
+            prevClose={kind === 'line' ? prevClose : undefined}
+            height={chartHeight}
+            // A perp's liquidation line sits far from the price; with `fit`
+            // it would squash the candles into a strip, so it becomes an
+            // edge chip instead.
+            fit={!header.perp}
+            onScrub={setScrub}
+            label={`${market.symbol} price, ${range}`}
+          />
+        ) : (
+          <View style={[styles.chartEmpty, { height: chartHeight }]}>
+            {klines.unavailable ? (
+              <Text style={text.caption}>Charts aren't on this server yet.</Text>
+            ) : klines.error && !klines.data ? (
+              <Text style={text.caption}>Couldn't load the chart. Pull to retry.</Text>
+            ) : klines.data ? (
+              <Text style={text.caption}>No trades in this range yet.</Text>
+            ) : (
+              <Loading />
+            )}
+          </View>
+        )}
+      </View>
+      <RangePills
+        options={rangesFor(market)}
+        value={range}
+        onChange={(next) => {
+          // A scrub index belongs to the series it was taken on.
+          setScrub(null);
+          setRange(next);
+        }}
+        trailing={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={kind === 'line' ? 'Show candles' : 'Show line'}
+            onPress={() => {
+              setScrub(null);
+              setKind(kind === 'line' ? 'candles' : 'line');
+            }}
+            hitSlop={6}
+            style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
+          >
+            <Text style={styles.toggleText}>{kind === 'line' ? 'Candles' : 'Line'}</Text>
+          </Pressable>
+        }
+      />
+
+      <View style={styles.tfGrid}>
+        {cells.map((cell) => (
+          <View key={cell.label} style={[styles.tf, cell.primary && styles.tfOn]}>
+            <Text style={text.caption}>{cell.label}</Text>
+            <ChangeText pct={cell.pct} style={styles.tfValue} />
+          </View>
+        ))}
+      </View>
+
+      {funding ? (
+        <View style={styles.funding}>
+          <View>
+            <Text style={text.caption}>Funding · {funding.payer}</Text>
+            <Text style={[text.strong, text.num]}>{funding.rate}</Text>
+          </View>
+          {funding.nextIn ? (
+            <View style={styles.right}>
+              <Text style={text.caption}>Next in</Text>
+              <Text style={[text.strong, text.num]}>{funding.nextIn}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {agents !== null && agents.length > 0 ? (
+        <Section
+          label={`Agents trading ${header.title}`}
+          aside={<Text style={text.caption}>{agents.length} of yours</Text>}
+        >
+          <View style={styles.agents}>
+            {agents.map(({ agent, stake }) => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                stake={stake}
+                unit={header.unit}
+                onPress={() => router.push({ pathname: '/agents/[id]', params: { id: agent.id } })}
+              />
+            ))}
+          </View>
+        </Section>
+      ) : null}
+
+      {stats.length > 0 ? (
+        <Section label="Market">
+          {stats.map((row, i) => (
+            <View key={row.label} style={[styles.stat, i < stats.length - 1 && styles.divider]}>
+              <Text style={text.dim}>{row.label}</Text>
+              <Text style={[text.body, text.num]}>{row.value}</Text>
+            </View>
+          ))}
+        </Section>
+      ) : null}
+
+      {sums && !depth.unavailable ? (
+        <Section
+          label="Order book pressure"
+          aside={<Text style={styles.asofText}>top {PRESSURE_LEVELS} levels</Text>}
+        >
+          <PressureBar bids={sums.bids} asks={sums.asks} legend={false} />
+          <View style={styles.pressureLegend}>
+            <PressureSide side="Bids" sums={sums} unit={market.base} />
+            <PressureSide side="Asks" sums={sums} />
+          </View>
+        </Section>
+      ) : null}
+
+      {recentFills.length > 0 ? (
+        <Section label={`Fills on ${header.title}`}>
+          {recentFills.map((fill, i) => (
+            <FillRow
+              key={fill.key}
+              fill={fill}
+              tick={market.tickSize}
+              divider={i < recentFills.length - 1}
+            />
+          ))}
+        </Section>
+      ) : null}
+    </>
+  );
+
+  if (wide) {
+    return (
+      <View style={styles.root}>
+        <View style={styles.desk}>
+          <ScrollView
+            style={styles.grow}
+            contentContainerStyle={[styles.content, styles.deskContent]}
+            refreshControl={refreshControl}
+          >
+            {sections}
+          </ScrollView>
+          <View style={styles.deskSide}>
+            {trading && canEmbedTicket(market) ? (
+              <TicketPanel market={market} />
+            ) : (
+              <View style={styles.deskActions}>
+                <Text style={text.label}>Trade {header.title}</Text>
+                <View style={styles.deskButtons}>{sideButtons}</View>
+              </View>
+            )}
+          </View>
+        </View>
+        {gatedSheet}
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <ScrollView
         onScroll={onScroll}
         scrollEventThrottle={32}
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + CTA_HEIGHT + 40 }]}
-        refreshControl={
-          <RefreshControl
-            refreshing={false}
-            onRefresh={refresh}
-            tintColor={color.purpleHi}
-            colors={[color.purple]}
-            progressBackgroundColor={color.board}
-          />
-        }
+        refreshControl={refreshControl}
       >
-        <TopBar
-          back={{ label: 'Markets', onPress: onBack }}
-          right={<StarButton starred={starred} onPress={toggleStar} symbol={market.symbol} />}
-        />
-
-        <View style={styles.identity}>
-          <TokenGlyph symbol={market.base} />
-          <View style={styles.grow}>
-            <Text style={text.title} numberOfLines={1}>
-              {header.title}
-              {header.perp ? ' ' : null}
-              {header.perp ? <PerpTag leverage={market.maxLeverage} /> : null}
-            </Text>
-            <Text style={text.caption}>{header.caption}</Text>
-          </View>
-          <AsOf at={ticker.asOf} paused={ticker.stale} />
-        </View>
-
-        {ticker.stale && ticker.data ? (
-          <View style={styles.banner}>
-            <Notice
-              title={`${venue === 'kuru' ? 'Kuru' : 'Perpl'} prices paused`}
-              detail="Showing the last ones we got and retrying. A ticket re-quotes before you confirm, so a stale price can't fill you."
-            />
-          </View>
-        ) : null}
-
-        <View style={styles.priceLine}>
-          <BigNumber value={head.price ?? '—'} places={places} />
-          <Text style={styles.unit}>{header.unit}</Text>
-        </View>
-        <ChangeText pct={head.pct} suffix={head.suffix} />
-        {header.perp && ticker.data ? (
-          <View style={styles.markIndex}>
-            <MarkIndex label="Mark" value={ticker.data.mark} tick={market.tickSize} />
-            <MarkIndex label="Index" value={ticker.data.index} tick={market.tickSize} />
-          </View>
-        ) : null}
-
-        <View style={styles.chart}>
-          {bars.length > 1 ? (
-            <Chart
-              kind={kind}
-              points={kind === 'line' ? points : undefined}
-              klines={kind === 'candles' ? bars : undefined}
-              levels={position?.levels}
-              markers={markers}
-              prevClose={kind === 'line' ? prevClose : undefined}
-              height={CHART_HEIGHT}
-              // A perp's liquidation line sits far from the price; with `fit`
-              // it would squash the candles into a strip, so it becomes an
-              // edge chip instead.
-              fit={!header.perp}
-              onScrub={setScrub}
-              label={`${market.symbol} price, ${range}`}
-            />
-          ) : (
-            <View style={[styles.chartEmpty, { height: CHART_HEIGHT }]}>
-              {klines.unavailable ? (
-                <Text style={text.caption}>Charts aren't on this server yet.</Text>
-              ) : klines.error && !klines.data ? (
-                <Text style={text.caption}>Couldn't load the chart. Pull to retry.</Text>
-              ) : klines.data ? (
-                <Text style={text.caption}>No trades in this range yet.</Text>
-              ) : (
-                <Loading />
-              )}
-            </View>
-          )}
-        </View>
-        <RangePills
-          options={rangesFor(market)}
-          value={range}
-          onChange={(next) => {
-            // A scrub index belongs to the series it was taken on.
-            setScrub(null);
-            setRange(next);
-          }}
-          trailing={
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={kind === 'line' ? 'Show candles' : 'Show line'}
-              onPress={() => {
-                setScrub(null);
-                setKind(kind === 'line' ? 'candles' : 'line');
-              }}
-              hitSlop={6}
-              style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
-            >
-              <Text style={styles.toggleText}>{kind === 'line' ? 'Candles' : 'Line'}</Text>
-            </Pressable>
-          }
-        />
-
-        <View style={styles.tfGrid}>
-          {cells.map((cell) => (
-            <View key={cell.label} style={[styles.tf, cell.primary && styles.tfOn]}>
-              <Text style={text.caption}>{cell.label}</Text>
-              <ChangeText pct={cell.pct} style={styles.tfValue} />
-            </View>
-          ))}
-        </View>
-
-        {funding ? (
-          <View style={styles.funding}>
-            <View>
-              <Text style={text.caption}>Funding · {funding.payer}</Text>
-              <Text style={[text.strong, text.num]}>{funding.rate}</Text>
-            </View>
-            {funding.nextIn ? (
-              <View style={styles.right}>
-                <Text style={text.caption}>Next in</Text>
-                <Text style={[text.strong, text.num]}>{funding.nextIn}</Text>
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-
-        {agents !== null && agents.length > 0 ? (
-          <Section
-            label={`Agents trading ${header.title}`}
-            aside={<Text style={text.caption}>{agents.length} of yours</Text>}
-          >
-            <View style={styles.agents}>
-              {agents.map(({ agent, stake }) => (
-                <AgentCard
-                  key={agent.id}
-                  agent={agent}
-                  stake={stake}
-                  unit={header.unit}
-                  onPress={() =>
-                    router.push({ pathname: '/agents/[id]', params: { id: agent.id } })
-                  }
-                />
-              ))}
-            </View>
-          </Section>
-        ) : null}
-
-        {stats.length > 0 ? (
-          <Section label="Market">
-            {stats.map((row, i) => (
-              <View key={row.label} style={[styles.stat, i < stats.length - 1 && styles.divider]}>
-                <Text style={text.dim}>{row.label}</Text>
-                <Text style={[text.body, text.num]}>{row.value}</Text>
-              </View>
-            ))}
-          </Section>
-        ) : null}
-
-        {sums && !depth.unavailable ? (
-          <Section
-            label="Order book pressure"
-            aside={<Text style={styles.asofText}>top {PRESSURE_LEVELS} levels</Text>}
-          >
-            <PressureBar bids={sums.bids} asks={sums.asks} legend={false} />
-            <View style={styles.pressureLegend}>
-              <PressureSide side="Bids" sums={sums} unit={market.base} />
-              <PressureSide side="Asks" sums={sums} />
-            </View>
-          </Section>
-        ) : null}
-
-        {recentFills.length > 0 ? (
-          <Section label={`Fills on ${header.title}`}>
-            {recentFills.map((fill, i) => (
-              <FillRow
-                key={fill.key}
-                fill={fill}
-                tick={market.tickSize}
-                divider={i < recentFills.length - 1}
-              />
-            ))}
-          </Section>
-        ) : null}
+        {sections}
       </ScrollView>
 
       {condensed ? (
@@ -422,30 +494,9 @@ function Asset({
         </View>
       ) : null}
 
-      <View style={[styles.cta, { paddingBottom: insets.bottom + 12 }]}>
-        <SideButton label={header.actions[0]} tone="short" onPress={() => trade('sell')} />
-        <SideButton label={header.actions[1]} tone="long" onPress={() => trade('buy')} />
-      </View>
+      <View style={[styles.cta, { paddingBottom: insets.bottom + 12 }]}>{sideButtons}</View>
 
-      <Sheet
-        visible={gated}
-        title="Trading from your wallet is coming"
-        onClose={() => setGated(false)}
-      >
-        <Text style={text.body}>
-          Soon you'll {header.perp ? 'go long or short' : 'buy and sell'} {header.title} here
-          yourself, from your own wallet. Until then, an agent can trade {market.symbol} for you,
-          inside a mandate the enclave enforces.
-        </Text>
-        <Button
-          label={`Hire an agent for ${header.title}`}
-          kind="primary"
-          onPress={() => {
-            setGated(false);
-            router.push('/agents?segment=presets');
-          }}
-        />
-      </Sheet>
+      {gatedSheet}
     </View>
   );
 }
@@ -793,6 +844,23 @@ const BERRY_WASH = 'rgba(240, 80, 140, 0.12)';
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.ink },
   content: { paddingHorizontal: GUTTER, paddingTop: 8 },
+  // Wide (SEN-167): the page as a row, the ticket's column ruled off down the right.
+  desk: {
+    flex: 1,
+    flexDirection: 'row',
+    width: '100%',
+    maxWidth: WIDE_MAX,
+    alignSelf: 'center',
+  },
+  deskContent: { paddingBottom: 40 },
+  deskSide: {
+    width: SIDE_WIDTH,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: color.line,
+  },
+  deskActions: { padding: GUTTER, paddingTop: 26, gap: 12 },
+  deskButtons: { flexDirection: 'row', gap: 10 },
   grow: { flex: 1, minWidth: 0 },
   right: { alignItems: 'flex-end' },
   pressed: { opacity: 0.7 },

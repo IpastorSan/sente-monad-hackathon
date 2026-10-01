@@ -53,6 +53,11 @@ export const DOCK = {
 const WIDE_MIN = 1024;
 /** The centred column a wide screen reads in. */
 export const CONTENT_MAX = 720;
+/**
+ * The wider column for the screens laid out in two (SEN-167): a market beside
+ * its ticket, and Home. The rest stay at `CONTENT_MAX`.
+ */
+export const WIDE_MAX = 1180;
 /** The left rail's width on a wide screen. */
 export const RAIL = 232;
 
