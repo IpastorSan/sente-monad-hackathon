@@ -5,8 +5,9 @@
 # NO redirect — Apple and Google both refuse to follow one, and the resulting
 # passkey failure gives no useful error. See ../CLAUDE.md.
 #
-# Later this same box is where apps/web and services/api land, which is why it
-# is a VM with a reverse proxy rather than a static file host.
+# The same box serves the web app on the apex (SEN-168) and reverse-proxies
+# services/api on api.sente.lol, which is why it is a VM with a reverse proxy
+# rather than a static file host.
 
 services:
   caddy:
@@ -18,7 +19,11 @@ services:
       - '443:443'
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # /.well-known/* only — the passkey association files.
       - ./site:/srv/site:ro
+      # Everything else on the apex: the Expo web export, built locally by
+      # deploy.sh into infra/web (SEN-168). Caddyfile has the ordering.
+      - ./web:/srv/web:ro
       # caddy_data holds the Let's Encrypt certificates and account key.
       # Losing it means re-issuing certs and burning rate limit (5 per domain
       # per week). It must be a named volume, never a bind mount to /tmp.

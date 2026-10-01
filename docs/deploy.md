@@ -1,8 +1,8 @@
 # deploy.md
 
 How Sente gets somewhere a stranger can use it: the API on HTTPS at
-`api.sente.lol`, and a release APK a judge installs without a dev client or
-Metro. SEN-51.
+`api.sente.lol`, a release APK a judge installs without a dev client or Metro
+(SEN-51), and the same app in a browser at `https://sente.lol` (SEN-168).
 
 > **NOTHING IN THIS FILE HAS BEEN EXECUTED.** The machinery is written and, where
 > it could be, verified locally — see [What has and has not
@@ -19,13 +19,17 @@ certificate for `sente.lol` in a named Docker volume. Do not rebuild it: losing
                        ┌──────────────────────── sente-web (e2-micro, Debian 12)
   api.sente.lol ──TLS──┤  caddy  ──http──>  api  (sente-api:<git sha>)
   sente.lol     ──TLS──┤    │                │
-  www.sente.lol ──TLS──┘    └─ /srv/site     ├── env_file /opt/sente/api.env   0600 root
-                               (.well-known)  └── bind mount /var/lib/sente/state
+  www.sente.lol ──TLS──┘    ├─ /srv/site     ├── env_file /opt/sente/api.env   0600 root
+                            │  (.well-known)  └── bind mount /var/lib/sente/state
+                            └─ /srv/web
+                               (everything else on the apex: the web app)
 ```
 
-- **`sente.lol`** — the static site and, load-bearing, `/.well-known/assetlinks.json`.
-  200, no redirect, or every user's passkey stops being offered to the app and
-  their wallet goes with it (`../CLAUDE.md`, "Permanent, unchangeable values").
+- **`sente.lol`** — load-bearing, `/.well-known/assetlinks.json`: 200, no
+  redirect, or every user's passkey stops being offered to the app and their
+  wallet goes with it (`../CLAUDE.md`, "Permanent, unchangeable values").
+  Every other path is the web app, a single-page Expo export with a fallback to
+  `index.html` — see [The web app](#the-web-app) for how the two are kept apart.
 - **`api.sente.lol`** — `services/api`, reverse-proxied. Its own hostname rather
   than a path under the apex so that a proxy directive can never end up in front
   of the association files. The rpId is unaffected: a passkey scoped to
@@ -60,7 +64,7 @@ deployment view.
 | `ALCHEMY_WEBHOOK_SIGNING_KEY`, `ALCHEMY_NOTIFY_AUTH_TOKEN`, `OPENROUTER_MANAGEMENT_KEY`, `NANSEN_API_KEY` | `/opt/sente/api.env`                     | secret                                                                     |
 | `PRIVY_APP_ID`, `ALCHEMY_NOTIFY_WEBHOOK_ID`, quorum ids                                                   | `/opt/sente/api.env`                     | not secret, useless alone                                                  |
 | `SENTE_API_TAG`                                                                                           | `/opt/sente/.env`                        | public — compose interpolation only, **never put a secret here**           |
-| `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_MONAD_NETWORK`, `EXPO_PUBLIC_BUNDLER_URL`                             | inside the APK                           | **public** — inlined at bundle time                                        |
+| `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_MONAD_NETWORK`, `EXPO_PUBLIC_BUNDLER_URL`                             | inside the APK and the web bundle        | **public** — inlined at bundle time                                        |
 | the release keystore + `credentials.json`                                                                 | `apps/mobile/keystores/`, gitignored     | secret — **unrecoverable**, back it up off this machine                    |
 | both SHA-256 signing fingerprints                                                                         | `infra/site/.well-known/assetlinks.json` | public by design                                                           |
 | the Let's Encrypt account key and certificates                                                            | the `caddy_data` volume                  | secret, and irreplaceable-ish (rate limits)                                |
@@ -156,14 +160,19 @@ it at `up` time.
 PROJECT=… ZONE=… ./deploy.sh
 ```
 
-What it does: reads the box's IP and checks DNS → checks `/opt/sente/api.env`
-exists (refuses otherwise; `SKIP_API=1` deploys only Caddy and the site) →
+What it does: builds the web export locally into `infra/web` and refuses it if
+`https://api.sente.lol` is not inlined (`SKIP_WEB=1` skips this and leaves the
+box's web app alone; see [The web app](#the-web-app)) → reads the box's IP and
+checks DNS → checks `/opt/sente/api.env` exists (refuses otherwise; `SKIP_API=1`
+deploys only Caddy, the site and the web app) →
 `docker build` locally, tagged with the git short SHA → `docker save | gzip` piped
 into `docker load` over the SSH connection it already has, so there is no
 registry to enable, authenticate or leak → copies `Caddyfile`,
-`docker-compose.yml` and `site/` → writes `SENTE_API_TAG` into `/opt/sente/.env`
-→ `install -d -m 0700 -o 1000 -g 1000 /var/lib/sente/state` → `docker compose up
--d` → waits for the container's health check → `verify.sh`.
+`docker-compose.yml`, `site/` and `web/` → writes `SENTE_API_TAG` into
+`/opt/sente/.env` → `install -d -m 0700 -o 1000 -g 1000 /var/lib/sente/state` →
+`docker compose up -d` → `caddy reload` (an edited Caddyfile is not a compose
+change, so `up -d` alone would leave Caddy on the old config) → waits for the
+container's health check → `verify.sh`.
 
 The image ship is the slow part: hundreds of megabytes up a home uplink. It is
 also why the tag is the commit — `sudo docker image ls sente-api` on the box
@@ -244,7 +253,9 @@ SENTE_API_TAG=<an older sha> PROJECT=… ZONE=… ./deploy.sh
 box. `docker image prune -f` in the deploy removes **dangling** images only, so
 every `sente-api:<sha>` stays and the rollback targets survive. If you have
 rolled the Caddyfile or the site back too, check out the older commit first — the
-Caddyfile and `site/` are copied from your working tree, not from the image.
+Caddyfile, `site/` and the web export are copied or built from your working
+tree, not from the image. A rollback that should keep the current web app is
+`SKIP_WEB=1`.
 
 Three things a rollback does **not** touch, deliberately:
 
@@ -264,6 +275,109 @@ Three things a rollback does **not** touch, deliberately:
 Rotating `AUTH_SESSION_SECRET` is `push-secrets.sh` then `deploy.sh`, and it
 invalidates every live session — which is the point of rotating it. Do not do it
 between recording two takes of a demo.
+
+## The web app
+
+The app's web build (SEN-163's `export:web`) is served on the apex, from the
+same Caddy, as a single-page app. Chosen over `app.sente.lol` because it needs no
+new DNS record and the link a judge gets is the bare domain — and `sente.lol`
+and its subdomains are the only origins where the passkeys work at all.
+
+### What is served where
+
+| Path on `https://sente.lol` | From                                                                    | Cache-Control                                    |
+| --------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------ |
+| `/.well-known/*`            | `infra/site` → `/srv/site`, a plain file server; unknown file = **404** | `public, max-age=300`                            |
+| `/_expo/static/*`           | `infra/web` → `/srv/web`; content-hashed names, missing = 404           | `public, max-age=31536000, immutable`            |
+| `/canvaskit.wasm`           | `infra/web` (Skia's CanvasKit, SEN-164); `application/wasm`             | `public, max-age=86400` (its name is not hashed) |
+| `/assets/*`, `/favicon.ico` | `infra/web`; missing = 404                                              | none (heuristic, revalidated by ETag)            |
+| everything else             | `infra/web/index.html`, the SPA fallback                                | `no-cache` — it names the current bundles        |
+
+**The one way this goes wrong silently** is the fallback reaching
+`/.well-known/`: a missing or mistyped association path would come back 200
+`text/html`, and Android would stop offering every user's passkey to the app with
+no error anywhere. So the Caddyfile puts `/.well-known/*` in its own `handle`
+with no `try_files`, and `verify.sh` asserts from outside that
+`/.well-known/does-not-exist` is a 404 — it runs even with `SKIP_WEB=1`, because
+the fallback is live either way. (Caddy sorts `handle` blocks by matcher
+specificity, so the order in the file does not decide it; it is written first for
+the reader.) The old `infra/site/index.html` landing page was deleted: nothing
+routes to `/srv/site` outside `/.well-known/` any more, and the app's welcome
+screen replaces it.
+
+`verify.sh` also checks `/` is the app shell, `/agents/anything` is the very same
+`index.html`, and `/canvaskit.wasm` is `application/wasm`.
+
+### Building it
+
+`deploy.sh` builds the export **on this machine** (the box has 1 GB of RAM),
+copies `apps/mobile/dist-web` to `infra/web` (gitignored) and ships it with the
+rest of `infra/`. On the box `/opt/sente/web` is emptied and refilled, never
+removed and recreated — it is bind mounted into the running Caddy, and a new
+directory would be a new inode the container never sees.
+
+**`EXPO_PUBLIC_*` is baked in at build time.** Whatever the build saw is in the
+JavaScript every browser downloads: public by construction, and fixed until the
+next build. `deploy.sh` sets them explicitly rather than trusting whatever `.env`
+the machine has:
+
+| Variable                    | Value                                               |
+| --------------------------- | --------------------------------------------------- |
+| `EXPO_PUBLIC_API_URL`       | `https://$API_HOST` — always, not overridable       |
+| `EXPO_PUBLIC_MONAD_NETWORK` | `testnet` unless set in the environment             |
+| `EXPO_PUBLIC_MONAD_RPC_URL` | empty (viem's default public RPC) unless set        |
+| `EXPO_PUBLIC_BUNDLER_URL`   | `https://public.pimlico.io/v2/10143/rpc` unless set |
+| `EXPO_PUBLIC_USER_TRADING`  | empty (manual trading off) unless set               |
+
+Two refusals before anything reaches the network: the bundle must contain
+`https://api.sente.lol` (the APK's inlining check, same reasoning: do not test
+for the absence of `localhost:3000`, the fallback literal is always there), and
+the export must contain `canvaskit.wasm`, without which every Skia icon throws
+and the page is blank.
+
+**`--clear` is not optional, and this is the trap.** Metro's transform cache does
+not key on `EXPO_PUBLIC_*` values. Measured on SEN-168: an `expo export
+--platform web` with `EXPO_PUBLIC_API_URL=https://api.sente.lol` produced a bundle
+with **no** `api.sente.lol` and a bare `http://localhost:3000`, because an earlier
+export had cached `src/wallet/api.ts` without the variable; with `--clear` the URL
+appeared. The reverse holds too — an export with the variable **unset** right
+after a `--clear`ed one still carried `api.sente.lol`. `deploy.sh` always passes
+`--clear`. The release APK's bundling goes through the same Metro cache; that
+recipe has not been re-measured with this in mind.
+
+### Redeploying just the web app
+
+```bash
+cd infra
+DRY_RUN=1 ./deploy.sh                          # local only: build + checks into infra/web, then stop
+SKIP_API=1 PROJECT=… ZONE=… ./deploy.sh        # ship it: Caddyfile, site/, web/, caddy reload, verify
+```
+
+`DRY_RUN=1` exits before the first `gcloud` call and needs no `PROJECT`; it never
+touches the box or DNS. `SKIP_API=1` still runs the DNS check (the Caddyfile still
+has an `api.sente.lol` block) and `verify.sh`.
+
+### Testing the Caddyfile locally
+
+No box needed — the real Caddyfile in a `caddy:2-alpine` container on high ports,
+with Caddy's internal CA instead of ACME:
+
+```bash
+T=$(mktemp -d)
+# Swap only the global options block: local CA, ports 8168/8443.
+python3 -c "import sys;s=sys.stdin.read();print('{\n\tlocal_certs\n\tskip_install_trust\n\thttp_port 8168\n\thttps_port 8443\n}'+s[s.index('\n}\n')+2:])" \
+  < infra/Caddyfile > "$T/Caddyfile"
+docker run -d --rm --name sente-caddy-test -p 8168:8168 -p 8443:8443 \
+  -v "$T/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -v "$PWD/infra/site:/srv/site:ro" -v "$PWD/infra/web:/srv/web:ro" caddy:2-alpine
+sleep 3                                        # let it issue its internal certs
+printf 'insecure\nresolve = sente.lol:8443:127.0.0.1\n' > "$T/.curlrc"
+CURL_HOME="$T" SITE_BASE=https://sente.lol:8443 SKIP_API=1 infra/verify.sh
+docker stop sente-caddy-test
+```
+
+`SITE_BASE` points `verify.sh` at the local Caddy; the `.curlrc` makes every curl
+in it trust the internal CA and resolve `sente.lol` to localhost.
 
 ## The release APK
 
@@ -431,6 +545,18 @@ Written and **verified locally**, 2026-09-24, on this branch:
 | `assembleRelease` signs with the debug key                                                                                                                     | read the generated `apps/mobile/android/app/build.gradle`                                                                                                                                                            |
 | `deploy.sh`'s DNS check works on a machine with no `dig`                                                                                                       | ran its `resolve()` helper verbatim: `sente.lol` and `www.sente.lol` → 35.202.26.61 via `getent`, `api.sente.lol` → nothing, which is the refusal path                                                               |
 
+Added 2026-10-01 (SEN-168), the web half, also **local only**:
+
+| Verified                                                                 | How                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the new Caddyfile passes every `verify.sh` site and web check            | the real Caddyfile (global block swapped for `local_certs` on 8168/8443) in `caddy:2-alpine`, serving `infra/site` and a real `infra/web` from `DRY_RUN=1 ./deploy.sh`; `SITE_BASE=https://sente.lol:8443 SKIP_API=1 ./verify.sh` → PASS |
+| `/.well-known/does-not-exist` is a 404 and the check catches the mistake | same container: 404. Then a copy of the Caddyfile with `try_files {path} /index.html` added to the `/.well-known/*` block: `verify.sh` failed on exactly that check (HTTP 200)                                                           |
+| `assetlinks.json` bytes are unchanged by the new config                  | served by the old Caddyfile (`main`) and by the new one; `cmp` of the two bodies, and of each against `infra/site/.well-known/assetlinks.json` — identical                                                                               |
+| cache headers and compression                                            | `/` and SPA routes `no-cache`; `/_expo/static/*` immutable and `zstd`-encoded; `/canvaskit.wasm` `application/wasm`, one day; a missing `/_expo/static/…` chunk or `/assets/…` file is a 404, not HTML; `www` → 301 to the apex          |
+| `deploy.sh` refuses a bundle without `https://api.sente.lol`             | `DRY_RUN=1` with a `mise` shim that dropped `EXPO_PUBLIC_API_URL`: exit 1 at the grep, nothing copied to `infra/web`                                                                                                                     |
+| `deploy.sh` refuses an export without `canvaskit.wasm`                   | `DRY_RUN=1` on this branch, where SEN-164's `public/canvaskit.wasm` has not landed: exit 1; with a temporary copy in `apps/mobile/public/` it passed and filled `infra/web` (15 MB)                                                      |
+| Metro's cache ignores `EXPO_PUBLIC_*`                                    | see "Building it" above — the reason for `--clear`                                                                                                                                                                                       |
+
 **NOT RUN. Nothing has been deployed, and nothing about the live box has
 changed:**
 
@@ -458,4 +584,9 @@ changed:**
   comparison has been run only on the `assetlinks.json` side.
 - No real Alchemy delivery. No state-survives-a-redeploy check. Nothing has been
   installed on a phone.
+- **The web app has never been served from the box.** The `./web` bind mount,
+  the empty-and-refill of `/opt/sente/web`, the `caddy reload` step and the
+  web half of `verify.sh` against the live host are all unrun; the live deploy is
+  the human half of SEN-51. The SPA fallback has been checked with `curl`, not
+  in a browser.
 - `docs/alchemy.md`'s webhook steps are unchanged and still unperformed.

@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Copies infra/ to the box, ships the API image, and brings both containers up.
-# Safe to re-run. SEN-51 added the API half.
+# Copies infra/ to the box, ships the API image and the web export, and brings
+# both containers up. Safe to re-run. SEN-51 added the API half, SEN-168 the web.
 #
 #   PROJECT=… ZONE=… ./deploy.sh
 #
-#   SKIP_API=1        Caddy and the site only — the pre-SEN-51 behaviour. Use it
-#                     to get certificates issued before the API has secrets.
+#   SKIP_API=1        Caddy, the site and the web app only — no API image. Use it
+#                     to get certificates issued before the API has secrets, and
+#                     to redeploy just the web app.
+#   SKIP_WEB=1        do not build or ship the web export; whatever the box
+#                     already serves at https://sente.lol stays as it is.
+#   DRY_RUN=1         LOCAL ONLY: build the web export into infra/web, run its
+#                     checks, and exit before the first gcloud call. Needs no
+#                     PROJECT and touches neither the box nor DNS.
 #   ALLOW_NO_DNS=1    deploy even though api.sente.lol does not resolve to the
 #                     box. Read the rate-limit note below before you do.
 #   SENTE_API_TAG=…   deploy an image that is already on the box instead of
@@ -21,13 +27,15 @@
 #   5. verify.sh             deploy.sh runs it for you at the end
 set -euo pipefail
 
-PROJECT="${PROJECT:?set PROJECT}"
+PROJECT="${PROJECT:-}"
 ZONE="${ZONE:-us-central1-a}"
 NAME="${NAME:-sente-web}"
 SITE_HOST="${SITE_HOST:-sente.lol}"
 API_HOST="${API_HOST:-api.$SITE_HOST}"
 SKIP_API="${SKIP_API:-0}"
 ALLOW_NO_DNS="${ALLOW_NO_DNS:-0}"
+SKIP_WEB="${SKIP_WEB:-0}"
+DRY_RUN="${DRY_RUN:-0}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
@@ -48,6 +56,74 @@ if grep -rq 'REPLACE_' site/.well-known/ 2>/dev/null; then
   echo "         fingerprints are filled in. Deploying anyway." >&2
   echo >&2
 fi
+
+# ---------------------------------------------------------------------------
+# The web export (SEN-168). Built HERE, before anything reaches the network, for
+# the same reason as the API image: the box has 1 GB of RAM. It lands in
+# infra/web (gitignored) and ships with the rest of infra/.
+#
+# EXPO_PUBLIC_* is INLINED into the JavaScript at bundle time, so these values
+# are public by construction and fixed per build; changing one means rebuilding.
+# Each is overridable from the environment except the API URL, which follows
+# API_HOST.
+#
+# `--clear` IS NOT OPTIONAL. Metro's transform cache does not key on
+# EXPO_PUBLIC_* values: measured on SEN-168, an export run with
+# EXPO_PUBLIC_API_URL unset, straight after one with it set, still carried the
+# old URL — and the reverse ships `http://localhost:3000`, the fallback literal,
+# to every browser. The grep below catches the API URL; --clear is what makes
+# the other values trustworthy too.
+# ---------------------------------------------------------------------------
+build_web () {
+  command -v mise >/dev/null 2>&1 || die "mise is required to build the web export (../CLAUDE.md, Toolchain)"
+  local api_url="https://$API_HOST"
+  local out="$REPO/apps/mobile/dist-web"
+
+  say "Building the web export (EXPO_PUBLIC_API_URL=$api_url)"
+  rm -rf "$out"
+  (
+    cd "$REPO"
+    EXPO_PUBLIC_API_URL="$api_url" \
+    EXPO_PUBLIC_MONAD_NETWORK="${EXPO_PUBLIC_MONAD_NETWORK:-testnet}" \
+    EXPO_PUBLIC_MONAD_RPC_URL="${EXPO_PUBLIC_MONAD_RPC_URL:-}" \
+    EXPO_PUBLIC_BUNDLER_URL="${EXPO_PUBLIC_BUNDLER_URL:-https://public.pimlico.io/v2/10143/rpc}" \
+    EXPO_PUBLIC_USER_TRADING="${EXPO_PUBLIC_USER_TRADING:-}" \
+      mise exec -- pnpm --filter @sente/mobile run export:web --clear
+  ) || die "the web export failed"
+
+  # The same check as the APK's (docs/deploy.md, "The release APK"): the URL must
+  # appear in the bundle. Do not check that localhost:3000 is ABSENT instead — it
+  # is the fallback literal in src/wallet/api.ts and survives into every build.
+  grep -rqF "$api_url" "$out/_expo/static/js/" 2>/dev/null \
+    || die "$api_url is not in the web bundle, so the app would call http://localhost:3000.
+       EXPO_PUBLIC_API_URL was not inlined; refusing to ship it."
+  echo "    ✓ $api_url is inlined in the bundle"
+
+  # Every icon is a Skia path, and on web Skia needs CanvasKit (SEN-164). Without
+  # the wasm the app is a blank page, which verify.sh would only notice after the
+  # deploy.
+  [ -f "$out/canvaskit.wasm" ] \
+    || die "canvaskit.wasm is not in the export, so every Skia icon throws and the page is blank.
+       apps/mobile/public/canvaskit.wasm is SEN-164's; deploy with SKIP_WEB=1 until it lands."
+  echo "    ✓ canvaskit.wasm is in the export"
+
+  rm -rf "$HERE/web"
+  cp -r "$out" "$HERE/web"
+  echo "    → infra/web ($(du -sh "$HERE/web" | cut -f1))"
+}
+
+if [ "$SKIP_WEB" = 1 ]; then
+  say "SKIP_WEB=1 — the box keeps the web app it already has"
+else
+  build_web
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+  say "DRY_RUN=1 — stopping before anything reaches gcloud, DNS or the box"
+  exit 0
+fi
+
+[ -n "$PROJECT" ] || die "set PROJECT"
 
 # ---------------------------------------------------------------------------
 # DNS, before anything touches Caddy's configuration
@@ -150,7 +226,9 @@ say "Staging to $NAME:~/sente-deploy"
 gcloud compute ssh "$NAME" --project "$PROJECT" --zone "$ZONE" --quiet --command \
   'rm -rf ~/sente-deploy && mkdir -p ~/sente-deploy'
 
-gcloud compute scp --recurse Caddyfile docker-compose.yml site \
+ship=(Caddyfile docker-compose.yml site)
+[ "$SKIP_WEB" = 1 ] || ship+=(web)
+gcloud compute scp --recurse "${ship[@]}" \
   "$NAME:~/sente-deploy/" --project "$PROJECT" --zone "$ZONE"
 
 # /opt/sente/.env is compose's VARIABLE INTERPOLATION file — it is how
@@ -160,14 +238,32 @@ gcloud compute scp --recurse Caddyfile docker-compose.yml site \
 say "Installing to /opt/sente and starting"
 gcloud compute ssh "$NAME" --project "$PROJECT" --zone "$ZONE" --quiet --command \
   "sudo mkdir -p /opt/sente \
+   && sudo mkdir -p /opt/sente/web \
+   && if [ -d ~/sente-deploy/web ]; then sudo find /opt/sente/web -mindepth 1 -delete; fi \
    && sudo cp -r ~/sente-deploy/. /opt/sente/ \
    && printf '# compose interpolation only. Secrets are in api.env (0600 root:root).\nSENTE_API_TAG=%s\n' '${SENTE_API_TAG:-latest}' | sudo tee /opt/sente/.env >/dev/null \
    && sudo install -d -m 0700 -o 1000 -g 1000 /var/lib/sente/state \
    && cd /opt/sente \
    && sudo docker compose up -d \
+   && { sleep 2; sudo docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile \
+        || echo 'WARNING: caddy reload failed; Caddy keeps its previous config. sudo docker logs sente-caddy'; } \
    && sudo docker compose ps \
    && sudo docker image prune -f >/dev/null"
 
+# /opt/sente/web is EMPTIED, never removed: it is bind mounted into the running
+# Caddy container, and a directory that is deleted and recreated is a different
+# inode — the container would keep serving the deleted, empty one. Emptied only
+# when a new export arrived, so SKIP_WEB=1 leaves the live app alone. The old
+# bundles go with it; a tab still open on the previous deploy gets a 404 for a
+# lazily loaded chunk and recovers on reload, since index.html is no-cache.
+#
+# `caddy reload`: `compose up -d` recreates a container only when its compose
+# definition changed. An edited Caddyfile is a bind-mounted file, not a
+# definition change, so without the reload Caddy keeps the old config.
+# A failed reload (a bad Caddyfile, or a container still starting after `up`
+# recreated it) leaves the old config running, so it warns rather than aborting
+# before verify.sh, which is what says whether the result is acceptable.
+#
 # STATE_DIR lives on the host at /var/lib/sente/state, owned by uid 1000 — the
 # image's `node` user. Root-owned would make every wallet registration EACCES,
 # and `install -d` is idempotent, so this runs on every deploy and cannot drift.
@@ -194,4 +290,4 @@ fi
 
 say "Verifying"
 sleep 5
-SKIP_API="$SKIP_API" API_HOST="$API_HOST" ./verify.sh "$SITE_HOST"
+SKIP_API="$SKIP_API" SKIP_WEB="$SKIP_WEB" API_HOST="$API_HOST" ./verify.sh "$SITE_HOST"
