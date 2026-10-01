@@ -41,7 +41,7 @@ import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
 import { GeistMono_500Medium } from '@expo-google-fonts/geist-mono/500Medium';
 import { GeistMono_600SemiBold } from '@expo-google-fonts/geist-mono/600SemiBold';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -266,12 +266,20 @@ export function Chart({
         scheduleOnRN(emit, null);
       }
     };
-    return Gesture.Pan()
+    const pan = Gesture.Pan()
       .activeOffsetX([-SCRUB_ACTIVATE_X, SCRUB_ACTIVATE_X])
       .failOffsetY([-SCRUB_FAIL_Y, SCRUB_FAIL_Y])
       .onStart((e) => follow(e.x))
       .onUpdate((e) => follow(e.x))
       .onFinalize(() => release());
+    if (Platform.OS !== 'web') return pan;
+    // A mouse has a pointer before it has a press: on web the crosshair also
+    // follows a plain hover (SEN-164), and a drag still scrubs as on a phone.
+    const hover = Gesture.Hover()
+      .onStart((e) => follow(e.x))
+      .onUpdate((e) => follow(e.x))
+      .onFinalize(() => release());
+    return Gesture.Simultaneous(pan, hover);
   }, [model, emit, scrubX, scrubY, scrubOn, scrubIndex]);
 
   const canvas =
