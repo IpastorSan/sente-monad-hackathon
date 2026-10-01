@@ -39,6 +39,8 @@ export default function RootLayout() {
         >
           {/* The dock's Trade button (SEN-109): a ticket over the tab you were on. */}
           <Stack.Screen name="trade" options={wide ? DESKTOP_MODAL : { presentation: 'modal' }} />
+          {/* A ticket (SEN-167): on a wide window a sheet too, over the picker or the page. */}
+          <Stack.Screen name="trade/[venue]/[symbol]" options={wide ? DESKTOP_MODAL : {}} />
         </Stack>
       ) : (
         <View style={{ flex: 1, backgroundColor: color.ink }} />

@@ -35,6 +35,12 @@
  *
  * Every choice — what the total counts, which markets make each list, how a
  * card is worded — is `agents/home.ts`, under test. This file only lays out.
+ *
+ * A wide web window (SEN-167) reads in two columns under the header and the
+ * ticker: your money and the markets on the left (the total and its chart,
+ * the watchlist, the biggest moves), your agents on the right (at work, what
+ * they trade, the latest move, the nudge). A phone keeps the single column in
+ * the order above.
  */
 import { Canvas, Group, Path, Skia } from '@shopify/react-native-skia';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -100,6 +106,8 @@ import {
   Section,
   SectionLink,
   Sheet,
+  useWide,
+  WIDE_MAX,
 } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import {
@@ -121,6 +129,7 @@ const STABLES = FUNDING_TOKENS.filter(
 
 export default function Home() {
   const router = useRouter();
+  const wide = useWide();
   // The session lives in <SessionProvider> so the agent screens share it. The
   // tabs layout only renders this once it is signed in.
   const { wallet } = useSession();
@@ -226,162 +235,203 @@ export default function Home() {
     );
   };
 
-  return (
-    <Screen tabbed refreshing={refreshing} onRefresh={() => void refresh()}>
-      <View style={styles.header}>
+  const header = (
+    <View style={styles.header}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Account"
+        hitSlop={8}
+        onPress={() => router.push('/account')}
+        style={({ pressed }) => [styles.me, pressed && styles.pressed]}
+      >
+        <View style={styles.avatar} />
+        <View style={styles.meText}>
+          <Text style={[text.strong, styles.hello]}>{greeting(new Date().getHours())}</Text>
+          <Text style={[text.mono, styles.whoami]} numberOfLines={1}>
+            {address !== null ? `${shortAddress(address)} · testnet` : 'testnet'}
+          </Text>
+        </View>
+      </Pressable>
+      <View style={styles.aside}>
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityState={{ checked: hidden }}
+          accessibilityLabel="Hide balances"
+          hitSlop={8}
+          onPress={toggleHidden}
+          style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+        >
+          <EyeIcon off={hidden} />
+        </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Account"
+          accessibilityLabel={feed.badge !== null ? `Alerts, ${feed.badge} unread` : 'Alerts'}
           hitSlop={8}
-          onPress={() => router.push('/account')}
-          style={({ pressed }) => [styles.me, pressed && styles.pressed]}
+          onPress={() => router.push('/alerts')}
+          style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
         >
-          <View style={styles.avatar} />
-          <View style={styles.meText}>
-            <Text style={[text.strong, styles.hello]}>{greeting(new Date().getHours())}</Text>
-            <Text style={[text.mono, styles.whoami]} numberOfLines={1}>
-              {address !== null ? `${shortAddress(address)} · testnet` : 'testnet'}
-            </Text>
-          </View>
-        </Pressable>
-        <View style={styles.aside}>
-          <Pressable
-            accessibilityRole="switch"
-            accessibilityState={{ checked: hidden }}
-            accessibilityLabel="Hide balances"
-            hitSlop={8}
-            onPress={toggleHidden}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-          >
-            <EyeIcon off={hidden} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={feed.badge !== null ? `Alerts, ${feed.badge} unread` : 'Alerts'}
-            hitSlop={8}
-            onPress={() => router.push('/alerts')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-          >
-            <Icon name="bell" size={18} color={color.textDim} />
-            {feed.badge !== null ? (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{feed.badge}</Text>
-              </View>
-            ) : null}
-          </Pressable>
-        </View>
-      </View>
-
-      <Hero
-        wallet={wallet}
-        capital={capital}
-        trading={user.trading}
-        own={own}
-        summaries={summaries}
-        events={activity.events}
-        hidden={hidden}
-        onAddFunds={() => setFundOpen(true)}
-        onShare={share}
-      />
-
-      {strip.length > 0 ? (
-        <View style={styles.ticker}>
-          <TickerMarquee items={strip} />
-        </View>
-      ) : null}
-
-      <AgentsAtWork overview={overview.state} hidden={hidden} />
-
-      {showMarkets ? (
-        <Section
-          label="Watchlist"
-          aside={
-            <View style={styles.aside}>
-              <AsOf at={tickers.asOf} paused={tickers.stale} />
-              <SectionLink label="Edit" onPress={() => router.push('/markets')} />
+          <Icon name="bell" size={18} color={color.textDim} />
+          {feed.badge !== null ? (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{feed.badge}</Text>
             </View>
-          }
+          ) : null}
+        </Pressable>
+      </View>
+    </View>
+  );
+
+  const hero = (
+    <Hero
+      wallet={wallet}
+      capital={capital}
+      trading={user.trading}
+      own={own}
+      summaries={summaries}
+      events={activity.events}
+      hidden={hidden}
+      chartHeight={wide ? HERO_CHART_WIDE : HERO_CHART}
+      onAddFunds={() => setFundOpen(true)}
+      onShare={share}
+    />
+  );
+
+  const ticker =
+    strip.length > 0 ? (
+      <View style={styles.ticker}>
+        <TickerMarquee items={strip} />
+      </View>
+    ) : null;
+
+  const agentsAtWork = <AgentsAtWork overview={overview.state} hidden={hidden} />;
+
+  const watchlistSection = showMarkets ? (
+    <Section
+      label="Watchlist"
+      aside={
+        <View style={styles.aside}>
+          <AsOf at={tickers.asOf} paused={tickers.stale} />
+          <SectionLink label="Edit" onPress={() => router.push('/markets')} />
+        </View>
+      }
+    >
+      {watched.length === 0 ? (
+        <Text style={[text.dim, styles.empty]}>
+          Nothing starred yet. Long-press a market in Markets to add it here.
+        </Text>
+      ) : (
+        watched.map((market, i) => rowFor(market, i, watched.length))
+      )}
+    </Section>
+  ) : null;
+
+  const tradedSection =
+    showMarkets && traded.length > 0 ? (
+      <Section label="What your agents are trading">
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.strip}
+          contentContainerStyle={styles.stripContent}
         >
-          {watched.length === 0 ? (
-            <Text style={[text.dim, styles.empty]}>
-              Nothing starred yet. Long-press a market in Markets to add it here.
-            </Text>
-          ) : (
-            watched.map((market, i) => rowFor(market, i, watched.length))
-          )}
-        </Section>
-      ) : null}
-
-      {showMarkets && traded.length > 0 ? (
-        <Section label="What your agents are trading">
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.strip}
-            contentContainerStyle={styles.stripContent}
-          >
-            {traded.map((row) => (
-              <MoverCard
-                key={marketKey(row.market)}
-                row={row}
-                index={index}
-                onPress={() => openMarket(router, row.market)}
-              />
-            ))}
-          </ScrollView>
-        </Section>
-      ) : null}
-
-      {showMarkets && movers.length > 0 ? (
-        <Section
-          label="Biggest moves today"
-          aside={<SectionLink label="Markets" onPress={() => router.push('/markets')} />}
-        >
-          {movers.map((market, i) => rowFor(market, i, movers.length))}
-        </Section>
-      ) : null}
-
-      {move !== null ? (
-        <Section
-          label="Latest move"
-          aside={
-            <SectionLink
-              label="Ledger"
-              onPress={() =>
-                router.push({
-                  pathname: '/agents/[id]/ledger',
-                  params: { id: move.agentId },
-                })
-              }
+          {traded.map((row) => (
+            <MoverCard
+              key={marketKey(row.market)}
+              row={row}
+              index={index}
+              onPress={() => openMarket(router, row.market)}
             />
-          }
-        >
-          <Move move={move} />
-        </Section>
-      ) : null}
+          ))}
+        </ScrollView>
+      </Section>
+    ) : null;
 
-      {idle !== null ? (
-        <Card goban style={styles.nudge}>
-          <Text style={text.label}>Put cash to work</Text>
-          <Text style={[text.dim, styles.nudgeText]}>{hidden ? maskDigits(idle) : idle}</Text>
-          <ButtonRow>
-            <Button
-              label="Hire an agent"
-              kind="soft"
-              size="sm"
-              onPress={() => router.push('/agents/new')}
-              style={styles.grow}
-            />
-            <Button
-              label="Trade"
-              kind="primary"
-              size="sm"
-              onPress={() => router.push('/trade')}
-              style={styles.grow}
-            />
-          </ButtonRow>
-        </Card>
-      ) : null}
+  const moversSection =
+    showMarkets && movers.length > 0 ? (
+      <Section
+        label="Biggest moves today"
+        aside={<SectionLink label="Markets" onPress={() => router.push('/markets')} />}
+      >
+        {movers.map((market, i) => rowFor(market, i, movers.length))}
+      </Section>
+    ) : null;
+
+  const moveSection =
+    move !== null ? (
+      <Section
+        label="Latest move"
+        aside={
+          <SectionLink
+            label="Ledger"
+            onPress={() =>
+              router.push({
+                pathname: '/agents/[id]/ledger',
+                params: { id: move.agentId },
+              })
+            }
+          />
+        }
+      >
+        <Move move={move} />
+      </Section>
+    ) : null;
+
+  const nudge =
+    idle !== null ? (
+      <Card goban style={styles.nudge}>
+        <Text style={text.label}>Put cash to work</Text>
+        <Text style={[text.dim, styles.nudgeText]}>{hidden ? maskDigits(idle) : idle}</Text>
+        <ButtonRow>
+          <Button
+            label="Hire an agent"
+            kind="soft"
+            size="sm"
+            onPress={() => router.push('/agents/new')}
+            style={styles.grow}
+          />
+          <Button
+            label="Trade"
+            kind="primary"
+            size="sm"
+            onPress={() => router.push('/trade')}
+            style={styles.grow}
+          />
+        </ButtonRow>
+      </Card>
+    ) : null;
+
+  return (
+    <Screen tabbed refreshing={refreshing} onRefresh={() => void refresh()} maxWidth={WIDE_MAX}>
+      {header}
+      {wide ? (
+        <>
+          {ticker}
+          <View style={styles.columns}>
+            <View style={styles.column}>
+              {hero}
+              {watchlistSection}
+              {moversSection}
+            </View>
+            <View style={[styles.column, styles.columnRight]}>
+              {agentsAtWork}
+              {tradedSection}
+              {moveSection}
+              {nudge}
+            </View>
+          </View>
+        </>
+      ) : (
+        <>
+          {hero}
+          {ticker}
+          {agentsAtWork}
+          {watchlistSection}
+          {tradedSection}
+          {moversSection}
+          {moveSection}
+          {nudge}
+        </>
+      )}
 
       <Text style={styles.testnet}>MONAD TESTNET</Text>
 
@@ -396,6 +446,10 @@ export default function Home() {
     </Screen>
   );
 }
+
+/** The agents' P&L under the total: a strip on a phone, room to read on a wide window. */
+const HERO_CHART = 64;
+const HERO_CHART_WIDE = 140;
 
 const EMPTY_SUMMARIES: ReadonlyMap<string, AgentSummary> = new Map();
 const NO_CAPITAL: readonly AgentCapital[] = [];
@@ -431,6 +485,7 @@ function Hero({
   summaries,
   events,
   hidden,
+  chartHeight,
   onAddFunds,
   onShare,
 }: {
@@ -443,6 +498,7 @@ function Hero({
   summaries: ReadonlyMap<string, AgentSummary>;
   events: readonly ActivityEvent[];
   hidden: boolean;
+  chartHeight: number;
   onAddFunds: () => void;
   onShare: () => void;
 }) {
@@ -520,7 +576,7 @@ function Hero({
           <Chart
             kind="area"
             points={series}
-            height={64}
+            height={chartHeight}
             label="Your agents' realised profit and loss over the last 24 hours"
           />
           <Text style={[text.caption, styles.chartCaption]}>Agents’ realised P&L, last 24h</Text>
@@ -940,6 +996,11 @@ const styles = StyleSheet.create({
   grow: { flex: 1 },
   aside: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   hero: { marginTop: 14 },
+  // Wide (SEN-167): two columns under the ticker, tops level with each other.
+  columns: { flexDirection: 'row', alignItems: 'flex-start', gap: 48 },
+  column: { flex: 1, minWidth: 0 },
+  // A Section opens with 28 of margin where the hero opens with 14.
+  columnRight: { marginTop: -14 },
   heroFigure: { marginTop: 6 },
   heroChange: { marginTop: 4, fontFamily: font.medium, fontSize: 13, color: color.textDim },
   includes: { marginTop: 6 },

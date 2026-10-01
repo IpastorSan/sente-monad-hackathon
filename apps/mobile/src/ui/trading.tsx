@@ -470,6 +470,9 @@ export function TickerMarquee({
   }, [x, copyWidth, reduced]);
 
   const slide = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
+  // Copies after the first: one on a phone, where a copy outruns the screen;
+  // enough to cover the strip when it is wider than a copy (wide web, SEN-167).
+  const trailing = copyWidth > 0 && box > copyWidth ? Math.ceil(box / copyWidth) : 1;
 
   const copy = (key: string, onLayout?: (e: LayoutChangeEvent) => void) => (
     <View key={key} style={styles.tickerCopy} onLayout={onLayout}>
@@ -499,11 +502,16 @@ export function TickerMarquee({
       ) : (
         <Animated.View style={[styles.tickerTrack, slide]}>
           {copy('a', (e) => setCopyWidth(e.nativeEvent.layout.width))}
-          {copy('b')}
+          {Array.from({ length: trailing }, (_, i) => copy(`b${i}`))}
         </Animated.View>
       )}
       {box > 0 ? (
-        <Canvas style={[styles.tickerFade, { width: box }]} pointerEvents="none">
+        // One object, not an array: Skia's web Canvas spreads its style into a
+        // <div>, and an array there throws (SEN-167), blanking Home on the web.
+        <Canvas
+          style={StyleSheet.flatten([styles.tickerFade, { width: box }])}
+          pointerEvents="none"
+        >
           <Rect x={0} y={0} width={FADE} height={TICKER_HEIGHT}>
             <LinearGradient
               start={vec(0, 0)}

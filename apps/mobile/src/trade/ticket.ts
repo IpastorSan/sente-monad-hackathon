@@ -1,7 +1,7 @@
 /**
  * The spot order ticket's rules (SEN-119, plan U-13; the study's `trade.html`
  * → "Spot ticket on Kuru" and "Results"). Plain TS, no React Native, so
- * `ticket.test.ts` runs under plain node; `app/trade/[venue]/[symbol].tsx`
+ * `ticket.test.ts` runs under plain node; `trade/TicketScreen.tsx`
  * only lays out what this decides.
  *
  * What the ticket owns, and why it is here rather than in the screen:

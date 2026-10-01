@@ -701,7 +701,8 @@ export function ConsensusRamp({
       accessibilityLabel={accessibilityLabel(phase, stop, blockNumber)}
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      <Canvas style={[styles.canvas, { width }]}>
+      {/* One object, not an array: Skia's web Canvas spreads its style into a <div>. */}
+      <Canvas style={StyleSheet.flatten([styles.canvas, { width }])}>
         <RoundedRect x={0} y={GLOW} width={width} height={TRACK} r={TRACK / 2} color={color.line} />
         <RoundedRect
           x={0}
