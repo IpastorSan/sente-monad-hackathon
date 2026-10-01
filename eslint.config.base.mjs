@@ -16,6 +16,7 @@ export const ignores = [
   '**/node_modules/**',
   '**/dist/**',
   '**/dist-web/**',
+  'infra/web/**',
   '**/build/**',
   '**/.expo/**',
   '**/ios/**',

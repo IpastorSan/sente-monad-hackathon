@@ -24,6 +24,10 @@ apps/mobile/keystores/credentials.json
 # secret, never someone else's business.
 .state/
 
+# infra/deploy.sh copies the web export here to ship it (SEN-168). A build
+# artifact with this machine's EXPO_PUBLIC_* values inlined, never a source.
+infra/web/
+
 # Claude Code agent worktrees
 .claude/worktrees/
 
