@@ -607,7 +607,13 @@ export class AgentsApi {
   private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: AgentsApiOptions) {
+  // Wrapped, not bare `fetch`: called as `this.fetchImpl(...)` a browser throws
+  // "Illegal invocation" (SEN-164); Hermes does not care either way.
+  constructor({
+    auth,
+    baseUrl = API_URL,
+    fetchImpl = (input, init) => fetch(input, init),
+  }: AgentsApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.auth = auth;
     this.fetchImpl = fetchImpl;
