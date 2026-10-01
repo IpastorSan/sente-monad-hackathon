@@ -3,6 +3,9 @@
 #
 #   the site   a redirect on the apex, and the wrong content type on the AASA —
 #              either one kills passkey association with no useful error;
+#   the web    the SPA fallback answering /.well-known/* with index.html (200,
+#              HTML — Android stops trusting the app, silently), or the app
+#              itself not loading (SEN-168);
 #   the API    session auth not enforced, placeholder auth left on, or the public
 #              webhook accepting an unsigned body. Each of those looks like a
 #              working deployment from the outside.
@@ -11,6 +14,12 @@
 #
 #   API_HOST=…   default api.<host>
 #   SKIP_API=1   site only (deploy.sh passes this when it skipped the API)
+#   SKIP_WEB=1   no web-app checks (deploy.sh passes this when it skipped the web)
+#   SITE_BASE=…  the apex's base URL outright, default https://<host>. For a
+#                local Caddy on a high port with `local_certs`, e.g.
+#                SITE_BASE=https://sente.lol:8443 with a $CURL_HOME/.curlrc
+#                holding `insecure` and `resolve = sente.lol:8443:127.0.0.1`
+#                (docs/deploy.md, "Web app").
 #   API_BASE=…   the API's base URL outright, overriding API_HOST. For pointing
 #                the API half of this script at a locally running API
 #                (http://127.0.0.1:3399) while writing or changing it.
@@ -24,6 +33,8 @@ set -uo pipefail
 HOST="${1:-sente.lol}"
 API_HOST="${API_HOST:-api.$HOST}"
 SKIP_API="${SKIP_API:-0}"
+SKIP_WEB="${SKIP_WEB:-0}"
+SITE="${SITE_BASE:-https://$HOST}"
 fail=0
 
 # The placeholder check reads `site/.well-known/*`, so anchor it to this script
@@ -73,8 +84,52 @@ body_has () {
   fi
 }
 
-echo "Checking https://$HOST"
-check "https://$HOST/.well-known/assetlinks.json" "json"
+# $1=label  $2=url — the body must parse as JSON. Android reads the file, so a
+# 200 with the right header around a truncated or HTML body is still a failure.
+json_body () {
+  local label="$1" url="$2" out
+  out=$(curl -sS -m 15 "$url" 2>/dev/null) || { echo "  ✗ $label — unreachable ($url)"; fail=1; return; }
+  if printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+    echo "  ✓ $label — body parses as JSON"
+  else
+    echo "  ✗ $label — body is not JSON; got: ${out:0:160}"; fail=1
+  fi
+}
+
+echo "Checking $SITE"
+check "$SITE/.well-known/assetlinks.json" "json"
+json_body "assetlinks.json" "$SITE/.well-known/assetlinks.json"
+# THE ONE THAT PROTECTS PASSKEYS, and it runs even with SKIP_WEB=1 because the
+# Caddyfile's fallback is live either way. The app's catch-all serves index.html
+# for any path it does not know; if that ever reached /.well-known/, a missing
+# association file would come back 200 text/html and this would be a 200.
+status "/.well-known/does-not-exist is a 404, not the app" "$SITE/.well-known/does-not-exist" "404"
+
+if [ "$SKIP_WEB" = 1 ]; then
+  echo
+  echo "Web-app checks skipped (SKIP_WEB=1)."
+else
+  echo
+  echo "Checking the web app on $SITE"
+
+  check "$SITE/" "text/html"
+  body_has "/ is the app shell" "$SITE/" 'id="root"'
+  body_has "/ loads the bundle" "$SITE/" '/_expo/static/js/'
+
+  # The SPA fallback: a client-side route must be the very same index.html.
+  shell=$(curl -sS -m 15 "$SITE/" 2>/dev/null)
+  deep=$(curl -sS -m 15 "$SITE/agents/anything" 2>/dev/null)
+  status "/agents/anything answers" "$SITE/agents/anything" "200"
+  if [ -n "$shell" ] && [ "$shell" = "$deep" ]; then
+    echo "  ✓ /agents/anything is the same index.html as /"
+  else
+    echo "  ✗ /agents/anything is not the same body as / — the SPA fallback is broken"; fail=1
+  fi
+
+  # Skia's CanvasKit (SEN-164): every icon needs it, and browsers refuse to
+  # stream-compile wasm served under any other type.
+  check "$SITE/canvaskit.wasm" "application/wasm"
+fi
 
 echo
 echo "Placeholder check:"
@@ -130,7 +185,7 @@ else
   # 6. And the apex must still be the apex. A misplaced proxy directive that sent
   #    /.well-known/* to Nest would show up as a 404 in the first check, but a
   #    whole-apex redirect would not — so assert the site root separately.
-  status "apex still answers without a redirect" "https://$HOST/" "200"
+  status "apex still answers without a redirect" "$SITE/" "200"
 fi
 
 echo
