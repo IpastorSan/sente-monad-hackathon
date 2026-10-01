@@ -17,7 +17,7 @@
  * `useTradingEnabled` says trading is on (SEN-119). Every choice with a rule
  * behind it is in `markets/asset.ts`, under test; this file only lays out.
  */
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {

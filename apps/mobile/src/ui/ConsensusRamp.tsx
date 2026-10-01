@@ -68,7 +68,7 @@ import {
   RoundedRect,
   vec,
 } from '@shopify/react-native-skia';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '@/platform/haptics';
 import Animated, {
   Easing,
   useAnimatedStyle,

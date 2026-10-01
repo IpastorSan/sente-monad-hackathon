@@ -25,7 +25,7 @@
  * agent instead. Every rule lives in `trade/ticket.ts`, under test.
  */
 import { KURU_TESTNET_MARKETS, NATIVE_TOKEN, type KuruMarketConfig } from '@sente/venues/kuru';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '@/platform/haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';

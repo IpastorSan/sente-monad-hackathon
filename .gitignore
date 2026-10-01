@@ -42,3 +42,6 @@ packages/*/scripts/*.js
 apps/mobile/src/**/*.js
 services/api/src/**/*.js
 services/api/scripts/*.js
+
+# Copied from canvaskit-wasm by `pnpm run setup:web` (SEN-164), ~8 MB; never committed.
+apps/mobile/public/canvaskit.wasm
