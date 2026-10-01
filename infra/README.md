@@ -2,7 +2,8 @@
 
 A single GCE box running Caddy in Docker. Its first job is the two WebAuthn
 association files; since SEN-51 it also runs `services/api` behind Caddy on
-`api.sente.lol`.
+`api.sente.lol`, and since SEN-168 it serves the Expo web export on the apex,
+everywhere except `/.well-known/*`.
 
 **The runbook is `../docs/deploy.md`.** This file is about the host and the
 association files; that one is about deploying the API, the secrets, the release
@@ -10,10 +11,9 @@ APK, and rolling back. Read it before running anything here.
 
 ## Why a VM rather than static hosting
 
-Two JSON files would be happier on Cloudflare Pages. The VM exists because
-`apps/web` (landing + the Perpl analytics dashboard) and `services/api` need a
-home anyway, and one box with a reverse proxy is fewer moving parts than three
-hosting accounts.
+Two JSON files would be happier on Cloudflare Pages. The VM exists because the
+web app and `services/api` need a home anyway, and one box with a reverse proxy
+is fewer moving parts than three hosting accounts.
 
 ## Order of operations — DNS before deploy
 
@@ -32,8 +32,11 @@ Do not loop `deploy.sh` while DNS is still propagating. `deploy.sh` now refuses
 to run at all while `api.sente.lol` does not resolve to the box, for exactly this
 reason (`ALLOW_NO_DNS=1` overrides it).
 
-`SKIP_API=1 ./deploy.sh` is the pre-SEN-51 behaviour: Caddy and the site only,
-for getting certificates issued before the API has secrets.
+`SKIP_API=1 ./deploy.sh` deploys Caddy, the association files and the web app
+without the API: for getting certificates issued before the API has secrets, and
+for redeploying just the web app. `SKIP_WEB=1` leaves the web app the box already
+has; `DRY_RUN=1` only builds the export locally. See `../docs/deploy.md`, "The
+web app".
 
 ## The placeholders are deliberate — and are now filled in
 
@@ -73,7 +76,9 @@ issued before the app exists.
 
 `./verify.sh [host]` checks the two things that break passkeys silently: a
 redirect on the apex, and the wrong content type on the extensionless
-`apple-app-site-association`. It also fails if placeholders remain.
+`apple-app-site-association`. It also fails if placeholders remain, and — since
+the apex shares a site block with the web app's catch-all (SEN-168) — if
+`/.well-known/does-not-exist` answers anything but 404.
 
 Verified locally before first deploy: both files return 200, zero redirects,
 `application/json`.
