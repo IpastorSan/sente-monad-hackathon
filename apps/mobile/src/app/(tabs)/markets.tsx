@@ -17,7 +17,7 @@
  * one. Choices with a rule behind them are in `markets/select.ts` and
  * `markets/marketsView.ts`, under test.
  */
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
