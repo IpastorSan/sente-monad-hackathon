@@ -23,6 +23,7 @@ Start with `privy-policy-enforcement.md` if you only read one.
 | [openrouter.md](openrouter.md)                             | How per-user model credits are minted, and whether tool use works through OpenRouter   |
 | [nansen.md](nansen.md)                                     | What smart-money data the agents' Nansen tool reads, and how it stays in budget        |
 | [deploy.md](deploy.md)                                     | How to deploy the API and build the release APK, what is secret, and how to roll back  |
+| [web.md](web.md)                                           | Which passkey providers sign in on the web build, what was measured, and what is left  |
 
 Two transcripts sit beside `demo-refusal.md` rather than inside it, because they
 are the evidence for it and are meant to be read unedited:

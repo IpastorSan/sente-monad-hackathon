@@ -12,6 +12,10 @@
  * has no PRF and cannot derive a wallet. Said here, right before the platform
  * asks where to save, it is advice; said on a static footer it was noise.
  *
+ * On web the tip and the caption say the browser-specific things instead
+ * (`PASSKEY_TIP`, SEN-165): save to Google Password Manager from Chrome or use a
+ * phone through the QR code, and expect two prompts.
+ *
  * Signing in lands on the tabs: the moment the session is `ready` this
  * redirects to `/`, so there is no "continue" step after the system sheet.
  */
@@ -19,7 +23,12 @@ import { Redirect } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { hasSeenPasskeyTip, markPasskeyTipSeen } from '@/auth/passkeyTip';
+import {
+  hasSeenPasskeyTip,
+  markPasskeyTipSeen,
+  PASSKEY_CAPTION,
+  PASSKEY_TIP,
+} from '@/auth/passkeyTip';
 import { useSession } from '@/session';
 import { GobanHero } from '@/ui/GobanHero';
 import { Mark, Pill } from '@/ui/goban';
@@ -102,9 +111,7 @@ export default function Welcome() {
               <Button label="I already have one" onPress={() => void signIn()} disabled={busy} />
             </>
           )}
-          <Text style={[text.caption, styles.center]}>
-            No seed phrase. Your wallet is derived from the passkey.
-          </Text>
+          <Text style={[text.caption, styles.center]}>{PASSKEY_CAPTION}</Text>
         </>
       }
     >
@@ -136,14 +143,9 @@ export default function Welcome() {
         />
       ) : null}
 
-      <Sheet visible={tipOpen} title="Save it to Google" onClose={() => setTipOpen(false)}>
-        <Text style={[text.body, styles.dim]}>
-          When your phone asks where to save the passkey, choose Google Password Manager.
-        </Text>
-        <Text style={[text.dim, styles.tipNote]}>
-          A passkey saved to Chrome&apos;s own store can&apos;t create a wallet, and you would have
-          to start again.
-        </Text>
+      <Sheet visible={tipOpen} title={PASSKEY_TIP.title} onClose={() => setTipOpen(false)}>
+        <Text style={[text.body, styles.dim]}>{PASSKEY_TIP.body}</Text>
+        <Text style={[text.dim, styles.tipNote]}>{PASSKEY_TIP.note}</Text>
         <Button
           label="Create passkey"
           kind="primary"

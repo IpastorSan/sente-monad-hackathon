@@ -26,6 +26,7 @@
 import type { Address, Hash, Hex } from 'viem';
 
 import type { AuthorizationPayload } from '../auth/deviceKey';
+import { unboundFetch } from '../platform/fetch.ts';
 
 /** Set to the machine's LAN IP on a physical device — the phone's localhost is the phone. */
 const DEFAULT_API_URL = 'http://localhost:3000';
@@ -244,7 +245,7 @@ export class WalletApi {
   private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: WalletApiOptions) {
+  constructor({ auth, baseUrl = API_URL, fetchImpl = unboundFetch }: WalletApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.auth = auth;
     this.fetchImpl = fetchImpl;

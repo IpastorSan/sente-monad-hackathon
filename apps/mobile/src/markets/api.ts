@@ -12,6 +12,7 @@
  * error body surfaced as a typed error. Money stays a decimal string; nothing
  * here converts it.
  */
+import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 
 // ---------------------------------------------------------------------------
@@ -180,7 +181,7 @@ export class MarketsApi {
   private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: MarketsApiOptions) {
+  constructor({ auth, baseUrl = API_URL, fetchImpl = unboundFetch }: MarketsApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.auth = auth;
     this.fetchImpl = fetchImpl;

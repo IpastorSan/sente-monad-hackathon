@@ -12,6 +12,7 @@
 import type { Address } from 'viem';
 
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
+import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 
 /** Mirrors `AGENT_MODELS` in `services/api/src/agents/agents.config.ts`. */
@@ -607,7 +608,7 @@ export class AgentsApi {
   private readonly auth: SessionAuth;
   private readonly fetchImpl: typeof fetch;
 
-  constructor({ auth, baseUrl = API_URL, fetchImpl = fetch }: AgentsApiOptions) {
+  constructor({ auth, baseUrl = API_URL, fetchImpl = unboundFetch }: AgentsApiOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.auth = auth;
     this.fetchImpl = fetchImpl;
