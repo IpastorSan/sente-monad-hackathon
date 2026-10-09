@@ -201,7 +201,10 @@ else
     git -C "$REPO" diff --quiet HEAD -- || SENTE_API_TAG="${SENTE_API_TAG}-dirty"
 
     say "Building sente-api:$SENTE_API_TAG (context: $REPO)"
+    # The laptop's pnpm store seeds the install (see the Dockerfile's hoststore).
+    HOST_STORE="$(cd "$REPO" && mise exec -- pnpm store path)"
     docker build \
+      --build-context hoststore="$HOST_STORE" \
       --file "$REPO/services/api/Dockerfile" \
       --tag "sente-api:$SENTE_API_TAG" \
       --tag "sente-api:latest" \

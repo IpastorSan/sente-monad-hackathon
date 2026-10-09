@@ -27,6 +27,17 @@
 # does not need.
 
 # ---------------------------------------------------------------------------
+# hoststore — empty unless the build passes the builder's own pnpm store:
+#     docker build --build-context hoststore="$(pnpm store path)" ...
+# (deploy.sh does). A filtered install still fetches the WHOLE lockfile, every
+# Skia native binary included, and over a home uplink those ~74 MB tarballs
+# never finished inside pnpm's fetch limit: four failed builds on 2026-10-09.
+# Mounted read-write, so pnpm reads what the laptop already has and anything it
+# still downloads is discarded with the mount; nothing in it lands in a layer.
+# ---------------------------------------------------------------------------
+FROM scratch AS hoststore
+
+# ---------------------------------------------------------------------------
 # build — full workspace install, then the topological build
 # ---------------------------------------------------------------------------
 FROM node:26.10.0-slim AS build
@@ -50,7 +61,8 @@ COPY packages/mandate/package.json packages/mandate/
 COPY packages/presets/package.json packages/presets/
 COPY packages/venues/package.json packages/venues/
 COPY services/api/package.json services/api/
-RUN pnpm install --frozen-lockfile --filter @sente/api... --filter .
+RUN --mount=type=bind,from=hoststore,target=/pnpm/store/v11,rw \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter @sente/api... --filter .
 
 COPY tsconfig.base.json ./
 COPY packages/ packages/
@@ -63,7 +75,8 @@ RUN pnpm -r --filter @sente/api... run build
 
 # Drop everything dev from the store and re-link, so the tree copied into the
 # runtime stage is production-only.
-RUN pnpm install --frozen-lockfile --prod --filter @sente/api... --filter .
+RUN --mount=type=bind,from=hoststore,target=/pnpm/store/v11,rw \
+    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter @sente/api... --filter .
 
 # ---------------------------------------------------------------------------
 # runtime — no pnpm, no compiler, no sources it does not need
