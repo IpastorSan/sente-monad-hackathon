@@ -3,7 +3,7 @@
  *
  * The wallet is created on the server but OWNED by this phone: its owner is the
  * `device` P-256 key derived from the passkey (SEN-38), which exists only for
- * the lifetime of a session and is never stored anywhere. So the first thing a
+ * the lifetime of a session and is never stored in plaintext. So the first thing a
  * signed-in app does is present that key — `POST /wallet/register` — and the
  * server answers with the wallet bound to it, address and balances included.
  *

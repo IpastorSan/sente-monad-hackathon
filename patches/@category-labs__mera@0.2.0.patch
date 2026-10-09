@@ -1,0 +1,375 @@
+diff --git a/dist/passkey.d.ts b/dist/passkey.d.ts
+index c964c5ff84ee63f3996329b1de3517bed2855fca..d3a9940dc829a1d5f3b0d008ef24994c8911a701 100644
+--- a/dist/passkey.d.ts
++++ b/dist/passkey.d.ts
+@@ -27,7 +27,7 @@ import { type WebAuthnClient } from "./webauthn.js";
+  * @throws MeraError with code `CRYPTO_UNAVAILABLE` when `crypto.getRandomValues` is unavailable.
+  * @throws MeraError with code `PASSKEY_OPERATION_FAILED` when WebAuthn is unavailable, cancelled, or returns an unexpected credential.
+  */
+-declare function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, webAuthnClient, }: createPasskeyWithPrfOutput.Options): Promise<createPasskeyWithPrfOutput.Result>;
++declare function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, prfSecondSalt, webAuthnClient, }: createPasskeyWithPrfOutput.Options): Promise<createPasskeyWithPrfOutput.Result>;
+ declare namespace createPasskeyWithPrfOutput {
+     /** Inputs for creating a passkey and obtaining its first WebAuthn PRF output. */
+     type Options = {
+@@ -50,6 +50,14 @@ declare namespace createPasskeyWithPrfOutput {
+          * Defaults to the fixed salt documented on {@link getPasskeyPrfOutput}.
+          */
+         prfSalt?: Uint8Array;
++        /**
++         * Optional second 32-byte PRF salt, evaluated in the same ceremony as
++         * `prfSalt` (WebAuthn's `eval.second`). Its output is returned as
++         * `prfSecondOutput` when the authenticator evaluates it, and is the same
++         * bytes a separate ceremony with this salt as `prfSalt` would return.
++         * (Sente patch, additive.)
++         */
++        prfSecondSalt?: Uint8Array;
+         /**
+          * Client that runs the WebAuthn ceremonies. Defaults to the built-in browser
+          * client, which calls `navigator.credentials`.
+@@ -64,6 +72,11 @@ declare namespace createPasskeyWithPrfOutput {
+         readonly prfSalt: Uint8Array<ArrayBuffer>;
+         /** First WebAuthn PRF output for `prfSalt`. Always 32 bytes. */
+         readonly prfOutput: Uint8Array<ArrayBuffer>;
++        /**
++         * PRF output for `prfSecondSalt`, when one was requested and the
++         * authenticator evaluated it. Always 32 bytes when present.
++         */
++        readonly prfSecondOutput?: Uint8Array<ArrayBuffer>;
+     };
+ }
+ /**
+@@ -95,7 +108,7 @@ declare namespace createPasskeyWithPrfOutput {
+  * @throws MeraError with code `CRYPTO_UNAVAILABLE` when `crypto.getRandomValues` is unavailable.
+  * @throws MeraError with code `PASSKEY_OPERATION_FAILED` when WebAuthn is unavailable, cancelled, or returns an unexpected credential.
+  */
+-declare function getPasskeyPrfOutput({ rpId, credential: allowCredential, prfSalt, timeout, webAuthnClient, }: getPasskeyPrfOutput.Options): Promise<getPasskeyPrfOutput.Result>;
++declare function getPasskeyPrfOutput({ rpId, credential: allowCredential, prfSalt, prfSecondSalt, timeout, webAuthnClient, }: getPasskeyPrfOutput.Options): Promise<getPasskeyPrfOutput.Result>;
+ declare namespace getPasskeyPrfOutput {
+     /** Inputs for requesting the first WebAuthn PRF output from a passkey. */
+     type Options = {
+@@ -112,6 +125,11 @@ declare namespace getPasskeyPrfOutput {
+          * {@link getPasskeyPrfOutput}.
+          */
+         prfSalt?: Uint8Array;
++        /**
++         * Optional second 32-byte PRF salt, evaluated in the same assertion
++         * (WebAuthn's `eval.second`). (Sente patch, additive.)
++         */
++        prfSecondSalt?: Uint8Array;
+         /** WebAuthn timeout in milliseconds. Platform defaults apply when omitted. */
+         timeout?: number;
+         /**
+@@ -126,6 +144,11 @@ declare namespace getPasskeyPrfOutput {
+         readonly credentialId: string;
+         /** First PRF output from WebAuthn. Always 32 bytes. */
+         readonly prfOutput: Uint8Array<ArrayBuffer>;
++        /**
++         * PRF output for `prfSecondSalt`, when one was requested and the
++         * authenticator returned it. Always 32 bytes when present.
++         */
++        readonly prfSecondOutput?: Uint8Array<ArrayBuffer>;
+     };
+ }
+ declare function toCredentialMetadata(credentialId: string, transports: readonly PasskeyCredentialTransport[] | undefined): PasskeyCredentialMetadata;
+diff --git a/dist/passkey.js b/dist/passkey.js
+index 3919ea22ee7f86c4976b867485fc8850dbc05ed0..907d08c86b797116d0869bf48f22128a5acb2610 100644
+--- a/dist/passkey.js
++++ b/dist/passkey.js
+@@ -33,9 +33,10 @@ const PASSKEY_COSE_ALGORITHMS = [-7, -257];
+  * @throws MeraError with code `CRYPTO_UNAVAILABLE` when `crypto.getRandomValues` is unavailable.
+  * @throws MeraError with code `PASSKEY_OPERATION_FAILED` when WebAuthn is unavailable, cancelled, or returns an unexpected credential.
+  */
+-async function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, webAuthnClient = browserWebAuthnClient, }) {
++async function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, prfSecondSalt, webAuthnClient = browserWebAuthnClient, }) {
+     try {
+         validatePrfSalt(prfSalt);
++        validatePrfSalt(prfSecondSalt, "Second PRF salt");
+         const prfSaltCopy = copyBytes(prfSalt ?? DEFAULT_PRF_SALT);
+         const created = await webAuthnClient.createCredential({
+             rp,
+@@ -47,6 +48,7 @@ async function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, webAuthn
+             challenge: randomBytes(32),
+             algorithms: PASSKEY_COSE_ALGORITHMS,
+             prfSalt: prfSaltCopy,
++            ...(prfSecondSalt !== undefined ? { prfSecondSalt: copyBytes(prfSecondSalt) } : {}),
+             residentKey: "required",
+             userVerification: "required",
+             attestation: "none",
+@@ -56,19 +58,34 @@ async function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, webAuthn
+             throw new MeraError("PRF_UNAVAILABLE", "Authenticator did not enable PRF");
+         }
+         const credentialMetadata = toCredentialMetadata(base64UrlEncode(created.credentialId), created.transports);
+-        const prfOutput = created.prfOutput !== undefined
+-            ? copyPrfOutput(created.prfOutput)
+-            : (await getPasskeyPrfOutput({
++        let prfOutput;
++        let prfSecondOutput;
++        if (created.prfOutput !== undefined) {
++            prfOutput = copyPrfOutput(created.prfOutput);
++            prfSecondOutput =
++                prfSecondSalt !== undefined && created.prfSecondOutput !== undefined
++                    ? copyPrfOutput(created.prfSecondOutput)
++                    : undefined;
++        }
++        else {
++            // The fallback assertion asks for both salts too, so an
++            // authenticator without create-time PRF still costs two prompts.
++            const fallback = await getPasskeyPrfOutput({
+                 rpId: rp.id,
+                 credential: credentialMetadata,
+                 prfSalt: prfSaltCopy,
++                ...(prfSecondSalt !== undefined ? { prfSecondSalt } : {}),
+                 webAuthnClient,
+                 ...(timeout !== undefined ? { timeout } : {}),
+-            })).prfOutput;
++            });
++            prfOutput = fallback.prfOutput;
++            prfSecondOutput = fallback.prfSecondOutput;
++        }
+         return {
+             ...credentialMetadata,
+             prfSalt: prfSaltCopy,
+             prfOutput,
++            ...(prfSecondOutput !== undefined ? { prfSecondOutput } : {}),
+         };
+     }
+     catch (error) {
+@@ -109,14 +126,16 @@ async function createPasskeyWithPrfOutput({ rp, user, timeout, prfSalt, webAuthn
+  * @throws MeraError with code `CRYPTO_UNAVAILABLE` when `crypto.getRandomValues` is unavailable.
+  * @throws MeraError with code `PASSKEY_OPERATION_FAILED` when WebAuthn is unavailable, cancelled, or returns an unexpected credential.
+  */
+-async function getPasskeyPrfOutput({ rpId, credential: allowCredential, prfSalt, timeout, webAuthnClient = browserWebAuthnClient, }) {
++async function getPasskeyPrfOutput({ rpId, credential: allowCredential, prfSalt, prfSecondSalt, timeout, webAuthnClient = browserWebAuthnClient, }) {
+     try {
+         validatePrfSalt(prfSalt);
++        validatePrfSalt(prfSecondSalt, "Second PRF salt");
+         const asserted = await webAuthnClient.getCredential({
+             rpId,
+             challenge: randomBytes(32),
+             // The client gets its own salt array, so it cannot reach DEFAULT_PRF_SALT.
+             prfSalt: copyBytes(prfSalt ?? DEFAULT_PRF_SALT),
++            ...(prfSecondSalt !== undefined ? { prfSecondSalt: copyBytes(prfSecondSalt) } : {}),
+             userVerification: "required",
+             ...(allowCredential !== undefined
+                 ? { allowCredential: toAllowCredential(allowCredential) }
+@@ -129,6 +148,9 @@ async function getPasskeyPrfOutput({ rpId, credential: allowCredential, prfSalt,
+         return {
+             credentialId: base64UrlEncode(asserted.credentialId),
+             prfOutput: copyPrfOutput(asserted.prfOutput),
++            ...(prfSecondSalt !== undefined && asserted.prfSecondOutput !== undefined
++                ? { prfSecondOutput: copyPrfOutput(asserted.prfSecondOutput) }
++                : {}),
+         };
+     }
+     catch (error) {
+@@ -162,9 +184,9 @@ function toAllowCredential(credential) {
+             : {}),
+     };
+ }
+-function validatePrfSalt(prfSalt) {
++function validatePrfSalt(prfSalt, name = "PRF salt") {
+     if (prfSalt !== undefined && prfSalt.length !== 32) {
+-        throw new MeraError("INPUT_INVALID", "PRF salt must be 32 bytes");
++        throw new MeraError("INPUT_INVALID", `${name} must be 32 bytes`);
+     }
+ }
+ function copyPrfOutput(prfOutput) {
+diff --git a/dist/react-native-webauthn-client-internal.js b/dist/react-native-webauthn-client-internal.js
+index e70ba02ccb8b8fa890897ff91e08c37a9ff13e5f..4caef757c53e790251a1fc23421924c1e493ddde 100644
+--- a/dist/react-native-webauthn-client-internal.js
++++ b/dist/react-native-webauthn-client-internal.js
+@@ -22,17 +22,21 @@ function createReactNativeWebAuthnClient(platformApi) {
+                     userVerification: request.userVerification,
+                 },
+                 attestation: request.attestation,
+-                extensions: prfExtension(request.prfSalt),
++                extensions: prfExtension(request.prfSalt, request.prfSecondSalt),
+                 ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),
+             });
+             const prf = created.clientExtensionResults?.prf;
+             const prfOutput = readPrfOutput(prf?.results?.first);
++            const prfSecondOutput = request.prfSecondSalt !== undefined
++                ? readPrfOutput(prf?.results?.second, "Second PRF output")
++                : undefined;
+             const transports = created.response.transports;
+             return {
+                 credentialId: decodeNativeBase64Url(created.rawId, "Credential ID", "PASSKEY_OPERATION_FAILED"),
+                 ...(transports !== undefined ? { transports } : {}),
+                 prfEnabled: prf?.enabled === true,
+                 ...(prfOutput !== undefined ? { prfOutput } : {}),
++                ...(prfSecondOutput !== undefined ? { prfSecondOutput } : {}),
+             };
+         },
+         async getCredential(request) {
+@@ -41,7 +45,7 @@ function createReactNativeWebAuthnClient(platformApi) {
+                 rpId: request.rpId,
+                 challenge: base64UrlEncode(request.challenge),
+                 userVerification: request.userVerification,
+-                extensions: prfExtension(request.prfSalt),
++                extensions: prfExtension(request.prfSalt, request.prfSecondSalt),
+                 ...(allowCredential !== undefined
+                     ? {
+                         allowCredentials: [
+@@ -61,10 +65,15 @@ function createReactNativeWebAuthnClient(platformApi) {
+                     : {}),
+                 ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),
+             });
+-            const prfOutput = readPrfOutput(asserted.clientExtensionResults?.prf?.results?.first);
++            const prfResults = asserted.clientExtensionResults?.prf?.results;
++            const prfOutput = readPrfOutput(prfResults?.first);
++            const prfSecondOutput = request.prfSecondSalt !== undefined
++                ? readPrfOutput(prfResults?.second, "Second PRF output")
++                : undefined;
+             return {
+                 credentialId: decodeNativeBase64Url(asserted.rawId ?? asserted.id, "Credential ID", "PASSKEY_OPERATION_FAILED"),
+                 ...(prfOutput !== undefined ? { prfOutput } : {}),
++                ...(prfSecondOutput !== undefined ? { prfSecondOutput } : {}),
+             };
+         },
+     };
+@@ -74,20 +83,26 @@ function createReactNativeWebAuthnClient(platformApi) {
+  * PRF salt reaches Swift as the index-keyed object produced by stringifying a
+  * Uint8Array. Keeping the salt as bytes is the one shape both platforms read.
+  */
+-function prfExtension(prfSalt) {
+-    return { prf: { eval: { first: prfSalt } } };
++function prfExtension(prfSalt, prfSecondSalt) {
++    return {
++        prf: {
++            eval: prfSecondSalt !== undefined
++                ? { first: prfSalt, second: prfSecondSalt }
++                : { first: prfSalt },
++        },
++    };
+ }
+ function decodeNativeBase64Url(value, name, code) {
+     return base64UrlDecode(value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""), { name, code });
+ }
+-function readPrfOutput(value) {
+-    if (value === undefined)
++function readPrfOutput(value, name = "PRF output") {
++    if (value === undefined || value === null)
+         return undefined;
+     if (typeof value === "string") {
+-        return decodeNativeBase64Url(value, "PRF output", "PRF_UNAVAILABLE");
++        return decodeNativeBase64Url(value, name, "PRF_UNAVAILABLE");
+     }
+     return normalizeByteArray(value, {
+-        name: "PRF output",
++        name,
+         code: "PRF_UNAVAILABLE",
+     });
+ }
+diff --git a/dist/webauthn.d.ts b/dist/webauthn.d.ts
+index 30d56c5ec62cbb202dc0436a4c11d8fa10fb4bdb..8b0ea6ce26d5133cc2147d1aff3ad1dce607a50c 100644
+--- a/dist/webauthn.d.ts
++++ b/dist/webauthn.d.ts
+@@ -19,6 +19,8 @@ declare namespace WebAuthnClient {
+         algorithms: readonly number[];
+         /** PRF salt to evaluate during creation, as 32 raw bytes. */
+         prfSalt: Uint8Array<ArrayBuffer>;
++        /** Optional second PRF salt (`eval.second`), as 32 raw bytes. (Sente patch.) */
++        prfSecondSalt?: Uint8Array<ArrayBuffer>;
+         /** Discoverable-credential requirement. */
+         residentKey: "required";
+         userVerification: "required";
+@@ -36,6 +38,8 @@ declare namespace WebAuthnClient {
+         prfEnabled: boolean;
+         /** First PRF output, when the authenticator evaluated the salt during creation. */
+         prfOutput?: Uint8Array;
++        /** Second PRF output, when `prfSecondSalt` was requested and evaluated. (Sente patch.) */
++        prfSecondOutput?: Uint8Array;
+     };
+     /** Credential an assertion is restricted to. */
+     type AllowCredential = {
+@@ -55,6 +59,8 @@ declare namespace WebAuthnClient {
+         allowCredential?: AllowCredential;
+         /** PRF salt to evaluate, as 32 raw bytes. */
+         prfSalt: Uint8Array<ArrayBuffer>;
++        /** Optional second PRF salt (`eval.second`), as 32 raw bytes. (Sente patch.) */
++        prfSecondSalt?: Uint8Array<ArrayBuffer>;
+         userVerification: "required";
+         /** Timeout in milliseconds. Platform defaults apply when omitted. */
+         timeout?: number;
+@@ -65,6 +71,8 @@ declare namespace WebAuthnClient {
+         credentialId: Uint8Array;
+         /** First PRF output for the requested salt. */
+         prfOutput?: Uint8Array;
++        /** Second PRF output, when `prfSecondSalt` was requested and returned. (Sente patch.) */
++        prfSecondOutput?: Uint8Array;
+     };
+ }
+ declare const browserWebAuthnClient: WebAuthnClient;
+diff --git a/dist/webauthn.js b/dist/webauthn.js
+index 93f8bd8f332cfb6426dbea76e61cff9217229fde..707e580c8902d85905f350dfcacc64050b65a514 100644
+--- a/dist/webauthn.js
++++ b/dist/webauthn.js
+@@ -21,7 +21,7 @@ const browserWebAuthnClient = {
+                     userVerification: request.userVerification,
+                 },
+                 extensions: {
+-                    prf: { eval: { first: request.prfSalt } },
++                    prf: { eval: prfEvalValues(request) },
+                 },
+             },
+         });
+@@ -44,6 +44,7 @@ const browserWebAuthnClient = {
+                     }),
+                 }
+                 : {}),
++            ...readSecondPrfOutput(request, prf),
+         };
+     },
+     async getCredential(request) {
+@@ -54,7 +55,7 @@ const browserWebAuthnClient = {
+                 challenge: request.challenge,
+                 ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),
+                 userVerification: request.userVerification,
+-                extensions: { prf: { eval: { first: request.prfSalt } } },
++                extensions: { prf: { eval: prfEvalValues(request) } },
+                 ...(allowCredential !== undefined
+                     ? {
+                         allowCredentials: [
+@@ -77,7 +78,8 @@ const browserWebAuthnClient = {
+             },
+         });
+         const publicKeyCredential = assertPublicKeyCredential(credential);
+-        const first = publicKeyCredential.getClientExtensionResults().prf?.results?.first;
++        const prf = publicKeyCredential.getClientExtensionResults().prf;
++        const first = prf?.results?.first;
+         return {
+             credentialId: new Uint8Array(publicKeyCredential.rawId),
+             ...(first
+@@ -88,9 +90,32 @@ const browserWebAuthnClient = {
+                     }),
+                 }
+                 : {}),
++            ...readSecondPrfOutput(request, prf),
+         };
+     },
+ };
++/**
++ * PRF inputs for one ceremony: `first` always, `second` only when the caller
++ * asked for a second salt. WebAuthn evaluates both in the same ceremony, and
++ * each output depends only on the credential and its own salt.
++ */
++function prfEvalValues(request) {
++    return request.prfSecondSalt !== undefined
++        ? { first: request.prfSalt, second: request.prfSecondSalt }
++        : { first: request.prfSalt };
++}
++/** The second PRF output, only when one was requested and returned. */
++function readSecondPrfOutput(request, prf) {
++    const second = request.prfSecondSalt !== undefined ? prf?.results?.second : undefined;
++    return second
++        ? {
++            prfSecondOutput: normalizeByteArray(second, {
++                name: "Second PRF output",
++                code: "PRF_UNAVAILABLE",
++            }),
++        }
++        : {};
++}
+ function assertPublicKeyCredential(credential) {
+     if (credential?.type !== "public-key" ||
+         !("rawId" in credential) ||

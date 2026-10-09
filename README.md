@@ -55,7 +55,9 @@ wallet but not the policy would simply detach the policy.
 The device key is a P-256 key derived from the user's passkey PRF output under the
 salt `sha256("sente.prf.v1.device")` ([`apps/mobile/src/auth/derive.ts`](apps/mobile/src/auth/derive.ts),
 [`deviceKey.ts`](apps/mobile/src/auth/deviceKey.ts)). It is re-derived per session
-and never stored — not on the device, and certainly not here. So Sente cannot
+and never stored in plaintext — on the web a sealed, tab-scoped copy survives a reload
+([`docs/web.md`](docs/web.md#staying-signed-in-across-a-reload)) — and never on the
+server. So Sente cannot
 amend a mandate either:
 [`scripts/sen43-device-owner-probe.ts`](services/api/scripts/sen43-device-owner-probe.ts)
 showed `PRIVY_MANDATE_OWNER_KEY` getting **401** on both the policy and the wallet
@@ -287,7 +289,7 @@ the caveat below about what that does and does not prove.
 | Track                      | What is actually built                                                                                                                                                                                          | State                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Privy**                  | Four features, not one: server wallets, the policy engine as the mandate, key quorums for the owner/signer split, and native gas sponsorship                                                                    | Enforcement, ownership and sponsorship verified live; sponsored sends from the user's wallet are in the app (funding an agent, returning its funds)                                                                                                                                                                                                                                                                   |
-| **Mera — One Passkey**     | One passkey, two namespaced PRF salts, two independent keys: a secp256k1 wallet key and a P-256 **capability** key that owns the user's wallet and every agent mandate policy                                   | Derivation, namespacing and "nothing is persisted" are pinned by tests and passed on a physical phone; no cross-device test has been run                                                                                                                                                                                                                                                                              |
+| **Mera — One Passkey**     | One passkey, two namespaced PRF salts, two independent keys: a secp256k1 wallet key and a P-256 **capability** key that owns the user's wallet and every agent mandate policy                                   | Derivation, namespacing and "nothing is persisted in plaintext" are pinned by tests and passed on a physical phone; on web, a sealed tab-scoped copy survives reloads; no cross-device test has been run                                                                                                                                                                                                              |
 | **Agora — mobile trading** | Passkey sign-in, an AUSD balance leading the home screen, and perps executed on Perpl                                                                                                                           | Passed on a physical Android phone (2026-09-25). The live Perpl fills are an agent's, placed under the user's mandate with the user's AUSD, not a manual perp ticket                                                                                                                                                                                                                                                  |
 | **Kuru — spot**            | `@sente/venues/kuru`: Spot V2 `AccountCore` + `OrderBook.batch`, atomic deposit-and-place as one ERC-7579 batch, recipient-pinned withdraw                                                                      | Real settlement on 10143, hashes above                                                                                                                                                                                                                                                                                                                                                                                |
 | **Perpl — API**            | `@sente/venues/perpl`: onboarding, Ed25519 API-key enrollment, POST_ONLY and market orders, leverage, close                                                                                                     | A 5x position opened and closed by an autonomous agent                                                                                                                                                                                                                                                                                                                                                                |
@@ -317,6 +319,17 @@ Read this section before the demo video.
   to give the same wallet on the web and on the phone; that cross-device check is
   pending. Passkey providers without PRF (Bitwarden, 1Password, Chrome's
   profile-local store) cannot hold a Sente wallet.
+- **One passkey prompt where the provider allows it.** Sign-in asks for both PRF
+  salts in one WebAuthn ceremony (`eval.first` and `eval.second`), through a
+  committed patch to mera; a provider that ignores the second salt gets a second,
+  pinned prompt. Both paths derive byte-identical keys against Chrome's virtual
+  authenticator (`apps/mobile/scripts/prf-equivalence.ts`); Google Password
+  Manager's prompt count is not yet measured.
+- **Nothing is persisted in plaintext; on web, a sealed tab-scoped copy survives
+  reloads.** For up to 8 hours a reloaded tab reopens the session without a
+  prompt, from a copy encrypted under a non-extractable browser key. Script
+  running in the page could use that copy while the tab is open; closing the tab
+  or signing out ends it ([`docs/web.md`](docs/web.md#staying-signed-in-across-a-reload)).
 - **Manual trading is behind `USER_TRADING`**, off by default. The Kuru spot
   ticket is built and verified by the phone before it signs; the manual Perpl
   ticket is not finished. Agents trade both venues.
