@@ -108,6 +108,17 @@ export type WireUserWallet = {
   chainId: number;
   createdAt: string;
   balances: WireTokenBalance[];
+  /**
+   * The one-time AUSD + USDC starter kit (SEN-170). Optional: an API from
+   * before it sends none.
+   */
+  starterKit?: WireStarterKit;
+};
+
+export type WireStarterKit = {
+  status: 'none' | 'pending' | 'sent' | 'failed' | 'disabled';
+  ausdTx?: Hex;
+  usdcTx?: Hex;
 };
 
 /** The user's Privy wallet (SEN-40): what `GET /wallet` answers, in bigints. */

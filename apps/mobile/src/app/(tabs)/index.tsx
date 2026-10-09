@@ -565,6 +565,9 @@ function Hero({
               )} USDC · ${formatBalance(balanceOf(held, 'MON'))} MON`,
             )}
           </Text>
+          {held.starterKit?.status === 'pending' ? (
+            <Text style={text.caption}>Starter funds on the way</Text>
+          ) : null}
           {wallet.status === 'error' && wallet.error ? (
             <Notice tone="error" title="Balances may be stale" detail={wallet.error.message} />
           ) : null}
