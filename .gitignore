@@ -45,3 +45,6 @@ services/api/scripts/*.js
 
 # Copied from canvaskit-wasm by `pnpm run setup:web` (SEN-164), ~8 MB; never committed.
 apps/mobile/public/canvaskit.wasm
+
+# Local secrets for live scripts (test identities). Never commit, never ship.
+.secrets/

@@ -12,3 +12,6 @@ pnpm-lock.yaml
 # check:indexer` runs it — so without this line format:check passes on a clean
 # tree and fails right after the indexer has been checked.
 .envio
+
+# Local secrets for live scripts (test identities). Never commit, never ship.
+.secrets/

@@ -39,3 +39,6 @@ infra/
 docs/
 *.md
 *.log
+
+# Local secrets for live scripts (test identities). Never commit, never ship.
+.secrets/
