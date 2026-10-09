@@ -79,7 +79,8 @@ export const LEADERBOARD_NOTES: readonly string[] = [
     'own fills close it, whichever run the close lands in. It is counted per thesis and is never ' +
     'divided by n. A thesis’s own PnL IS net of fees, on Kuru and on Perpl alike — the opposite ' +
     'of realised PnL above, which is the indexer’s gross figure.',
-  PERPL_NOT_INDEXED_REASON + ' Its PnL is AUSD and is never added to the Kuru USDC figure.',
+  PERPL_NOT_INDEXED_REASON +
+    ' That Perpl record’s PnL is AUSD, net of fees, and is never added to the Kuru USDC figure.',
   'Monad testnet samples are thin. A win rate over four trades is a fact about four trades.',
 ];
 
