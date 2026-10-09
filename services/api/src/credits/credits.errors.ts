@@ -14,6 +14,12 @@ export const CREDITS_REFUSAL_REASONS = [
   'provision_failed',
   /** The key exists but OpenRouter could not report its limit and usage. */
   'status_unavailable',
+  /** SEN-183: buying credits is off (`CREDITS_PURCHASES_ENABLED`); the free tier is all there is. */
+  'purchases_disabled',
+  /** SEN-183: a purchase or auto top-up names no plan we sell, or a custom amount out of range. */
+  'purchase_invalid',
+  /** SEN-183: purchases are on, but no payment rail is bound to take the money. */
+  'payments_unavailable',
 ] as const;
 
 export type CreditsRefusalReason = (typeof CREDITS_REFUSAL_REASONS)[number];
@@ -39,6 +45,9 @@ const REFUSAL_STATUS: Record<CreditsRefusalReason, HttpStatus> = {
   // Upstream failures: the request was fine, OpenRouter was not.
   provision_failed: HttpStatus.BAD_GATEWAY,
   status_unavailable: HttpStatus.BAD_GATEWAY,
+  purchases_disabled: HttpStatus.FORBIDDEN,
+  purchase_invalid: HttpStatus.BAD_REQUEST,
+  payments_unavailable: HttpStatus.NOT_IMPLEMENTED,
 };
 
 export function creditsRefusalStatus(reason: CreditsRefusalReason): HttpStatus {

@@ -75,6 +75,8 @@ STARTER_DRIP_DAILY_CAP_USERS
 # --- model credits ---
 OPENROUTER_MANAGEMENT_KEY
 OPENROUTER_DEFAULT_LIMIT_USD
+# Off unless 1|true; leave it off until a payment rail exists (SEN-183).
+CREDITS_PURCHASES_ENABLED
 
 # --- agent runner ---
 # AGENT_TICK_SECONDS unset = no scheduler. Leave it unset on the box unless you

@@ -16,7 +16,9 @@ export interface RecordedCall {
  * `fetch`. It mints recognisable plaintext keys (`sk-or-v1-PLAINTEXT-n`) so a
  * spec can assert they never reach an HTTP response.
  */
-export function fakeOpenRouter(options: { failCreate?: number; failCurrentKey?: number } = {}) {
+export function fakeOpenRouter(
+  options: { failCreate?: number; failCurrentKey?: number; failUpdate?: number } = {},
+) {
   const keys = new Map<string, OpenRouterKey>();
   const calls: RecordedCall[] = [];
   let minted = 0;
@@ -107,7 +109,14 @@ export function fakeOpenRouter(options: { failCreate?: number; failCurrentKey?: 
       return Promise.resolve(json(200, { data: key }));
     }
     if (method === 'PATCH') {
+      if (options.failUpdate) {
+        return Promise.resolve(
+          json(options.failUpdate, { error: { code: options.failUpdate, message: 'no patch' } }),
+        );
+      }
       Object.assign(key, body);
+      // OpenRouter recomputes what is left against the new limit.
+      key.limit_remaining = key.limit === null ? null : Math.max(0, key.limit - key.usage_monthly);
       return Promise.resolve(json(200, { data: key }));
     }
     if (method === 'DELETE') {

@@ -93,6 +93,7 @@ import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usa
 import { LiveRunSection, RunHistorySection, useAgentRuns } from '@/agents/AgentRuns';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
+import { CreditsLink } from '@/credits/CreditsLink';
 import { useSession } from '@/session';
 import { sendSponsored } from '@/wallet/send';
 import { Chart } from '@/ui/chart/Chart';
@@ -122,7 +123,13 @@ import {
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
 
-type NoticeState = { tone: NoticeTone; title: string; detail?: string };
+/** `reason`: the API's refusal, when one is worth a link (SEN-183: out of credits → Credits). */
+type NoticeState = {
+  tone: NoticeTone;
+  title: string;
+  detail?: string;
+  reason?: string | undefined;
+};
 type SheetId = 'fund' | 'run' | 'return' | 'revoke' | 'details';
 
 /**
@@ -818,6 +825,7 @@ function Cadence({
       <Text style={[text.caption, styles.after]}>
         {scheduleLine(schedule, agent.schedule, now)}
       </Text>
+      <CreditsLink reason={schedule?.paused?.reason} />
       {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
     </Section>
   );
@@ -1420,7 +1428,11 @@ function RunSheet({
       const runs = await api?.runs(agent.id).catch(() => null);
       return { tone: 'info', ...alreadyRunning(agent.name, liveRun(runs), Date.now()) };
     }
-    return { tone: 'error', ...describeAgentsError(error) };
+    return {
+      tone: 'error',
+      ...describeAgentsError(error),
+      reason: error instanceof AgentsApiError ? error.reason : undefined,
+    };
   };
 
   const finished = (result: RunOutcome): NoticeState => {
@@ -1492,6 +1504,7 @@ function RunSheet({
       {outcome ? (
         <Notice tone={outcome.tone} title={outcome.title} detail={outcome.detail} />
       ) : null}
+      <CreditsLink reason={outcome?.reason} />
       <Button
         label="Run now"
         kind="primary"

@@ -6,6 +6,7 @@ import { LeaderboardModule } from './agents/leaderboard/leaderboard.module';
 import { AuthModule } from './auth/auth.module';
 import { ChainModule } from './chain/chain.module';
 import { CreditsModule } from './credits/credits.module';
+import { CreditsOverviewModule } from './credits/usage/credits-overview.module';
 import { GasModule } from './gas/gas.module';
 import { HealthModule } from './health/health.module';
 import { ValueHistoryModule } from './portfolio/history/value-history.module';
@@ -45,6 +46,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     // Monad's commit state, followed over `MONAD_WS_URL` (SEN-21).
     ChainModule,
     CreditsModule,
+    // GET /credits (SEN-183): the free tier and where it went, by agent and run.
+    CreditsOverviewModule,
     GasModule,
     // POST /webhooks/alchemy (SEN-30): Alchemy Notify appending `deposit` events.
     // The ONLY unguarded route that writes anything — its HMAC is what stands in
