@@ -16,7 +16,8 @@
  * Indicators come from the SAME candles and math as `get_indicators`: the
  * shared market-data cache and `computeIndicator`.
  */
-import { computeIndicator, labelOf, type Candle } from '../tools/indicators';
+import type { VenueId } from '../../venues/dto/markets.dto';
+import { computeIndicator, labelOf, type Candle, type IndicatorResult } from '../tools/indicators';
 import type { StoredWatcher } from './watcher-store';
 import {
   formatNumber,
@@ -25,8 +26,6 @@ import {
   type IndicatorClause,
   type WatcherClause,
 } from './watcher.schema';
-
-type VenueId = 'kuru' | 'perpl';
 
 /** What a check reads. Every read may throw; that clause is then unknown. */
 export interface WatcherReads {
@@ -68,8 +67,23 @@ type ClauseReading =
 class Unknown extends Error {}
 
 /** The latest finite value of an indicator output, or Unknown before warm-up. */
-function latest(candles: readonly Candle[], spec: IndicatorClause['indicator'], output: string) {
-  const result = computeIndicator(spec, candles);
+/**
+ * Indicator results of one check, per candle series and spec: a MACD line
+ * against its own signal, or several watchers on one indicator, compute it once.
+ */
+type IndicatorCache = WeakMap<readonly Candle[], Map<string, IndicatorResult>>;
+
+function latest(
+  cache: IndicatorCache,
+  candles: readonly Candle[],
+  spec: IndicatorClause['indicator'],
+  output: string,
+) {
+  let bySpec = cache.get(candles);
+  if (!bySpec) cache.set(candles, (bySpec = new Map()));
+  const key = JSON.stringify(spec);
+  let result = bySpec.get(key);
+  if (!result) bySpec.set(key, (result = computeIndicator(spec, candles)));
   const value = result.outputs[output]?.values.at(-1);
   if (value === undefined || !Number.isFinite(value)) {
     throw new Unknown(
@@ -98,7 +112,11 @@ function verbOf(op: string, holds: boolean): string {
   return edge || levelWord;
 }
 
-async function readClause(clause: WatcherClause, reads: WatcherReads): Promise<ClauseReading> {
+async function readClause(
+  clause: WatcherClause,
+  reads: WatcherReads,
+  cache: IndicatorCache,
+): Promise<ClauseReading> {
   try {
     switch (clause.type) {
       case 'price': {
@@ -135,13 +153,13 @@ async function readClause(clause: WatcherClause, reads: WatcherReads): Promise<C
       case 'indicator': {
         const candles = await reads.candles(clause.venue, clause.market, clause.timeframe);
         const output = clause.output ?? 'value';
-        const left = latest(candles, clause.indicator, output);
+        const left = latest(cache, candles, clause.indicator, output);
         let right: number;
         let rightLabel: string;
         if (clause.compareTo) {
           const spec = clause.compareTo.indicator ?? clause.indicator;
           const other = clause.compareTo.output ?? 'value';
-          right = latest(candles, spec, other);
+          right = latest(cache, candles, spec, other);
           rightLabel = `${operandLabel(spec, other)} ${formatNumber(right)}`;
         } else {
           right = clause.value ?? NaN;
@@ -223,10 +241,11 @@ export async function checkWatchers(
   now: number,
 ): Promise<WatcherCheck> {
   const memo = memoReads(reads);
+  const cache: IndicatorCache = new WeakMap();
   const fired: Firing[] = [];
   const next = await Promise.all(
     watchers.map(async (watcher) => {
-      const readings = await Promise.all(watcher.clauses.map((c) => readClause(c, memo)));
+      const readings = await Promise.all(watcher.clauses.map((c) => readClause(c, memo, cache)));
       const hits: boolean[] = [];
       const edges = watcher.clauses.map((clause, i) => {
         const reading = readings[i]!;

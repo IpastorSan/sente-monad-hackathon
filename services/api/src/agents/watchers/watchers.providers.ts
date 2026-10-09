@@ -39,14 +39,13 @@ export const watcherProviders: Provider[] = [
         store,
         // The phone's and the tools' cached reads: a check costs the venue no more than a screen.
         marketData,
-        // Never enrolls a Perpl key: a check only reads what the agent already has.
-        positionsOf: async (agent) => {
-          const set = await venues.forAgent(
+        // Borrows the run's socket or opens a throwaway one (SEN-122), so a
+        // check never keeps a socket alive, and never enrolls a Perpl key.
+        positionsOf: (agent) =>
+          venues.readPerpl(
             { agentId: agent.id, walletId: agent.walletId, address: agent.address },
-            { enrollPerpl: false },
-          );
-          return set.perpl ? set.perpl.getPositions() : undefined;
-        },
+            async (perpl) => (perpl ? perpl.getPositions() : undefined),
+          ),
       }),
   },
 ];

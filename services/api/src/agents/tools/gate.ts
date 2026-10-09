@@ -48,6 +48,8 @@ export interface GatedTool {
   readonly description: string;
   readonly input: z.ZodType;
   readonly kind: ToolKind;
+  /** `false` for a write that never reaches the enclave; see `AgentTool.signs`. */
+  readonly signs?: false;
   invoke(ctx: ToolContext, args: unknown): Promise<ToolOutcome>;
 }
 
@@ -60,6 +62,7 @@ export function gate(tool: AgentTool): GatedTool {
     description: tool.description,
     input: tool.input,
     kind: tool.kind,
+    ...(tool.signs === false ? { signs: false as const } : {}),
     async invoke(ctx, raw) {
       const parsed = tool.input.safeParse(raw ?? {});
       if (!parsed.success) {

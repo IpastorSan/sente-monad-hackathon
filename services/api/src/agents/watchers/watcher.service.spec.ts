@@ -83,7 +83,6 @@ describe('WatcherService (SEN-182)', () => {
       const first = service({ store: new FileWatcherStore(path), tickers });
       first.replace(agent, { watchers: [BREAKOUT, CHEAP], heartbeatHours: 2 }, 'agent', T0);
       await first.check(agent, T0 + 60_000);
-      first.record(agent.id, 'skipped', T0 + 60_000);
 
       const reloaded = new FileWatcherStore(path);
       expect(reloaded.size).toBe(1);
@@ -97,7 +96,7 @@ describe('WatcherService (SEN-182)', () => {
         store: reloaded,
         tickers: { 'BTC-PERP': ticker({ mark: '101000' }) },
       });
-      const { fired } = await second.check(agent, T0 + 120_000);
+      const fired = await second.check(agent, T0 + 120_000);
       expect(fired).toEqual([
         {
           id: 'breakout',
@@ -182,7 +181,7 @@ describe('WatcherService (SEN-182)', () => {
       'agent',
       T0,
     );
-    const { fired } = await s.check(agent, T0 + 1);
+    const fired = await s.check(agent, T0 + 1);
     expect(fired.map((f) => f.observed)).toEqual([
       'BTC-PERP funding 0.08%/8h is above 0.05%/8h',
       'your BTC-PERP P&L -6.25% of margin is below -5%',

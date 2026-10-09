@@ -41,13 +41,7 @@ export interface AgentScheduleStatusDto {
    * without the model, and `nextRunAt` is the next CHECK: a run starts only
    * when a watcher fires, or at `nextHeartbeatAt` if none does.
    */
-  watchers: {
-    count: number;
-    heartbeatSeconds: number;
-    nextHeartbeatAt: string | null;
-    wakes: number;
-    modelCallsSaved: number;
-  } | null;
+  watchers: { count: number; heartbeatSeconds: number } | null;
 }
 
 /**
@@ -147,15 +141,14 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     }
     this.prune(new Set(agents.map((agent) => agent.id)));
 
-    const due: { agent: AgentRecord; at: number; wake?: RunWake; watch: boolean }[] = [];
+    const due: { agent: AgentRecord; at: number; start: () => Promise<TickOutcome> }[] = [];
     const skipped: TickOutcome[] = [];
     for (const agent of agents) {
       const cadence = this.cadenceOf(agent);
       if (!cadence) continue;
       const at = (await this.seed(agent, cadence.everySeconds, now)) + cadence.everySeconds * 1000;
-      const watch = this.watchers?.has(agent.id) ?? false;
       let wake = this.pending.get(agent.id);
-      if (wake && (!watch || now - wake.at > this.heartbeatMs(agent.id))) {
+      if (wake && (!this.watching(agent.id) || now - wake.at > this.heartbeatMs(agent.id))) {
         this.pending.delete(agent.id);
         wake = undefined;
       }
@@ -164,18 +157,17 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
         skipped.push({ agentId: agent.id, ran: false, reason: 'run_in_progress' });
         continue;
       }
-      due.push({ agent, at, watch, ...(wake ? { wake } : {}) });
+      const pending = wake;
+      const start = pending
+        ? () => this.runDue(agent, pending)
+        : this.watching(agent.id)
+          ? () => this.watchDue(agent, now)
+          : () => this.runDue(agent);
+      due.push({ agent, at, start });
     }
     // Most overdue first, so a full limiter serves the longest wait first.
     due.sort((a, b) => a.at - b.at);
-    return [
-      ...skipped,
-      ...(await Promise.all(
-        due.map(({ agent, wake, watch }) =>
-          wake ? this.runDue(agent, wake) : watch ? this.watchDue(agent, now) : this.runDue(agent),
-        ),
-      )),
-    ];
+    return [...skipped, ...(await Promise.all(due.map(({ start }) => start())))];
   }
 
   /** What `GET /agents/:id/schedule` returns. */
@@ -199,29 +191,18 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
       else if (paused.until !== null) nextRunAt = Math.max(at, paused.until, now);
     }
 
-    const set = this.watchers?.get(agent.id);
-    const watchers =
-      set && set.watchers.length > 0
-        ? {
-            count: set.watchers.length,
-            heartbeatSeconds: set.heartbeatSeconds,
-            nextHeartbeatAt:
-              cadence && lastRunAt !== null
-                ? iso(Math.max(lastRunAt + set.heartbeatSeconds * 1000, now))
-                : null,
-            wakes: set.wakes,
-            modelCallsSaved: set.skipped,
-          }
-        : null;
-
     return {
       everySeconds: cadence?.everySeconds ?? null,
       source: cadence?.source ?? null,
       lastRunAt: iso(lastRunAt),
       nextRunAt: iso(nextRunAt),
       paused: paused ? { reason: paused.reason, until: iso(paused.until) } : null,
-      watchers,
+      watchers: this.watchers?.summary(agent.id) ?? null,
     };
+  }
+
+  private watching(agentId: string): boolean {
+    return this.watchers?.has(agentId) ?? false;
   }
 
   private heartbeatMs(agentId: string): number {
@@ -236,20 +217,18 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
   private async watchDue(agent: AgentRecord, now: number): Promise<TickOutcome> {
     const watchers = this.watchers!;
     this.claimed.add(agent.id);
-    let wake: RunWake | undefined;
+    let wake: RunWake;
     try {
-      const { fired } = await watchers.check(agent, now);
+      const idle = now - (await this.lastRunOf(agent.id, now));
+      const heartbeat = idle >= this.heartbeatMs(agent.id);
+      // One store write: the check also counts the model call it saved, unless a run follows.
+      const fired = await watchers.check(agent, now, { waking: heartbeat });
       this.lastStart.set(agent.id, now);
       if (fired.length > 0) {
         wake = { reason: 'watchers', at: now, fired };
+      } else if (heartbeat) {
+        wake = { reason: 'heartbeat', at: now, fired: [], idleSeconds: Math.round(idle / 1000) };
       } else {
-        const idle = now - (await this.lastRunOf(agent.id, now));
-        if (idle >= this.heartbeatMs(agent.id)) {
-          wake = { reason: 'heartbeat', at: now, fired: [], idleSeconds: Math.round(idle / 1000) };
-        }
-      }
-      if (!wake) {
-        watchers.record(agent.id, 'skipped', now);
         return { agentId: agent.id, ran: false, reason: 'watching' };
       }
     } catch (error) {

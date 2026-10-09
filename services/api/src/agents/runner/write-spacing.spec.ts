@@ -92,6 +92,10 @@ describe('spaceWrites', () => {
       const signing =
         original.kind === 'write' &&
         !['record_thesis', 'set_watchers', 'clear_watchers'].includes(original.name);
+      expect([original.name, original.signs !== false]).toEqual([
+        original.name,
+        original.kind === 'read' || signing,
+      ]);
       expect([original.name, same]).toEqual([original.name, !signing]);
     }
   });

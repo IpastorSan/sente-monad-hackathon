@@ -53,6 +53,11 @@ export interface AgentTool<S extends z.ZodType = z.ZodType> {
   readonly description: string;
   readonly input: S;
   readonly kind: ToolKind;
+  /**
+   * A write that never reaches the enclave (a thesis, the watchers): the
+   * runner does not space it like a signing write. Writes sign by default.
+   */
+  readonly signs?: false;
   thesisMarket?(args: z.output<S>): string;
   intent?(ctx: ToolContext, args: z.output<S>): Promise<Intent>;
   handler(ctx: ToolContext, args: z.output<S>): Promise<unknown>;
@@ -493,7 +498,8 @@ const getKlines = defineTool({
 
 const MAX_INDICATOR_TIMEFRAMES = 4;
 const MAX_INDICATOR_SPECS = 8;
-const DEFAULT_INDICATOR_LOOKBACK = 200;
+/** Also the watchers' lookback (SEN-182), so their candle reads share this tool's cache entries. */
+export const DEFAULT_INDICATOR_LOOKBACK = 200;
 const MAX_INDICATOR_LOOKBACK = 500;
 const DEFAULT_INDICATOR_SERIES = 5;
 const MAX_INDICATOR_SERIES = 20;
@@ -548,7 +554,7 @@ async function tickDecimals(
   }
 }
 
-function toSourceCandle(k: KlineDto | Kline): SourceCandle {
+export function toSourceCandle(k: KlineDto | Kline): SourceCandle {
   return {
     candle: {
       t: k.openTime,
@@ -651,6 +657,30 @@ const RATE_DECIMALS = 18;
 const PER_8H_DECIMALS = 8;
 const EIGHT_HOURS_SEC = 8n * 3600n;
 
+type TickerFunding = { rate: Decimal; intervalHours: number } | null;
+
+/** A funding rate as exact scaled integers; null when there is none to read. */
+function scaledFunding(funding: TickerFunding) {
+  const intervalSec = funding ? BigInt(Math.round(funding.intervalHours * 3600)) : 0n;
+  if (funding === null || intervalSec <= 0n) return null;
+  const rate = toScaled(funding.rate, RATE_DECIMALS, 'floor');
+  const per8h = divRound(
+    rate * 100n * EIGHT_HOURS_SEC * 10n ** BigInt(PER_8H_DECIMALS),
+    intervalSec * 10n ** BigInt(RATE_DECIMALS),
+  );
+  return { rate, intervalSec, per8h };
+}
+
+/**
+ * `get_funding`'s `ratePctPer8h`, exactly as the tool reports it, or null.
+ * The watchers compare against this (SEN-182), so a threshold the agent took
+ * from the tool means the same number.
+ */
+export function fundingPctPer8h(funding: TickerFunding): Decimal | null {
+  const scaled = scaledFunding(funding);
+  return scaled === null ? null : fromScaled(scaled.per8h, PER_8H_DECIMALS);
+}
+
 const getFunding = defineTool({
   name: 'get_funding',
   kind: 'read',
@@ -671,9 +701,8 @@ const getFunding = defineTool({
       throw new VenueUnavailableError('funding is not available in this session');
     }
     const ticker = await marketRead(() => marketData.ticker('perpl', args.market));
-    const { funding } = ticker;
-    const intervalSec = funding ? BigInt(Math.round(funding.intervalHours * 3600)) : 0n;
-    if (funding === null || intervalSec <= 0n) {
+    const scaled = scaledFunding(ticker.funding);
+    if (scaled === null) {
       // A null the model must read as "no rate", never as a zero rate.
       return {
         market: ticker.symbol,
@@ -681,18 +710,14 @@ const getFunding = defineTool({
         reason: `Perpl has published no funding for ${ticker.symbol} yet`,
       };
     }
-    const rate = toScaled(funding.rate, RATE_DECIMALS, 'floor');
-    const per8h = divRound(
-      rate * 100n * EIGHT_HOURS_SEC * 10n ** BigInt(PER_8H_DECIMALS),
-      intervalSec * 10n ** BigInt(RATE_DECIMALS),
-    );
+    const { rate, intervalSec, per8h } = scaled;
     return {
       market: ticker.symbol,
       payer: rate === 0n ? 'nobody pays' : rate > 0n ? 'longs pay shorts' : 'shorts pay longs',
       ratePctPer8h: fromScaled(per8h, PER_8H_DECIMALS),
       ratePct: fromScaled(rate * 100n, RATE_DECIMALS),
       intervalMinutes: Number(intervalSec) / 60,
-      nextAt: funding.nextAt,
+      nextAt: ticker.funding!.nextAt,
       stale: ticker.stale,
     };
   },
@@ -866,6 +891,7 @@ const listWatchers = defineTool({
 const setWatchers = defineTool({
   name: 'set_watchers',
   kind: 'write',
+  signs: false,
   description:
     'Replace your watchers. Between runs Sente checks them on your schedule WITHOUT calling ' +
     'you, and starts a run only when one fires (or after heartbeatHours with no run, default ' +
@@ -897,6 +923,7 @@ const setWatchers = defineTool({
 const clearWatchers = defineTool({
   name: 'clear_watchers',
   kind: 'write',
+  signs: false,
   description:
     'Remove all your watchers. You are then run on every scheduled tick again, as before ' +
     'you set any.',
@@ -915,6 +942,7 @@ const clearWatchers = defineTool({
 const recordThesis = defineTool({
   name: 'record_thesis',
   kind: 'write',
+  signs: false,
   description:
     'Write down why you are about to trade a market and what would prove you wrong. Required ' +
     'before any place_limit, place_market or deposit on that market in this run. Recording ' +

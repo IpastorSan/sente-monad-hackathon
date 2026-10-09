@@ -13,10 +13,15 @@ import { randomBytes } from 'node:crypto';
 import type { Position } from '@sente/venues';
 import * as z from 'zod/v4';
 
+import type { KlineInterval, VenueId } from '../../venues/dto/markets.dto';
 import type { MarketDataService } from '../../venues/market-data.service';
 import type { AgentRecord } from '../store/agent-store';
-import { symbolInMandate } from '../tools/registry';
-import type { Candle } from '../tools/indicators';
+import {
+  DEFAULT_INDICATOR_LOOKBACK,
+  fundingPctPer8h,
+  symbolInMandate,
+  toSourceCandle,
+} from '../tools/registry';
 import { checkWatchers, type Firing, type WatcherReads } from './watcher-eval';
 import type { StoredWatcher, WatcherSet, WatcherSetBy, WatcherStore } from './watcher-store';
 import {
@@ -32,11 +37,7 @@ import {
   type ParsedWatcher,
 } from './watcher.schema';
 
-/** As many candles as `get_indicators` reads by default, so both share a cache entry. */
-export const WATCHER_LOOKBACK = 200;
 const MAX_ERROR = 300;
-
-type VenueId = 'kuru' | 'perpl';
 
 export interface WatcherServiceOptions {
   readonly store: WatcherStore;
@@ -44,10 +45,6 @@ export interface WatcherServiceOptions {
   readonly marketData?: Pick<MarketDataService, 'ticker' | 'klines'>;
   /** The agent's open Perpl positions; undefined when it has no Perpl account here. */
   readonly positionsOf?: (agent: AgentRecord) => Promise<readonly Position[] | undefined>;
-}
-
-export interface WatcherCheckResult {
-  readonly fired: readonly Firing[];
 }
 
 /** One watcher as the agent and the owner read it. */
@@ -92,7 +89,15 @@ export class WatcherService {
 
   /** Whether the scheduler should check instead of run: a set with at least one watcher. */
   has(agentId: string): boolean {
-    return (this.get(agentId)?.watchers.length ?? 0) > 0;
+    return (this.#options.store.peek(agentId)?.watchers.length ?? 0) > 0;
+  }
+
+  /** What `GET /agents/:id/schedule` says about them; null without watchers. */
+  summary(agentId: string): { count: number; heartbeatSeconds: number } | null {
+    const set = this.#options.store.peek(agentId);
+    return set && set.watchers.length > 0
+      ? { count: set.watchers.length, heartbeatSeconds: set.heartbeatSeconds }
+      : null;
   }
 
   view(agentId: string): WatcherSetView {
@@ -176,33 +181,44 @@ export class WatcherService {
 
   /**
    * One scheduled check of every watcher, no model. Records the check and
-   * each watcher's new state; returns what fired (cooldowns applied).
+   * each watcher's new state in ONE write, and returns what fired (cooldowns
+   * applied). When nothing fires and no run is `waking` the agent anyway (its
+   * heartbeat), the same write counts a model call saved.
    */
-  async check(agent: AgentRecord, now = Date.now()): Promise<WatcherCheckResult> {
+  async check(
+    agent: AgentRecord,
+    now = Date.now(),
+    { waking = false }: { waking?: boolean } = {},
+  ): Promise<Firing[]> {
     const set = this.get(agent.id);
-    if (!set || set.watchers.length === 0) return { fired: [] };
+    if (!set || set.watchers.length === 0) return [];
     const { watchers, fired } = await checkWatchers(set.watchers, this.#reads(agent), now);
     // Re-read: a set_watchers in a run that started meanwhile wins over this check.
-    const latest = this.get(agent.id);
-    if (latest && latest.updatedAt !== set.updatedAt) return { fired: [] };
-    this.#options.store.put({ ...set, watchers, checks: set.checks + 1, lastCheckAt: now });
-    return { fired };
-  }
-
-  /** What the check led to: nothing (a model call saved), a watcher's run, or a heartbeat's. */
-  record(agentId: string, outcome: 'skipped' | 'wake' | 'heartbeat', now = Date.now()): void {
-    const set = this.get(agentId);
-    if (!set) return;
+    if (this.#options.store.peek(agent.id)?.updatedAt !== set.updatedAt) return [];
+    const saved = fired.length === 0 && !waking;
     this.#options.store.put({
       ...set,
-      ...(outcome === 'skipped' ? { skipped: set.skipped + 1 } : {}),
-      ...(outcome === 'wake' ? { wakes: set.wakes + 1, lastWakeAt: now } : {}),
-      ...(outcome === 'heartbeat' ? { heartbeats: set.heartbeats + 1, lastWakeAt: now } : {}),
+      watchers,
+      checks: set.checks + 1,
+      lastCheckAt: now,
+      skipped: set.skipped + (saved ? 1 : 0),
     });
+    return fired;
+  }
+
+  /** A run the watchers (`wake`) or the heartbeat started. */
+  record(agentId: string, outcome: 'wake' | 'heartbeat', now = Date.now()): void {
+    const set = this.get(agentId);
+    if (!set) return;
+    this.#options.store.put(
+      outcome === 'wake'
+        ? { ...set, wakes: set.wakes + 1, lastWakeAt: now }
+        : { ...set, heartbeats: set.heartbeats + 1, lastWakeAt: now },
+    );
   }
 
   heartbeatSeconds(agentId: string): number {
-    return this.get(agentId)?.heartbeatSeconds ?? DEFAULT_HEARTBEAT_SECONDS;
+    return this.#options.store.peek(agentId)?.heartbeatSeconds ?? DEFAULT_HEARTBEAT_SECONDS;
   }
 
   #reads(agent: AgentRecord): WatcherReads {
@@ -224,17 +240,10 @@ export class WatcherService {
         const page = await scoped(venue, market).klines(
           venue,
           market,
-          timeframe as Parameters<MarketDataService['klines']>[2],
-          WATCHER_LOOKBACK,
+          timeframe as KlineInterval,
+          DEFAULT_INDICATOR_LOOKBACK,
         );
-        return page.klines.map((k): Candle => ({
-          t: k.openTime,
-          open: Number(k.open),
-          high: Number(k.high),
-          low: Number(k.low),
-          close: Number(k.close),
-          volume: Number(k.volume),
-        }));
+        return page.klines.map((k) => toSourceCandle(k).candle);
       },
       async positions() {
         const positions = positionsOf ? await positionsOf(agent) : undefined;
@@ -251,8 +260,8 @@ export class WatcherService {
       },
       async funding(market) {
         const { funding } = await scoped('perpl', market).ticker('perpl', market);
-        if (!funding || !(funding.intervalHours > 0)) return null;
-        return (Number(funding.rate) * 100 * 8) / funding.intervalHours;
+        const pct = fundingPctPer8h(funding);
+        return pct === null ? null : Number(pct);
       },
     };
   }

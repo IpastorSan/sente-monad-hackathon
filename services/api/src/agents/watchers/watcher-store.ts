@@ -61,7 +61,10 @@ export interface WatcherSet {
 }
 
 export interface WatcherStore {
+  /** A copy, safe to change. */
   get(agentId: string): WatcherSet | undefined;
+  /** The stored set itself, for a read on the scheduler's hot path: never mutate it. */
+  peek(agentId: string): Readonly<WatcherSet> | undefined;
   put(set: WatcherSet): void;
   delete(agentId: string): void;
 }
@@ -72,6 +75,10 @@ export class InMemoryWatcherStore implements WatcherStore {
   get(agentId: string): WatcherSet | undefined {
     const set = this.sets.get(agentId);
     return set ? structuredClone(set) : undefined;
+  }
+
+  peek(agentId: string): Readonly<WatcherSet> | undefined {
+    return this.sets.get(agentId);
   }
 
   put(set: WatcherSet): void {

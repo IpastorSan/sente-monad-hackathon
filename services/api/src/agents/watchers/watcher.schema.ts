@@ -23,7 +23,9 @@
 import * as z from 'zod/v4';
 
 import { computeIndicator, labelOf, type IndicatorSpec } from '../tools/indicators';
-import { indicatorSpec, KLINE_INTERVALS } from '../tools/indicator-schema';
+import type { VenueId } from '../../venues/dto/markets.dto';
+import { checkSpec, indicatorSpec, KLINE_INTERVALS } from '../tools/indicator-schema';
+import { SenteRefusal } from '../tools/refusals';
 
 export const MAX_WATCHERS = 8;
 export const MAX_CLAUSES = 4;
@@ -113,9 +115,10 @@ export const watcherClause = z.discriminatedUnion('type', [
   fundingClause,
 ]);
 
-export const watcherId = z
-  .string()
-  .regex(/^[A-Za-z0-9_-]{1,24}$/, 'letters, digits, _ and -, up to 24');
+/** A watcher id, in a body and in a route (`watchers.controller.ts`). */
+export const WATCHER_ID_PATTERN = /^[A-Za-z0-9_-]{1,24}$/;
+
+export const watcherId = z.string().regex(WATCHER_ID_PATTERN, 'letters, digits, _ and -, up to 24');
 
 export const watcherInput = z.strictObject({
   id: watcherId
@@ -176,7 +179,7 @@ export class WatcherInvalidError extends Error {
 }
 
 /** What a watcher's markets are checked against: the mandate, by symbol. */
-export type MandateScope = (venue: 'kuru' | 'perpl', market: string) => 'ok' | 'venue' | 'market';
+export type MandateScope = (venue: VenueId, market: string) => 'ok' | 'venue' | 'market';
 
 /** The outputs an indicator has, in the names `get_indicators` shows. */
 export function outputsOf(spec: IndicatorSpec): string[] {
@@ -239,8 +242,11 @@ export function checkWatcher(watcher: ParsedWatcher, scope: MandateScope): Parse
           throw fail('Perpl has no 1w candles; use 1d or shorter');
         }
         for (const spec of [clause.indicator, clause.compareTo?.indicator]) {
-          if (spec?.type === 'macd' && spec.fast >= spec.slow) {
-            throw fail(`macd needs fast < slow; got fast ${spec.fast}, slow ${spec.slow}`);
+          // `get_indicators`' own rule, so the tool and a watcher refuse alike.
+          try {
+            if (spec) checkSpec(spec);
+          } catch (error) {
+            throw error instanceof SenteRefusal ? fail(error.detail) : error;
           }
         }
         if ((clause.value === undefined) === (clause.compareTo === undefined)) {

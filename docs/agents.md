@@ -821,7 +821,7 @@ the woken run is told).
 reads it back, each condition in words with its fire count. `clear_watchers` removes them all.
 They go through the gate like every tool, so the runner and `/mcp` both have them. The two
 writes take the agent's write lock and need it active, but they reach no venue and are not
-write-spaced. Setting watchers writes nothing to the event log: they are not trades. They
+write-spaced (`signs: false` on the tool, like `record_thesis`). Setting watchers writes nothing to the event log: they are not trades. They
 show up in the run transcript as tool calls.
 
 **A watcher.** `{id?, label, match: "all"|"any" (default all), clauses: 1-4, cooldownMinutes:
@@ -887,7 +887,7 @@ instead. The system prompt has one rule about watchers (rule 7).
 
 Bodies go through the same validation as the tool. A rule broken is a 400 with `reason`
 `invalid_input`, `market_not_allowed` or `venue_not_allowed`. `GET /agents/:id/schedule` gains
-`watchers: {count, heartbeatSeconds, nextHeartbeatAt, wakes, modelCallsSaved} | null`. With
+`watchers: {count, heartbeatSeconds} | null`. With
 watchers set, its `nextRunAt` is the next check.
 
 **Persistence.** `<STATE_DIR>/agent-watchers.json`, rewritten on every change and every check, so

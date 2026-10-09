@@ -31,15 +31,13 @@ import type { GatedTool, ToolOutcome } from '../tools/gate';
 // reason for it is written down, and where every caller already looks for it.
 export { WriteSpacer, type WriteSpacerOptions };
 
-/** Writes that never reach the enclave. */
-const UNSIGNED_WRITES = new Set(['record_thesis', 'set_watchers', 'clear_watchers']);
-
 export const SPACING_ABORTED_MESSAGE =
   'Not sent: the run ended (timeout) while this write waited for its turn. Nothing was signed.';
 
 /**
  * The gated tools with every signing write routed through `spacer`. Reads and
- * `record_thesis` pass straight through. A spacing of 0 returns the tools as
+ * writes that never sign (`signs: false`: `record_thesis`, the watchers) pass
+ * straight through. A spacing of 0 returns the tools as
  * they are.
  */
 export function spaceWrites(
@@ -49,7 +47,7 @@ export function spaceWrites(
 ): GatedTool[] {
   if (spacer.spacingMs <= 0) return [...tools];
   return tools.map((tool) =>
-    tool.kind !== 'write' || UNSIGNED_WRITES.has(tool.name)
+    tool.kind !== 'write' || tool.signs === false
       ? tool
       : {
           ...tool,

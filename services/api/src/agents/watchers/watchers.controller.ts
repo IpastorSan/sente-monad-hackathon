@@ -18,7 +18,7 @@ import { agentErrorToHttpBody } from '../agents.errors';
 import { AgentsService } from '../agents.service';
 import { AgentRunScheduler } from '../runner/agent-run.scheduler';
 import type { AgentRecord } from '../store/agent-store';
-import { WatcherInvalidError } from './watcher.schema';
+import { WATCHER_ID_PATTERN, WatcherInvalidError } from './watcher.schema';
 import { WatcherService, type WatcherSetView } from './watcher.service';
 
 class AgentIdParamDto {
@@ -30,7 +30,7 @@ class WatcherParamDto {
   @IsUUID('4')
   id!: string;
 
-  @Matches(/^[A-Za-z0-9_-]{1,24}$/)
+  @Matches(WATCHER_ID_PATTERN)
   wid!: string;
 }
 

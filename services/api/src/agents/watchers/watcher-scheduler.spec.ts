@@ -212,9 +212,6 @@ describe('scheduling an agent with watchers (SEN-182)', () => {
     expect((await h.scheduler.status(h.agent, T0)).watchers).toEqual({
       count: 1,
       heartbeatSeconds: 7_200,
-      nextHeartbeatAt: new Date(T0 - 5 * MIN + 2 * 3_600_000).toISOString(),
-      wakes: 0,
-      modelCallsSaved: 1,
     });
   });
 });
