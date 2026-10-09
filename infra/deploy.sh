@@ -259,7 +259,11 @@ gcloud compute ssh "$NAME" --project "$PROJECT" --zone "$ZONE" --quiet --command
    && { sleep 2; sudo docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile \
         || echo 'WARNING: caddy reload failed; Caddy keeps its previous config. sudo docker logs sente-caddy'; } \
    && sudo docker compose ps \
-   && sudo docker image prune -f >/dev/null"
+   && sudo docker image prune -f >/dev/null \
+   && { run=\$(sudo docker inspect -f '{{.Config.Image}}' sente-api 2>/dev/null | sed 's/.*://'); \
+        sudo docker image ls sente-api --format '{{.CreatedAt}} {{.Tag}}' | sort -r | awk '{print \$NF}' \
+        | grep -vx latest | grep -vx \"\$run\" | tail -n +3 \
+        | while read -r t; do sudo docker rmi \"sente-api:\$t\" >/dev/null || true; done; }"
 
 # /opt/sente/web is EMPTIED, never removed: it is bind mounted into the running
 # Caddy container, and a directory that is deleted and recreated is a different
@@ -278,8 +282,10 @@ gcloud compute ssh "$NAME" --project "$PROJECT" --zone "$ZONE" --quiet --command
 # STATE_DIR lives on the host at /var/lib/sente/state, owned by uid 1000 — the
 # image's `node` user. Root-owned would make every wallet registration EACCES,
 # and `install -d` is idempotent, so this runs on every deploy and cannot drift.
-# `image prune -f` removes DANGLING images only: every sente-api:<sha> stays, so
-# the rollback tags survive while the disk does not fill.
+# `image prune -f` removes DANGLING images only. Tagged images are ~1 GB each on a
+# 30 GB disk, and ~15 deploys filled it on 2026-10-09 (a push failed with "no
+# space left on device"), so only the running tag and the two newest others are
+# kept as rollback targets; older sente-api:<sha> tags are removed.
 
 if [ "$SKIP_API" != 1 ]; then
   say "Waiting up to ${HEALTH_TIMEOUT}s for the API's health check to pass"
