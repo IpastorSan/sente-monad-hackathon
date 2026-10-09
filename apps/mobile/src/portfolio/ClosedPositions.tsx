@@ -43,7 +43,7 @@ export function ClosedPositions({
       {total !== null && list.positions.length > 0 ? (
         <View style={styles.total}>
           <Text style={text.label}>Realised</Text>
-          <Text style={[text.strong, text.num]}>≈ {total}</Text>
+          <Text style={[text.strong, text.num]}>{total}</Text>
         </View>
       ) : null}
       {list.gaps.length > 0 ? (

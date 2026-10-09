@@ -330,7 +330,11 @@ The same flow as the P5 run, from the phone's own code:
 - `app/trade/perpl-setup.tsx` runs onboarding then enrollment as one list of
   steps; the perp ticket (`trade/PerpTicket.tsx`) places market orders bounded
   at 1% of the mark through `createAppPerplTrader`, and a perp position closes
-  from its screen with `closePosition`. All of it is gated on
+  from its screen with `closePosition`. Under "Advanced options" (SEN-179) it
+  also places GTC or post-only limit orders (`placeLimit`), which Portfolio →
+  Orders cancels with the same device key (`cancel`). Neither venue offers a
+  stop-loss or take-profit order on testnet, so the tickets say so and offer
+  Guardian (spot only) instead. None of this was run live. All of it is gated on
   `capabilities().venues.perpl` (`USER_TRADING_PERPL`); off, perp markets keep
   pointing at an agent.
 

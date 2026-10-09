@@ -20,6 +20,7 @@ import {
   decisionSteps,
   fundingAssets,
   guardianLines,
+  prefillDraft,
   initialDraft,
   levelKind,
   marketOptions,
@@ -346,4 +347,21 @@ test('hire: a weekly DCA Stacker is hired with a weekly schedule (SEN-158)', () 
     }).schedule,
     { everySeconds: 86_400 },
   );
+});
+
+test('a ticket’s Guardian link prefills only what the preset could set (SEN-179)', () => {
+  const def = getPreset('guardian')!;
+  const draft = initialDraft(def);
+  const filled = prefillDraft(def, draft, { market: 'WETH-USDC', amount: '0.25' });
+  assert.equal(filled.market, 'WETH-USDC');
+  assert.equal(filled.amount, '0.25');
+  assert.equal(checkParams(def, filled).ok, true);
+  // A market Guardian doesn't offer, a bad number, a key it doesn't have: defaults stay.
+  const refused = prefillDraft(def, draft, {
+    market: 'BTC-PERP',
+    amount: '-3',
+    sellAbove: 'lots',
+    surprise: '1',
+  });
+  assert.deepEqual(refused, draft);
 });

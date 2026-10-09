@@ -508,7 +508,9 @@ export class MarketDataService {
         ...dayFields(lastPrice, stats),
         funding: null,
         stale: depth.stale || Boolean(last?.stale) || Boolean(day?.stale),
-        asOf: Math.min(depth.loadedAt, last?.loadedAt ?? Infinity, day?.loadedAt ?? Infinity),
+        // The prices' age, not the 24h window's: that rides a 60 s cache and
+        // would age a fresh book past the phone's 30 s "paused" rule (SEN-179).
+        asOf: Math.min(depth.loadedAt, last?.loadedAt ?? Infinity),
       };
     });
   }

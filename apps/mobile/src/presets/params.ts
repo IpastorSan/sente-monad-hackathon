@@ -279,6 +279,31 @@ export function initialDraft(def: Pick<PresetDefinition, 'params'>): Draft {
   return draft;
 }
 
+/**
+ * A draft with values handed in from elsewhere (SEN-179: a ticket's "Protect
+ * it with a Guardian agent" passes its market and amount as route params).
+ * Only a key the preset has, and only a value its control could have set: a
+ * market it offers, a plain positive decimal for a number. Anything else is
+ * dropped and the default stays, so a stale link can't seed a bad draft.
+ */
+export function prefillDraft(
+  def: Pick<PresetDefinition, 'params'>,
+  draft: Draft,
+  prefill: Readonly<Record<string, string | undefined>>,
+): Draft {
+  const next: Draft = { ...draft };
+  for (const spec of def.params) {
+    const value = prefill[spec.key];
+    if (value === undefined || value === '') continue;
+    if (spec.type === 'market' && !spec.multiple && marketOptions(spec).includes(value)) {
+      next[spec.key] = value;
+    } else if (spec.type === 'number' && DECIMAL_TEXT.test(value) && Number(value) > 0) {
+      next[spec.key] = value.trim();
+    }
+  }
+  return next;
+}
+
 const DECIMAL_TEXT = /^\s*\d+(\.\d+)?\s*$/;
 
 /**

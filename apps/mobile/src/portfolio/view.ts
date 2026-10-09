@@ -7,10 +7,11 @@
  * Pure, like `agents/cockpit.ts`: no React, no React Native, so `view.test.ts`
  * pins every rule under plain `node --test` and the screens only lay out.
  *
- * Money stays a decimal string. Totals add USDC and AUSD as if both were
- * dollars and price every other asset at its Kuru last price, so every figure
- * that mixes them is "≈ $" and says so; an asset with no price is left out of
- * the total and named, never counted as zero.
+ * Money stays a decimal string, summed exactly and floored to the cent once
+ * for display (`floorTo`). Totals add USDC and AUSD as if both were dollars
+ * and price every other asset at its Kuru last price; a total that prices one
+ * is "≈ $" and says so (`totalIsApprox`); an asset with no price is left out
+ * of the total and named, never counted as zero.
  */
 import type { Agent, AgentPortfolioDto, BalanceDto, OrderDto, PositionDto } from '../agents/api.ts';
 import { sumDecimals } from '../agents/ledgerView.ts';
@@ -84,15 +85,36 @@ function ratio(part: string, whole: string): number | null {
 }
 
 /**
- * A money figure at 2 places, grouped: `3,918.40`. Rounded (it is a total, not
- * a spendable balance); a negative one takes a true minus.
+ * `value` floored to `places` decimals (toward −∞), exactly, as a plain
+ * decimal. Every money figure on Portfolio is cut here once, after the exact
+ * sum (SEN-179): 349.996 AUSD is $349.99, never a $350.00 you don't have, and
+ * a 0.004 loss is −0.01, never a 0.00 that hides it. `null` when `value` is
+ * not a plain decimal.
  */
-export function money(value: string | null, places = 2): string {
-  if (value === null) return '—';
-  return formatPlaces(value, places) ?? '—';
+export function floorTo(value: string, places = 2): string | null {
+  const parsed = parse(value);
+  if (parsed === null) return null;
+  if (parsed.scale <= places) {
+    return render({ atoms: parsed.atoms * 10n ** BigInt(places - parsed.scale), scale: places });
+  }
+  const unit = 10n ** BigInt(parsed.scale - places);
+  let atoms = parsed.atoms / unit; // toward zero
+  if (parsed.atoms < 0n && atoms * unit !== parsed.atoms) atoms -= 1n;
+  return render({ atoms, scale: places });
 }
 
-/** `≈ $3,918.40`: every figure that adds USDC and AUSD together. */
+/** `value` floored to the cent, or as given when it is not a plain decimal. */
+export function cents(value: string | null): string | null {
+  return value === null ? null : (floorTo(value) ?? value);
+}
+
+/** A money figure at 2 places, grouped: `3,918.40`, floored (`floorTo`); a negative one takes a true minus. */
+export function money(value: string | null, places = 2): string {
+  if (value === null) return '—';
+  return formatPlaces(floorTo(value, places) ?? value, places) ?? '—';
+}
+
+/** `≈ $3,918.40`: a figure that prices a non-stable token. */
 export function approxUsd(value: string | null): string {
   return value === null ? '—' : `≈ $${money(value)}`;
 }
@@ -112,14 +134,15 @@ export function amountText(value: string, symbol: string): string {
   return formatPlaces(render(truncated), places) ?? value;
 }
 
-/** `+11.53` / `−4.10` / `0.00`, at 2 places. */
+/** `+11.53` / `−4.10` / `0.00`, at 2 places, floored like `money`. */
 export function signedMoney(value: string | null): string {
-  // The app's one signed formatter (SEN-136), so this agrees with the agent screens.
-  return signedFigure(value, 2)?.text ?? '—';
+  // The app's one signed formatter (SEN-136), fed the floored figure so its
+  // own rounding has nothing left to round.
+  return signedFigure(cents(value), 2)?.text ?? '—';
 }
 
 export function toneOf(value: string | null): Direction {
-  return signedFigure(value, 2)?.tone ?? 'flat';
+  return signedFigure(cents(value), 2)?.tone ?? 'flat';
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +345,15 @@ const ALLOCATION_LABEL: Record<AllocationKey, string> = {
   perps: 'Perps',
 };
 
+/**
+ * Whether the total is only ≈ in dollars: some part of it is a non-stable
+ * token valued at its Kuru price. USDC and AUSD alone count at $1 and are
+ * shown exact.
+ */
+export function totalIsApprox(held: Holdings, agentsPriced: boolean): boolean {
+  return agentsPriced || held.spot.some((s) => isPositive(s.value));
+}
+
 /** Each part of the total in dollars, from your holdings and the agents group. */
 export function allocationParts(
   held: Holdings,
@@ -403,7 +435,10 @@ export function seriesChange(
   const first = series[0];
   const last = series[series.length - 1];
   if (first === undefined || last === undefined || series.length < 2) return null;
-  const delta = subDecimal(last.usd, first.usd);
+  // The change between the figures as shown: the big number is floored to
+  // the cent, so this is the difference of floored totals, and a move that
+  // changes the shown total never reads as $0.00.
+  const delta = subDecimal(cents(last.usd) ?? last.usd, cents(first.usd) ?? first.usd);
   if (delta === null) return null;
   const pct = ratio(delta, first.usd);
   return { delta, pct, tone: toneOf(delta) };
@@ -466,13 +501,17 @@ export type AgentGroupRow =
 export function agentGroup(inputs: readonly AgentInput[]): {
   rows: AgentGroupRow[];
   total: string | null;
+  /** Some agent holds a spot token, valued at its Kuru price: the total is ≈. */
+  priced: boolean;
 } {
   const rows: AgentGroupRow[] = [];
   const totals: string[] = [];
+  let priced = false;
   for (const { agent, portfolio } of inputs) {
     const revoked = agent.status === 'revoked';
     const value = portfolio?.totals.approxUsd ?? null;
     if (value !== null) totals.push(value);
+    if (portfolio?.holdings.some((h) => isPositive(h.value))) priced = true;
     if (portfolio === null) {
       if (!revoked) {
         rows.push(agentRow(agent, 'Holdings unavailable', null, null));
@@ -488,7 +527,7 @@ export function agentGroup(inputs: readonly AgentInput[]): {
     if (positions.length === 0) rows.push(agentRow(agent, 'No open position', value, null));
     rows.push(...positions);
   }
-  return { rows, total: totals.length > 0 ? sum(totals) : null };
+  return { rows, total: totals.length > 0 ? sum(totals) : null, priced };
 }
 
 function agentRow(
@@ -675,6 +714,11 @@ function trackFor(limit: number, market: number): { limit: number; market: numbe
 
 export type FillRow = {
   key: string;
+  /**
+   * What the round trip this fill closed realised, net of its fees, floored
+   * to the cent (`closed.ts`); `null` on a fill that closed nothing.
+   */
+  realised: { text: string; asset: string; tone: Direction } | null;
   /** `Buy` / `Sell`, or `null` when the trade's summary was lost. */
   side: 'Buy' | 'Sell' | null;
   /** `412.00 MON`, `0.25 ETH-PERP`, or the size alone. */
@@ -689,8 +733,15 @@ export type FillRow = {
 
 export type FillDay = { key: string; label: string; fills: FillRow[] };
 
+/** A closed round trip's realised P&L, keyed by the fill that closed it (`fillKey`). */
+export type RealisedByFill = ReadonlyMap<string, { pnl: string; asset: string }>;
+
 /** Grouped by UTC day, newest first, like every other dated list in the app. */
-export function fillDays(fills: readonly PortfolioFill[], now: number): FillDay[] {
+export function fillDays(
+  fills: readonly PortfolioFill[],
+  now: number,
+  realised: RealisedByFill = new Map(),
+): FillDay[] {
   const days: FillDay[] = [];
   for (const fill of [...fills].sort((a, b) => b.timestamp - a.timestamp)) {
     const key = dayKey(fill.timestamp);
@@ -699,18 +750,23 @@ export function fillDays(fills: readonly PortfolioFill[], now: number): FillDay[
       day = { key, label: dayLabel(fill.timestamp, now), fills: [] };
       days.push(day);
     }
-    day.fills.push(fillRow(fill));
+    day.fills.push(fillRow(fill, realised));
   }
   return days;
 }
 
-function fillRow(fill: PortfolioFill): FillRow {
+function fillRow(fill: PortfolioFill, realised: RealisedByFill): FillRow {
   const spot = fill.venue === 'kuru';
   const base = fill.symbol !== null ? baseOf(fill.symbol) : null;
   const unit = fill.symbol === null ? '' : spot ? ` ${base}` : ` ${fill.symbol}`;
   const size = spot && base !== null ? amountText(fill.size, base) : fill.size;
+  const key = `${fill.venue}:${fill.tradeId ?? ''}:${fill.venueTradeId}`;
+  const trip = realised.get(key);
   return {
-    key: `${fill.venue}:${fill.tradeId ?? ''}:${fill.venueTradeId}`,
+    key,
+    realised: trip
+      ? { text: signedMoney(trip.pnl), asset: trip.asset, tone: toneOf(trip.pnl) }
+      : null,
     side: fill.side === 'buy' ? 'Buy' : fill.side === 'sell' ? 'Sell' : null,
     title: `${size}${unit}`,
     detail: `at ${fill.price} · ${spot ? 'Kuru spot' : 'Perpl'}`,
@@ -771,7 +827,7 @@ export type PerpDetail = {
   /** `+5.54%` on margin. */
   pct: string;
   pctTone: Direction;
-  /** `0.25 ETH · 636.03 AUSD` at the mark. */
+  /** `0.25 ETH · 636.02 AUSD` at the mark. */
   size: string;
   /** `208.17 AUSD · 3×`. */
   margin: string;

@@ -14,7 +14,8 @@
  * read-only: an agent's funds are the agent's, so a row opens its cockpit.
  *
  * The total is computed on the phone (`portfolio/view.ts`): USDC and AUSD at
- * $1, anything else at its Kuru last price, and it always says "≈ $". The
+ * $1, anything else at its Kuru last price (then, and only then, "≈ $"),
+ * summed exactly and floored to the cent. The
  * line under it is the server's recorded history over 1D / 1W / 1M / ALL
  * (SEN-152, `portfolio/ValueHero.tsx`); until that has a point, it is what
  * this phone observed since the app opened, and the caption says exactly that.
@@ -24,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
 
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
+import { closedList } from '@/portfolio/closed';
 import { ClosedPositions } from '@/portfolio/ClosedPositions';
 import { useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
@@ -52,11 +54,13 @@ import {
   perplFillsNote,
   sectionFailure,
   shown,
+  totalIsApprox,
   type Holdings,
   type OrderRow,
   type PortfolioSection,
 } from '@/portfolio/view';
 import { useSession } from '@/session';
+import { createAppPerplTrader } from '@/trade/appPerplTrader';
 import { describeTradeError, kuruCancelDraft, runTrade, type TradeFlowState } from '@/trade/flow';
 import { usePerplSetup } from '@/trade/usePerplSetup';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
@@ -160,6 +164,7 @@ export default function PortfolioScreen() {
         <>
           <ValueHero
             total={split.total}
+            approx={totalIsApprox(held, group?.priced ?? false)}
             at={at}
             trading={user.trading}
             hidden={hidden}
@@ -328,6 +333,7 @@ export default function PortfolioScreen() {
         row={cancelling}
         hidden={hidden}
         trading={user.trading}
+        perplApiKey={perplSetup.kind === 'ready' ? perplSetup.apiKey : null}
         onClose={() => setCancelling(null)}
         onSettled={user.polled.refresh}
       />
@@ -440,7 +446,15 @@ function History({
   hidden: boolean;
   now: number;
 }) {
-  const days = fillDays(fills.fills, now);
+  // SEN-179: a fill that closed a round trip carries what the trip realised,
+  // from the same replay as Positions → Closed (only over complete histories).
+  const realised = useMemo(() => {
+    const list = closedList(fills.fills, fills.coverage);
+    return new Map(
+      list.positions.map((p) => [p.closedBy, { pnl: p.realisedPnl, asset: p.pnlAsset }]),
+    );
+  }, [fills.fills, fills.coverage]);
+  const days = fillDays(fills.fills, now, realised);
   const perplNote = perplFillsNote(fills.perplGap);
   return (
     <View style={styles.section}>
@@ -526,12 +540,15 @@ function CancelSheet({
   row,
   hidden,
   trading,
+  perplApiKey,
   onClose,
   onSettled,
 }: {
   row: OrderRow | null;
   hidden: boolean;
   trading: boolean;
+  /** This device's enrolled Perpl key (SEN-179): a Perpl order is cancelled with it. */
+  perplApiKey: string | null;
   onClose: () => void;
   /** A cancel reached the server (whatever its outcome): re-read the orders. */
   onSettled: () => void;
@@ -548,7 +565,59 @@ function CancelSheet({
   // A notice belongs to the order it was about; a new row starts clean.
   useEffect(() => setNotice(null), [row?.key]);
 
+  /**
+   * A Perpl order (SEN-179) is cancelled the way the perp ticket places one:
+   * this device's trading key signs in on a socket of its own and sends the
+   * cancel. No passkey prompt, and nothing the server could do for you.
+   */
+  const cancelPerpl = async () => {
+    const derive = auth.perplTradeKey;
+    const address = wallet.wallet?.address;
+    if (!order || perplApiKey === null || derive === null || address === undefined) {
+      setNotice({
+        tone: 'error',
+        title: 'Perps aren’t set up on this device',
+        detail: 'Finish perps setup from Portfolio, then cancel it here.',
+      });
+      return;
+    }
+    setNotice(null);
+    setPhase('committing');
+    let trader: ReturnType<typeof createAppPerplTrader> | null = null;
+    try {
+      const key = derive(address);
+      trader = createAppPerplTrader({
+        credentials: { apiKey: perplApiKey, secretKey: key.secretKey },
+      });
+      key.secretKey.fill(0);
+      const result = await trader.cancel({ symbol: order.symbol, orderId: order.id });
+      onSettled();
+      if (result.status === 'cancelled' || result.status === 'filled') {
+        onClose();
+      } else {
+        setNotice({
+          tone: 'info',
+          title: 'Cancel sent, not confirmed yet',
+          detail: 'The order leaves the list once Perpl confirms it.',
+        });
+      }
+    } catch (caught) {
+      setNotice({
+        tone: 'error',
+        title: 'The cancel didn’t go through',
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    } finally {
+      trader?.release();
+      setPhase(null);
+    }
+  };
+
   const confirm = async () => {
+    if (!spot) {
+      await cancelPerpl();
+      return;
+    }
     const walletId = wallet.wallet?.walletId;
     const address = wallet.wallet?.address;
     if (draft === null || trade === null || walletId === undefined || address === undefined) {
@@ -627,16 +696,16 @@ function CancelSheet({
             </View>
           ) : null}
           <Button
-            label={busy ? phaseLabel(phase) : 'Cancel order with passkey'}
+            label={busy ? phaseLabel(phase) : spot ? 'Cancel order with passkey' : 'Cancel order'}
             kind="primary"
-            disabled={draft === null || !trading}
+            disabled={(spot ? draft === null : perplApiKey === null) || !trading}
             busy={busy}
             onPress={() => void confirm()}
             style={styles.sheetButton}
           />
-          {draft === null ? (
+          {!spot && perplApiKey === null ? (
             <Text style={[text.caption, styles.pending]}>
-              Cancelling a Perpl order arrives with the perp ticket.
+              Set up perps on this device to cancel Perpl orders from here.
             </Text>
           ) : null}
           <Button label="Keep it on the book" onPress={onClose} style={styles.keep} />

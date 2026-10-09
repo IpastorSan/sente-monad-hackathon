@@ -44,9 +44,12 @@ export type HeroLine = {
 };
 
 /**
- * The recorded points of `history` (oldest first) plus the live total, when
- * the live read is newer than the last point: the line ends where the big
- * number above it is. `null` while the range holds no recorded point.
+ * The recorded points of `history` (oldest first) ending at the live total:
+ * the line, and the change under the big number, always end where that number
+ * is (SEN-179). A recorded point at or after the live read is dropped rather
+ * than left as the endpoint, so a snapshot taken from an older cached read
+ * can never stand in for the total on screen. `null` while the range holds no
+ * recorded point before the live one.
  */
 export function heroLine(
   history: ValueHistory | null,
@@ -54,9 +57,10 @@ export function heroLine(
   live: ValueSample | null,
 ): HeroLine | null {
   if (history === null || history.points.length === 0) return null;
-  const points: ValueSample[] = history.points.map(({ at, usd }) => ({ at, usd }));
-  const newest = points[points.length - 1];
-  if (live !== null && newest !== undefined && live.at > newest.at) points.push(live);
+  const points: ValueSample[] = history.points
+    .filter((p) => live === null || p.at < live.at)
+    .map(({ at, usd }) => ({ at, usd }));
+  if (live !== null) points.push(live);
   if (points.length < 2) return null;
   return {
     points,

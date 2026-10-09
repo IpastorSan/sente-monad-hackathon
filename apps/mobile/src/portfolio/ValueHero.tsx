@@ -19,17 +19,20 @@ import { BigNumber, ChangeText, RangePills } from '@/ui/trading';
 import { HERO_RANGES, heroLine, PARTIAL_NOTE, type HeroRange } from './history';
 import { useObservedValue } from './usePortfolio';
 import { useValueHistory } from './useValueHistory';
-import { clock, seriesChange, shown, signedUsd } from './view';
+import { cents, clock, seriesChange, shown, signedUsd } from './view';
 
 export function ValueHero({
   total,
+  approx,
   at,
   trading,
   hidden,
   note,
 }: {
-  /** The ≈ $ total the screen computed, agents included. */
+  /** The exact $ total the screen computed, agents included; shown floored to the cent. */
   total: string;
+  /** Some of it is a token valued at its Kuru price (`totalIsApprox`). */
+  approx: boolean;
   /** The newest data time behind `total`, `null` before any read. */
   at: number | null;
   trading: boolean;
@@ -56,7 +59,13 @@ export function ValueHero({
     <>
       <View style={styles.hero}>
         <Text style={text.label}>Total value</Text>
-        <BigNumber value={total} prefix="$" approx size="xl" blurred={hidden} />
+        <BigNumber
+          value={cents(total) ?? total}
+          prefix="$"
+          approx={approx}
+          size="xl"
+          blurred={hidden}
+        />
         {change !== null ? (
           <ChangeText
             pct={change.pct}

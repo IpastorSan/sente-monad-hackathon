@@ -135,7 +135,9 @@ export function CashCard({
     <Card style={styles.cash}>
       <View style={styles.between}>
         <Text style={text.label}>Cash</Text>
-        <Text style={text.caption}>in your wallet</Text>
+        <Text style={text.caption}>
+          {venueCash.length > 0 ? 'in your wallet and venue accounts' : 'in your wallet'}
+        </Text>
       </View>
       {cash.map((line) => (
         <View key={line.symbol} style={styles.cashLine}>
@@ -573,7 +575,22 @@ export function FillLine({ fill, hidden }: { fill: FillRow; hidden: boolean }) {
           </Text>
           <Text style={text.mono}>{fill.time}</Text>
         </View>
-        <Text style={text.dim}>{fill.detail}</Text>
+        <View style={styles.between}>
+          <Text style={[text.dim, styles.grow]}>{fill.detail}</Text>
+          {fill.realised ? (
+            <Text
+              style={[
+                text.caption,
+                text.num,
+                fill.realised.tone === 'up' && text.up,
+                fill.realised.tone === 'down' && text.down,
+              ]}
+              accessibilityLabel={`Realised ${fill.realised.text} ${fill.realised.asset}`}
+            >
+              Realised {shown(fill.realised.text, hidden)} {fill.realised.asset}
+            </Text>
+          ) : null}
+        </View>
         {fill.tx ? <Text style={text.mono}>{fill.tx}</Text> : null}
       </View>
     </View>

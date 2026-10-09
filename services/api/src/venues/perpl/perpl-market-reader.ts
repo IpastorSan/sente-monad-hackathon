@@ -337,7 +337,10 @@ export class PerplMarketReader implements PerplReader {
       ...dayFields(last, day?.value ?? null),
       funding: fundingOf(m),
       stale: context.stale || Boolean(day?.stale),
-      asOf: Math.min(state.at.t ?? context.loadedAt, day?.loadedAt ?? Infinity),
+      // The prices' own time. The 24h fields ride a 60 s cache, and folding
+      // their load time in here aged a live price past the phone's 30 s rule
+      // for half of every minute: "prices paused" over a moving chart (SEN-179).
+      asOf: state.at.t ?? context.loadedAt,
     };
   }
 

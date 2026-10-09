@@ -93,11 +93,14 @@ import {
 } from '@/trade/ticket';
 import type { PreparedTrade, TradeFunds, TradeView } from '@/trade/types';
 import {
+  AdvancedPanel,
+  AdvancedToggle,
   Frame,
   HoldToConfirm,
   Keypad,
   Note,
   SIDE_TONE,
+  ProtectionRow,
   StepStone,
   TxLink,
   useLitKey,
@@ -105,6 +108,7 @@ import {
   useWebKeys,
 } from '@/trade/ticketKit';
 import { PerpTicket } from '@/trade/PerpTicket';
+import { RiskDisclosure, useRiskAck } from '@/trade/RiskDisclosure';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { ComingNext } from '@/ui/ComingNext';
@@ -251,7 +255,7 @@ function kuruConfig(symbol: string): KuruMarketConfig | null {
  * `canEmbedTicket` and that trading is on; this renders nothing for a market
  * it cannot ticket.
  */
-export function TicketPanel({ market }: { market: MarketDto }) {
+export function TicketPanel({ market, side = 'buy' }: { market: MarketDto; side?: Side }) {
   const [round, setRound] = useState(0);
   const config = useMemo(() => kuruConfig(market.symbol), [market.symbol]);
   if (market.venue === 'perpl') {
@@ -259,7 +263,7 @@ export function TicketPanel({ market }: { market: MarketDto }) {
       <PerpTicket
         key={`${market.symbol}:${round}`}
         market={market}
-        initialSide="long"
+        initialSide={side === 'sell' ? 'short' : 'long'}
         embedded
         onClose={() => setRound((n) => n + 1)}
       />
@@ -272,7 +276,7 @@ export function TicketPanel({ market }: { market: MarketDto }) {
       market={market}
       config={config}
       venue="kuru"
-      initialSide="buy"
+      initialSide={side}
       embedded
       onClose={() => setRound((n) => n + 1)}
     />
@@ -324,6 +328,7 @@ function Ticket({
   const [focus, setFocus] = useState<'amount' | 'price'>('amount');
   const [slippageBps, setSlippageBps] = useState(DEFAULT_SLIPPAGE_BPS);
   const [gear, setGear] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
   const [stage, setStage] = useState<Stage>({ kind: 'ticket' });
   const [sent, setSent] = useState<Sent | null>(null);
 
@@ -633,17 +638,45 @@ function Ticket({
           <>
             <View style={styles.segs}>
               <SideSegment side={side} onChange={switchSide} />
-              <View style={styles.grow}>
-                <Segmented
-                  options={[
-                    { value: 'market', label: 'Market' },
-                    { value: 'limit', label: 'Limit' },
-                  ]}
-                  value={orderType}
-                  onChange={switchType}
-                />
-              </View>
+              <View style={styles.grow} />
+              <AdvancedToggle
+                open={advanced}
+                summary={orderType === 'limit' ? 'Limit' : null}
+                onToggle={() => setAdvanced((open) => !open)}
+              />
             </View>
+            {advanced ? (
+              <AdvancedPanel>
+                <View style={styles.advRow}>
+                  <Text style={text.label}>Order type</Text>
+                  <Segmented
+                    options={[
+                      { value: 'market', label: 'Market' },
+                      { value: 'limit', label: 'Limit' },
+                    ]}
+                    value={orderType}
+                    onChange={switchType}
+                  />
+                </View>
+                <ProtectionRow
+                  onGuardian={() => {
+                    // Guardian guards base you hand it, so it gets this order's size.
+                    const amount =
+                      ticket.sizeUnits !== null && ticket.sizeUnits > 0n
+                        ? unitsToDecimal(ticket.sizeUnits, tm.sizePrecision)
+                        : undefined;
+                    router.push({
+                      pathname: '/presets/[id]/configure',
+                      params: {
+                        id: 'guardian',
+                        market: config.symbol,
+                        ...(amount ? { amount } : {}),
+                      },
+                    });
+                  }}
+                />
+              </AdvancedPanel>
+            ) : null}
 
             {orderType === 'market' ? (
               <View style={styles.amount}>
@@ -1034,6 +1067,7 @@ function Review({
   onConfirm: () => void;
 }) {
   const now = useNow(1_000);
+  const risk = useRiskAck('kuru');
   const age = Math.max(0, now - at);
   const old = input.orderType === 'market' && age > QUOTE_MAX_AGE_MS;
   useWebKeys(keys && ticket.cta.enabled && old, (event) => {
@@ -1073,11 +1107,19 @@ function Review({
       {rows.map((row) => (
         <Row key={row.label} label={row.label} value={row.value} mono={row.chain} />
       ))}
+      <RiskDisclosure venue="kuru" ack={risk} />
       <View style={styles.spaced}>
         {!ticket.cta.enabled ? (
           <Button kind="secondary" label={ticket.cta.label} disabled onPress={() => undefined} />
         ) : old ? (
           <Button kind="primary" label="Refresh quote" onPress={onRefresh} />
+        ) : !risk.ready ? (
+          <Button
+            kind="secondary"
+            label={risk.needed ? 'Tick the box to continue' : 'One moment'}
+            disabled
+            onPress={() => undefined}
+          />
         ) : (
           <HoldToConfirm
             tone={SIDE_TONE[input.side]}
@@ -1085,7 +1127,10 @@ function Review({
             label={`Hold to ${input.side} ${sizeLabel}${
               input.orderType === 'limit' ? ` at ${input.limitPrice}` : ''
             }`}
-            onConfirm={onConfirm}
+            onConfirm={() => {
+              risk.remember();
+              onConfirm();
+            }}
           />
         )}
       </View>
@@ -1477,7 +1522,8 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   identity: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
   panelHead: { marginTop: 18 },
-  segs: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  segs: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18 },
+  advRow: { gap: 8 },
   sideSeg: {
     flexDirection: 'row',
     padding: 3,

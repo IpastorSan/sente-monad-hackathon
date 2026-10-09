@@ -261,6 +261,16 @@ describe('MarketDataService (Kuru)', () => {
       });
     });
 
+    it('dates the ticker by its book and last close, not its 24h window (SEN-179)', async () => {
+      await service.ticker('kuru', 'MON-USDC');
+      // 45 s on, the book (2 s) and the 1m close (10 s) reload; the hourly
+      // window (60 s) is still the one loaded at NOW.
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + 45_000);
+      const ticker = await service.ticker('kuru', 'MON-USDC');
+      expect(ticker.open24h).toBe('0.9');
+      expect(ticker.asOf).toBe(NOW + 45_000);
+    });
+
     it('still answers from the book when candles are unavailable', async () => {
       kuru.getKlines.mockRejectedValue(new Error('data source down'));
       const ticker = await service.ticker('kuru', 'MON-USDC');

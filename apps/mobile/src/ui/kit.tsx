@@ -549,11 +549,15 @@ export function Chip({
   label,
   selected,
   onPress,
+  icon,
 }: {
   label: string;
   selected: boolean;
   onPress: () => void;
+  /** A glyph before the label, in the label's colour (filled when selected). */
+  icon?: IconName;
 }) {
+  const ink = selected ? color.purpleDeep : color.text;
   return (
     <Pressable
       accessibilityRole="radio"
@@ -561,10 +565,12 @@ export function Chip({
       onPress={onPress}
       style={(state) => [
         styles.chip,
+        icon && styles.chipWithIcon,
         selected ? styles.chipOn : isHovered(state) && styles.chipHover,
         state.pressed && styles.pressed,
       ]}
     >
+      {icon ? <Icon name={icon} size={16} color={ink} fill={selected ? ink : undefined} /> : null}
       <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
     </Pressable>
   );
@@ -970,6 +976,7 @@ const styles = StyleSheet.create({
     borderColor: color.lineStrong,
     borderRadius: RADIUS.stone,
   },
+  chipWithIcon: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   chipHover: { backgroundColor: color.well },
   chipOn: { backgroundColor: color.purpleSoft, borderColor: color.purpleSoft },
   chipText: { fontFamily: font.medium, fontSize: 13, color: color.text },

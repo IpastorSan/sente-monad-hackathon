@@ -31,15 +31,19 @@ export function Icon({
   size = 20,
   color = palette.textDim,
   strokeWidth = 1.8,
+  fill,
 }: {
   name: IconName;
   size?: number;
   color?: string;
   strokeWidth?: number;
+  /** Fills a closed glyph (a starred star); stroke-only when omitted. */
+  fill?: string;
 }) {
   return (
     <Canvas style={{ width: size, height: size }} pointerEvents="none">
       <Group transform={[{ scale: size / 24 }]}>
+        {fill ? <Path path={pathFor(name)} style="fill" color={fill} /> : null}
         <Path
           path={pathFor(name)}
           style="stroke"

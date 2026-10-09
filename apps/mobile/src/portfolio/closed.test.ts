@@ -307,3 +307,17 @@ test('closedNotes: "before fees" only when a trip has a fill without its fee (SE
     'Perp funding is not included.',
   ]);
 });
+
+test('a perp round trip that lost under a cent net of fees reads −0.01, red (SEN-179)', () => {
+  const { positions } = closedPositions([
+    perp('buy', '0.008', '2483.34', 1, { fee: '0.007', feeAsset: 'AUSD', venueTradeId: 'open' }),
+    perp('sell', '0.008', '2484.66', 2, { fee: '0.007', feeAsset: 'AUSD', venueTradeId: 'close' }),
+  ]);
+  const [p] = positions;
+  assert.equal(p?.realisedPnl, '-0.00344', '0.01056 on price, 0.014 in fees');
+  assert.equal(p?.closedBy, 'perpl::close');
+  const row = closedRow(p!, false);
+  assert.equal(row.pnl, '−0.01');
+  assert.equal(row.tone, 'down');
+  assert.equal(closedTotal('-0.00344', false), '−$0.01');
+});

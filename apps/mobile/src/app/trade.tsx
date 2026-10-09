@@ -3,7 +3,10 @@
  * over whichever tab you were on (`presentation: 'modal'` in
  * `app/_layout.tsx`). A quick market picker (the study's `trade.html` → "Pick
  * a market"): recents first, then what you hold, then every market. Picking
- * one opens its order ticket (`trade/[venue]/[symbol]`).
+ * one replaces the sheet with that market's page (SEN-179), so an order is
+ * never placed blind: on a wide window the page has the ticket beside the
+ * chart, ready for keys; on a phone the chart, with Sell/Buy pinned below. A
+ * `side` this sheet was opened with rides along to preselect the ticket.
  *
  * - Search filters that short list; it never promises "any token" — Sente
  *   lists only what Kuru and Perpl run on Monad testnet.
@@ -12,7 +15,7 @@
  *   state: a picker that leads to tickets that can't place is a half-enabled
  *   feature, which the plan rules out.
  */
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -79,6 +82,7 @@ export default function TradeScreen() {
 
 function Picker() {
   const router = useRouter();
+  const { side } = useLocalSearchParams<{ side?: string }>();
   const session = useSession();
   const markets = useMarkets();
   const tickers = useTickers();
@@ -105,9 +109,11 @@ function Picker() {
     void addRecent({ kind: 'market', venue: market.venue, symbol: market.symbol, label }).then(
       setRecents,
     );
-    router.push({
-      pathname: '/trade/[venue]/[symbol]',
-      params: { venue: market.venue, symbol: market.symbol },
+    // Replace, not push: the sheet closes, and back from the market goes to
+    // wherever the sheet was opened from.
+    router.replace({
+      pathname: '/markets/[venue]/[symbol]',
+      params: { venue: market.venue, symbol: market.symbol, ...(side ? { side } : {}) },
     });
   };
 

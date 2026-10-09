@@ -6,9 +6,12 @@
  * Long or short, a value in AUSD, leverage chips capped at the market's
  * maximum, then a review and a hold to confirm in the side's colour — the
  * spot ticket's grammar (`TicketScreen.tsx`), with its keyboard (SEN-167).
- * MARKET orders only, bounded at 1% of Perpl's fresh mark
+ * A market order is bounded at 1% of Perpl's fresh mark
  * (`perplTrader.placeMarket` computes the bound itself; nothing on screen is
- * a price the order carries). Rules and copy live in `perpTicket.ts`.
+ * a price it carries). Under "Advanced options" (SEN-179) a LIMIT order
+ * carries the price typed, optionally post-only, and rests on the book until
+ * it fills or is cancelled (Portfolio → Orders cancels it). Rules and copy
+ * live in `perpTicket.ts`.
  *
  * The order is signed by this device's Perpl trading key, derived from the
  * passkey session (`auth/perplKey.ts`) and enrolled once by
@@ -26,28 +29,36 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MarketDto } from '@/markets/api';
 import { useTicker } from '@/markets/hooks';
 import { useUserPortfolio } from '@/portfolio/usePortfolio';
+import { amountText } from '@/portfolio/view';
 import { useSession } from '@/session';
 import { createAppPerplTrader } from '@/trade/appPerplTrader';
 import {
+  checkPerpLimit,
   evaluatePerpTicket,
   leverageChoices,
+  limitFromMark,
   PERP_MAX_SLIPPAGE,
   perplFreeAusd,
   type PerpMarket,
+  type PerpOrderType,
   type PerpSide,
 } from '@/trade/perpTicket';
 import { pressKey, QUOTE_MAX_AGE_MS, shortSize, type Key } from '@/trade/ticket';
 import {
+  AdvancedPanel,
+  AdvancedToggle,
   Frame,
   HoldToConfirm,
   Keypad,
   Note,
+  ProtectionRow,
   SIDE_TONE,
   TxLink,
   useLitKey,
   useNow,
   useWebKeys,
 } from '@/trade/ticketKit';
+import { RiskDisclosure, useRiskAck } from '@/trade/RiskDisclosure';
 import { usePerplSetup, type PerplSetup } from '@/trade/usePerplSetup';
 import { Pill } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
@@ -61,6 +72,7 @@ import {
   Loading,
   Notice,
   Row,
+  Segmented,
   TopBar,
   useWide,
 } from '@/ui/kit';
@@ -200,6 +212,21 @@ function Ticket({
     choices.includes(DEFAULT_LEVERAGE) ? DEFAULT_LEVERAGE : choices[0]!,
   );
   const [stage, setStage] = useState<Stage>({ kind: 'ticket' });
+  // SEN-179: a limit order, behind "Advanced options".
+  const [advanced, setAdvanced] = useState(false);
+  const [orderType, setOrderType] = useState<PerpOrderType>('market');
+  const [limitPrice, setLimitPrice] = useState('');
+  const [postOnly, setPostOnly] = useState(false);
+  const [focus, setFocusState] = useState<'value' | 'price'>('value');
+  // The price starts at the mark; the first key typed into it replaces it
+  // rather than appending to it, like a selected field.
+  const [priceFresh, setPriceFresh] = useState(false);
+  const setFocus = (next: 'value' | 'price') => {
+    setFocusState(next);
+    setPriceFresh(next === 'price');
+  };
+  const limit = orderType === 'limit';
+  const tickDecimals = (market.tickSize.split('.')[1] ?? '').replace(/0+$/u, '').length;
 
   const pm: PerpMarket = {
     symbol: market.symbol,
@@ -212,11 +239,44 @@ function Ticket({
   const mark = stage.kind === 'review' ? stage.mark : liveMark;
   const perpl = user.portfolio?.perpl;
   const available = perpl?.ok && perpl.status === 'ok' ? perplFreeAusd(perpl.balances) : null;
-  const ticket = evaluatePerpTicket({ market: pm, side, value, leverage, mark, available });
+  const limitCheck = limit
+    ? checkPerpLimit({
+        price: limitPrice,
+        side,
+        mark: liveMark,
+        tickSize: market.tickSize,
+        postOnly,
+      })
+    : null;
+  const sized = evaluatePerpTicket({
+    market: pm,
+    side,
+    value,
+    leverage,
+    mark,
+    available,
+    orderType,
+    limitPrice,
+  });
+  // A price that can't be sent blocks the review whatever the size says.
+  const ticket = limitCheck?.problem
+    ? { ...sized, cta: { label: limitCheck.problem, enabled: false } }
+    : sized;
 
   const press = (key: Key) => {
     void Haptics.selectionAsync();
-    setValue((v) => pressKey(v, key, 2));
+    if (limit && focus === 'price') {
+      const from = priceFresh && key !== 'back' ? '' : null;
+      setPriceFresh(false);
+      setLimitPrice((v) => pressKey(from ?? v, key, tickDecimals));
+    } else setValue((v) => pressKey(v, key, 2));
+  };
+  const switchType = (next: PerpOrderType) => {
+    if (next === orderType) return;
+    setOrderType(next);
+    setFocus(next === 'limit' ? 'price' : 'value');
+    if (next === 'limit' && limitPrice === '')
+      setLimitPrice(limitFromMark(liveMark, market.tickSize));
   };
   const { lit, typeKey } = useLitKey(press);
   const stepLeverage = (by: 1 | -1) => {
@@ -226,9 +286,10 @@ function Ticket({
   };
 
   const review = useCallback(() => {
-    if (liveMark === null) return;
-    setStage({ kind: 'review', mark: liveMark, at: Date.now() });
-  }, [liveMark]);
+    // A limit is sized at its own price, so it can be reviewed before the first mark.
+    if (liveMark === null && !limit) return;
+    setStage({ kind: 'review', mark: liveMark ?? '—', at: Date.now() });
+  }, [liveMark, limit]);
 
   useWebKeys(stage.kind === 'ticket', (event) => {
     if (event.type !== 'keydown') return false;
@@ -239,6 +300,7 @@ function Ticket({
     else if (event.key === 's' || event.key === 'S') setSide('short');
     else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') stepLeverage(1);
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') stepLeverage(-1);
+    else if (event.key === 'Tab' && limit) setFocus(focus === 'value' ? 'price' : 'value');
     else if (event.key === 'Enter') {
       if (ticket.cta.enabled && !event.repeat) review();
     } else return false;
@@ -264,13 +326,22 @@ function Ticket({
       // The trader keeps its own copy; this one goes now.
       trader = createAppPerplTrader({ credentials: { apiKey, secretKey: key.secretKey } });
       key.secretKey.fill(0);
-      const order = await trader.placeMarket({
-        symbol: market.symbol,
-        side: side === 'long' ? 'buy' : 'sell',
-        size,
-        leverage,
-        maxSlippage: PERP_MAX_SLIPPAGE,
-      });
+      const order = limit
+        ? await trader.placeLimit({
+            symbol: market.symbol,
+            side: side === 'long' ? 'buy' : 'sell',
+            size,
+            leverage,
+            price: limitPrice,
+            timeInForce: postOnly ? 'POST_ONLY' : 'GTC',
+          })
+        : await trader.placeMarket({
+            symbol: market.symbol,
+            side: side === 'long' ? 'buy' : 'sell',
+            size,
+            leverage,
+            maxSlippage: PERP_MAX_SLIPPAGE,
+          });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setStage({ kind: 'done', order });
       user.polled.refresh();
@@ -295,7 +366,8 @@ function Ticket({
         <View style={styles.running}>
           <ActivityIndicator color={color.purpleHi} />
           <Text style={text.dim}>
-            Signing in to Perpl with this device’s key, then placing a market order. A few seconds.
+            Signing in to Perpl with this device’s key, then placing a {limit ? 'limit' : 'market'}{' '}
+            order. A few seconds.
           </Text>
         </View>
       </Frame>
@@ -307,8 +379,10 @@ function Ticket({
         order={stage.order}
         market={market}
         side={side}
+        limit={limit}
         embedded={embedded}
         onClose={onClose}
+        onOrders={() => router.push('/portfolio')}
         onPosition={() =>
           router.push({
             pathname: '/positions/[venue]/[symbol]',
@@ -328,7 +402,9 @@ function Ticket({
         <Text style={[text.display, styles.title]}>{stage.title}</Text>
         <Text style={[text.body, styles.spaced]}>{stage.detail}</Text>
         <Text style={[text.caption, styles.spacedSm]}>
-          Nothing fills outside 1% of the mark. Check Portfolio before you try again.
+          {limit
+            ? 'Check Portfolio → Orders before you try again: a limit that was placed rests there.'
+            : 'Nothing fills outside 1% of the mark. Check Portfolio before you try again.'}
         </Text>
         <Button
           kind="primary"
@@ -375,6 +451,9 @@ function Ticket({
             leverage={leverage}
             ticket={ticket}
             mark={stage.mark}
+            limit={
+              limit ? { price: limitPrice, postOnly, warning: limitCheck?.warning ?? null } : null
+            }
             at={stage.at}
             onRefresh={review}
             onConfirm={() => void confirm()}
@@ -400,12 +479,73 @@ function Ticket({
                   );
                 })}
               </View>
-              <Text style={[text.caption, styles.grow, styles.sideHint]}>
-                {side === 'long' ? 'Gains if the price rises' : 'Gains if the price falls'}
-              </Text>
+              <View style={styles.grow} />
+              <AdvancedToggle
+                open={advanced}
+                summary={limit ? (postOnly ? 'Limit, post-only' : 'Limit') : null}
+                onToggle={() => setAdvanced((open) => !open)}
+              />
             </View>
+            <Text style={[text.caption, styles.sideHint]}>
+              {side === 'long' ? 'Gains if the price rises' : 'Gains if the price falls'}
+            </Text>
+            {advanced ? (
+              <AdvancedPanel>
+                <View style={styles.advRow}>
+                  <Text style={text.label}>Order type</Text>
+                  <Segmented
+                    options={[
+                      { value: 'market', label: 'Market' },
+                      { value: 'limit', label: 'Limit' },
+                    ]}
+                    value={orderType}
+                    onChange={switchType}
+                  />
+                  {limit ? (
+                    <View style={styles.postOnly}>
+                      <Chip
+                        label="Post-only"
+                        selected={postOnly}
+                        onPress={() => setPostOnly((on) => !on)}
+                      />
+                      <Text style={[text.caption, styles.grow]}>
+                        Only ever rests on the book; refused if it would trade at once.
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                <ProtectionRow onGuardian={null} />
+              </AdvancedPanel>
+            ) : null}
 
-            <View style={styles.amount}>
+            {limit ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Limit price ${limitPrice || 'empty'} AUSD. Type to change`}
+                accessibilityState={{ selected: focus === 'price' }}
+                onPress={() => setFocus('price')}
+                style={[styles.priceField, focus === 'price' && styles.fieldOn]}
+              >
+                <Text style={text.caption}>Limit price</Text>
+                <Text style={[styles.priceText, limitCheck?.problem && text.danger]}>
+                  {limitPrice === '' ? <Text style={styles.placeholder}>0</Text> : limitPrice}
+                  <Text style={styles.priceUnit}> AUSD</Text>
+                </Text>
+                <Text style={[text.caption, text.num]}>Mark {liveMark ?? '—'}</Text>
+              </Pressable>
+            ) : null}
+            {limitCheck?.warning ? (
+              <Text style={[text.caption, styles.warn]} accessibilityRole="alert">
+                {limitCheck.warning}
+              </Text>
+            ) : null}
+
+            <Pressable
+              disabled={!limit}
+              onPress={() => setFocus('value')}
+              accessibilityLabel={limit ? 'Position value. Type to change' : undefined}
+              style={[styles.amount, limit && focus === 'value' && styles.amountOn]}
+            >
               <Text
                 style={[styles.amountText, ticket.short && text.danger]}
                 numberOfLines={1}
@@ -415,7 +555,7 @@ function Ticket({
                 <Text style={styles.amountUnit}> AUSD</Text>
               </Text>
               <Text style={[text.dim, text.num]}>{ticket.sub ?? 'Position value'}</Text>
-            </View>
+            </Pressable>
 
             <View style={styles.levHead}>
               <Text style={text.label}>Leverage</Text>
@@ -436,7 +576,7 @@ function Ticket({
 
             {available !== null ? (
               <Text style={[text.caption, styles.center, styles.spacedSm]}>
-                {available} AUSD free in your Perpl account
+                {amountText(available, 'AUSD')} AUSD free in your Perpl account
               </Text>
             ) : null}
             {ticket.short ? (
@@ -461,11 +601,15 @@ function Ticket({
             />
             {wide ? (
               <Text style={[text.caption, styles.center, styles.spacedSm]}>
-                Type a value · L / S picks the side · ← → leverage · Enter to review
+                {limit
+                  ? 'Type a price and a value · Tab switches field · L / S side · ← → leverage · Enter to review'
+                  : 'Type a value · L / S picks the side · ← → leverage · Enter to review'}
               </Text>
             ) : null}
             <Text style={[text.caption, styles.center, styles.spacedSm]}>
-              Market order · fills within 1% of the mark, or not at all
+              {limit
+                ? 'Limit order · rests on the book until filled or cancelled'
+                : 'Market order · fills within 1% of the mark, or not at all'}
             </Text>
           </>
         )}
@@ -480,6 +624,7 @@ function Review({
   leverage,
   ticket,
   mark,
+  limit,
   at,
   onRefresh,
   onConfirm,
@@ -489,13 +634,17 @@ function Review({
   leverage: number;
   ticket: ReturnType<typeof evaluatePerpTicket>;
   mark: string;
+  /** A limit order's price and options; `null` for a market order. */
+  limit: { price: string; postOnly: boolean; warning: string | null } | null;
   at: number;
   onRefresh: () => void;
   onConfirm: () => void;
 }) {
   const now = useNow(1_000);
+  const risk = useRiskAck('perpl');
   const age = Math.max(0, now - at);
-  const old = age > QUOTE_MAX_AGE_MS;
+  // A limit carries its own price: the mark's age doesn't bound it.
+  const old = limit === null && age > QUOTE_MAX_AGE_MS;
   useWebKeys(ticket.cta.enabled && old, (event) => {
     if (event.key !== 'Enter') return false;
     if (event.type === 'keydown' && !event.repeat) onRefresh();
@@ -506,31 +655,60 @@ function Review({
   return (
     <View>
       <View style={styles.reviewHead}>
-        <Text style={[text.title, styles.sheetTitle, styles.grow]}>Review your {verb}</Text>
-        <Pill label={`Mark ${Math.round(age / 1000)}s ago`} tone={old ? 'idle' : 'live'} />
+        <Text style={[text.title, styles.sheetTitle, styles.grow]}>
+          Review your {verb}
+          {limit ? ' limit' : ''}
+        </Text>
+        {limit ? null : (
+          <Pill label={`Mark ${Math.round(age / 1000)}s ago`} tone={old ? 'idle' : 'live'} />
+        )}
       </View>
       <View style={styles.reviewBig}>
         <BigNumber value={size} places={Math.min(5, (size.split('.')[1] ?? '').length)} />
         <Text style={text.dim}>
-          {market.base} <SideTag side={side} /> at market, {leverage}×
+          {market.base} <SideTag side={side} /> {limit ? `limit at ${limit.price}` : 'at market'},{' '}
+          {leverage}×
         </Text>
       </View>
-      <Row label="Value at the mark" value={`≈ ${ticket.notional ?? '—'} AUSD`} />
+      {limit ? <Row label="Limit price" value={`${limit.price} AUSD`} /> : null}
+      <Row
+        label={limit ? 'Value at the limit' : 'Value at the mark'}
+        value={`≈ ${ticket.notional ?? '—'} AUSD`}
+      />
       <Row label="Margin it locks" value={`≈ ${ticket.margin ?? '—'} AUSD`} />
       <Row label="Mark" value={mark} />
-      <Row label="Fills" value="Within 1% of the mark, or not at all" />
+      <Row
+        label="Fills"
+        value={
+          limit
+            ? `Rests on the book until filled or cancelled${limit.postOnly ? ', post-only' : ''}`
+            : 'Within 1% of the mark, or not at all'
+        }
+      />
+      {limit?.warning ? <Text style={[text.caption, styles.warn]}>{limit.warning}</Text> : null}
       <Row label="Liquidation" value="Shown on your position once it opens" />
+      <RiskDisclosure venue="perpl" ack={risk} />
       <View style={styles.spaced}>
         {!ticket.cta.enabled ? (
           <Button kind="secondary" label={ticket.cta.label} disabled onPress={() => undefined} />
         ) : old ? (
           <Button kind="primary" label="Refresh the mark" onPress={onRefresh} />
+        ) : !risk.ready ? (
+          <Button
+            kind="secondary"
+            label={risk.needed ? 'Tick the box to continue' : 'One moment'}
+            disabled
+            onPress={() => undefined}
+          />
         ) : (
           <HoldToConfirm
             tone={TONE[side]}
             keys
-            label={`Hold to ${verb} ${shortSize(size)} ${market.base}`}
-            onConfirm={onConfirm}
+            label={`Hold to ${verb} ${shortSize(size)} ${market.base}${limit ? ` at ${limit.price}` : ''}`}
+            onConfirm={() => {
+              risk.remember();
+              onConfirm();
+            }}
           />
         )}
       </View>
@@ -548,20 +726,65 @@ function Filled({
   order,
   market,
   side,
+  limit,
   embedded,
   onClose,
+  onOrders,
   onPosition,
   onAgain,
 }: {
   order: Order;
   market: MarketDto;
   side: PerpSide;
+  limit: boolean;
   embedded: boolean;
   onClose: () => void;
+  onOrders: () => void;
   onPosition: () => void;
   onAgain: () => void;
 }) {
   const filled = Number(order.filledSize) > 0;
+  // A limit that is (still partly) on the book: placed, not failed.
+  const resting = limit && (order.status === 'open' || order.status === 'partially_filled');
+  if (resting) {
+    return (
+      <Frame onClose={onClose} embedded={embedded}>
+        <View style={styles.mark}>
+          <View style={[styles.markStone, { backgroundColor: TONE[side] }]}>
+            <Icon name="check" size={24} color={color.ink} strokeWidth={2.6} />
+          </View>
+        </View>
+        <View style={styles.centerCol}>
+          <Text style={text.dim}>
+            {filled ? 'Part filled, the rest is on the book' : 'Your limit is on the book'}
+          </Text>
+          <View style={styles.bigRow}>
+            <BigNumber value={order.size} places={5} size="xl" />
+            <Text style={styles.bigUnit}> {market.base}</Text>
+          </View>
+          <Text style={[text.dim, text.num]}>
+            {side === 'long' ? 'Long' : 'Short'} at {order.price ?? '—'} · {order.leverage ?? ''}×
+          </Text>
+        </View>
+        <View style={styles.spacedSm}>
+          <Row label="Order" value={`${order.status} · ${order.id}`} />
+          {filled ? (
+            <Row label="Filled so far" value={`${order.filledSize} ${market.base}`} />
+          ) : null}
+        </View>
+        <View style={styles.spaced}>
+          <ButtonRow>
+            <Button kind="soft" label="Trade again" onPress={onAgain} style={styles.grow} />
+            <Button kind="primary" label="Open Portfolio" onPress={onOrders} style={styles.grow} />
+          </ButtonRow>
+        </View>
+        <Note icon="shield">
+          It rests until it fills or you cancel it from Portfolio → Orders. Its margin is held while
+          it does.
+        </Note>
+      </Frame>
+    );
+  }
   return (
     <Frame onClose={onClose} embedded={embedded}>
       <View style={styles.mark}>
@@ -585,8 +808,9 @@ function Filled({
       </View>
       {!filled ? (
         <Text style={[text.dim, styles.center, styles.spacedSm]}>
-          The book couldn’t fill it within 1% of the mark, so the order was cancelled. Nothing
-          moved.
+          {limit
+            ? 'Perpl didn’t keep it on the book (a post-only limit that would have traded at once is refused). Nothing moved.'
+            : 'The book couldn’t fill it within 1% of the mark, so the order was cancelled. Nothing moved.'}
         </Text>
       ) : null}
       <View style={styles.spacedSm}>
@@ -642,8 +866,37 @@ const styles = StyleSheet.create({
   },
   sideBtn: { paddingVertical: 8, paddingHorizontal: 18, borderRadius: RADIUS.stone },
   sideText: { fontFamily: font.semibold, fontSize: 13, color: color.textDim },
-  sideHint: { textAlign: 'right' },
-  amount: { alignItems: 'center', marginTop: 18, gap: 4 },
+  sideHint: { marginTop: 6 },
+  advRow: { gap: 8 },
+  postOnly: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
+  priceField: {
+    alignItems: 'center',
+    marginTop: 14,
+    paddingVertical: 10,
+    borderRadius: RADIUS.well,
+    borderWidth: 1,
+    borderColor: color.line,
+    gap: 2,
+  },
+  fieldOn: { borderColor: color.purple },
+  priceText: {
+    fontFamily: font.displaySemibold,
+    fontSize: 28,
+    lineHeight: 34,
+    color: color.text,
+    fontVariant: ['tabular-nums'],
+  },
+  priceUnit: { fontSize: 16, color: color.textDim },
+  warn: { marginTop: 8, color: color.purpleSoft, textAlign: 'center' },
+  amountOn: { borderColor: color.purple },
+  amount: {
+    alignItems: 'center',
+    marginTop: 18,
+    gap: 4,
+    borderRadius: RADIUS.well,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
   amountText: {
     fontFamily: font.displaySemibold,
     fontSize: 52,

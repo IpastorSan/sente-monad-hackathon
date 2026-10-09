@@ -22,6 +22,8 @@
  * itself (`TicketPanel`) for a Kuru market with trading on or a Perpl market
  * with perps on (SEN-120), else the Sell/Buy
  * pair that is pinned to the bottom on a phone. Narrow keeps the phone tree.
+ * A `side` param (from the Trade sheet, SEN-179) preselects the embedded
+ * ticket's side.
  */
 import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -35,6 +37,7 @@ import {
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -82,7 +85,19 @@ import { canEmbedTicket, TicketPanel } from '@/trade/TicketScreen';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { Sigil, Stone } from '@/ui/goban';
-import { Button, Card, Loading, Notice, Section, Sheet, TopBar, useWide, WIDE_MAX } from '@/ui/kit';
+import { Icon } from '@/ui/icons';
+import {
+  Button,
+  Card,
+  isHovered,
+  Loading,
+  Notice,
+  Section,
+  Sheet,
+  TopBar,
+  useWide,
+  WIDE_MAX,
+} from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import {
   AsOf,
@@ -102,14 +117,21 @@ const CHART_HEIGHT = 210;
 const CHART_HEIGHT_WIDE = 380;
 /** The ticket's column on a wide window. */
 const SIDE_WIDTH = 380;
+/**
+ * The ticket's column held at the top of the window while the page scrolls
+ * under it (wide is web-only, where `sticky` and `vh` exist; RN's types know
+ * neither). A window's height, so its rules run the full height.
+ */
+const STICKY_SIDE = { position: 'sticky', top: 0, height: '100vh' } as unknown as ViewStyle;
 const CTA_HEIGHT = 50;
 /** A stable empty series, so the line's memo holds before the first answer. */
 const NO_BARS: readonly KlineDto[] = [];
 
 export default function AssetScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ venue?: string; symbol?: string }>();
+  const params = useLocalSearchParams<{ venue?: string; symbol?: string; side?: string }>();
   const venue = parseVenue(params.venue);
+  const side = params.side === 'sell' || params.side === 'short' ? 'sell' : 'buy';
   const symbol = typeof params.symbol === 'string' ? params.symbol : '';
   const markets = useMarkets();
 
@@ -149,16 +171,19 @@ export default function AssetScreen() {
     return <Missing onBack={back} loading />;
   }
   // Keyed on the market so ranges, scrub and favourites never leak from one market to the next.
-  return <Asset key={marketKey(market)} market={market} venue={venue} onBack={back} />;
+  return <Asset key={marketKey(market)} market={market} venue={venue} side={side} onBack={back} />;
 }
 
 function Asset({
   market,
   venue,
+  side,
   onBack,
 }: {
   market: MarketDto;
   venue: VenueId;
+  /** The side the embedded ticket opens on (wide only). */
+  side: 'buy' | 'sell';
   onBack: () => void;
 }) {
   const router = useRouter();
@@ -442,27 +467,26 @@ function Asset({
   );
 
   if (wide) {
+    // One scroll for the page (SEN-179): a scroller per column put its bar
+    // between the chart and the ticket. The ticket's column sticks to the top
+    // of the window and scrolls on its own only if the window is too short.
     return (
       <View style={styles.root}>
-        <View style={styles.desk}>
-          <ScrollView
-            style={styles.grow}
-            contentContainerStyle={[styles.content, styles.deskContent]}
-            refreshControl={refreshControl}
-          >
-            {sections}
-          </ScrollView>
-          <View style={styles.deskSide}>
-            {trading && canEmbedTicket(market, perps) ? (
-              <TicketPanel market={market} />
-            ) : (
-              <View style={styles.deskActions}>
-                <Text style={text.label}>Trade {header.title}</Text>
-                <View style={styles.deskButtons}>{sideButtons}</View>
-              </View>
-            )}
+        <ScrollView style={styles.grow} refreshControl={refreshControl}>
+          <View style={styles.desk}>
+            <View style={[styles.grow, styles.content, styles.deskContent]}>{sections}</View>
+            <View style={[styles.deskSide, STICKY_SIDE]}>
+              {trading && canEmbedTicket(market, perps) ? (
+                <TicketPanel market={market} side={side} />
+              ) : (
+                <View style={styles.deskActions}>
+                  <Text style={text.label}>Trade {header.title}</Text>
+                  <View style={styles.deskButtons}>{sideButtons}</View>
+                </View>
+              )}
+            </View>
           </View>
-        </View>
+        </ScrollView>
         {gatedSheet}
       </View>
     );
@@ -718,11 +742,21 @@ function StarButton({
       accessibilityState={{ selected: starred }}
       hitSlop={8}
       onPress={onPress}
-      style={({ pressed }) => [styles.star, starred && styles.starOn, pressed && styles.pressed]}
+      style={(state) => [
+        styles.star,
+        starred && styles.starOn,
+        isHovered(state) && styles.starHover,
+        state.pressed && styles.pressed,
+      ]}
     >
-      <Text style={[styles.starGlyph, starred && { color: color.purpleHi }]}>
-        {starred ? '★' : '☆'}
-      </Text>
+      {(state) => (
+        <Icon
+          name="star"
+          size={20}
+          color={starred || isHovered(state) ? color.purpleHi : color.textDim}
+          fill={starred ? color.purpleHi : undefined}
+        />
+      )}
     </Pressable>
   );
 }
@@ -847,8 +881,8 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: GUTTER, paddingTop: 8 },
   // Wide (SEN-167): the page as a row, the ticket's column ruled off down the right.
   desk: {
-    flex: 1,
     flexDirection: 'row',
+    alignItems: 'flex-start',
     width: '100%',
     maxWidth: WIDE_MAX,
     alignSelf: 'center',
@@ -935,8 +969,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  starOn: { borderColor: color.purple },
-  starGlyph: { fontSize: 17, lineHeight: 20, color: color.textDim },
+  starOn: { borderColor: color.purple, backgroundColor: 'rgba(131, 110, 249, 0.16)' },
+  starHover: { borderColor: color.lineStrong, backgroundColor: color.well },
   cta: {
     position: 'absolute',
     left: 0,

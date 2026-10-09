@@ -53,6 +53,7 @@ import {
   fundingAssets,
   guardianLines,
   initialDraft,
+  prefillDraft,
   LEVEL_NOTE,
   presetHireRequest,
   LEVEL_TAG,
@@ -110,12 +111,19 @@ type FundOutcome = { tone: 'ok' | 'info' | 'error'; title: string; detail?: stri
 
 export default function ConfigurePresetScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, market, amount } = useLocalSearchParams<{
+    id: string;
+    market?: string;
+    amount?: string;
+  }>();
   // SEN-160: the version and specs come from `GET /presets`, so a preset bump
   // on the server doesn't turn every hire from this build into a refusal.
   const { state, reload } = useHirePreset(id);
 
-  if (state.kind === 'ready') return <Configure def={state.def} reload={reload} />;
+  if (state.kind === 'ready') {
+    // SEN-179: a ticket's "Protect it with a Guardian agent" hands over its market and amount.
+    return <Configure def={state.def} reload={reload} prefill={{ market, amount }} />;
+  }
   const back = { label: 'Presets', onPress: () => router.back() };
   return (
     <Screen
@@ -144,7 +152,15 @@ export default function ConfigurePresetScreen() {
   );
 }
 
-function Configure({ def, reload }: { def: PresetDefinition; reload: () => void }) {
+function Configure({
+  def,
+  reload,
+  prefill,
+}: {
+  def: PresetDefinition;
+  reload: () => void;
+  prefill: Readonly<Record<string, string | undefined>>;
+}) {
   const router = useRouter();
   const { agents: api, auth, wallet, walletApi, markets: marketsApi } = useSession();
 
@@ -153,7 +169,7 @@ function Configure({ def, reload }: { def: PresetDefinition; reload: () => void 
   const [showErrors, setShowErrors] = useState(false);
 
   // ─── Strategy ────────────────────────────────────────────────────────────
-  const [draft, setDraft] = useState<Draft>(() => initialDraft(def));
+  const [draft, setDraft] = useState<Draft>(() => prefillDraft(def, initialDraft(def), prefill));
   /** Keys the person has set by hand: a live-price prefill never overwrites them. */
   const touched = useRef(new Set<string>());
   const setParam = (key: string, value: Draft[string]) => {
