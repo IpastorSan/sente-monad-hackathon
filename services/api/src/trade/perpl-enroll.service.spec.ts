@@ -178,6 +178,7 @@ function harness(
   const config: TradeConfig = {
     enabled: o.enabled ?? true,
     atomicBatch: false,
+    perpl: false,
     chainId: TRADE_CHAIN_ID,
   };
   const binding = o.binding === undefined ? BINDING : o.binding;
@@ -314,7 +315,7 @@ describe('PerplEnrollService.prepare', () => {
 
   it('maps a Perpl refusal of the payload to perpl_enroll_refused', async () => {
     const failing = new FixedClock(
-      { enabled: true, atomicBatch: false, chainId: TRADE_CHAIN_ID },
+      { enabled: true, atomicBatch: false, perpl: false, chainId: TRADE_CHAIN_ID },
       { find: () => Promise.resolve(BINDING) },
       {} as EnrollPrivy,
       {

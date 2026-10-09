@@ -40,7 +40,7 @@ const IV_BYTES = 12;
 const AAD_PREFIX = 'sente/agent-secrets/v1/perpl/';
 
 /** One sealed secret, all fields base64. */
-interface Sealed {
+export interface Sealed {
   readonly iv: string;
   readonly tag: string;
   readonly data: string;
@@ -62,7 +62,7 @@ export function agentSecretsKey(env: Record<string, string | undefined> = proces
   if (!value) {
     throw new Error(
       `${AGENT_SECRETS_KEY_VAR} is required when STATE_DIR is set: it encrypts the agents' ` +
-        'Perpl keys at rest. Generate one with `openssl rand -hex 32` and keep it OUT of STATE_DIR.',
+        "and users' Perpl keys at rest. Generate one with `openssl rand -hex 32` and keep it OUT of STATE_DIR.",
     );
   }
   if (!/^[0-9a-fA-F]{64}$/.test(value)) {
@@ -71,21 +71,15 @@ export function agentSecretsKey(env: Record<string, string | undefined> = proces
   return Buffer.from(value, 'hex');
 }
 
-function aad(agentId: string): Buffer {
-  return Buffer.from(AAD_PREFIX + agentId, 'utf8');
-}
-
-function seal(key: Uint8Array, agentId: string, credentials: PerplCredentials): Sealed {
+/**
+ * AES-256-GCM over `plain` under `key`, bound to `aad` (a versioned label plus
+ * the record's owner, so a record cannot be moved onto another owner). Zeroes
+ * `plain`. Shared with the users' venue secrets (SEN-174).
+ */
+export function sealBytes(key: Uint8Array, aad: string, plain: Buffer): Sealed {
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, key, iv);
-  cipher.setAAD(aad(agentId));
-  const plain = Buffer.from(
-    JSON.stringify({
-      apiKey: credentials.apiKey,
-      secretKey: Buffer.from(credentials.secretKey).toString('base64'),
-    }),
-    'utf8',
-  );
+  cipher.setAAD(Buffer.from(aad, 'utf8'));
   const data = Buffer.concat([cipher.update(plain), cipher.final()]);
   plain.fill(0);
   return {
@@ -95,15 +89,30 @@ function seal(key: Uint8Array, agentId: string, credentials: PerplCredentials): 
   };
 }
 
-/** Throws on a wrong key, a tampered record or a record moved to another agent. */
-function unseal(key: Uint8Array, agentId: string, sealed: Sealed): PerplCredentials {
+/**
+ * The inverse of {@link sealBytes}. Throws on a wrong key, a tampered record
+ * or a different `aad`. The caller zeroes the returned buffer.
+ */
+export function unsealBytes(key: Uint8Array, aad: string, sealed: Sealed): Buffer {
   const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(sealed.iv, 'base64'));
-  decipher.setAAD(aad(agentId));
+  decipher.setAAD(Buffer.from(aad, 'utf8'));
   decipher.setAuthTag(Buffer.from(sealed.tag, 'base64'));
-  const plain = Buffer.concat([
-    decipher.update(Buffer.from(sealed.data, 'base64')),
-    decipher.final(),
-  ]);
+  return Buffer.concat([decipher.update(Buffer.from(sealed.data, 'base64')), decipher.final()]);
+}
+
+/** Perpl credentials as the plaintext both secret files seal: JSON, secret in base64. */
+export function encodePerplCredentials(credentials: PerplCredentials): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      apiKey: credentials.apiKey,
+      secretKey: Buffer.from(credentials.secretKey).toString('base64'),
+    }),
+    'utf8',
+  );
+}
+
+/** The inverse of {@link encodePerplCredentials}: sealed credentials. Zeroes `plain`. */
+export function decodePerplCredentials(plain: Buffer): PerplCredentials {
   try {
     const parsed = JSON.parse(plain.toString('utf8')) as { apiKey: string; secretKey: string };
     const secretKey = Buffer.from(parsed.secretKey, 'base64');
@@ -113,6 +122,15 @@ function unseal(key: Uint8Array, agentId: string, sealed: Sealed): PerplCredenti
   } finally {
     plain.fill(0);
   }
+}
+
+function seal(key: Uint8Array, agentId: string, credentials: PerplCredentials): Sealed {
+  return sealBytes(key, AAD_PREFIX + agentId, encodePerplCredentials(credentials));
+}
+
+/** Throws on a wrong key, a tampered record or a record moved to another agent. */
+function unseal(key: Uint8Array, agentId: string, sealed: Sealed): PerplCredentials {
+  return decodePerplCredentials(unsealBytes(key, AAD_PREFIX + agentId, sealed));
 }
 
 export class FileAgentSecretStore implements AgentSecretStore {

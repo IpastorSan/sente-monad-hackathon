@@ -93,7 +93,12 @@ describe('TradeController over HTTP (SEN-135)', () => {
   const tokens: Record<string, string> = {};
 
   async function start(enabled: boolean): Promise<void> {
-    const config: TradeConfig = { enabled, atomicBatch: false, chainId: TRADE_CHAIN_ID };
+    const config: TradeConfig = {
+      enabled,
+      atomicBatch: false,
+      perpl: false,
+      chainId: TRADE_CHAIN_ID,
+    };
     fake = new FakeTrades(config);
     const moduleRef = await Test.createTestingModule({
       controllers: [TradeController],

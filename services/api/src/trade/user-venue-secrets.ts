@@ -16,9 +16,12 @@
  * (`agents/venues/agent-secret-store.ts`): readable, but JSON and
  * `util.inspect` print a placeholder.
  *
- * PERSISTENCE: in memory, by decision (D3). A restart forgets every read key,
- * and Portfolio reports `perpl.status: 'unlinked'` until the phone approves a
- * new enrollment. Nothing is lost that the phone cannot re-authorize.
+ * PERSISTENCE: {@link InMemoryUserVenueSecretStore} when `STATE_DIR` is unset
+ * (specs, a plain `pnpm start`): a restart forgets every read key, and
+ * Portfolio reports `perpl.status: 'unlinked'` until the phone approves a new
+ * enrollment. With `STATE_DIR` set the API binds `FileUserVenueSecretStore`
+ * (`file-user-venue-secrets.ts`, SEN-174), sealed at rest under
+ * `AGENT_SECRETS_KEY`.
  *
  * Erasable syntax only (gotcha 10).
  */

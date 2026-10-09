@@ -2,7 +2,12 @@ import { loadTradeConfig } from './trade.config';
 
 describe('loadTradeConfig', () => {
   it('is off by default', () => {
-    expect(loadTradeConfig({})).toEqual({ enabled: false, atomicBatch: false, chainId: 10143 });
+    expect(loadTradeConfig({})).toEqual({
+      enabled: false,
+      atomicBatch: false,
+      perpl: false,
+      chainId: 10143,
+    });
   });
 
   it.each(['1', 'true'])('turns trading on for %p', (value) => {
@@ -19,5 +24,18 @@ describe('loadTradeConfig', () => {
       loadTradeConfig({ USER_TRADING: '1', USER_TRADE_ATOMIC_BATCH: 'true' }).atomicBatch,
     ).toBe(true);
     expect(loadTradeConfig({ USER_TRADING: '1' }).atomicBatch).toBe(false);
+  });
+
+  it.each([
+    [undefined, undefined, false],
+    [undefined, '1', false],
+    ['1', undefined, false],
+    ['1', 'yes', false],
+    ['1', '1', true],
+    ['true', 'true', true],
+  ])('USER_TRADING=%p USER_TRADING_PERPL=%p gives perpl %p', (trading, perpl, expected) => {
+    expect(loadTradeConfig({ USER_TRADING: trading, USER_TRADING_PERPL: perpl }).perpl).toBe(
+      expected,
+    );
   });
 });

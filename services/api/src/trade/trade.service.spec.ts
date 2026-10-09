@@ -39,6 +39,7 @@ import {
   TradeRefusedError,
 } from './trade.service';
 import { TradeStore, type KuruPlaceResult, type Trade, type TradeStep } from './trade-store';
+import { InMemoryUserVenueSecretStore } from './user-venue-secrets';
 
 // Only the planner is faked: it reads the chain. Its refusal class stays real,
 // so the reason mapping is tested against the type the planner really throws.
@@ -182,8 +183,9 @@ function harness(config: Partial<TradeConfig> = {}) {
     ),
   );
   const bindings = new Map([[ALICE.userId, BINDING]]);
+  const secrets = new InMemoryUserVenueSecretStore();
   const service = new FixedClockTradeService(
-    { enabled: true, atomicBatch: false, chainId: TRADE_CHAIN_ID, ...config },
+    { enabled: true, atomicBatch: false, perpl: false, chainId: TRADE_CHAIN_ID, ...config },
     store,
     { execute } as unknown as StepExecutor,
     // The real provider over a real client: its prepareSend reaches nothing,
@@ -194,8 +196,9 @@ function harness(config: Partial<TradeConfig> = {}) {
     { getTransactionReceipt: txReceipt, readContract } as unknown as PublicClient,
     { placeResult } as unknown as TradeOutcomes,
     () => Promise.resolve(PERPL_CONTEXT_FIXTURE),
+    secrets,
   );
-  return { service, store, execute, receipt, placeResult, txReceipt, readContract };
+  return { service, store, execute, receipt, placeResult, txReceipt, readContract, secrets };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -626,10 +629,51 @@ describe('TradeService.perplAccount', () => {
     expect(await service.perplAccount(ALICE)).toMatchObject({ accountId: '493', forwarding: true });
   });
 
+  it('hands back the trade-key token and reports the read key linked after enrollment', async () => {
+    const { service, secrets } = harness();
+    await secrets.putPerplTradeToken(ALICE.userId, 'trade-token-1');
+    expect(await service.perplAccount(ALICE)).toEqual({
+      accountId: null,
+      forwarding: false,
+      minOpenAtoms: '100000000',
+      apiKey: 'trade-token-1',
+      readKey: 'unlinked',
+    });
+
+    await secrets.putPerplRead(ALICE.userId, {
+      apiKey: 'read-token',
+      secretKey: new Uint8Array(32).fill(5),
+    });
+    const linked = await service.perplAccount(ALICE);
+    expect(linked).toMatchObject({ apiKey: 'trade-token-1', readKey: 'linked' });
+    // The read key itself never leaves the server.
+    expect(JSON.stringify(linked)).not.toContain('read-token');
+    // Reading the status does not consume the stored key.
+    expect(Array.from((await secrets.getPerplRead(ALICE.userId))!.secretKey)).toEqual(
+      Array(32).fill(5),
+    );
+  });
+
+  it("does not report another user's keys", async () => {
+    const { service, secrets } = harness();
+    await secrets.putPerplTradeToken('someone-else', 'trade-token-2');
+    expect(await service.perplAccount(ALICE)).not.toHaveProperty('apiKey');
+  });
+
   it('refuses a user with no wallet and answers 404 with the flag off', async () => {
     expect(await refusal(harness().service.perplAccount(BOB))).toBe('account_not_registered');
     const off = harness({ enabled: false }).service;
     expect(await refusal(off.perplAccount(ALICE))).toBe('trading_disabled');
+  });
+});
+
+describe('TradeService.capabilities', () => {
+  it.each([
+    [false, false, { kuru: false, perpl: false }],
+    [true, false, { kuru: true, perpl: false }],
+    [true, true, { kuru: true, perpl: true }],
+  ])('enabled %p, perpl %p gives venues %p', (enabled, perpl, venues) => {
+    expect(harness({ enabled, perpl }).service.capabilities().venues).toEqual(venues);
   });
 });
 
@@ -649,7 +693,12 @@ describe('trading_disabled', () => {
   });
 
   it('the route guard answers 404 trading_disabled before validation runs', () => {
-    const guard = new TradingEnabledGuard({ enabled: false, atomicBatch: false, chainId: 10143 });
+    const guard = new TradingEnabledGuard({
+      enabled: false,
+      atomicBatch: false,
+      perpl: false,
+      chainId: 10143,
+    });
     let thrown: unknown;
     try {
       guard.canActivate();
@@ -660,7 +709,12 @@ describe('trading_disabled', () => {
     expect((thrown as HttpException).getStatus()).toBe(404);
     expect((thrown as HttpException).getResponse()).toMatchObject({ reason: 'trading_disabled' });
     expect(
-      new TradingEnabledGuard({ enabled: true, atomicBatch: false, chainId: 10143 }).canActivate(),
+      new TradingEnabledGuard({
+        enabled: true,
+        atomicBatch: false,
+        perpl: false,
+        chainId: 10143,
+      }).canActivate(),
     ).toBe(true);
   });
 });
