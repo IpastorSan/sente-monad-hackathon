@@ -1,16 +1,14 @@
 /**
- * Market + daily-aggregate writes, shared by the Kuru and Perpl handler files.
+ * Market + daily-aggregate writes for the Kuru handlers.
  *
  * Markets are seeded (never inferred): Kuru's four OrderBook proxies come from
- * src/lib/seeds.ts, Perpl's from its live `/api/v1/pub/context` snapshot, and a
- * Perpl market listed *inside* the indexed range is added by `ContractAdded`.
- * A handler that cannot resolve its market refuses the event rather than
+ * src/lib/seeds.ts. A handler that cannot resolve its market refuses the event rather than
  * guessing a precision — a wrong price scale silently corrupts every USD figure
  * downstream, so silence is the cheaper failure.
  */
 import { BigDecimal } from 'envio';
 import { addBd, bd, type Ctx } from './common.ts';
-import { KURU_MARKET_SEEDS, PERPL_MARKET_SEEDS, type MarketSeed } from './seeds.ts';
+import { KURU_MARKET_SEEDS, type MarketSeed } from './seeds.ts';
 import { dayId, yyyymmdd } from './stats.ts';
 
 /** Create the market row if it is not there yet; idempotent. */
@@ -35,10 +33,6 @@ export async function ensureMarket(context: Ctx, seed: MarketSeed): Promise<void
 
 export async function ensureKuruMarkets(context: Ctx): Promise<void> {
   for (const seed of KURU_MARKET_SEEDS) await ensureMarket(context, seed);
-}
-
-export async function ensurePerplMarkets(context: Ctx): Promise<void> {
-  for (const seed of PERPL_MARKET_SEEDS) await ensureMarket(context, seed);
 }
 
 /** Market rollup: one increment per *match*, not per leg (see schema.graphql). */

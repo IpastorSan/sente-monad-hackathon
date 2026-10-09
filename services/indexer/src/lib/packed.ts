@@ -1,8 +1,8 @@
 /**
  * Kuru's packed event decoders, ported from `@toxicflow-labs/ts-sdk`
  * (`dist/events/index.js` @ 0.0.4 — src/events/packed.ts) so the indexer
- * has no runtime dependency on the SDK or viem. Kuru packs trade and book
- * records as fixed-width bit fields, not ABI-encoded params, so this is a
+ * has no runtime dependency on the SDK or viem. Kuru packs trade records
+ * as fixed-width bit fields, not ABI-encoded params, so this is a
  * hand-rolled decoder either way.
  *
  * The field layouts below were pinned against a real fill: tx
@@ -28,18 +28,6 @@ export type PackedTrade = {
   /** Fee charged to the maker, parts per ten million. */
   readonly makerFeePps: number;
   readonly tradeId: bigint;
-};
-
-export type PackedBookUpdate = {
-  readonly makerId: bigint;
-  readonly slotIdx: number;
-  readonly orderId: bigint;
-  readonly price: bigint;
-  readonly size: bigint;
-  readonly makerIsBuy: boolean;
-  /** true = the order rests on the book after this update; false = removed. */
-  readonly isLive: boolean;
-  readonly makerFeePps: number;
 };
 
 const MASK_40 = (1n << 40n) - 1n;
@@ -77,9 +65,8 @@ function assertPackedLength(bytes: Uint8Array, recordSize: number, label: string
 }
 
 /**
- * First 32 bytes of a trade record / 39-byte book-update record, packed as
- * (word >> bit positions): makerId(40) slotIdx(8) flags(8) price(32)
- * fillSize/size(96) orderId(64).
+ * First 32 bytes of a trade record, packed as (word >> bit positions):
+ * makerId(40) slotIdx(8) flags(8) price(32) fillSize(96) orderId(64).
  */
 function decodeFirstPackedWord(bytes: Uint8Array, offset: number) {
   const word = bytesToBigInt(bytes, offset, 32);
@@ -120,27 +107,6 @@ export function decodeTradesPacked(packedTrades: string): PackedTrade[] {
   const records: PackedTrade[] = [];
   for (let offset = 0; offset < bytes.length; offset += 64) {
     records.push(decodeTradeRecord(bytes, offset));
-  }
-  return records;
-}
-
-/** `BookUpdatesPacked.packedUpdates`: 39-byte records. */
-export function decodeBookUpdatesPacked(packedUpdates: string): PackedBookUpdate[] {
-  const bytes = hexToBytes(packedUpdates);
-  assertPackedLength(bytes, 39, 'BookUpdatesPacked.packedUpdates');
-  const records: PackedBookUpdate[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 39) {
-    const update = decodeFirstPackedWord(bytes, offset);
-    records.push({
-      makerId: update.makerId,
-      slotIdx: update.slotIdx,
-      orderId: update.orderId,
-      price: update.price,
-      size: update.fillSize,
-      makerIsBuy: update.makerIsBuy,
-      isLive: (update.makerFlags & 128) !== 0,
-      makerFeePps: Number(bytesToBigInt(bytes, offset + 36, 3)),
-    });
   }
   return records;
 }

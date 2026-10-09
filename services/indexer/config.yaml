@@ -1,13 +1,17 @@
 # yaml-language-server: $schema=./node_modules/envio/evm.schema.json
 #
-# Sente leaderboard indexer — Monad testnet (10143).
+# Sente leaderboard indexer — Monad testnet (10143). Kuru Spot V2 fills only.
 #
-# Kuru Spot V2 fills come off the four market OrderBook proxies as packed
-# events (`TradesPacked` / `BookUpdatesPacked`), decoded by hand in
-# src/lib/packed.ts because the payload is bit-packed, not ABI-encoded.
-# Account custody flows come off AccountCore. Perpl fills come off its
-# Exchange proxy using the event ABI vendored from Perpl's official
-# `dex-sdk` repo (abis/PerplExchange.events.json).
+# Kuru fills come off the four market OrderBook proxies as packed
+# `TradesPacked` events, decoded by hand in src/lib/packed.ts because the
+# payload is bit-packed, not ABI-encoded. Account custody flows and the
+# id -> address mapping come off AccountCore.
+#
+# Kuru-only on purpose (SEN-171): Envio Cloud's free Development plan stops at
+# 100,000 processed events, and Perpl's Exchange alone emits ~216k an hour.
+# Kuru's `BookUpdatesPacked` and AccountCore's `SpotReserveUpdated` are left
+# out for the same reason — the leaderboard reads neither. The numbers, and
+# the estimate that sizes `start_block` below, are in docs/indexer.md §budget.
 #
 # Every signature below was checked against the chain, not just against a
 # vendored ABI: `scripts/verify-config-topics.ts` recomputes each topic0 from
@@ -19,25 +23,25 @@
 # packages/venues/src/kuru/constants.ts is the source of truth; this file is
 # a copy for a standalone runtime that cannot import workspace TS.
 name: sente-kuru-indexer
-description: Kuru + Perpl fills on Monad testnet, per-account stats for the Sente leaderboard
+description: Kuru Spot V2 fills on Monad testnet, per-account stats for the Sente leaderboard
 
 # Handlers are auto-loaded from ./src (recursively, excluding *.test.ts);
 # registration lives in src/handlers/, re-exported by src/EventHandlers.ts,
 # pure logic in src/lib/.
 handlers: ./src
 
-# Trade rows and the Perpl context join key on tx hash, so select it globally
-# (block number/timestamp/hash are on by default).
+# Trade rows carry the tx hash, so select it globally (block
+# number/timestamp/hash are on by default).
 field_selection:
   transaction_fields:
     - hash
 
 chains:
   - id: 10143 # Monad Testnet
-    # ~7 days back from 2026-09-17 (block 63278318 @ 09:29 UTC, binary
-    # searched on-chain): 61294867 @ 2026-09-10T09:29:46Z. The verified live
-    # fill in docs/kuru.md (tx 0x9d7fbce1…) is at 61406913, inside the range.
-    start_block: 61294867
+    # 2026-10-02T00:00:00Z (binary searched on-chain), 7 days before the
+    # 2026-10-09 redeploy. Sized against the 100k-event cap, not chosen for
+    # history: see docs/indexer.md §budget before moving it earlier.
+    start_block: 67394632
     hypersync_config:
       # HyperSync is the primary source because Monad's public RPC caps
       # eth_getLogs at 100 blocks (docs/monad-testnet-assets.md), which is far
@@ -60,16 +64,13 @@ chains:
           - '0x0B4dD2A7b09d5c5401149fFe51301Cc589017343' # XAUt-USDC
       - name: KuruAccountCore
         address: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22'
-      - name: PerplExchange
-        address: '0x1964C32f0bE608E7D29302AFF5E61268E72080cc'
 
 contracts:
   - name: KuruOrderBook
     events:
-      # Signatures copied from @toxicflow-labs/ts-sdk's spotOrderBookAbi so
-      # the topic0 hashes cannot drift from what the contract emits.
+      # Signature copied from @toxicflow-labs/ts-sdk's spotOrderBookAbi so the
+      # topic0 hash cannot drift from what the contract emits.
       - event: 'TradesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, uint24 effectiveTakerFeePps, address builder, uint24 builderFeePps, bytes packedTrades)'
-      - event: 'BookUpdatesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, bytes packedUpdates)'
 
   - name: KuruAccountCore
     events:
@@ -78,19 +79,3 @@ contracts:
       # account id -> account address. Without it every leaderboard row is a
       # number nobody can pay.
       - event: 'AccountRegistered(address indexed account, uint40 indexed accountId, uint40 indexed rootAccountId, address owner, uint16 subaccountSeq)'
-      # The balance itself: absolute free/reserved per (userId, token), emitted
-      # on custody changes AND on fills. Not in the deployment docs — found by
-      # scanning AccountCore's logs and matching topic0 against the SDK's
-      # accountCoreAbi, confirmed to carry the post-fill USDC/MON split.
-      - event: 'SpotReserveUpdated(uint40 indexed userId, address indexed token, uint256 freeBalance, uint256 reservedBalance)'
-
-  - name: PerplExchange
-    abi_file_path: ./abis/PerplExchange.events.json
-    events:
-      - event: OrderRequestV2
-      - event: MakerOrderFilledV2
-      - event: TakerOrderFilledV2
-      - event: AccountCreated
-      - event: ContractAdded
-      - event: CollateralDeposit
-      - event: CollateralWithdrawal

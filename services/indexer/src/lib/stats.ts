@@ -2,7 +2,7 @@
  * Aggregate math for the leaderboard: signed moving-average cost basis with
  * exact BigInt quote arithmetic, plus entity-id helpers shared by handlers.
  *
- * Position convention: `baseRaw` is signed base in book/LNS units (+ long,
+ * Position convention: `baseRaw` is signed base in book units (+ long,
  * − short); `costRaw` carries the same sign and holds the quote atoms paid
  * for the open position, so avgCost = costRaw / baseRaw in atoms/unit.
  *
@@ -21,7 +21,7 @@
  */
 
 export type PositionState = {
-  /** signed base in raw book/LNS units */
+  /** signed base in raw book units */
   readonly baseRaw: bigint;
   /** signed quote atoms carried by the open position */
   readonly costRaw: bigint;
@@ -37,7 +37,7 @@ export type FillResult = PositionState & {
 /**
  * Apply one fill of `tradeBaseRaw` signed base units costing
  * `tradeQuoteAtoms` (non-negative quote atoms for |tradeBaseRaw| units at
- * the trade price, computed by the venue-specific helper below).
+ * the trade price, computed by `kuruQuoteAtoms`).
  */
 export function applyFill(
   pos: PositionState,
@@ -89,21 +89,8 @@ export function kuruQuoteAtoms(
   return (priceRaw * sizeRaw * 10n ** BigInt(quoteDecimals)) / (pricePrecision * sizePrecision);
 }
 
-/** Perpl CNS for a fill: pricePNS × lotLNS × 10^collatDecimals / (10^pd × 10^sd). */
-export function perplQuoteAtoms(
-  pricePns: bigint,
-  lotLns: bigint,
-  priceDecimals: number,
-  sizeDecimals: number,
-  collateralDecimals: number,
-): bigint {
-  const scale = 10n ** BigInt(priceDecimals + sizeDecimals);
-  return (pricePns * lotLns * 10n ** BigInt(collateralDecimals)) / scale;
-}
-
 /** Entity-id helpers: everything lowercase, venue-prefixed. */
 export const kuruAccountId = (id: bigint): string => `kuru-${id}`;
-export const perplAccountId = (id: bigint): string => `perpl-${id}`;
 export const statsId = (accountId: string, marketId: string): string => `${accountId}-${marketId}`;
 export const balanceId = (accountId: string, token: string): string =>
   `${accountId}-${token.toLowerCase()}`;
@@ -121,7 +108,7 @@ export function yyyymmdd(timestampSeconds: number): number {
  * Decimal count of a power-of-ten precision (10^8 → 8, 1 → 0).
  *
  * This — not the base token's ERC-20 decimals — is the scale that turns a raw
- * book/LNS size into a human base amount. On MON-USDC the book sizes in 10^8
+ * book size into a human base amount. On MON-USDC the book sizes in 10^8
  * units while MON is 18-decimal, so using the token's decimals overstates
  * `boughtBase`/`soldBase`/`baseVolume` by 10^(18-8).
  */

@@ -19,7 +19,12 @@ import {
   type IndexerStats,
 } from './indexer';
 import { FORMULA, MIN_RANKED_TRADES } from './metrics';
-import { LEADERBOARD_NOTES, LeaderboardService } from './leaderboard.service';
+import {
+  LEADERBOARD_COVERAGE,
+  LEADERBOARD_NOTES,
+  LeaderboardService,
+  PERPL_NOT_INDEXED_REASON,
+} from './leaderboard.service';
 
 const USDC = KURU_TESTNET_TOKENS.USDC.address;
 const MARKET = KURU_TESTNET_MARKETS[0]!.address;
@@ -172,6 +177,55 @@ async function recordTrail(events: AgentEventLog, agentId: string): Promise<void
   });
 }
 
+/** A Perpl thesis that closed at a loss of 9 AUSD net of funding, and one still open. */
+async function recordPerplTrail(events: AgentEventLog, agentId: string): Promise<void> {
+  const perpl = { venue: 'perpl', symbol: 'BTC-PERP', leverage: 3 };
+  await events.append({
+    agentId,
+    kind: 'thesis',
+    detail: { market: 'BTC-PERP', direction: 'long', venue: 'perpl' },
+  });
+  await events.append({
+    agentId,
+    kind: 'fill',
+    detail: { ...perpl, side: 'buy', filledSize: '0.001', averageFillPrice: '60000' },
+  });
+  await events.append({
+    agentId,
+    kind: 'fill',
+    detail: { ...perpl, side: 'sell', filledSize: '0.001', averageFillPrice: '59000' },
+  });
+  await events.append({
+    agentId,
+    kind: 'close',
+    tool: 'close_position',
+    detail: {
+      ...perpl,
+      side: 'sell',
+      filledSize: '0.001',
+      averageFillPrice: '59000',
+      realizedPnl: '-8.25',
+      fundingPaid: '0.75',
+    },
+  });
+  await events.append({
+    agentId,
+    kind: 'thesis',
+    detail: { market: 'ETH-PERP', direction: 'short', venue: 'perpl' },
+  });
+  await events.append({
+    agentId,
+    kind: 'fill',
+    detail: {
+      ...perpl,
+      symbol: 'ETH-PERP',
+      side: 'sell',
+      filledSize: '0.01',
+      averageFillPrice: '3000',
+    },
+  });
+}
+
 async function setup(options: {
   agents: AgentRecord[];
   accounts?: readonly IndexerAccount[] | Error;
@@ -319,6 +373,92 @@ describe('LeaderboardService', () => {
     const board = await service.leaderboard();
 
     expect(board.tooFewTrades[0]!.theses).toEqual({ settled: 1, held: 0, open: 1, partial: true });
+  });
+
+  it('reads Perpl from the agent’s own trail, apart from the Kuru-only indexer figures', async () => {
+    const events = new InMemoryAgentEventLog();
+    await recordTrail(events, 'a');
+    await recordPerplTrail(events, 'a');
+    const { service } = await setup({
+      agents: [agent({ id: 'a', address: NIGHT })],
+      accounts: [account({ address: NIGHT.toLowerCase(), realizedPnlUsd: '1' })],
+      events,
+    });
+
+    const row = (await service.leaderboard()).tooFewTrades[0]!;
+
+    // Settled Perpl theses only: the open ETH short's figure is not counted.
+    expect(row.perpl).toEqual({
+      source: 'agent-event-log',
+      settled: 1,
+      held: 0,
+      open: 1,
+      realisedPnl: '-9',
+    });
+    // The indexer's PnL stays the indexer's: Perpl's AUSD is never added to it.
+    expect(row.realisedPnlUsd).toBe('1');
+    // The SEN-22 reading still spans both venues.
+    expect(row.theses).toEqual({ settled: 3, held: 1, open: 2 });
+  });
+
+  it('shows a Perpl mandate with nothing on its trail as an empty record, not null', async () => {
+    const { service } = await setup({
+      agents: [
+        agent({
+          id: 'a',
+          address: NIGHT,
+          mandate: parseMandate({
+            ...MANDATE,
+            venues: ['kuru', 'perpl'],
+            perpl: { ...MANDATE.perpl, markets: ['BTC-PERP'] },
+          }),
+        }),
+      ],
+    });
+
+    const row = (await service.leaderboard()).tooFewTrades[0]!;
+
+    expect(row.perpl).toEqual({
+      source: 'agent-event-log',
+      settled: 0,
+      held: 0,
+      open: 0,
+      realisedPnl: '0',
+    });
+  });
+
+  it('has no Perpl record for a Kuru-only agent with no Perpl thesis', async () => {
+    const events = new InMemoryAgentEventLog();
+    await recordTrail(events, 'a');
+    const { service } = await setup({
+      agents: [agent({ id: 'a', address: NIGHT })],
+      accounts: [account({ address: NIGHT.toLowerCase() })],
+      events,
+    });
+
+    expect((await service.leaderboard()).tooFewTrades[0]!.perpl).toBeNull();
+  });
+
+  it('names Perpl as not indexed, with its reason, on every answer', async () => {
+    const ok = await (
+      await setup({ agents: [agent({ id: 'a', address: NIGHT })] })
+    ).service.leaderboard();
+    const failed = await (
+      await setup({
+        agents: [agent({ id: 'a', address: NIGHT })],
+        accounts: new IndexerQueryError('the indexer answered 503'),
+      })
+    ).service.leaderboard();
+
+    for (const board of [ok, failed]) {
+      expect(board.coverage).toEqual(LEADERBOARD_COVERAGE);
+      expect(board.notes.some((note) => note.includes(PERPL_NOT_INDEXED_REASON))).toBe(true);
+    }
+    expect(LEADERBOARD_COVERAGE).toEqual({
+      indexed: ['kuru'],
+      notIndexed: [{ venue: 'perpl', reason: PERPL_NOT_INDEXED_REASON }],
+    });
+    expect(PERPL_NOT_INDEXED_REASON).toContain('100,000 events');
   });
 
   it('leaves revoked agents off the board: their mandate is empty', async () => {

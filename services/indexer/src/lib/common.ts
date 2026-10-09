@@ -1,12 +1,9 @@
 /**
- * Handler-side helpers shared by the Kuru and Perpl registration files.
+ * Handler-side helpers for the Kuru registration file.
  *
  * Every accumulation here is a read-modify-write on a stored entity, and every
  * handler batches its writes per entity, so no read-your-write assumption is
- * needed *within* a handler invocation. Across handlers Envio does make
- * uncommitted in-batch writes visible to `getWhere` (LoadLayer consults the
- * in-memory index before storage), which the Perpl attribution relies on — see
- * src/lib/perpl.ts.
+ * needed *within* a handler invocation.
  *
  * `BigDecimal` is Envio's re-export of bignumber.js. Note what it does *not*
  * have: `BigDecimal.fromNumber` / `fromRawString` do not exist on bignumber.js
@@ -48,8 +45,7 @@ export const ZERO_BD = (): BigDecimal => new BigDecimal('0');
  * The account's address, read off the venue the first time the account is
  * seen.
  *
- * The registration events (`AccountRegistered`, `AccountCreated`) are one-shot
- * and most of them are older than `config.yaml`'s `start_block`, so an account
+ * The registration event (`AccountRegistered`) is one-shot and most of them are older than `config.yaml`'s `start_block`, so an account
  * that only ever *trades* inside the window would otherwise carry a null
  * address forever — and the API matches agents by address, dropping null rows.
  * The read is an Envio effect, so it is deduplicated and cached: one RPC call
@@ -58,19 +54,14 @@ export const ZERO_BD = (): BigDecimal => new BigDecimal('0');
  *
  * `undefined` (no such account) is stored as no address, never as `0x000…0`.
  */
-async function lookupAccountAddress(
-  context: Ctx,
-  venue: 'KURU' | 'PERPL',
-  accountId: bigint,
-): Promise<string | undefined> {
-  const address = await context.effect(accountAddressEffect, { venue, accountId });
+async function lookupAccountAddress(context: Ctx, accountId: bigint): Promise<string | undefined> {
+  const address = await context.effect(accountAddressEffect, { accountId });
   return address === null ? undefined : address.toLowerCase();
 }
 
 export async function ensureAccount(
   context: Ctx,
   id: string,
-  venue: 'KURU' | 'PERPL',
   accountId: bigint,
   blockNumber: number,
   timestampSec: number,
@@ -79,9 +70,9 @@ export async function ensureAccount(
   if (existing !== undefined) return;
   context.Account.set({
     id,
-    venue,
+    venue: 'KURU',
     accountId,
-    address: await lookupAccountAddress(context, venue, accountId),
+    address: await lookupAccountAddress(context, accountId),
     owner: undefined,
     firstSeenBlock: BigInt(blockNumber),
     firstSeenAt: new Date(timestampSec * 1000),
@@ -93,7 +84,7 @@ export async function ensureAccount(
   });
 }
 
-/** The Kuru account address (`AccountRegistered.account`). */
+/** The account address (`AccountRegistered.account`). */
 export async function setAccountAddress(context: Ctx, id: string, address: string): Promise<void> {
   const account = await context.Account.getOrThrow(id);
   context.Account.set({ ...account, address: address.toLowerCase() });
@@ -106,10 +97,8 @@ export async function setAccountOwner(context: Ctx, id: string, owner: string): 
 }
 
 /**
- * The (account, token) custody row, created at zero if absent. Callers then
- * write only the fields their event actually reports — `SpotReserveUpdated`
- * sets the absolute free/reserved pair, `Deposit`/`Withdrawal` add to the
- * cumulative flow, and neither clobbers the other.
+ * The (account, token) custody row, created at zero if absent; `Deposit` and
+ * `Withdrawal` then add to its cumulative flow.
  */
 export async function ensureBalance(
   context: Ctx,
@@ -127,8 +116,6 @@ export async function ensureBalance(
     deposited: 0n,
     withdrawn: 0n,
     net: 0n,
-    freeRaw: 0n,
-    reservedRaw: 0n,
     decimals,
     lastUpdatedBlock: 0n,
   };
@@ -136,19 +123,18 @@ export async function ensureBalance(
 
 /** One accounted fill for one party (taker or maker) on one market. */
 export type FillInput = {
-  /** "kuru-62" | "perpl-7" — the Account entity id; the row must already exist. */
+  /** "kuru-62" — the Account entity id; the row must already exist. */
   accountId: string;
   marketId: string;
-  venue: 'KURU' | 'PERPL';
   role: 'taker' | 'maker';
   /** signed base raw units (+ buy, − sell) from this party's perspective */
   signedBaseRaw: bigint;
   /**
-   * Decimal scale of that raw unit — `decimalsFromPrecision(market.sizePrecision)`
-   * for both venues, NOT the base token's ERC-20 decimals.
+   * Decimal scale of that raw unit — `decimalsFromPrecision(market.sizePrecision)`,
+   * NOT the base token's ERC-20 decimals.
    */
   baseUnitDecimals: number;
-  /** quote atoms exchanged (non-negative, venue-native decimals) */
+  /** quote atoms exchanged (non-negative, quote-token decimals) */
   quoteAtoms: bigint;
   quoteDecimals: number;
   blockNumber: number;
@@ -158,9 +144,8 @@ export type FillInput = {
 /**
  * Roll one party's fill into its `AccountMarketStats` and the account rollup.
  *
- * Realised PnL is fee-exclusive: fees are recorded on the `Trade` row (and are
- * zero for a maker leg, whose fee is on its own maker event) but are not netted
- * out of `realizedPnlUsd`. See docs/indexer.md §pnl for why.
+ * Realised PnL is fee-exclusive: both legs' fees are recorded on the `Trade`
+ * row but are not netted out of `realizedPnlUsd`. See docs/indexer.md §pnl for why.
  *
  * Precondition: `fill.accountId` already has an `Account` row — every caller
  * runs `ensureAccount` first, which is also where the raw id is known.

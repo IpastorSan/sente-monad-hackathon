@@ -17,9 +17,9 @@
  * carries both and `MIN_RANKED_TRADES` decides whether the rate is shown as a
  * rank or as a note.
  *
- * ROI is the one number here that is not a direct read: the indexer stores
- * **flows** (`AccountBalance.net` = deposited − withdrawn) and **balances**
- * separately, and only the flow is capital. Money the agent put into the venue
+ * ROI is the one number here that is not a direct read: capital is the
+ * **flow** the indexer stores (`AccountBalance.net` = deposited − withdrawn),
+ * not a **balance**. Money the agent put into the venue
  * and has not taken back out is what was at risk; a balance that has since
  * grown is the result of the bet, not the size of it, and storing it as the
  * denominator would make every winning agent's ROI shrink the more it won.
@@ -28,10 +28,11 @@
  * ratio is the one place a float appears, and only after the digit has been
  * decided in integers (`ratioOf`, `winRateOf`).
  *
- * Mixed units, stated plainly: Kuru's PnL is USDC and Perpl's is AUSD, both
- * 6-decimal stables on Monad testnet, and the indexer's own `*Usd` field names
- * treat them as one unit. This module sums them the same way, and the API
- * returns a note saying so.
+ * Units: the indexer covers Kuru only since SEN-171, so every `*Usd` figure
+ * that arrives here is USDC. The sums below are venue-agnostic all the same —
+ * they add whatever accounts they are handed — so `CAPITAL_TOKENS` keeps
+ * Perpl's AUSD, and a re-indexed Perpl would be summed as one unit with USDC,
+ * as the indexer's own `*Usd` field names treat them.
  *
  * **Two unit domains arrive here and exactly one leaves** (SEN-32). The
  * indexer's `*Usd` fields are `BigDecimal!` — human units already — while
@@ -138,8 +139,9 @@ export function metricsOf(accounts: readonly IndexerAccount[]): LeaderboardMetri
 
 /**
  * Capital deployed on one venue account: the net stablecoin flow, converted
- * from raw atoms into quote units. Balances the venue reports
- * (`freeRaw`/`reservedRaw`) are deliberately not used; see the module doc.
+ * from raw atoms into quote units. A balance — what the account holds now —
+ * would be the wrong denominator; see the module doc. (The indexer no longer
+ * stores one at all since SEN-171.)
  *
  * The token's decimals come from `CAPITAL_TOKENS`, not from the row's own
  * `decimals`: the allowlist already decided this address is a dollar, and the

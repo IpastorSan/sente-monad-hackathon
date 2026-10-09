@@ -23,6 +23,11 @@
  *   - Monad's public RPC caps `eth_getLogs` at 100 blocks, so a range wider
  *     than that is slow rather than wrong. Spot-check single blocks.
  *
+ * The test indexer refuses a block before `config.yaml`'s `start_block`. The
+ * documented fill (61406913) is older than it, so re-running that one means
+ * lowering `start_block` locally, running `npm run codegen`, and putting both
+ * back afterwards.
+ *
  * Committed, unlike the rest of `scripts/local/`, because docs/indexer.md cites
  * it by name: a documented run nobody can reproduce is a claim, not evidence.
  */
@@ -41,21 +46,14 @@ await import('../../src/EventHandlers.ts');
 
 const MONAD_TESTNET = 10143;
 
-/**
- * Every entity in `schema.graphql`, in the order the summary prints them.
- * `@internal` entities (the two Perpl join tables) are included: they are how
- * the Perpl attribution is checked, and a zero there explains an empty Trade.
- */
+/** Every entity in `schema.graphql`, in the order the summary prints them. */
 const ENTITIES = [
   'Trade',
   'AccountMarketStats',
   'Account',
   'Market',
   'MarketDay',
-  'MakerOrderUpdate',
   'AccountBalance',
-  'PerplOrderContext',
-  'PerplMakerFill',
 ] as const;
 
 type EntityRow = Record<string, unknown>;

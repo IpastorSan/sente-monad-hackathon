@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Envio HyperIndex for Kuru Spot V2 + Perpl fills on Monad testnet (SEN-25)",
+  "description": "Envio HyperIndex for Kuru Spot V2 fills on Monad testnet (SEN-25, SEN-171)",
   "scripts": {
     "codegen": "envio codegen",
     "dev": "envio dev",
