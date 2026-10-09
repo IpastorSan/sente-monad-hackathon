@@ -36,6 +36,8 @@ WALLET_SEND_SPACING_MS
 USER_TRADING
 # Perps in the app (SEN-174). Read only with USER_TRADING on.
 USER_TRADING_PERPL
+# One atomic batch per trade instead of one send per step. Off unless 1.
+USER_TRADE_ATOMIC_BATCH
 
 # --- Privy (agent wallets, the user's wallet, the mandate policies) ---
 # The two P-256 keys are the most dangerous values in the file: replacing one
@@ -89,6 +91,14 @@ AGENT_WRITE_SPACING_MS
 AGENT_RUNNER_THINKING
 AGENT_PRECHECK
 AGENT_MANDATE_OWNER
+# The scheduler's own knobs (SEN-71); inert while AGENT_TICK_SECONDS is unset.
+AGENT_SCHEDULER_POLL_SECONDS
+AGENT_SCHEDULE_MAX_CONCURRENT
+AGENT_SCHEDULE_MAX_RUNS_PER_DAY
+AGENT_SCHEDULE_MIN_CREDITS_USD
+# The resting-order fill watcher.
+AGENT_FILL_POLL_SECONDS
+AGENT_FILL_MAX_BLOCK_RANGE
 # Required: STATE_DIR is pinned on the box, and the API will not boot without
 # it. Encrypts agent-secrets.json (the agents' Perpl keys, SEN-148).
 AGENT_SECRETS_KEY
@@ -112,6 +122,10 @@ ALCHEMY_WEBHOOK_SIGNING_KEY
 ALCHEMY_NOTIFY_AUTH_TOKEN
 ALCHEMY_NOTIFY_WEBHOOK_ID
 ALCHEMY_NOTIFY_TIMEOUT_MS
+
+# --- portfolio value history (SEN-152) ---
+VALUE_HISTORY_TICK_SECONDS
+VALUE_HISTORY_EVERY_SECONDS
 
 # --- leaderboard ---
 ENVIO_GRAPHQL_URL
@@ -138,3 +152,4 @@ DENY EXPO_PUBLIC_*             compiled into the app bundle, so public by constr
 DENY PERPL_DEV_*               a dev account for local live scripts, not something the API reads
 DENY PRIVY_PROBE_*             bookkeeping written by probe:privy; nothing reads it
 DENY ENVIO_MONAD_RPC_URL       read by services/indexer, not by the API
+DENY ANTHROPIC_API_KEY         the API never uses it, and the agent runner talks to OpenRouter, which must never receive a real Anthropic key (the SDK reads this ambiently; openrouter-client.ts blocks it)

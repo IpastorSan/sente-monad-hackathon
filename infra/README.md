@@ -83,6 +83,12 @@ the apex shares a site block with the web app's catch-all (SEN-168) — if
 Verified locally before first deploy: both files return 200, zero redirects,
 `application/json`.
 
+`./live-check.sh [--box] [host]` is what `deploy.sh` runs last: `verify.sh`,
+`smoke.sh`, authenticated reads of `/markets`, tickers, `/trade/capabilities` and
+`/leaderboard`, the drift check, and with `--box` the box's own view (Perpl's
+socket not geoblocked, container healthy, state lock held, env names in step with
+the allowlist). All reads; `../docs/deploy.md` step 5 has the list.
+
 ## Cert persistence
 
 `caddy_data` is a named volume holding the Let's Encrypt account key and

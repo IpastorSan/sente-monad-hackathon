@@ -4,6 +4,9 @@
 #   PROJECT=… ZONE=… ./push-secrets.sh [path-to-env-file]      (default ../.env)
 #   DRY_RUN=1 ./push-secrets.sh [path]     filter and pre-flight only, no SSH,
 #                                          no PROJECT needed. Run this first.
+#   NAMES_ONLY=1 ./push-secrets.sh [path]  a DRY_RUN that prints only the names it
+#                                          would write, one per line (live-check.sh
+#                                          compares them with the box's).
 #
 # WHAT "OUT OF BAND" MEANS HERE, and why each half of it matters:
 #
@@ -31,6 +34,9 @@
 set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
+NAMES_ONLY="${NAMES_ONLY:-0}"
+# Names only: a dry run whose report is silenced; fd 3 gets the names.
+if [ "$NAMES_ONLY" = 1 ]; then DRY_RUN=1; exec 3>&1 >/dev/null; fi
 if [ "$DRY_RUN" = 1 ]; then PROJECT="${PROJECT:-dry-run}"; else PROJECT="${PROJECT:?set PROJECT}"; fi
 ZONE="${ZONE:-europe-southwest1-a}"
 NAME="${NAME:-sente-eu}"
@@ -203,6 +209,10 @@ fi
 # ---------------------------------------------------------------------------
 # Deliver
 # ---------------------------------------------------------------------------
+if [ "$NAMES_ONLY" = 1 ]; then
+  grep -oE '^[A-Za-z_][A-Za-z0-9_]*' "$STAGE" >&3
+  exit 0
+fi
 if [ "$DRY_RUN" = 1 ]; then
   say "DRY RUN — nothing left this machine"
   echo "  would write $copied variables to $NAME:$REMOTE_PATH (0600 root:root):"

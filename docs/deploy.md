@@ -48,7 +48,7 @@ certificate for `sente.lol` in a named Docker volume. Do not rebuild it: losing
 
 Files: `infra/Caddyfile`, `infra/docker-compose.yml`, `infra/deploy.sh`,
 `infra/push-secrets.sh`, `infra/api-env.allowlist`, `infra/verify.sh`,
-`infra/smoke.sh`, `services/api/Dockerfile`.
+`infra/smoke.sh`, `infra/live-check.sh`, `services/api/Dockerfile`.
 
 ## Secret versus public
 
@@ -174,8 +174,10 @@ registry to enable, authenticate or leak → copies `Caddyfile`,
 `docker-compose.yml`, `site/` and `web/` → writes `SENTE_API_TAG` into
 `/opt/sente/.env` → `install -d -m 0700 -o 1000 -g 1000 /var/lib/sente/state` →
 `docker compose up -d` → `caddy reload` (an edited Caddyfile is not a compose
-change, so `up -d` alone would leave Caddy on the old config) → waits for the
-container's health check → `verify.sh`.
+change, so `up -d` alone would leave Caddy on the old config) → waits up to
+`HEALTH_TIMEOUT` seconds (default 120) for the container's health check, and
+**exits non-zero** if it is not `healthy` by then → `live-check.sh --box`
+(step 5), whose exit code becomes the deploy's.
 
 The image ship is the slow part: hundreds of megabytes up a home uplink. It is
 also why the tag is the commit — `sudo docker image ls sente-api` on the box
@@ -195,6 +197,12 @@ Two things about that ordering are load-bearing:
   boot loudly instead of serving with no auth. Two guards, in order:
   `push-secrets.sh` never writes it, and the API would refuse it anyway.
 
+The health wait is a deadline, not a count of polls: on an e2-small the API has
+taken longer than a minute to report `healthy`, so raise `HEALTH_TIMEOUT` rather
+than re-running the deploy if a slow boot is the only problem. A deploy that
+stops there has still replaced the containers; re-run the checks alone with
+`./live-check.sh --box` once it is up, or roll back (step 7).
+
 If the API comes up unhealthy, its boot log says which variable it refused:
 
 ```bash
@@ -202,10 +210,58 @@ gcloud compute ssh sente-web --project "$PROJECT" --zone "$ZONE" \
   --command 'sudo docker logs --tail 50 sente-api'
 ```
 
-### 5. Verify, then smoke-test from somewhere else
+### 5. Live check, then smoke-test from somewhere else
 
-`deploy.sh` runs `verify.sh` for you. Run `smoke.sh` yourself, **from a network
-that is not the LAN this was developed on** — a phone hotspot is enough:
+`deploy.sh` ends with `live-check.sh --box` (SEN-186), stage A of the post-deploy
+checks in `docs/testing/test-audit-2026-10-09.md`. Every check is a read — no
+transaction, no wallet, no key enrolled — and each prints one
+`PASS|WARN|FAIL name — detail` line; any FAIL is a non-zero exit:
+
+- `verify.sh`, then `smoke.sh`, whose throwaway session token
+  (`SMOKE_TOKEN_FILE`) the next checks reuse;
+- `GET /markets`: both venues `ok`, the Kuru symbols equal the pins in
+  `packages/venues/src/kuru/constants.ts`, Perpl lists `BTC-PERP`;
+- each pinned Kuru ticker and `BTC-PERP`'s: `stale:false`, `asOf` under 60 s
+  (a fresh ticker with no price at all is a WARN);
+- `GET /trade/capabilities` against `EXPECT_TRADING` / `EXPECT_TRADING_PERPL`
+  (both default `true`; pass `false` when a deploy has trading off);
+- `GET /leaderboard`: the indexer source is `ok`;
+- the drift check (`pnpm run drift:check`, below);
+- `--box`, over `gcloud compute ssh`: Perpl's trading WebSocket answers the box
+  with 101 (a 451 is "Perpl geoblocks this region"), Perpl's REST context and
+  Kuru's API answer 200, `sente-api` is `healthy`, `api.lock` is held by a live
+  pid on the container's host, and the variable **names** in
+  `/opt/sente/api.env` equal the non-empty, allowlisted names in the laptop
+  `.env` (`ENV_FILE`), as `NAMES_ONLY=1 ./push-secrets.sh` lists them. Values are
+  never read off either side.
+
+`SKIP_API=1` and `SKIP_WEB=1` pass through to `verify.sh`; `SKIP_API=1` also skips
+the API reads and the box checks. `SKIP_BOX_CHECK=1` runs stage A without
+`--box`. Run it alone at any time:
+
+```bash
+./live-check.sh --box                # what deploy.sh runs
+./live-check.sh                      # from the laptop only
+```
+
+**The drift check** (`packages/venues/scripts/drift-check.ts`) compares every
+pinned fact with the live service: Kuru's active catalog against
+`KURU_TESTNET_MARKETS` (address, precisions, tick, tokens and decimals), with a
+WARN for catalog markets nobody pinned; `eth_getCode` on every pinned Kuru
+address; Perpl's `/pub/context` contracts and the BTC/ETH perps; Perpl's
+`/api-key/payload` types, domain (minus the salt) and statement against
+`PERPL_API_KEY_TYPED_DATA` (a payload uses no key slot; `--skip-perpl-payload`
+leaves it out); OpenRouter's `/models` against `AGENT_MODELS`; the Envio lag
+(under 2000 blocks) and a non-empty `Account`; and the indexer's and presets'
+copies of the pins. It reads `ENVIO_GRAPHQL_URL` from the repo `.env` or
+`--envio=<url>`.
+
+```bash
+mise exec -- pnpm run drift:check
+```
+
+Run `smoke.sh` yourself too, **from a network that is not the LAN this was
+developed on** — a phone hotspot is enough:
 
 ```bash
 ./verify.sh                          # site + API, all reads or refused writes
