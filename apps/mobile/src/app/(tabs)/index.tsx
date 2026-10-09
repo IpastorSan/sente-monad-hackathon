@@ -1011,7 +1011,14 @@ const styles = StyleSheet.create({
   miniMove: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, minHeight: 32 },
   miniStone: { marginTop: 3 },
   miniLine: { fontFamily: font.regular, fontSize: 12, lineHeight: 16, color: color.textDim },
-  miniPnl: { fontSize: 13, flexShrink: 1, marginLeft: 8 },
+  // SEN-177: a flat day is the readable dim, not the default ink on a dark card.
+  miniPnl: {
+    fontFamily: font.medium,
+    fontSize: 13,
+    color: color.textDim,
+    flexShrink: 1,
+    marginLeft: 8,
+  },
   // The strip bleeds to the screen edge, as in the study, so the next card
   // peeks out and says the row scrolls.
   strip: { marginHorizontal: -GUTTER, flexGrow: 0 },
