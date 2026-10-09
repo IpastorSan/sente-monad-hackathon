@@ -290,7 +290,7 @@ test('funding: what each preset trades with, and a starting amount', () => {
     guardian: '100 MON',
     'range-trader': '100 USDC',
     'trend-rider': '250 AUSD',
-    'funding-harvester': '50 AUSD+USDC',
+    'funding-harvester': '100 AUSD+USDC',
     'dca-stacker': '100 USDC',
     'mean-reverter': '100 USDC',
   });

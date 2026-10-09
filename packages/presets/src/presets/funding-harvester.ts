@@ -30,8 +30,11 @@ const HEDGE_DRIFT_PCT = 5;
 
 const SLIPPAGE_PCT = 0.5;
 
-/** The app's Cautious mandate is sized for spot; perps get a small collateral of their own. */
-const CAUTIOUS_COLLATERAL = 50;
+/**
+ * The app's Cautious mandate is sized for spot; perps get a small collateral of their own:
+ * Perpl's account-opening minimum on testnet, the least that can trade at all (SEN-187).
+ */
+const CAUTIOUS_COLLATERAL = 100;
 
 function perpBase(market: string): string {
   return market.split('-')[0] ?? market;

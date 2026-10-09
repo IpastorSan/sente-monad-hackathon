@@ -148,6 +148,11 @@ for (const def of listPresets()) {
         const mandate = def.suggestedMandate(result.params);
         assert.match(mandate.maxOrderNotional, MANDATE_DECIMAL);
         for (const cap of mandate.depositCaps) assert.match(cap.amount, MANDATE_DECIMAL);
+        // SEN-187: a Perpl collateral cap under Perpl's 100 AUSD opening minimum
+        // can never open the agent's account, and the API refuses the hire.
+        if (mandate.venues.includes('perpl')) {
+          assert.ok(Number(mandate.perplCollateral) >= 100, `${def.id} perplCollateral`);
+        }
       }
       assert.ok(rendered > 0, def.id);
     });
@@ -579,10 +584,10 @@ describe('render snapshots', () => {
       venues: ['perpl', 'kuru'],
       kuruMarkets: ['WBTC-USDC'],
       perplMarkets: ['BTC-PERP'],
-      maxOrderNotional: '51',
+      maxOrderNotional: '101',
       maxLeverage: 2,
-      depositCaps: [{ asset: 'USDC', amount: '51' }],
-      perplCollateral: '50',
+      depositCaps: [{ asset: 'USDC', amount: '101' }],
+      perplCollateral: '100',
       expiryDays: 30,
       softRules: ['short only', 'Kuru leg matches the short'],
     });
