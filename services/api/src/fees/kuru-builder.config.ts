@@ -11,6 +11,10 @@
  * - `KURU_BUILDER_FEE_PPS` — the rate, default 10000 (0.10%). The API refuses
  *   to boot above 10000, so a typo cannot charge users more than 10 bps.
  *
+ * - `KURU_BUILDER_AGENTS=0` — keep the fee on users' own trades but out of
+ *   agents' policies and orders. The fallback for a Privy that will not match
+ *   the builder `batch` overloads (see docs/privy-policy-enforcement.md).
+ *
  * Perpl orders never carry a Sente fee: Perpl's builder codes are issued by
  * hand and Sente has none.
  *
@@ -21,9 +25,14 @@
  *
  * Erasable syntax and `.ts`-free imports only: nothing here needs Nest.
  */
-import { getAddress, isAddress, zeroAddress, type Address } from 'viem';
+import type { KuruBuilderSettings } from '@sente/venues/kuru';
+import { getAddress, isAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
 
-export const KURU_BUILDER = Symbol('KURU_BUILDER');
+/**
+ * DI token: the builder AGENTS' policies are compiled with and their orders
+ * pay — {@link loadAgentKuruBuilder}, `null` when off.
+ */
+export const AGENT_KURU_BUILDER = Symbol('AGENT_KURU_BUILDER');
 
 /** 10 bps: `feePps / 10_000_000`. */
 export const DEFAULT_KURU_BUILDER_FEE_PPS = 10_000;
@@ -83,4 +92,57 @@ export function feePpsToBps(feePps: number): string {
   return rest === 0
     ? String(whole)
     : `${whole}.${String(rest).padStart(3, '0').replace(/0+$/, '')}`;
+}
+
+/**
+ * The builder agents' policies are compiled with: {@link loadKuruBuilderConfig},
+ * unless `KURU_BUILDER_AGENTS` is `0` or `false`.
+ */
+export function loadAgentKuruBuilder(env: Env = process.env): KuruBuilderConfig | null {
+  const config = loadKuruBuilderConfig(env);
+  const agents = env['KURU_BUILDER_AGENTS']?.trim();
+  return agents === '0' || agents === 'false' ? null : config;
+}
+
+/** What a policy was compiled to allow (`@sente/mandate`'s `KuruBuilderGrant`). */
+export interface AgentBuilderGrant {
+  readonly address: Address;
+  readonly maxFeePps: number;
+}
+
+/**
+ * Agents re-approve only when the approval is about to lapse: it can never
+ * outlive the mandate, so "a day early" would mean every order in a mandate's
+ * last day paid for a fresh approval.
+ */
+export const AGENT_BUILDER_RENEW_WITHIN_SECONDS = 60;
+
+/**
+ * The builder fee one agent's Kuru orders pay right now, or `undefined` for
+ * the plain overloads (gotcha 13): only when the agent's LIVE policy carries
+ * the fee rules (`grant`, recorded when it was last compiled) for this same
+ * builder at no less than the current rate. An agent hired before SEN-184, or
+ * while the fee was off, has no grant and keeps trading without a fee until
+ * its mandate is amended.
+ */
+export function agentKuruBuilder(
+  agent: {
+    readonly kuruBuilder?: AgentBuilderGrant;
+    readonly mandate: { readonly expiresAt: number };
+  },
+  config: KuruBuilderConfig | null,
+): KuruBuilderSettings | undefined {
+  const grant = agent.kuruBuilder;
+  if (!config || !grant) return undefined;
+  if (!isAddressEqual(grant.address, config.address) || config.feePps > grant.maxFeePps) {
+    return undefined;
+  }
+  const expiresAt = BigInt(agent.mandate.expiresAt);
+  return {
+    address: config.address,
+    feePps: config.feePps,
+    // The policy caps `expiry` at the mandate's own expiry.
+    approvalExpiry: () => expiresAt,
+    renewWithinSeconds: AGENT_BUILDER_RENEW_WITHIN_SECONDS,
+  };
 }

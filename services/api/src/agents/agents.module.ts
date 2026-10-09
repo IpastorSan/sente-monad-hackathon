@@ -41,6 +41,12 @@ import {
   agentRunnerImports,
   agentRunnerProviders,
 } from './runner/agent-runner.providers';
+import {
+  AGENT_KURU_BUILDER,
+  describeKuruBuilder,
+  loadAgentKuruBuilder,
+  type KuruBuilderConfig,
+} from '../fees/kuru-builder.config';
 import { StateModule } from '../state/state.module';
 import { AlchemyModule } from '../webhooks/alchemy.module';
 import { AgentStoreModule } from './store/agent-store.module';
@@ -51,6 +57,20 @@ import {
   agentToolsProviders,
 } from './tools/agent-tools.providers';
 import { agentVenuesExports, agentVenuesProviders } from './venues/agent-venues.providers';
+
+/**
+ * AGENT_KURU_BUILDER (SEN-184): Sente's Kuru builder fee as agents' policies
+ * are compiled with it and their orders pay it. `null` when off. Throws at
+ * boot on a malformed `KURU_BUILDER_*`, like the trade module's own read.
+ */
+const kuruBuilderProvider: Provider = {
+  provide: AGENT_KURU_BUILDER,
+  useFactory: (): KuruBuilderConfig | null => {
+    const config = loadAgentKuruBuilder();
+    new Logger('AgentsConfig').log(`agents: ${describeKuruBuilder(config)}`);
+    return config;
+  },
+};
 
 const configProvider: Provider = {
   provide: AGENTS_CONFIG,
@@ -171,6 +191,7 @@ const authProvider: Provider = {
   controllers: [AgentsController, ...agentToolsControllers, ...agentRunnerControllers],
   providers: [
     configProvider,
+    kuruBuilderProvider,
     agentWalletsProvider,
     mandateOwnersProvider,
     returnAddressesProvider,

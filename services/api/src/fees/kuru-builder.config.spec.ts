@@ -1,4 +1,10 @@
-import { describeKuruBuilder, feePpsToBps, loadKuruBuilderConfig } from './kuru-builder.config';
+import {
+  agentKuruBuilder,
+  describeKuruBuilder,
+  feePpsToBps,
+  loadAgentKuruBuilder,
+  loadKuruBuilderConfig,
+} from './kuru-builder.config';
 
 const TREASURY = '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8';
 
@@ -55,5 +61,48 @@ describe('feePpsToBps', () => {
   it('describes itself for the boot log', () => {
     expect(describeKuruBuilder(null)).toMatch(/off/);
     expect(describeKuruBuilder({ address: TREASURY, feePps: 10_000 })).toMatch(/10 bps/);
+  });
+});
+
+describe('loadAgentKuruBuilder', () => {
+  it('follows the builder unless KURU_BUILDER_AGENTS turns agents off', () => {
+    const env = { KURU_BUILDER_ADDRESS: TREASURY };
+    expect(loadAgentKuruBuilder(env)).toEqual({ address: TREASURY, feePps: 10_000 });
+    expect(loadAgentKuruBuilder({ ...env, KURU_BUILDER_AGENTS: '1' })).not.toBeNull();
+    expect(loadAgentKuruBuilder({ ...env, KURU_BUILDER_AGENTS: '0' })).toBeNull();
+    expect(loadAgentKuruBuilder({ ...env, KURU_BUILDER_AGENTS: 'false' })).toBeNull();
+    expect(loadAgentKuruBuilder({})).toBeNull();
+  });
+});
+
+describe('agentKuruBuilder: old policies fall back to the plain overload (gotcha 13)', () => {
+  const config = { address: TREASURY, feePps: 10_000 } as const;
+  const mandate = { expiresAt: 2_000_000_000 };
+
+  it('pays the fee when the live policy was compiled with it', () => {
+    const settings = agentKuruBuilder(
+      { mandate, kuruBuilder: { address: TREASURY, maxFeePps: 10_000 } },
+      config,
+    );
+    expect(settings).toMatchObject({ address: TREASURY, feePps: 10_000 });
+    // The approval never outlives the mandate: the policy caps it there.
+    expect(settings!.approvalExpiry(1_700_000_000)).toBe(2_000_000_000n);
+  });
+
+  it('pays nothing for an agent hired before SEN-184 or with the fee off', () => {
+    expect(agentKuruBuilder({ mandate }, config)).toBeUndefined();
+    expect(
+      agentKuruBuilder({ mandate, kuruBuilder: { address: TREASURY, maxFeePps: 10_000 } }, null),
+    ).toBeUndefined();
+  });
+
+  it('pays nothing when the policy names another builder or a lower ceiling', () => {
+    const other = '0x1111111111111111111111111111111111111111';
+    expect(
+      agentKuruBuilder({ mandate, kuruBuilder: { address: other, maxFeePps: 10_000 } }, config),
+    ).toBeUndefined();
+    expect(
+      agentKuruBuilder({ mandate, kuruBuilder: { address: TREASURY, maxFeePps: 5_000 } }, config),
+    ).toBeUndefined();
   });
 });

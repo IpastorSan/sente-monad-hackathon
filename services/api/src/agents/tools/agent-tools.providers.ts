@@ -2,6 +2,11 @@ import { join } from 'node:path';
 
 import { Logger, type Provider } from '@nestjs/common';
 
+import {
+  AGENT_KURU_BUILDER,
+  agentKuruBuilder,
+  type KuruBuilderConfig,
+} from '../../fees/kuru-builder.config';
 import { StateDirLease } from '../../state/state.module';
 import { MarketDataService } from '../../venues/market-data.service';
 import { VenuesModule } from '../../venues/venues.module';
@@ -96,13 +101,21 @@ export const agentToolsProviders: Provider[] = [
   agentEventsProvider,
   {
     provide: AgentTools,
-    inject: [AGENT_STORE, AgentVenues, AGENT_EVENTS, AGENT_TOOLS_CONFIG, MarketDataService],
+    inject: [
+      AGENT_STORE,
+      AgentVenues,
+      AGENT_EVENTS,
+      AGENT_TOOLS_CONFIG,
+      MarketDataService,
+      AGENT_KURU_BUILDER,
+    ],
     useFactory: (
       store: AgentStore,
       venues: AgentVenues,
       events: AgentEventLog,
       config: AgentToolsConfig,
       marketData: MarketDataService,
+      kuruBuilder: KuruBuilderConfig | null,
     ) =>
       new AgentTools({
         store,
@@ -114,8 +127,13 @@ export const agentToolsProviders: Provider[] = [
         venuesFor: (agent) =>
           venues.forAgent(
             { agentId: agent.id, walletId: agent.walletId, address: agent.address },
-            // SEN-148: a run whose mandate allows Perpl enrolls its key on first use.
-            { enrollPerpl: agent.mandate.venues.includes('perpl') },
+            {
+              // SEN-148: a run whose mandate allows Perpl enrolls its key on first use.
+              enrollPerpl: agent.mandate.venues.includes('perpl'),
+              // SEN-184: the Sente fee, only when this agent's live policy allows it;
+              // otherwise its orders keep the plain overloads.
+              kuruBuilder: agentKuruBuilder(agent, kuruBuilder),
+            },
           ),
       }),
   },

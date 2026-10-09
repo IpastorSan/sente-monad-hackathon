@@ -7,13 +7,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  approveBuilderCall,
   cancelOrderCall,
   depositCalls,
   ERC20_TRANSFER_ABI,
   erc20TransferCall,
+  KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
+  KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_TOKENS,
   placeOrderCall,
@@ -39,6 +42,7 @@ import {
   compileMandate,
   compileRevocationRules,
   compileRollingCap,
+  KURU_APPROVE_BUILDER_RULE,
   KURU_WITHDRAW_RULE,
   readBackCaps,
 } from './policy.ts';
@@ -463,6 +467,7 @@ test('the caps read back out of the rules — the policy is the authority, not a
     expiresAt: null,
     kuruWithdraw: false,
     returnTo: null,
+    kuruBuilder: null,
   });
 });
 
@@ -492,4 +497,112 @@ test('the rolling cap compiles to a hex-bounded aggregation over one token, or t
   assert.equal(draft.metric.field, 'approve.amount');
   assert.ok(draft.conditions.some((c) => c.field === 'to' && c.value === USDC));
   assert.doesNotThrow(() => canonicalize(draft));
+});
+
+// ---------------------------------------------------------------------------
+// Sente's builder fee (SEN-184)
+
+const SENTE_GRANT = { address: OWNER, maxFeePps: 10_000 };
+
+test('without the builder option the policy is exactly what it was before SEN-184', () => {
+  const mandate = demoMandate({ returnTo: OWNER });
+  assert.deepEqual(compileMandate(mandate, {}), compileMandate(mandate));
+  assert.deepEqual(compileMandate(mandate, { kuruBuilder: null }), compileMandate(mandate));
+  assert.equal(readBackCaps(compileMandate(mandate)).kuruBuilder, null);
+});
+
+test('with it: one approve-the-fee rule pinned to Sente, the rate and the expiry', () => {
+  const mandate = demoMandate();
+  const rules = compileMandate(mandate, { kuruBuilder: SENTE_GRANT });
+  const approve = rules.filter((r) => r.name === KURU_APPROVE_BUILDER_RULE);
+  assert.equal(approve.length, 1);
+  const rule = approve[0]!;
+  assert.equal(toOf(rule), KURU_TESTNET_CONTRACTS.accountCore);
+  assert.equal(find(rule, 'ethereum_calldata', 'approveBuilder.builder')?.value, OWNER);
+  assert.equal(find(rule, 'ethereum_calldata', 'approveBuilder.builder')?.operator, 'eq');
+  assert.equal(find(rule, 'ethereum_calldata', 'approveBuilder.maxFeePps')?.value, '0x2710');
+  assert.equal(find(rule, 'ethereum_calldata', 'approveBuilder.maxFeePps')?.operator, 'lte');
+  assert.equal(
+    find(rule, 'ethereum_calldata', 'approveBuilder.expiry')?.value,
+    `0x${EXPIRES_AT.toString(16)}`,
+  );
+  assert.equal(find(rule, 'ethereum_transaction', 'value')?.value, '0x0');
+  assert.equal(find(rule, 'system', 'current_unix_timestamp')?.value, String(EXPIRES_AT));
+  assert.deepEqual(readBackCaps(rules).kuruBuilder, SENTE_GRANT);
+});
+
+test('with it: one builder-overload trade rule per market, and the plain ones untouched', () => {
+  const mandate = demoMandate();
+  const plain = compileMandate(mandate);
+  const rules = compileMandate(mandate, { kuruBuilder: SENTE_GRANT });
+  // Every rule the old policy had is still there, byte for byte.
+  for (const rule of plain)
+    assert.ok(rules.some((r) => JSON.stringify(r) === JSON.stringify(rule)));
+  const builderTrades = rules.filter((r) => r.name.endsWith('with the Sente fee'));
+  assert.deepEqual(
+    builderTrades.map(toOf),
+    mandate.kuru.markets.map((m) => getAddress(m)),
+  );
+  for (const rule of builderTrades) {
+    const fn = find(rule, 'ethereum_calldata', 'function_name')!;
+    assert.equal(fn.value, 'batch');
+    assert.deepEqual('abi' in fn ? fn.abi : undefined, KURU_ORDERBOOK_BUILDER_BATCH_ABI);
+  }
+  assert.equal(rules.length, plain.length + 1 + mandate.kuru.markets.length);
+  // Market list read-back is unchanged: the builder rules name the same books.
+  assert.deepEqual(readBackCaps(rules).kuruMarkets, readBackCaps(plain).kuruMarkets);
+});
+
+test('no Kuru venue or no market: no builder rule', () => {
+  const perplOnly = compileMandate(demoMandate({ venues: ['perpl'] }), {
+    kuruBuilder: SENTE_GRANT,
+  });
+  assert.equal(readBackCaps(perplOnly).kuruBuilder, null);
+  const noMarkets = compileMandate(
+    demoMandate({ kuru: { markets: [], maxDepositAtoms: { [USDC]: 1n } } }),
+    { kuruBuilder: SENTE_GRANT },
+  );
+  assert.equal(
+    noMarkets.some((r) => r.name === KURU_APPROVE_BUILDER_RULE),
+    false,
+  );
+});
+
+test('the builder ABIs decode what the venue adapter emits, field names included', () => {
+  const approve = approveBuilderCall(KURU_TESTNET_CONTRACTS.accountCore, OWNER, 10_000, 1n);
+  const decoded = decodeFunctionData({
+    abi: KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
+    data: approve.data!,
+  });
+  assert.equal(decoded.functionName, 'approveBuilder');
+  const fn = KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI[0] as unknown as { inputs: { name: string }[] };
+  assert.deepEqual(
+    fn.inputs.map((i) => i.name),
+    ['builder', 'maxFeePps', 'expiry'],
+  );
+  const order = {
+    side: 'buy',
+    quantity: 1n,
+    price: 1n,
+    tif: 'ioc',
+    executionInstruction: 'none',
+    minSizeAfterBlock: 0n,
+  } as const;
+  for (const clientOrderId of [undefined, `0x${'11'.repeat(32)}` as Hex]) {
+    const place = placeOrderCall(MON_USDC, order, clientOrderId, {
+      address: OWNER,
+      feePps: 10_000,
+    });
+    assert.equal(
+      decodeFunctionData({ abi: KURU_ORDERBOOK_BUILDER_BATCH_ABI, data: place.data! }).functionName,
+      'batch',
+    );
+    // ...and the plain rule's ABI does NOT decode it: old policies refuse a builder order.
+    assert.throws(() => decodeFunctionData({ abi: KURU_ORDERBOOK_BATCH_ABI, data: place.data! }));
+  }
+});
+
+test('a revoked agent keeps no builder rule', () => {
+  const revoked = compileRevocationRules(demoMandate({ returnTo: OWNER }));
+  assert.equal(readBackCaps(revoked).kuruBuilder, null);
 });

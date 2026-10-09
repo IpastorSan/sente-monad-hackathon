@@ -641,3 +641,80 @@ test('a condition whose blob this app cannot read is refused, not guessed at', (
   const float = rewriteCondition(m, isWithdraw, isFunctionName, (c) => ({ ...c, abi: [0.5] }));
   assertRefused(verifyPolicyPatch(float, amend(m)), /has a condition this app cannot read/);
 });
+
+// ---------------------------------------------------------------------------
+// Sente's builder fee (SEN-184): the policy may carry the fee rules for the
+// builder this build pins, and nothing wider.
+
+const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
+const PIN = { address: SENTE, feePps: 10_000 };
+const GRANT = { address: SENTE, maxFeePps: 10_000 };
+
+function feePayload(m: AgentMandate, grant: { address: Address; maxFeePps: number }) {
+  return payloadFor(m, {
+    body: { rules: compileMandate(parseMandate(toWireMandate(m)), { kuruBuilder: grant }) },
+  });
+}
+
+const amendWith = (
+  m: AgentMandate,
+  builder: { address: Address; feePps: number } | null,
+): MandateChangeIntent => ({ ...amend(m), builder });
+
+test('the mirrored compiler agrees with @sente/mandate with the Sente fee on', () => {
+  const cases: AgentMandate[] = [
+    mandate(),
+    mandate({ venues: ['kuru'] }),
+    mandate({ venues: ['perpl'] }),
+    mandate({ kuru: { markets: [MARKET_A, MARKET_B], maxDepositAtoms: { [USDC]: 5n } } }),
+    mandate({ kuru: { markets: [], maxDepositAtoms: { [USDC]: 5n } } }),
+    noExit({ venues: ['kuru'], expiresAt: 1_900_000_000 }),
+  ];
+  for (const m of cases) {
+    const real = compileMandate(parseMandate(toWireMandate(m)), { kuruBuilder: GRANT });
+    assert.deepEqual(
+      normalise(expectedPolicyRules(m, PIN)),
+      normalise(real.map(toExpected)),
+      `drifted for ${JSON.stringify(toWireMandate(m))}`,
+    );
+  }
+});
+
+test('with the pin, an amend carrying the Sente fee rules is approved, and one without too', () => {
+  const m = mandate();
+  assert.deepEqual(verifyPolicyPatch(feePayload(m, GRANT), amendWith(m, PIN)), { ok: true });
+  // Narrower: a server with the fee off, or with agents' fees off.
+  assert.deepEqual(verifyPolicyPatch(payloadFor(m), amendWith(m, PIN)), { ok: true });
+});
+
+test('without a pin, the Sente fee rules are one rule too many', () => {
+  const m = mandate();
+  assertRefused(verifyPolicyPatch(feePayload(m, GRANT), amendWith(m, null)), /sets \d+ rules/);
+});
+
+test('a fee rule for another builder, or a higher rate, is refused', () => {
+  const m = mandate();
+  assertRefused(
+    verifyPolicyPatch(feePayload(m, { address: ATTACKER, maxFeePps: 10_000 }), amendWith(m, PIN)),
+    /contains a rule this mandate does not/,
+  );
+  assertRefused(
+    verifyPolicyPatch(feePayload(m, { address: SENTE, maxFeePps: 20_000 }), amendWith(m, PIN)),
+    /contains a rule this mandate does not/,
+  );
+});
+
+test('a revoke never keeps a fee rule, pin or not', () => {
+  const m = mandate();
+  const withFee = payloadFor(m, {
+    body: {
+      rules: [
+        ...compileRevocationRules(parseMandate(toWireMandate(m))),
+        ...compileMandate(parseMandate(toWireMandate(m)), { kuruBuilder: GRANT }).filter((r) =>
+          r.name.includes('Sente fee'),
+        ),
+      ],
+    },
+  });
+  assertRefused(verifyPolicyPatch(withFee, { ...revoke(m), builder: PIN }), /sets \d+ rules/);
+});

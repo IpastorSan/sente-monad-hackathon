@@ -24,7 +24,7 @@
  *
  * Erasable syntax and `.ts` specifiers only (scripts load this file).
  */
-import { KuruVenue } from '@sente/venues/kuru';
+import { KuruVenue, type KuruBuilderSettings } from '@sente/venues/kuru';
 import {
   PERPL_NETWORKS,
   PerplVenue,
@@ -48,6 +48,12 @@ export interface AgentVenueSet {
 /** Whether a caller may enroll a Perpl key: only when Perpl is in the agent's mandate. */
 export interface PerplAccessOptions {
   readonly enrollPerpl?: boolean;
+  /**
+   * The Sente builder fee this agent's Kuru orders pay (SEN-184), from
+   * `agentKuruBuilder`. Absent: the plain overloads, which every agent policy
+   * signs. A different value than the cached venue's rebuilds it.
+   */
+  readonly kuruBuilder?: KuruBuilderSettings;
 }
 
 export interface AgentVenuesOptions {
@@ -70,7 +76,9 @@ export interface AgentVenuesOptions {
 
 interface Entry {
   readonly walletId: string;
-  readonly kuru: KuruVenue;
+  /** `builderKey` of the fee `kuru` was built with. */
+  builder: string;
+  kuru: KuruVenue;
   perpl?: PerplVenue;
   timer?: ReturnType<typeof setTimeout>;
 }
@@ -120,15 +128,14 @@ export class AgentVenues {
       this.release(agent.agentId);
       entry = undefined;
     }
+    const builder = builderKey(options.kuruBuilder);
     if (!entry) {
-      entry = {
-        walletId: agent.walletId,
-        kuru: new KuruVenue({
-          publicClient: this.#publicClient,
-          submitter: new PrivyKuruSubmitter({ wallet: agent, sender: this.#sender }),
-        }),
-      };
+      entry = { walletId: agent.walletId, builder, kuru: this.#kuru(agent, options.kuruBuilder) };
       this.#entries.set(agent.agentId, entry);
+    } else if (entry.builder !== builder) {
+      // An amend changed what the policy allows: the next order follows it.
+      entry.kuru = this.#kuru(agent, options.kuruBuilder);
+      entry.builder = builder;
     }
     if (!entry.perpl && credentials) entry.perpl = this.#createPerpl(credentials);
 
@@ -219,6 +226,14 @@ export class AgentVenues {
     }
   }
 
+  #kuru(agent: AgentIdentity, builder: KuruBuilderSettings | undefined): KuruVenue {
+    return new KuruVenue({
+      publicClient: this.#publicClient,
+      submitter: new PrivyKuruSubmitter({ wallet: agent, sender: this.#sender }),
+      ...(builder ? { builder } : {}),
+    });
+  }
+
   #touch(agentId: string, entry: Entry): void {
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => this.release(agentId), this.#idleMs);
@@ -234,4 +249,10 @@ export class AgentVenues {
 function messageOf(error: unknown): string {
   if (error instanceof BaseError) return error.shortMessage;
   return error instanceof Error ? error.message : String(error);
+}
+
+/** What distinguishes one builder setting from another for the venue cache. */
+function builderKey(builder: KuruBuilderSettings | undefined): string {
+  if (!builder) return '';
+  return `${builder.address.toLowerCase()}:${builder.feePps}:${builder.approvalExpiry(0)}`;
 }
