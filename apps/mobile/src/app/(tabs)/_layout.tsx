@@ -22,8 +22,8 @@
  * itself and the Trade button is its absolutely placed sibling.
  *
  * On a wide web window (`useWide`, SEN-166) the same TabList is restyled as a
- * left rail — the mark, the four tabs, a full-width Trade stone, and Account at
- * the foot, under the user's face and name (SEN-172) — and the screen beside it reads in a centred column (`Screen`).
+ * left rail — the mark, the four tabs, a full-width Trade stone, and at the
+ * foot "How it works" (SEN-181) above Account, under the user's face and name (SEN-172) — and the screen beside it reads in a centred column (`Screen`).
  * The rail's extras sit inside the TabList: the router ignores children of a
  * TabList that are not triggers, and renders them. The narrow tree is the dock
  * exactly as it was.
@@ -93,6 +93,22 @@ export default function TabsLayout() {
             <Text style={styles.railTradeLabel}>Trade</Text>
           </Pressable>
           <View style={styles.grow} />
+          {/* SEN-181: how the passkey, the wallet and the mandate work, for judges and the curious. */}
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="How it works"
+            onPress={() => router.push('/how-it-works')}
+            style={(state) => [
+              styles.railItem,
+              isHovered(state) && styles.railItemHover,
+              state.pressed && styles.pressed,
+            ]}
+          >
+            <Icon name="help" size={20} color={color.textFaint} />
+            <Text style={[styles.railLabel, styles.railLabelOff]} numberOfLines={1}>
+              How it works
+            </Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Account"
