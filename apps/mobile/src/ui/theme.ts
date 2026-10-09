@@ -27,7 +27,7 @@ import { StyleSheet } from 'react-native';
 import { color } from './palette';
 
 // The tokens live in `palette.ts`, RN-free, so pure generators can use them.
-export { color };
+export { color } from './palette';
 
 /**
  * Loaded in `app/_layout.tsx`. Each family is one registered face, so styles

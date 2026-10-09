@@ -19,7 +19,7 @@ import {
 import { useMemo } from 'react';
 import { View } from 'react-native';
 
-import { AVATAR_BOX, avatarArt, avatarStrokes } from './avatarArt';
+import { AVATAR_BOX, avatarArt, avatarStrokes, stonePaint } from './avatarArt';
 import { color } from './theme';
 
 const C = AVATAR_BOX / 2;
@@ -79,38 +79,22 @@ export function Avatar({ seed, size = 36 }: { seed: string; size?: number }) {
             opacity={s.trailOpacity}
           />
           {art.stones.map((stone, i) => {
-            const r = stone.r * s.stoneScale;
-            if (stone.kind === 'key') {
-              return (
-                <Group key={i}>
-                  <Circle cx={stone.cx} cy={stone.cy} r={r} color={color.text} />
+            const p = stonePaint(stone, art.accent, s);
+            return (
+              <Group key={i}>
+                <Circle cx={stone.cx} cy={stone.cy} r={p.r} color={p.fill} />
+                {p.stroke ? (
                   <Circle
                     cx={stone.cx}
                     cy={stone.cy}
-                    r={r}
+                    r={p.r}
                     style="stroke"
-                    strokeWidth={1.5}
-                    color={color.ink}
+                    strokeWidth={p.stroke.width}
+                    color={p.stroke.color}
                   />
-                </Group>
-              );
-            }
-            if (stone.kind === 'ring') {
-              return (
-                <Group key={i}>
-                  <Circle cx={stone.cx} cy={stone.cy} r={r} color={color.ink} />
-                  <Circle
-                    cx={stone.cx}
-                    cy={stone.cy}
-                    r={r}
-                    style="stroke"
-                    strokeWidth={s.ring}
-                    color={art.accent}
-                  />
-                </Group>
-              );
-            }
-            return <Circle key={i} cx={stone.cx} cy={stone.cy} r={r} color={art.accent} />;
+                ) : null}
+              </Group>
+            );
           })}
           <Circle
             cx={C}

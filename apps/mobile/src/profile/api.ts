@@ -72,7 +72,11 @@ export class ProfileApi {
 
   /** One request, and at most one silent re-authentication — see `WalletApi`. */
   private async request(method: 'GET' | 'PATCH', body?: ProfilePatch): Promise<unknown> {
-    const first = await this.send(method, body, this.auth.token());
+    const token = this.auth.token();
+    // No token yet (the first request after sign-in): sign in first rather
+    // than spend a round trip on a certain 401. `refresh()` is single-flight.
+    if (token === null) return this.read(await this.send(method, body, await this.auth.refresh()));
+    const first = await this.send(method, body, token);
     if (first.status !== 401) return this.read(first);
     const refreshed = await this.auth.refresh();
     if (refreshed === null) return this.read(first);

@@ -52,13 +52,12 @@ export function identityOf(address: string, profile: Profile): Identity {
 }
 
 /**
- * A fresh generated name for "roll a name": the `n`-th alternative for this
- * address, skipping any that equal `current`.
+ * A fresh generated name for "roll a name": the first alternative from the
+ * `n`-th on for this address that is not `current`.
  */
 export function rolledName(address: string, n: number, current: string): string {
-  for (let i = n; i < n + 8; i++) {
+  for (let i = n; ; i++) {
     const name = nameFor(`${base(address)}/name/${i}`);
     if (name !== current) return name;
   }
-  return nameFor(`${base(address)}/name/${n}`);
 }

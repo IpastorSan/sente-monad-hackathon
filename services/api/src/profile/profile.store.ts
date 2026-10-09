@@ -57,6 +57,14 @@ export class ProfileStore {
         patch.avatarSeed !== undefined ? patch.avatarSeed : (previous?.avatarSeed ?? null),
       updatedAt: now,
     };
+    const view = { name: next.name, avatarSeed: next.avatarSeed };
+    // Nothing changed ("Original" on the original face): no rewrite of the file.
+    if (
+      next.name === (previous?.name ?? null) &&
+      next.avatarSeed === (previous?.avatarSeed ?? null)
+    ) {
+      return view;
+    }
     if (next.name === null && next.avatarSeed === null) this.#byUserId.delete(userId);
     else this.#byUserId.set(userId, next);
     try {
@@ -67,7 +75,7 @@ export class ProfileStore {
       else this.#byUserId.delete(userId);
       throw error;
     }
-    return { name: next.name, avatarSeed: next.avatarSeed };
+    return view;
   }
 
   #save(): void {

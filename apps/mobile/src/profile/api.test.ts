@@ -63,6 +63,21 @@ test('a 401 signs in again once and retries with the new token', async () => {
   assert.deepEqual(calls[1]!.init?.headers, { authorization: 'Bearer new' });
 });
 
+test('with no token yet it signs in first instead of collecting a 401', async () => {
+  const calls: RequestInit[] = [];
+  const api = new ProfileApi({
+    auth: { token: () => null, refresh: () => Promise.resolve('fresh') },
+    baseUrl: BASE,
+    fetchImpl: ((_url: string, init?: RequestInit) => {
+      calls.push(init!);
+      return Promise.resolve(new Response('{"name":null,"avatarSeed":null}', { status: 200 }));
+    }) as typeof fetch,
+  });
+  await api.get();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.headers, { authorization: 'Bearer fresh' });
+});
+
 test('a refusal is a typed error carrying the reason and message', async () => {
   const { api } = recorder({
     status: 400,

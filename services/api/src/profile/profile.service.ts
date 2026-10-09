@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus } from '@nestjs/common';
 
 import type { Principal } from '../auth/principal';
 import { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
@@ -38,40 +38,34 @@ export class ProfileService {
    */
   update(principal: Principal, body: UpdateProfileDto, now = new Date()): ProfileResponseDto {
     const patch: Partial<ProfileView> = {};
-    if (body.name !== undefined) {
-      if (body.name === null) {
-        patch.name = null;
-      } else {
-        const name = normalizeName(body.name);
-        const problem = nameProblem(name);
-        if (problem !== null) {
-          throw new BadRequestException({
-            statusCode: 400,
-            reason: 'invalid_name',
-            message: problem,
-          });
-        }
-        patch.name = name;
-      }
+    if (typeof body.name === 'string') {
+      const name = normalizeName(body.name);
+      const problem = nameProblem(name);
+      if (problem !== null) refuse(HttpStatus.BAD_REQUEST, 'invalid_name', problem);
+      patch.name = name;
+    } else if (body.name === null) {
+      patch.name = null;
     }
     if (body.avatarSeed !== undefined) patch.avatarSeed = body.avatarSeed;
     if (Object.keys(patch).length === 0) {
-      throw new BadRequestException({
-        statusCode: 400,
-        reason: 'empty_patch',
-        message: 'Send name and/or avatarSeed (null resets either to the default)',
-      });
+      refuse(
+        HttpStatus.BAD_REQUEST,
+        'empty_patch',
+        'Send name and/or avatarSeed (null resets either to the default)',
+      );
     }
     if (!this.#writes.hit(principal.userId, now)) {
-      throw new HttpException(
-        {
-          statusCode: 429,
-          reason: 'rate_limited',
-          message: 'Too many profile changes; try again in a minute',
-        },
+      refuse(
         HttpStatus.TOO_MANY_REQUESTS,
+        'rate_limited',
+        'Too many profile changes; try again in a minute',
       );
     }
     return this.#store.set(principal.userId, patch, now);
   }
+}
+
+/** The API's usual `{statusCode, reason, message}` refusal. */
+function refuse(status: HttpStatus, reason: string, message: string): never {
+  throw new HttpException({ statusCode: status, reason, message }, status);
 }

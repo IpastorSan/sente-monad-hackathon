@@ -240,6 +240,25 @@ export function avatarStrokes(size: number): AvatarStrokes {
       };
 }
 
+export type StonePaint = {
+  readonly r: number;
+  readonly fill: string;
+  readonly stroke: { readonly color: string; readonly width: number } | null;
+};
+
+/**
+ * How a stone is painted, for both renderers: the key stone white with an ink
+ * edge (you), a `ring` hollow in the accent, a `solid` filled with it.
+ */
+export function stonePaint(stone: AvatarStone, accent: string, s: AvatarStrokes): StonePaint {
+  const r = round(stone.r * s.stoneScale);
+  if (stone.kind === 'key')
+    return { r, fill: color.text, stroke: { color: color.ink, width: 1.5 } };
+  if (stone.kind === 'ring')
+    return { r, fill: color.ink, stroke: { color: accent, width: s.ring } };
+  return { r, fill: accent, stroke: null };
+}
+
 /**
  * The same face as a standalone SVG document, `size` px square — for contexts
  * without Skia (a share card, an `<img>`, the tests). The ids are suffixed so
@@ -251,15 +270,11 @@ export function avatarSvg(seed: string, size = 96): string {
   const s = avatarStrokes(size);
   const stones = art.stones
     .map((stone) => {
-      const r = round(stone.r * s.stoneScale);
-      const at = `cx="${stone.cx}" cy="${stone.cy}" r="${r}"`;
-      if (stone.kind === 'key') {
-        return `<circle ${at} fill="${color.text}" stroke="${color.ink}" stroke-width="1.5"/>`;
-      }
-      if (stone.kind === 'ring') {
-        return `<circle ${at} fill="${color.ink}" stroke="${art.accent}" stroke-width="${s.ring}"/>`;
-      }
-      return `<circle ${at} fill="${art.accent}"/>`;
+      const p = stonePaint(stone, art.accent, s);
+      const outline = p.stroke
+        ? ` stroke="${p.stroke.color}" stroke-width="${p.stroke.width}"`
+        : '';
+      return `<circle cx="${stone.cx}" cy="${stone.cy}" r="${p.r}" fill="${p.fill}"${outline}/>`;
     })
     .join('');
   return (

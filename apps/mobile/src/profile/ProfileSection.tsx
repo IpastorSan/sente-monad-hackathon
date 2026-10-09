@@ -14,6 +14,7 @@ import { Avatar } from '@/ui/Avatar';
 import { shortAddress } from '@/ui/format';
 import { Button, ButtonRow, Card, Field, Notice, Section, useWide } from '@/ui/kit';
 import { color, font, text } from '@/ui/theme';
+import { asError } from '@/wallet/api';
 
 import { avatarSeedFor, rolledName } from './identity';
 import { NAME_MAX, nameProblem, normalizeName } from './rules';
@@ -32,7 +33,7 @@ export function ProfileSection() {
   const change = (patch: Parameters<typeof profile.update>[0]) => {
     setFailure(null);
     profile.update(patch).catch((error: unknown) => {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(asError(error).message);
     });
   };
 
@@ -55,6 +56,11 @@ export function ProfileSection() {
 
   const step = identity.avatarStep;
   const size = wide ? 128 : 104;
+  const face = identity.defaultAvatar ? 'original face' : `face ${step}`;
+  const source =
+    identity.defaultAvatar && identity.defaultName
+      ? `drawn from ${shortAddress(address)}`
+      : `${shortAddress(address)} · ${face}`;
 
   return (
     <Section label="Profile">
@@ -66,9 +72,7 @@ export function ProfileSection() {
               {identity.name}
             </Text>
             <Text style={[text.mono, styles.source]} numberOfLines={1}>
-              {identity.defaultAvatar && identity.defaultName
-                ? `drawn from ${shortAddress(address)}`
-                : `${shortAddress(address)} · ${identity.defaultAvatar ? 'original face' : `face ${step}`}`}
+              {source}
             </Text>
           </View>
         </View>
