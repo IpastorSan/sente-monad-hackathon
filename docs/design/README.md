@@ -23,4 +23,5 @@ in the ledger, and each entry kind has its own stone. The enclave's mandate is d
 with gauges showing how much of each limit an agent has used. Monad purple (`#836EF9`) marks an
 event, like an agent acting or a block landing, and the ground is Monad's night rather than a
 neutral black. Each of the four typefaces belongs to one speaker: Bricolage Grotesque for display
-text, Geist for the app, Newsreader italic for the agent's own words, and Geist Mono for the chain.
+text, Geist for the app, and Geist Mono for the machines: purple and at reading size when the agent speaks, small and dim
+for the chain.

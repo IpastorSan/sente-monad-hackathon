@@ -11,9 +11,11 @@
  *   ramp (SEN-24) while a block is landing — and it drains out once the block
  *   is final. Nothing decorative is purple.
  * - A face is a speaker. Bricolage when the app raises its voice, Geist when it
- *   talks, Newsreader italic when the AGENT talks (theses, invalidations, the
- *   mandate read back), Geist Mono when the CHAIN does (hashes, addresses,
- *   block heights). Numbers are always tabular.
+ *   talks, Geist Mono when a machine does. The machines are told apart by size
+ *   and colour: the AGENT (theses, invalidations, the mandate read back) at
+ *   reading size in purpleSoft, like a terminal it types into; the CHAIN
+ *   (hashes, addresses, block heights) small and dim. Nothing is italic.
+ *   Numbers are always tabular.
  * - Stones say what happened: the ledger's five entry kinds each have a stone
  *   (`Stone` in kit.tsx), so the shape carries the kind.
  * - Limits are drawn, not listed: a mandate limit is a `Gauge` with its cap.
@@ -39,7 +41,8 @@ export const font = {
   semibold: 'Geist_600SemiBold',
   display: 'BricolageGrotesque_700Bold',
   displaySemibold: 'BricolageGrotesque_600SemiBold',
-  voice: 'Newsreader_400Regular_Italic',
+  /** The agent's voice and the chain share one mono; `text.voice`/`text.mono` split them. */
+  voice: 'GeistMono_400Regular',
   chain: 'GeistMono_400Regular',
 } as const;
 
@@ -92,8 +95,17 @@ export const text = StyleSheet.create({
     textTransform: 'uppercase',
     color: color.textFaint,
   },
-  /** The agent's own words, and nothing else. */
-  voice: { fontFamily: font.voice, fontSize: 17, lineHeight: 24, color: color.purpleSoft },
+  /**
+   * The agent's own words, and nothing else: mono at reading size, in purple.
+   * Mono runs wide, so it sits two points under the old serif's 17.
+   */
+  voice: {
+    fontFamily: font.voice,
+    fontSize: 15,
+    lineHeight: 22,
+    letterSpacing: -0.2,
+    color: color.purpleSoft,
+  },
   /** Chain facts only: hashes, addresses, block heights, policy and agent ids. */
   mono: { fontFamily: font.chain, fontSize: 12, lineHeight: 18, color: color.textDim },
   num: { fontVariant: ['tabular-nums'] },

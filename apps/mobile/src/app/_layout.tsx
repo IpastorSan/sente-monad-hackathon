@@ -4,7 +4,6 @@ import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular';
 import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium';
 import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
 import { GeistMono_400Regular } from '@expo-google-fonts/geist-mono/400Regular';
-import { Newsreader_400Regular_Italic } from '@expo-google-fonts/newsreader/400Regular_Italic';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -17,14 +16,13 @@ import { color, RADIUS } from '@/ui/theme';
 
 export default function RootLayout() {
   // Per-weight imports: a package root would bundle every face it ships. These
-  // seven are the whole type system (`ui/theme.ts` → `font`).
+  // six are the whole type system (`ui/theme.ts` → `font`).
   const [fontsLoaded, fontError] = useFonts({
     Geist_400Regular,
     Geist_500Medium,
     Geist_600SemiBold,
     BricolageGrotesque_600SemiBold,
     BricolageGrotesque_700Bold,
-    Newsreader_400Regular_Italic,
     GeistMono_400Regular,
   });
   const wide = useWide();

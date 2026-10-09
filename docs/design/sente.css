@@ -6,14 +6,14 @@
  * below them is the component vocabulary drawn in CSS so it can be reviewed
  * before any of it is written in React Native.
  *
- * Four voices, four faces — and a face always means the same thing:
+ * Four voices, three faces — and a face always means the same thing:
  *   Bricolage Grotesque  the app speaking loudly (screen titles, the balance)
  *   Geist                the app speaking (everything else)
- *   Newsreader italic    the AGENT speaking (theses, invalidations, verdicts)
- *   Geist Mono           the CHAIN speaking (hashes, addresses, block heights)
+ *   Geist Mono 15 purple the AGENT speaking (theses, invalidations, verdicts)
+ *   Geist Mono 12 dim    the CHAIN speaking (hashes, addresses, block heights)
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,500..800&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Noto+Serif+JP:wght@700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,500..800&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Noto+Serif+JP:wght@700&display=swap');
 
 :root {
   /* Ground: Monad's night, not a neutral black. */
@@ -43,7 +43,7 @@
   /* Faces */
   --f-display: 'Bricolage Grotesque', 'Geist', system-ui, sans-serif;
   --f-body: 'Geist', system-ui, sans-serif;
-  --f-voice: 'Newsreader', Georgia, serif;
+  --f-voice: 'Geist Mono', ui-monospace, monospace;
   --f-chain: 'Geist Mono', ui-monospace, monospace;
   --f-mark: 'Noto Serif JP', serif;
 
@@ -104,8 +104,8 @@
 }
 .t-voice {
   font-family: var(--f-voice);
-  font-style: italic;
-  font-size: 17px;
+  font-size: 15px;
+  letter-spacing: -0.01em;
   line-height: 1.4;
   color: var(--purple-soft);
 }
