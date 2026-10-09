@@ -81,7 +81,7 @@ export const SECTIONS: readonly HelpSection[] = [
         question: 'Which passkey providers work?',
         body: [
           'The provider has to support PRF. Measured to work: Google Chrome on desktop with the passkey saved to Google Password Manager.',
-          'Measured not to work: Chromium, which has no Google Password Manager passkeys, and the Bitwarden extension, which takes over the ceremony without PRF (pick “Use your device” in its popup, or turn its passkey prompt off). 1Password and Chrome’s profile-local passkeys are not expected to work and have not been measured on the web build.',
+          'Measured not to work: Chromium, which has no Google Password Manager passkeys, and the Bitwarden extension, which takes over the ceremony without PRF (pick “Use your device” in its popup, or turn its passkey prompt off). Other providers (1Password, Chrome’s profile-local passkeys) have not been measured on the web build.',
           'Expected to work, not yet confirmed: signing in on the desktop with your Android phone through the QR code, and on the web with a passkey the Android app created. Windows Hello and iCloud Keychain have not been measured.',
         ],
       },
@@ -243,7 +243,7 @@ export const SECTIONS: readonly HelpSection[] = [
         question: 'When does an agent run, and what does a run do?',
         body: [
           'An agent runs when you start a run from its page, or on its own schedule if you give it one (from every minute to every 7 days). Scheduled runs are held back when your credits run low or the agent reaches its daily cap.',
-          'A run is one bounded loop. The model gets a snapshot (balances, positions, open orders and the order book of each market it may trade), calls tools, and stops: at most 12 turns and 3 minutes by default. It must record a thesis before it trades a market. Runs are billed to your own OpenRouter key, which has a monthly spending limit. The models are Kimi K2.6 and Claude Sonnet 5.',
+          'A run is one bounded loop. The model gets a snapshot (balances, positions, open orders and the order book of each market it may trade), calls tools, and stops: at most 12 turns and 3 minutes by default. It must record a thesis before it trades a market. Runs are billed to your own OpenRouter key, which starts with a one-off 10 USD free tier that does not refill (see [Credits](/credits)). The models are Kimi K2.6 and Claude Sonnet 5.',
           'Everything an agent does (theses, orders, fills, refusals, and a summary of each run) is written to its Agent Ledger, on the agent’s page.',
         ],
       },

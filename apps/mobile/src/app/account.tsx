@@ -102,8 +102,10 @@ export default function Account() {
           onPress={() => void forget()}
         />
         <Text style={[text.caption, styles.note]}>
-          A passkey saved to Chrome&apos;s local store has no PRF extension and cannot derive a
-          wallet. When the system sheet asks where to save, choose Google Password Manager.
+          Your wallet is derived from the passkey&apos;s PRF extension, so save it to Google
+          Password Manager: the provider measured to work. On a computer use Google Chrome (Chromium
+          has no Google Password Manager passkeys); if Bitwarden takes over the prompt, pick
+          &ldquo;Use your device&rdquo;.
         </Text>
       </Section>
 
