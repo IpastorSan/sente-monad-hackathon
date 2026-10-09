@@ -249,7 +249,7 @@ describe('prices', () => {
 describe('the agent mandate', () => {
   it('builds through the hire screen’s own buildMandate', () => {
     const now = 1_790_000_000;
-    const kuruMarket = '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61';
+    const kuruMarket = '0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9'; // MON-USDC (SEN-185)
     const built = buildMandate(
       agentMandateForm({ kuruMarket, maxOrderNotional: '77', nowSeconds: now, returnTo: ADDRESS }),
       now,
