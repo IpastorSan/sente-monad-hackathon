@@ -48,7 +48,11 @@ export interface PerplTraderOptions {
    * caller can (and should) zero its own buffer right after this call.
    */
   readonly credentials: PerplCredentials;
-  /** e.g. `https://testnet.perpl.xyz/api`. */
+  /**
+   * e.g. `https://testnet.perpl.xyz/api`. Screens do not pick it: they call
+   * `createAppPerplTrader` (appPerplTrader.ts), which passes this platform's
+   * network — Perpl directly on Android, Sente's proxy on web (SEN-175).
+   */
   readonly restUrl: string;
   /** e.g. `wss://testnet.perpl.xyz`. */
   readonly wsUrl: string;
