@@ -39,7 +39,16 @@ import {
 import { changeOf, indexTickers, search } from '@/markets/select';
 import { useSession } from '@/session';
 import { Sigil } from '@/ui/goban';
-import { Button, Chip, Screen, Section, SectionLink, Segmented } from '@/ui/kit';
+import {
+  BARE_INPUT,
+  Button,
+  Chip,
+  FOCUS_RING,
+  Screen,
+  Section,
+  SectionLink,
+  Segmented,
+} from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { ChangeText, PerpTag, TokenGlyph } from '@/ui/trading';
 import { formatPrice } from '@/ui/tradingFormat';
@@ -61,6 +70,7 @@ export default function SearchScreen() {
   const tickers = useTickers();
   const { state: overview } = useAgentsOverview();
   const [query, setQuery] = useState('');
+  const [focused, setFocused] = useState(false);
   const [scope, setScope] = useState<Scope>('all');
   const [recents, setRecents] = useState<Recent[]>([]);
   const [board, setBoard] = useState<Leaderboard | null>(null);
@@ -126,7 +136,7 @@ export default function SearchScreen() {
   return (
     <Screen>
       <View style={styles.bar}>
-        <View style={styles.field}>
+        <View style={[styles.field, focused && FOCUS_RING]}>
           <TextInput
             value={query}
             onChangeText={setQuery}
@@ -138,7 +148,9 @@ export default function SearchScreen() {
             returnKeyType="search"
             cursorColor={color.purpleHi}
             selectionColor={color.purple}
-            style={styles.input}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            style={[styles.input, BARE_INPUT]}
             accessibilityLabel="Search markets and agents"
           />
           {typed ? (
@@ -347,7 +359,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.well,
     backgroundColor: color.well,
     borderWidth: 1,
-    borderColor: color.purple,
+    borderColor: color.well,
   },
   input: {
     flex: 1,

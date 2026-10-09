@@ -23,6 +23,7 @@ import {
   type KeyboardTypeOptions,
   type PressableStateCallbackType,
   type StyleProp,
+  type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -324,6 +325,27 @@ export function ButtonRow({ children }: { children: ReactNode }) {
   return <View style={styles.buttonRow}>{children}</View>;
 }
 
+/**
+ * ONE FOCUS RING PER INPUT (SEN-177). On web the browser draws its own square
+ * outline on the inner `<input>`, inset from our rounded box, so a focused
+ * field showed two rings. The box is the indicator — a purple border and a
+ * soft glow — and every TextInput sets {@link BARE_INPUT} so the browser's
+ * outline goes. Removing it is only safe because the box takes over: a
+ * TextInput that sets BARE_INPUT must put {@link FOCUS_RING} on its container
+ * while focused.
+ *
+ * `outlineStyle: 'none'` is valid CSS that React Native's types don't list.
+ */
+export const BARE_INPUT = (Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) as TextStyle;
+
+export const FOCUS_RING: ViewStyle = {
+  borderColor: color.purple,
+  shadowColor: color.purple,
+  shadowOpacity: 0.45,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 0 },
+};
+
 export function Field({
   label,
   value,
@@ -370,11 +392,7 @@ export function Field({
         ) : null}
       </View>
       <View
-        style={[
-          styles.inputRow,
-          focused && styles.inputRowFocus,
-          (error || over) && styles.inputRowError,
-        ]}
+        style={[styles.inputRow, focused && FOCUS_RING, (error || over) && styles.inputRowError]}
       >
         <TextInput
           value={value}
@@ -393,7 +411,12 @@ export function Field({
           cursorColor={color.purpleHi}
           selectionColor={color.purple}
           textAlignVertical={multiline ? 'top' : 'center'}
-          style={[styles.input, multiline && styles.inputMultiline, numeric && text.num]}
+          style={[
+            styles.input,
+            BARE_INPUT,
+            multiline && styles.inputMultiline,
+            numeric && text.num,
+          ]}
         />
         {suffix ? <Text style={styles.suffix}>{suffix}</Text> : null}
       </View>
@@ -804,7 +827,6 @@ const styles = StyleSheet.create({
     borderColor: color.well,
     backgroundColor: color.well,
   },
-  inputRowFocus: { borderColor: color.purple },
   inputRowError: { borderColor: color.berry },
   input: {
     flex: 1,

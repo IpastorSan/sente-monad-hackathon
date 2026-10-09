@@ -27,6 +27,8 @@ import { useTradingEnabled } from '@/trade/useTradingEnabled';
 import { ComingNext } from '@/ui/ComingNext';
 import { Icon } from '@/ui/icons';
 import {
+  BARE_INPUT,
+  FOCUS_RING,
   Button,
   Chip,
   Chips,
@@ -81,6 +83,7 @@ function Picker() {
   const markets = useMarkets();
   const tickers = useTickers();
   const [query, setQuery] = useState('');
+  const [focused, setFocused] = useState(false);
   const [recents, setRecents] = useState<Recent[]>([]);
 
   useEffect(() => {
@@ -124,7 +127,7 @@ function Picker() {
 
   return (
     <View>
-      <View style={styles.search}>
+      <View style={[styles.search, focused && FOCUS_RING]}>
         <Icon name="markets" size={16} color={color.textFaint} />
         <TextInput
           value={query}
@@ -136,7 +139,9 @@ function Picker() {
           returnKeyType="search"
           cursorColor={color.purpleHi}
           selectionColor={color.purple}
-          style={styles.input}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={[styles.input, BARE_INPUT]}
           accessibilityLabel="Search markets"
         />
       </View>
@@ -205,6 +210,8 @@ const styles = StyleSheet.create({
     marginTop: 16,
     paddingHorizontal: 14,
     borderRadius: RADIUS.well,
+    borderWidth: 1,
+    borderColor: color.well,
     backgroundColor: color.well,
   },
   input: {
