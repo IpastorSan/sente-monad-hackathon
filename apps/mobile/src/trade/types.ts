@@ -56,6 +56,7 @@ export type TradeIntent = KuruIntent | PerplOnboardIntent;
 export type StepKind =
   | 'approve'
   | 'deposit'
+  | 'approveBuilder'
   | 'place'
   | 'cancel'
   | 'withdraw'
@@ -78,7 +79,12 @@ export type PreparedTrade = {
   readonly expiresAt: string;
   readonly wallet: { readonly walletId: string; readonly address: Address };
   readonly steps: readonly PreparedStep[];
-  /** Render only: never an input to a check. */
+  /**
+   * Render only: never an input to a check. A Kuru place with Sente's builder
+   * fee on (SEN-184) adds `senteFeeBps` ("10"), `senteFeePps` ("10000"),
+   * `senteFee` (the estimate on the whole notional, rounded up, e.g. "0.02")
+   * and `senteFeeAsset` ("USDC"); `senteFeeOf` in `kuruBuilder.ts` reads them.
+   */
   readonly summary: Record<string, string>;
 };
 
@@ -188,6 +194,12 @@ export type TradeCapabilities = {
   readonly atomicBatch: boolean;
   readonly chainId: number;
   readonly venues: { readonly kuru: boolean; readonly perpl: boolean };
+  /**
+   * Sente's builder fee on Kuru (SEN-184), `null` when off. Absent from an API
+   * older than SEN-184, which read as `null`. Kuru trading is offered only when
+   * this equals the build's own pin (`kuruBuilder.ts`).
+   */
+  readonly kuruBuilder?: { readonly address: Address; readonly feePps: number } | null;
 };
 
 export type KuruPlaceResult = {
@@ -204,6 +216,8 @@ export type KuruPlaceResult = {
     readonly tradeId: string;
   }[];
   readonly unfilledCancelled?: string;
+  /** Sente's builder fee these fills paid, in `feeAsset` (SEN-184). Absent without one. */
+  readonly senteFee?: string;
 };
 
 export type TradeFunds = readonly {

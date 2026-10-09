@@ -1,6 +1,8 @@
 import {
+  KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
+  KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -57,6 +59,8 @@ type World = {
   walletMon?: bigint;
   accountId?: bigint;
   liveOrderId?: bigint;
+  /** `getBuilderApproval(WALLET, builder)`; none by default. */
+  builderApproval?: { maxFeePps: number; expiry: bigint; active: boolean };
 };
 
 /** The chain reads the planner makes: market params, free balances, account id, slots. */
@@ -90,6 +94,11 @@ function fakeClient(world: World = {}): PublicClient {
     }
     if (functionName === 'userRegistry') return Promise.resolve(world.accountId ?? 0n);
     if (functionName === 'getOrderId') return Promise.resolve(world.liveOrderId ?? 0n);
+    if (functionName === 'getBuilderApproval') {
+      expect(isAddressEqual(address, ACCOUNT_CORE)).toBe(true);
+      expect(isAddressEqual(args![0] as Address, WALLET)).toBe(true);
+      return Promise.resolve(world.builderApproval ?? { maxFeePps: 0, expiry: 0n, active: false });
+    }
     return Promise.reject(new Error(`fake client: no ${functionName}`));
   };
   const getBalance = () => Promise.resolve(world.walletMon ?? parseEther('100'));
@@ -391,5 +400,108 @@ describe('baseReserveAtoms', () => {
     const params = { sizePrecision: 100_000_000n } as Parameters<typeof baseReserveAtoms>[1];
     expect(baseReserveAtoms(1n, params, 18)).toBe(10n ** 10n);
     expect(baseReserveAtoms(3n, params, 6)).toBe(1n); // 0.00000003 of a 6-decimal token
+  });
+});
+
+describe('planKuru with the Sente builder fee (SEN-184)', () => {
+  const BUILDER: Address = '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8';
+  const NOW_MS = 1_800_000_000_000;
+  const withBuilder = (world: World = {}, atomicBatch = false): KuruPlannerDeps => ({
+    ...deps(world, atomicBatch),
+    builder: { address: BUILDER, feePps: 10_000 },
+    now: () => NOW_MS,
+  });
+  const funded = { kuruFree: { [USDC.address.toLowerCase()]: 100_000_000n } };
+
+  it('off: the order keeps the plain overload and no approval leg appears', async () => {
+    const plan = await planKuru(buy(), deps(funded));
+    expect(plan.steps.map((s) => s.kind)).toEqual(['place']);
+    expect(sliceHex(plan.steps[0]!.transaction.data, 0, 4)).toBe('0x6947f147');
+    expect(plan.summary['senteFee']).toBeUndefined();
+  });
+
+  it('on, never approved: approveBuilder for one year, then the builder overload', async () => {
+    const plan = await planKuru(buy(), withBuilder(funded));
+    expect(plan.steps.map((s) => s.kind)).toEqual(['approveBuilder', 'place']);
+    const approve = plan.steps[0]!.transaction;
+    expect(approve.to).toBe(ACCOUNT_CORE);
+    expect(approve.value).toBeUndefined();
+    const { args } = decodeFunctionData({
+      abi: KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
+      data: approve.data,
+    });
+    expect(args).toEqual([BUILDER, 10_000, BigInt(NOW_MS / 1000 + 365 * 86_400)]);
+
+    const place = plan.steps[1]!.transaction.data;
+    expect(sliceHex(place, 0, 4)).toBe('0x2975ed7e');
+    const decoded = decodeFunctionData({ abi: KURU_ORDERBOOK_BUILDER_BATCH_ABI, data: place });
+    expect((decoded.args as readonly unknown[])[4]).toEqual({ builder: BUILDER, feePps: 10_000 });
+  });
+
+  it('on, already approved for long enough: no approval leg', async () => {
+    const plan = await planKuru(
+      buy(),
+      withBuilder({
+        ...funded,
+        builderApproval: {
+          maxFeePps: 10_000,
+          expiry: BigInt(NOW_MS / 1000 + 90 * 86_400),
+          active: true,
+        },
+      }),
+    );
+    expect(plan.steps.map((s) => s.kind)).toEqual(['place']);
+  });
+
+  it('on, approved below the rate or about to lapse: approves again', async () => {
+    for (const builderApproval of [
+      { maxFeePps: 5_000, expiry: BigInt(NOW_MS / 1000 + 90 * 86_400), active: true },
+      { maxFeePps: 10_000, expiry: BigInt(NOW_MS / 1000 + 3600), active: true },
+    ]) {
+      const plan = await planKuru(buy(), withBuilder({ ...funded, builderApproval }));
+      expect(plan.steps.map((s) => s.kind)).toEqual(['approveBuilder', 'place']);
+    }
+  });
+
+  it('the approval sits after the deposit, and a buy reserves the Sente fee too', async () => {
+    const plan = await planKuru(buy(), withBuilder());
+    expect(plan.steps.map((s) => s.kind)).toEqual([
+      'approve',
+      'deposit',
+      'approveBuilder',
+      'place',
+    ]);
+    // 10 USDC notional * (1 + 0.0004 maker + 0.001 Sente) = 10.014 USDC.
+    expect(plan.summary['deposit']).toBe('10.014');
+  });
+
+  it('atomic batch: one execute carrying all four legs', async () => {
+    const plan = await planKuru(buy(), withBuilder({}, true));
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]!.calls).toHaveLength(4);
+  });
+
+  it('the summary carries the fee for the ticket: 0.10% of 10 USDC is 0.01 USDC', async () => {
+    const plan = await planKuru(buy(), withBuilder(funded));
+    expect(plan.summary).toMatchObject({
+      senteFeeBps: '10',
+      senteFeePps: '10000',
+      senteFee: '0.01',
+      senteFeeAsset: 'USDC',
+    });
+  });
+
+  it('cancels and withdrawals carry no builder anything', async () => {
+    const cancel = await planKuru(
+      {
+        kind: 'kuru.cancel',
+        clientTradeId: CLIENT_TRADE_ID,
+        market: MON_USDC.address,
+        orderId: '3:9',
+      },
+      withBuilder({ accountId: 7n, liveOrderId: 9n }),
+    );
+    expect(cancel.steps.map((s) => s.kind)).toEqual(['cancel']);
+    expect(cancel.summary['senteFee']).toBeUndefined();
   });
 });

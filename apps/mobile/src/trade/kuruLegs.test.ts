@@ -12,9 +12,12 @@ import { test } from 'node:test';
 import {
   cancelOrderCall,
   depositCalls,
+  approveBuilderCall,
+  KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
+  KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -97,6 +100,12 @@ test('each hand-written fragment has the selector of its SDK counterpart', () =>
     'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[])': kuruAbi.spotOrderBookAbi,
     'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32)':
       kuruAbi.spotOrderBookAbi,
+    // SEN-184: Sente's own builder fee.
+    'approveBuilder(address,uint32,uint64)': kuruAbi.accountCoreAbi,
+    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))':
+      kuruAbi.spotOrderBookAbi,
+    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32,(address,uint32))':
+      kuruAbi.spotOrderBookAbi,
   };
   const ours = KURU_LEG_ABI.map((fn) => toFunctionSignature(fn));
   assert.deepEqual(ours.toSorted(), Object.keys(sources).toSorted());
@@ -115,6 +124,8 @@ test('the fragments match what the server encodes with (@sente/venues cuts)', ()
   const ours = new Set(KURU_LEG_ABI.map((fn) => toFunctionSelector(fn)));
   for (const selector of [
     ...selectors(KURU_ORDERBOOK_BATCH_ABI),
+    ...selectors(KURU_ORDERBOOK_BUILDER_BATCH_ABI),
+    ...selectors(KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI),
     ...selectors(KURU_ACCOUNT_CORE_DEPOSIT_ABI),
     ...selectors(KURU_ACCOUNT_CORE_WITHDRAW_ABI),
   ]) {
@@ -226,19 +237,113 @@ test('a non-zero userId is reported, not hidden, for the verifier to refuse', ()
 
 const BUILDER = { builder: STRANGER, feePps: 1_000 };
 
-test('both builder-config batch overloads are refused', () => {
-  for (const signature of [
-    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))',
-    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32,(address,uint32))',
-  ]) {
-    const fragment = sdkFunction(kuruAbi.spotOrderBookAbi, signature);
-    const tail = fragment.inputs.length === 5 ? [toClientOrderId('x'), BUILDER] : [BUILDER];
-    const data = encodeFunctionData({
-      abi: [fragment],
-      functionName: 'batch',
-      args: [0, [ORDER], [], ...tail],
+function builderBatch(builder: { builder: Address; feePps: number }, clientOrderId?: Hex): Hex {
+  const signature =
+    clientOrderId === undefined
+      ? 'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))'
+      : 'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32,(address,uint32))';
+  const fragment = sdkFunction(kuruAbi.spotOrderBookAbi, signature);
+  const tail = clientOrderId === undefined ? [builder] : [clientOrderId, builder];
+  return encodeFunctionData({
+    abi: [fragment],
+    functionName: 'batch',
+    args: [0, [ORDER], [], ...tail],
+  });
+}
+
+test('both builder-config batch overloads decode, reporting builder and rate (SEN-184)', () => {
+  // Who is paid is NOT judged here: the verifier holds it to the build's pin.
+  for (const clientOrderId of [undefined, toClientOrderId('x')]) {
+    const leg = accepted({
+      to: MON_USDC.address,
+      value: 0n,
+      data: builderBatch(BUILDER, clientOrderId),
     });
-    refused({ to: MON_USDC.address, value: 0n, data }, /is not a Kuru call/);
+    assert.equal(leg.kind, 'place');
+    assert.deepEqual(leg.kind === 'place' && leg.builder, BUILDER);
+    assert.equal(leg.kind === 'place' && leg.clientOrderId, clientOrderId);
+  }
+});
+
+test('the server’s own builder order is what the classifier reads back', () => {
+  const call = placeOrderCall(MON_USDC.address, ORDER, toClientOrderId('x'), {
+    address: STRANGER,
+    feePps: 10_000,
+  });
+  const leg = accepted(call);
+  assert.deepEqual(leg.kind === 'place' && leg.builder, { builder: STRANGER, feePps: 10_000 });
+});
+
+test('a builder order paying the zero address or outside Kuru’s range is refused', () => {
+  const zero = '0x0000000000000000000000000000000000000000' as Address;
+  refused(
+    { to: MON_USDC.address, value: 0n, data: builderBatch({ builder: zero, feePps: 1 }) },
+    /no builder/,
+  );
+  refused(
+    { to: MON_USDC.address, value: 0n, data: builderBatch({ builder: STRANGER, feePps: 0 }) },
+    /outside/,
+  );
+  refused(
+    { to: MON_USDC.address, value: 0n, data: builderBatch({ builder: STRANGER, feePps: 100_001 }) },
+    /outside/,
+  );
+});
+
+test('a cancel carrying a builder fee is refused', () => {
+  const fragment = sdkFunction(
+    kuruAbi.spotOrderBookAbi,
+    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))',
+  );
+  const data = encodeFunctionData({
+    abi: [fragment],
+    functionName: 'batch',
+    args: [0, [], [3], BUILDER],
+  });
+  refused({ to: MON_USDC.address, value: 0n, data }, /builder fee/);
+});
+
+test('approveBuilder is classified with builder, rate and expiry', () => {
+  const leg = accepted(approveBuilderCall(ACCOUNT_CORE, STRANGER, 10_000, 1_900_000_000n));
+  assert.deepEqual(leg, {
+    ok: true,
+    kind: 'approveBuilder',
+    builder: STRANGER,
+    maxFeePps: 10_000,
+    expiry: 1_900_000_000n,
+  });
+});
+
+test('approveBuilder to anyone but AccountCore, with value, or out of range is refused', () => {
+  const good = approveBuilderCall(ACCOUNT_CORE, STRANGER, 10_000, 1_900_000_000n);
+  refused({ ...good, to: STRANGER }, /not AccountCore/);
+  refused({ ...good, value: 1n }, /carries value/);
+  const raw = (builder: Address, pps: number, expiry: bigint): Erc7579Call => ({
+    to: ACCOUNT_CORE,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
+      functionName: 'approveBuilder',
+      args: [builder, pps, expiry],
+    }),
+  });
+  refused(raw('0x0000000000000000000000000000000000000000', 10_000, 1n), /no builder/);
+  refused(raw(STRANGER, 0, 1n), /outside/);
+  refused(raw(STRANGER, 100_001, 1n), /outside/);
+  refused(raw(STRANGER, 10_000, 0n), /never takes effect/);
+});
+
+test('revokeBuilder and claimBuilderFees are refused', () => {
+  for (const [name, args] of [
+    ['revokeBuilder', [STRANGER]],
+    ['claimBuilderFees', [USDC.address]],
+  ] as const) {
+    const data = encodeFunctionData({
+      abi: kuruAbi.accountCoreAbi,
+      functionName: name,
+      args: args as never,
+    });
+    refused({ to: ACCOUNT_CORE, value: 0n, data }, /is not a Kuru call/);
   }
 });
 

@@ -17,6 +17,12 @@
  * decides what the user pays (worst price, deposit cap) comes from the phone,
  * so the server can refuse a trade but not widen it.
  *
+ * Sente's builder fee (SEN-184) is held to this build's pin, never to the
+ * server: a builder order must pay exactly `ctx.builder` at exactly its rate,
+ * and an `approveBuilder` leg may only approve that builder, at no more than
+ * that rate, until no later than {@link BUILDER_APPROVAL_MAX_SECONDS} from the
+ * phone's clock. Without a pin, every builder leg is refused.
+ *
  * Pure TS: `verifyKuru.test.ts` runs under plain node.
  */
 import {
@@ -37,6 +43,7 @@ import {
   type KuruLeg,
   type KuruOrder,
 } from './kuruLegs.ts';
+import { BUILDER_APPROVAL_MAX_SECONDS, type KuruBuilderPin } from './kuruBuilder.ts';
 import { depositCapAtoms, worstPriceUnits, type MarketFacts } from './kuruMarket.ts';
 import type {
   KuruCancelIntent,
@@ -60,6 +67,13 @@ export type KuruVerifyContext = {
   readonly facts?: MarketFacts;
   /** The user's slippage setting. Required for a market order. */
   readonly slippageBps?: number;
+  /**
+   * The Sente builder this build accepts (`KURU_BUILDER_PIN`). Absent or
+   * `null`: every builder order and builder approval is refused.
+   */
+  readonly builder?: KuruBuilderPin | null;
+  /** The phone's clock, Unix seconds. Required to accept a builder approval. */
+  readonly nowSeconds?: number;
 };
 
 export type KuruVerifyResult =
@@ -156,7 +170,7 @@ function decodeStep(
 }
 
 // ---------------------------------------------------------------------------
-// Place: [approve?, deposit?, place], across any number of steps.
+// Place: [approve?, deposit?, approveBuilder?, place], across any number of steps.
 
 function verifyPlace(
   legs: readonly Leg[],
@@ -187,6 +201,7 @@ function verifyPlace(
   let i = 0;
   const approve = legs[i]?.kind === 'approve' ? legs[i++] : undefined;
   const deposit = legs[i]?.kind === 'deposit' ? legs[i++] : undefined;
+  const approveBuilder = legs[i]?.kind === 'approveBuilder' ? legs[i++] : undefined;
   const place = legs[i];
   if (place === undefined || place.kind !== 'place') {
     return refuse(
@@ -204,7 +219,71 @@ function verifyPlace(
   const orderProblem = checkOrder(place, intent, expected.order);
   if (orderProblem) return refuse(orderProblem, place.stepIndex);
 
-  return checkFunding(approve, deposit, intent, market, facts, expected.order, maxDeposit);
+  const builder = checkBuilder(place, approveBuilder, ctx);
+  if (!builder.ok) return builder;
+
+  return checkFunding(
+    approve,
+    deposit,
+    intent,
+    market,
+    facts,
+    expected.order,
+    maxDeposit,
+    builder.feePps,
+  );
+}
+
+/**
+ * The Sente fee, held to this build's pin. Answers the rate the order pays
+ * (0 without a builder) for the deposit cap.
+ */
+function checkBuilder(
+  place: Extract<Leg, { kind: 'place' }>,
+  approval: Leg | undefined,
+  ctx: KuruVerifyContext,
+): { readonly ok: true; readonly feePps: number } | Refusal {
+  const pin = ctx.builder ?? null;
+  const paid = place.builder;
+  if (paid === undefined) {
+    // A plain order costs the user less; only a lone approval is out of place.
+    if (approval !== undefined) {
+      return refuse('the builder approval is not followed by a builder order', approval.stepIndex);
+    }
+    return { ok: true, feePps: 0 };
+  }
+  if (pin === null)
+    return refuse('the order pays a builder fee this app does not allow', place.stepIndex);
+  if (!isAddressEqual(paid.builder, pin.address)) {
+    return refuse(`the order pays its fee to ${paid.builder}, not Sente`, place.stepIndex);
+  }
+  if (paid.feePps !== pin.feePps) {
+    return refuse(
+      `the order pays a ${paid.feePps} pps fee, not Sente's ${pin.feePps}`,
+      place.stepIndex,
+    );
+  }
+  if (approval === undefined || approval.kind !== 'approveBuilder')
+    return { ok: true, feePps: pin.feePps };
+
+  const at = approval.stepIndex;
+  if (!isAddressEqual(approval.builder, pin.address)) {
+    return refuse(`the builder approval is for ${approval.builder}, not Sente`, at);
+  }
+  if (approval.maxFeePps > pin.feePps) {
+    return refuse(
+      `the builder approval allows ${approval.maxFeePps} pps, more than Sente's ${pin.feePps}`,
+      at,
+    );
+  }
+  const now = ctx.nowSeconds;
+  if (now === undefined) return refuse('the phone has no clock to check the builder approval', at);
+  if (approval.expiry <= BigInt(Math.floor(now)))
+    return refuse('the builder approval has already expired', at);
+  if (approval.expiry > BigInt(Math.floor(now) + BUILDER_APPROVAL_MAX_SECONDS)) {
+    return refuse('the builder approval lasts more than a year', at);
+  }
+  return { ok: true, feePps: pin.feePps };
 }
 
 type ExpectedOrder = {
@@ -324,6 +403,7 @@ function checkFunding(
   facts: MarketFacts,
   order: ExpectedOrder,
   maxDeposit: bigint,
+  builderFeePps: number,
 ): KuruVerifyResult {
   const funding = intent.side === 'buy' ? market.quote : market.base;
   const native = isAddressEqual(funding.address, NATIVE_TOKEN);
@@ -368,6 +448,7 @@ function checkFunding(
       },
       facts.params,
       { quote: market.quote.decimals, base: market.base.decimals },
+      builderFeePps,
     );
   } catch (error) {
     return refuse(error instanceof Error ? error.message : 'the deposit cap does not compute');

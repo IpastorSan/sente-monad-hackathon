@@ -23,6 +23,7 @@
 import type { HistoryRange, ValueHistory } from '../portfolio/history.ts';
 import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
+import { KURU_BUILDER_PIN, kuruBuilderAgrees, type KuruBuilderPin } from './kuruBuilder.ts';
 import type {
   EnrollCommitRequest,
   EnrollCommitResult,
@@ -63,29 +64,42 @@ export function isUnavailable(error: unknown): boolean {
   return error instanceof TradeApiError && error.status === 404 && error.reason === undefined;
 }
 
-/**
- * Whether the app may offer manual trading (SEN-102). All three must hold:
- * the build opted in (`EXPO_PUBLIC_USER_TRADING=1`), the API says it is on,
- * and the app is on testnet — mainnet trading is out of scope for this plan
- * whatever the server says.
- */
-export function isTradingEnabled(input: {
+type TradingInput = {
   buildFlag: string | undefined;
   capabilities: TradeCapabilities | null;
   network: 'testnet' | 'mainnet';
-}): boolean {
+  /** This build's Sente fee pin; defaults to `KURU_BUILDER_PIN` (SEN-184). */
+  builderPin?: KuruBuilderPin | null;
+};
+
+/** The build opted in, the API says trading is on, and the app is on testnet. */
+function tradingAllowed(input: TradingInput): boolean {
   return (
     input.buildFlag === '1' && input.capabilities?.enabled === true && input.network === 'testnet'
   );
 }
 
 /**
+ * Whether the app may offer manual (Kuru spot) trading (SEN-102). All four
+ * must hold: the build opted in (`EXPO_PUBLIC_USER_TRADING=1`), the API says
+ * it is on, the app is on testnet — mainnet trading is out of scope for this
+ * plan whatever the server says — and the API's Sente fee on Kuru is the one
+ * this build pins (SEN-184). A fee that differs would only be refused at the
+ * signature, after the user confirmed, so it reads as trading off instead.
+ */
+export function isTradingEnabled(input: TradingInput): boolean {
+  const pin = input.builderPin === undefined ? KURU_BUILDER_PIN : input.builderPin;
+  return tradingAllowed(input) && kuruBuilderAgrees(input.capabilities?.kuruBuilder, pin);
+}
+
+/**
  * Whether the app may offer perps from the user's own wallet (SEN-120):
  * trading is on and the API trades Perpl for users. Off, a perp market keeps
- * pointing at an agent.
+ * pointing at an agent. Perpl carries no Sente fee, so a Kuru fee mismatch
+ * does not turn perps off.
  */
-export function isPerpsEnabled(input: Parameters<typeof isTradingEnabled>[0]): boolean {
-  return isTradingEnabled(input) && input.capabilities?.venues.perpl === true;
+export function isPerpsEnabled(input: TradingInput): boolean {
+  return tradingAllowed(input) && input.capabilities?.venues.perpl === true;
 }
 
 export type TradeApiOptions = {

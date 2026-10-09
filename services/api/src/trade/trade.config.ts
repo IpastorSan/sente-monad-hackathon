@@ -14,10 +14,17 @@
  * `GET /trade/capabilities`, SEN-174). Honoured only with `USER_TRADING` on,
  * for the same reason as atomic batching.
  *
+ * `kuruBuilder` is Sente's Kuru builder fee (SEN-184, `fees/kuru-builder.config.ts`):
+ * `KURU_BUILDER_ADDRESS` and `KURU_BUILDER_FEE_PPS`, `null` when unset. Read
+ * whatever `USER_TRADING` says, because agents' orders pay it too; it reaches
+ * users' trades only with trading on.
+ *
  * `chainId` is pinned rather than read: every address table and the phone's
  * verifier assume Monad testnet, and mainnet is out of scope (threat model,
  * "Mainnet").
  */
+
+import { loadKuruBuilderConfig, type KuruBuilderConfig } from '../fees/kuru-builder.config';
 
 export const TRADE_CONFIG = Symbol('TRADE_CONFIG');
 
@@ -29,6 +36,8 @@ export interface TradeConfig {
   readonly atomicBatch: boolean;
   readonly perpl: boolean;
   readonly chainId: typeof TRADE_CHAIN_ID;
+  /** Absent in older fixtures; read as `null`, no Sente fee. */
+  readonly kuruBuilder?: KuruBuilderConfig | null;
 }
 
 export function loadTradeConfig(env: NodeJS.ProcessEnv = process.env): TradeConfig {
@@ -38,6 +47,7 @@ export function loadTradeConfig(env: NodeJS.ProcessEnv = process.env): TradeConf
     atomicBatch: enabled && isOn(env.USER_TRADE_ATOMIC_BATCH),
     perpl: enabled && isOn(env.USER_TRADING_PERPL),
     chainId: TRADE_CHAIN_ID,
+    kuruBuilder: loadKuruBuilderConfig(env),
   };
 }
 

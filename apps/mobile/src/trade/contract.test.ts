@@ -41,7 +41,9 @@ import {
   encodeNativeOrder,
   erc20TransferCall,
   fromUnits,
+  KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
+  KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -64,6 +66,7 @@ import {
 import fc from 'fast-check';
 import {
   ContractFunctionRevertedError,
+  decodeFunctionData,
   encodeFunctionData,
   getAddress,
   hashTypedData,
@@ -167,6 +170,8 @@ type World = {
   readonly accountId: bigint;
   /** What `getOrderId(accountId, slot)` answers, for any slot. */
   readonly liveOrderId: bigint;
+  /** `getBuilderApproval(wallet, builder)` (SEN-184). */
+  readonly builderApproval: { maxFeePps: number; expiry: bigint; active: boolean };
 };
 
 function world(fields: Partial<World> = {}): World {
@@ -182,6 +187,7 @@ function world(fields: Partial<World> = {}): World {
     walletMon: parseEther('100'),
     accountId: 63n,
     liveOrderId: 3683n,
+    builderApproval: { maxFeePps: 0, expiry: 0n, active: false },
     ...fields,
   };
 }
@@ -222,6 +228,8 @@ function fakeChain(w: World): PublicClient {
         return Promise.resolve(w.accountId);
       case 'getOrderId':
         return Promise.resolve(w.liveOrderId);
+      case 'getBuilderApproval':
+        return Promise.resolve(w.builderApproval);
       default:
         return Promise.reject(new Error(`fake chain: no ${functionName}`));
     }
@@ -242,7 +250,16 @@ type LegTamper = (legs: readonly PlannedLeg[], ctx: TamperCtx) => PlannedLeg[];
 /** Rewrites the prepared steps after the envelopes are built. */
 type StepTamper = (steps: readonly PreparedStep[]) => PreparedStep[];
 
-type Server = { atomic: boolean; legs?: LegTamper; steps?: StepTamper };
+type Server = {
+  atomic: boolean;
+  legs?: LegTamper;
+  steps?: StepTamper;
+  /** `TradeConfig.kuruBuilder` (SEN-184); absent, off. */
+  builder?: { address: Address; feePps: number } | null;
+};
+
+/** The one clock both sides read in the builder cases, so the approval's expiry is exact. */
+const NOW_MS = 1_800_000_000_000;
 
 /** The legs of a plan in order, whether it was packed into a batch or not. */
 function legsOf(plan: KuruPlan): PlannedLeg[] {
@@ -269,7 +286,13 @@ async function serverPrepare(intent: TradeIntent, w: World, server: Server) {
   if (intent.kind === 'perpl.onboard') throw new Error('not a Kuru intent');
   // The phone's intent goes to the planner as-is: this line also pins, at the
   // type level, that the phone's wire type is one the server accepts.
-  const deps = { client: fakeChain(w), wallet: WALLET, atomicBatch: server.atomic };
+  const deps = {
+    client: fakeChain(w),
+    wallet: WALLET,
+    atomicBatch: server.atomic,
+    builder: server.builder ?? null,
+    now: () => NOW_MS,
+  };
   const plan = await planKuru(intent, deps);
   const planned = server.legs
     ? packSteps(
@@ -316,6 +339,8 @@ async function trade(
   w: World,
   server: Server,
   clientTradeId = TRADE_ID,
+  /** The phone build's Sente fee pin (SEN-184); `null`, a build without one. */
+  phoneBuilder: { address: Address; feePps: number } | null = null,
 ): Promise<Run> {
   const signed: AuthorizationPayload[] = [];
   let plan: KuruPlan | undefined;
@@ -343,6 +368,8 @@ async function trade(
         readFacts: (m) => readMarketFacts(fakeChain(w), m),
         newClientTradeId: () => clientTradeId,
         sleep: () => Promise.resolve(),
+        now: () => NOW_MS,
+        builder: phoneBuilder,
       },
     );
     return { outcome, plan, prepared, signed };
@@ -975,6 +1002,152 @@ test('property: any single-field tamper of a planned place is refused, nothing s
     { numRuns: 300 },
   );
 });
+
+// ===========================================================================
+// Sente's builder fee on Kuru (SEN-184): the server's `KURU_BUILDER_*` against
+// the phone's build-time pin. On, the phone signs the builder overload and
+// its approval exactly as planned; off on the phone, it signs neither.
+// ===========================================================================
+
+const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
+const SENTE_FEE = { address: SENTE, feePps: 10_000 };
+
+/** Re-encodes a planned leg with `edit` applied to its decoded arguments. */
+function builderTamper(kind: 'approveBuilder' | 'place', edit: (args: unknown[]) => unknown[]) {
+  const tamper: LegTamper = (legs) =>
+    legs.map((leg) => {
+      if (leg.kind !== kind) return leg;
+      const abi = kind === 'place' ? KURU_ORDERBOOK_BUILDER_BATCH_ABI : APPROVE_BUILDER_ABI;
+      const { functionName, args } = decodeFunctionData({ abi, data: leg.call.data! });
+      return {
+        ...leg,
+        call: {
+          ...leg.call,
+          data: encodeFunctionData({ abi, functionName, args: edit([...(args ?? [])]) as never }),
+        },
+      };
+    });
+  return tamper;
+}
+
+const APPROVE_BUILDER_ABI = KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI;
+
+for (const side of ['buy', 'sell'] as const) {
+  for (const style of ['limit', 'market'] as const) {
+    for (const atomic of [false, true]) {
+      const name = `MON-USDC ${side} ${style}, atomic=${atomic}`;
+      test(`builder on both sides: signs the builder order and its approval, ${name}`, async () => {
+        const w = world();
+        const draft = await draftPlace(w, side, style, SIZES['MON-USDC']!);
+        const run = await trade(draft, w, { atomic, builder: SENTE_FEE }, TRADE_ID, SENTE_FEE);
+        assertSigned(run, { name, summary: run.plan?.summary });
+        const kinds = run.prepared!.steps.map((s) => s.kind);
+        const funding = side === 'buy' ? ['approve', 'deposit'] : ['deposit'];
+        const legs = [...funding, 'approveBuilder', 'place'];
+        assert.deepEqual(kinds, atomic ? ['batch'] : legs);
+        assert.equal(run.plan!.summary['senteFeeBps'], '10');
+      });
+    }
+  }
+}
+
+test('builder on both sides: an approval still in force is not asked for again', async () => {
+  const covered = { maxFeePps: 10_000, expiry: BigInt(NOW_MS / 1000 + 200 * 86_400), active: true };
+  const base = world({ builderApproval: covered });
+  const draft = await draftPlace(base, 'buy', 'limit', SIZES['MON-USDC']!);
+  // Funded at the phone's builder-aware cap: the planner reserves the same.
+  const cap = depositCapAtoms(
+    {
+      side: 'buy',
+      price: BigInt(draft.kind === 'kuru.place' ? draft.priceUnits : 0),
+      quantity: SIZES['MON-USDC']!,
+      tif: 'gtc',
+    },
+    {
+      pricePrecision: MON_USDC.pricePrecision,
+      sizePrecision: MON_USDC.sizePrecision,
+      ...fees(base),
+    },
+    { quote: 6, base: 18 },
+    SENTE_FEE.feePps,
+  );
+  const w = { ...base, kuruFree: { [key(USDC)]: cap } };
+  const run = await trade(draft, w, { atomic: false, builder: SENTE_FEE }, TRADE_ID, SENTE_FEE);
+  assertSigned(run, 'covered');
+  assert.deepEqual(
+    run.prepared!.steps.map((s) => s.kind),
+    ['place'],
+  );
+});
+
+test('builder on the server, off on the phone: nothing is signed', async () => {
+  // Funded, so the deposit cap is not what stops it: the verifier is.
+  const base = world();
+  const draft = await draftPlace(base, 'buy', 'limit', SIZES['MON-USDC']!);
+  const w = { ...base, kuruFree: { [key(USDC)]: 10n ** 12n } };
+  const run = await trade(draft, w, { atomic: false, builder: SENTE_FEE }, TRADE_ID, null);
+  assertRefused(run, /builder fee this app does not allow/);
+
+  // With a shortfall the server refuses first: the phone's cap has no room
+  // for a fee it does not know, so the plan never reaches the verifier.
+  const short = await trade(draft, base, { atomic: false, builder: SENTE_FEE }, TRADE_ID, null);
+  assert.ok(short.error, 'a shortfall plan with an unknown fee was not refused');
+  assert.equal(short.signed.length, 0);
+});
+
+test('builder off on the server, on on the phone: the plain order still signs', async () => {
+  const w = world();
+  const draft = await draftPlace(w, 'buy', 'market', SIZES['MON-USDC']!);
+  const run = await trade(draft, w, { atomic: false }, TRADE_ID, SENTE_FEE);
+  assertSigned(run, 'server off');
+});
+
+const BUILDER_TAMPERS: readonly [string, LegTamper, RegExp][] = [
+  [
+    'the order pays the attacker',
+    builderTamper('place', (a) => [...a.slice(0, -1), { builder: ATTACKER, feePps: 10_000 }]),
+    /not Sente/,
+  ],
+  [
+    'the order pays a higher rate',
+    builderTamper('place', (a) => [...a.slice(0, -1), { builder: SENTE, feePps: 20_000 }]),
+    /not Sente's/,
+  ],
+  [
+    'the approval is for the attacker',
+    builderTamper('approveBuilder', ([, pps, expiry]) => [ATTACKER, pps, expiry]),
+    /not Sente/,
+  ],
+  [
+    'the approval allows more than the pin',
+    builderTamper('approveBuilder', ([builder, , expiry]) => [builder, 100_000, expiry]),
+    /more than Sente's/,
+  ],
+  [
+    'the approval lasts ten years',
+    builderTamper('approveBuilder', ([builder, pps]) => [
+      builder,
+      pps,
+      BigInt(NOW_MS / 1000 + 10 * 365 * 86_400),
+    ]),
+    /more than a year/,
+  ],
+];
+
+for (const [name, legs, reason] of BUILDER_TAMPERS) {
+  test(`builder tamper refused, nothing signed: ${name}`, async () => {
+    const w = world();
+    const draft = await draftPlace(w, 'buy', 'limit', SIZES['MON-USDC']!);
+    const run = await trade(
+      draft,
+      w,
+      { atomic: false, builder: SENTE_FEE, legs },
+      TRADE_ID,
+      SENTE_FEE,
+    );
+    assertRefused(run, reason);
+  });
+}
 
 // ===========================================================================
 // Perpl (SEN-98): the server's real `perpl-planner.ts` and enrollment format

@@ -1,6 +1,12 @@
 import type { AuthorizationPayload } from '@sente/mandate';
-import { KURU_TESTNET_MARKETS, type KuruLog, type KuruMarketParams } from '@sente/venues/kuru';
-import { getAddress } from 'viem';
+import {
+  KURU_TESTNET_CONTRACTS,
+  KURU_TESTNET_MARKETS,
+  type KuruLog,
+  type KuruMarketParams,
+} from '@sente/venues/kuru';
+import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
+import { encodeAbiParameters, encodeEventTopics, getAddress, type Hex } from 'viem';
 
 import { fundsAfter, placeResult, revertedPlaceResult, TradeOutcomes } from './outcome';
 import type { KuruPlaceContext, StepKind, StepStatus, Trade, TradeStep } from './trade-store';
@@ -52,6 +58,41 @@ const GTC = context({
 });
 
 describe('placeResult', () => {
+  describe('with the Sente builder fee (SEN-184)', () => {
+    const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
+    const builder = { address: SENTE, feePps: 10_000 };
+    const accrued = (taker: bigint, amount: bigint): KuruLog => ({
+      address: KURU_TESTNET_CONTRACTS.accountCore,
+      topics: encodeEventTopics({
+        abi: kuruAbi.accountCoreAbi,
+        eventName: 'BuilderFeeAccrued',
+        args: { builder: SENTE, asset: MON_USDC.quote.address, takerAccountId: Number(taker) },
+      }) as Hex[],
+      data: encodeAbiParameters(
+        [{ type: 'address' }, { type: 'uint24' }, { type: 'uint256' }],
+        [MON_USDC.address, 10_000, amount],
+      ),
+    });
+
+    it('reports what this account paid the builder, from AccountCore’s events', () => {
+      const logs = [
+        ...RECEIPTS.placeMarket.logs,
+        accrued(RECEIPT_ACCOUNT_ID, 9_842n),
+        accrued(RECEIPT_ACCOUNT_ID + 1n, 5n),
+      ];
+      expect(placeResult(logs, RECEIPT_ACCOUNT_ID, context({ builder })).senteFee).toBe('0.009842');
+    });
+
+    it('says 0 for a builder order that took nothing, and nothing without a builder', () => {
+      expect(
+        placeResult(RECEIPTS.placeLimit.logs, RECEIPT_ACCOUNT_ID, { ...GTC, builder }).senteFee,
+      ).toBe('0');
+      expect(
+        placeResult(RECEIPTS.placeLimit.logs, RECEIPT_ACCOUNT_ID, GTC).senteFee,
+      ).toBeUndefined();
+    });
+  });
+
   it('reads the IOC partial fill as partially_filled with the remainder cancelled', () => {
     const result = placeResult(RECEIPTS.placeMarket.logs, RECEIPT_ACCOUNT_ID, context());
     expect(result).toMatchObject({

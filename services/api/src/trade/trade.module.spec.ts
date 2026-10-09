@@ -15,6 +15,7 @@ describe('TradeModule', () => {
     delete process.env.USER_TRADING;
     delete process.env.USER_TRADE_ATOMIC_BATCH;
     delete process.env.USER_TRADING_PERPL;
+    delete process.env.KURU_BUILDER_ADDRESS;
     const moduleRef = await Test.createTestingModule({ imports: [TradeModule] }).compile();
 
     expect(moduleRef.get<TradeConfig>(TRADE_CONFIG)).toEqual({
@@ -22,6 +23,7 @@ describe('TradeModule', () => {
       atomicBatch: false,
       perpl: false,
       chainId: 10143,
+      kuruBuilder: null,
     });
     expect(moduleRef.get(TradeStore)).toBeInstanceOf(TradeStore);
     expect(moduleRef.get(StepExecutor)).toBeInstanceOf(StepExecutor);

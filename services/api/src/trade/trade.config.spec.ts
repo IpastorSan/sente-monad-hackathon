@@ -7,7 +7,15 @@ describe('loadTradeConfig', () => {
       atomicBatch: false,
       perpl: false,
       chainId: 10143,
+      kuruBuilder: null,
     });
+  });
+
+  it('reads the Sente builder fee whether or not trading is on (agents pay it too)', () => {
+    expect(
+      loadTradeConfig({ KURU_BUILDER_ADDRESS: '0x93e6b8d57dca7b72fae80adaa5c9d7308f7e33b8' })
+        .kuruBuilder,
+    ).toEqual({ address: '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8', feePps: 10_000 });
   });
 
   it.each(['1', 'true'])('turns trading on for %p', (value) => {

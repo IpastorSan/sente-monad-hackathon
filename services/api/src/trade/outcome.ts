@@ -23,7 +23,9 @@
  */
 
 import {
+  decodeBuilderFees,
   decodeOrderOutcome,
+  KURU_TESTNET_CONTRACTS,
   formatOrderId,
   fromUnits,
   precisionDecimals,
@@ -43,6 +45,21 @@ import type {
 
 /** Every allowed Kuru market is quoted in USDC, and Kuru charges fees in the quote. */
 const FEE_ASSET = 'USDC';
+
+/** What this place paid Sente's builder, in the quote token, from AccountCore's events (SEN-184). */
+function senteFeePaid(
+  logs: readonly KuruLog[],
+  accountId: bigint,
+  place: KuruPlaceContext,
+): string {
+  const paid = decodeBuilderFees(
+    logs,
+    KURU_TESTNET_CONTRACTS.accountCore,
+    place.builder!.address,
+    accountId,
+  ).reduce((sum, fee) => sum + fee.amount, 0n);
+  return fromUnits(paid, place.quoteDecimals);
+}
 
 /** A step whose user operation runs the place leg: the place itself, or a packed batch. */
 export function carriesPlace(step: Pick<TradeStep, 'kind'>): boolean {
@@ -104,6 +121,7 @@ export function placeResult(
       tradeId: fill.tradeId.toString(),
     })),
     ...(rested ? { orderId: formatOrderId(rested) } : {}),
+    ...(place.builder ? { senteFee: senteFeePaid(logs, accountId, place) } : {}),
   } as const;
   const discarded = { unfilledCancelled: fromUnits(remainder, sizeDecimals) };
 

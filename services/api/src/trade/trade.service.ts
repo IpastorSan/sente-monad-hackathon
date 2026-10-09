@@ -222,9 +222,17 @@ export class TradeService {
 
   capabilities(): TradeCapabilitiesDto {
     const { enabled, atomicBatch, chainId, perpl } = this.config;
+    const builder = this.config.kuruBuilder ?? null;
     // Perpl behind its own flag (SEN-174): a deployment turns it on only once
     // the app can onboard, enroll and order, or users would be stranded.
-    return { enabled, atomicBatch, chainId, venues: { kuru: enabled, perpl } };
+    return {
+      enabled,
+      atomicBatch,
+      chainId,
+      venues: { kuru: enabled, perpl },
+      // SEN-184: what the phone must have been built with; it compares.
+      kuruBuilder: builder ? { address: builder.address, feePps: builder.feePps } : null,
+    };
   }
 
   async prepare(principal: Principal, dto: TradeIntentDto): Promise<PreparedTradeDto> {
@@ -503,7 +511,9 @@ export class TradeService {
       atomicBatch: this.config.atomicBatch,
     };
     try {
-      if (intent.kind !== 'perpl.onboard') return await planKuru(intent, deps);
+      if (intent.kind !== 'perpl.onboard') {
+        return await planKuru(intent, { ...deps, builder: this.config.kuruBuilder ?? null });
+      }
       return await planPerplOnboard(intent, {
         ...deps,
         context: await this.perplContext(),

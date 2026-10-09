@@ -12,7 +12,11 @@
  * The output is shaped for the phone's decoder (SEN-85, plan "Phone checks"),
  * which refuses anything else, so these are rules, not style:
  *
- * - legs run exactly `[approve?, deposit?, place]`;
+ * - legs run exactly `[approve?, deposit?, approveBuilder?, place]`;
+ * - with a Sente builder configured (SEN-184), the place leg is the builder
+ *   `batch` overload at exactly that builder and rate, and `approveBuilder`
+ *   appears only when the wallet's approval does not cover it, for that
+ *   builder, at that rate, expiring in {@link KURU_BUILDER_APPROVAL_SECONDS};
  * - `approve` is for the deposit amount exactly — never unlimited;
  * - a transaction carries `value` only for a native-MON deposit;
  * - `clientOrderId == keccak256(utf8(clientTradeId))`;
@@ -28,6 +32,7 @@
  */
 
 import {
+  builderFeeAtoms,
   depositCalls,
   encodeNativeOrder,
   fromUnits,
@@ -60,6 +65,11 @@ import {
   type PublicClient,
 } from 'viem';
 
+import {
+  feePpsToBps,
+  KURU_BUILDER_APPROVAL_SECONDS,
+  type KuruBuilderConfig,
+} from '../fees/kuru-builder.config.ts';
 import type { KuruPlaceContext, StepKind } from './trade-store.ts';
 
 /** Plan "Shared wire types". Amounts are decimal strings of integer atoms/units. */
@@ -131,6 +141,10 @@ export type KuruPlannerDeps = {
   readonly wallet: Address;
   /** `TradeConfig.atomicBatch` — pack every leg into one self-call. */
   readonly atomicBatch: boolean;
+  /** Sente's Kuru builder fee (SEN-184); absent or `null`, orders carry none. */
+  readonly builder?: KuruBuilderConfig | null;
+  /** The clock a builder approval's expiry is set from, ms. Defaults to `Date.now`. */
+  readonly now?: () => number;
 };
 
 /**
@@ -203,7 +217,21 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
   }
   const maxDeposit = atoms(intent.maxDepositAtoms, 'maxDepositAtoms');
 
-  const venue = new KuruVenue({ publicClient: deps.client, account: deps.wallet });
+  const builder = deps.builder ?? undefined;
+  const venue = new KuruVenue({
+    publicClient: deps.client,
+    account: deps.wallet,
+    ...(deps.now ? { now: deps.now } : {}),
+    ...(builder
+      ? {
+          builder: {
+            ...builder,
+            approvalExpiry: (nowSeconds: number) =>
+              BigInt(nowSeconds + KURU_BUILDER_APPROVAL_SECONDS),
+          },
+        }
+      : {}),
+  });
   const params = await venue.marketParams(market.symbol);
 
   // Checked here rather than left to `encodeNativeOrder` so each refusal has
@@ -246,7 +274,10 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
   // Maker rate for a resting GTC (Kuru locks maker-fee headroom: the
   // 10 -> 10.004 USDC observation in docs/kuru.md), taker for an IOC. The
   // phone's deposit cap (M-T8) is sized the same way, so both agree.
-  const feePps = intent.orderType === 'market' ? params.takerFeePps : params.makerFeePps;
+  // The Sente fee is headroom on top (SEN-184): a buy sets it aside too, and
+  // the phone's cap adds the same pinned rate, so the two still agree.
+  const venueFeePps = intent.orderType === 'market' ? params.takerFeePps : params.makerFeePps;
+  const feePps = venueFeePps + BigInt(builder?.feePps ?? 0);
   const reserve =
     intent.side === 'buy'
       ? quoteReserveAtoms(order, params, market.quote.decimals, feePps)
@@ -286,6 +317,15 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
     }
     legs.push({ kind: 'deposit', title: `Deposit ${amount} to Kuru`, call: deposit });
   }
+  // After the deposit, which registers a first-time account in AccountCore.
+  const [approveBuilder] = await venue.builderApprovalCalls();
+  if (builder && approveBuilder) {
+    legs.push({
+      kind: 'approveBuilder',
+      title: `Allow Sente’s ${feePpsToBps(builder.feePps)} bps fee on Kuru`,
+      call: approveBuilder,
+    });
+  }
   legs.push({ kind: 'place', title: placeTitle, call: place });
 
   return {
@@ -302,7 +342,8 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
       reserve: fromUnits(reserve, token.decimals),
       kuruFree: fromUnits(free, token.decimals),
       deposit: fromUnits(shortfall, token.decimals),
-      feePps: feePps.toString(),
+      feePps: venueFeePps.toString(),
+      ...(builder ? senteFeeSummary(builder, notional, market.quote) : {}),
     },
     place: {
       market: market.address,
@@ -315,7 +356,26 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
       params,
       quoteDecimals: market.quote.decimals,
       funding: { symbol: token.symbol, decimals: token.decimals, deposit: shortfall },
+      ...(builder ? { builder: { address: builder.address, feePps: builder.feePps } } : {}),
     },
+  };
+}
+
+/**
+ * The Sente fee as the ticket shows it (SEN-184): "Sente fee 0.10% (≈ 0.02
+ * USDC)". An estimate on the whole notional, rounded up: a resting order that
+ * never takes may pay less, never more.
+ */
+export function senteFeeSummary(
+  builder: KuruBuilderConfig,
+  notionalAtoms: bigint,
+  quote: Pick<KuruToken, 'symbol' | 'decimals'>,
+): Record<string, string> {
+  return {
+    senteFeeBps: feePpsToBps(builder.feePps),
+    senteFeePps: String(builder.feePps),
+    senteFee: fromUnits(builderFeeAtoms(notionalAtoms, builder.feePps), quote.decimals),
+    senteFeeAsset: quote.symbol,
   };
 }
 
