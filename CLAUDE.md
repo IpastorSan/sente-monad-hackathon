@@ -39,15 +39,17 @@ packages/venues    Venue interface + Kuru (./kuru) and Perpl (./perpl) adapters
 ```
 derive.ts          PRF bytes -> BIP-39 -> BIP-44 -> secp256k1. No RN, no mera imports,
                    so `derive.test.ts` runs under plain node with no device.
-mera.ts            The WebAuthn ceremonies and the WalletSession lifetime.
+ceremony.ts        The WebAuthn ceremonies (both salts in one, fallback to two). No RN.
+mera.ts            The WalletSession lifetime: sign-in, create, restore after a reload.
+sessionSeal*.ts    Web only: the session sealed for a reload (native twin is a no-op).
 credentialStore.ts expo-secure-store. Holds only sign-in HINTS, never key material.
 useAccount.ts      React binding; owns exactly one live session and ends it.
 ```
 
 Mera is a **client-side TS library, not a smart-account system**, and it does not touch Monad's
 P256 precompile. The account it produces is an ordinary secp256k1 EOA with no seed phrase, because
-the key is re-derived from the passkey every session rather than stored. Nothing about it is
-on-chain or server-side.
+the key is re-derived from the passkey every session rather than stored (on web, a sealed
+tab-scoped copy survives a reload — `docs/web.md`). Nothing about it is on-chain or server-side.
 
 `@sente/venues` is consumed by both `apps/mobile` and `services/api`. Its `types` entry points at
 `src/index.ts`, so typecheck works without a build; its runtime entry points at `dist/`, so it must
@@ -130,9 +132,16 @@ wallet is registered under the key it derives, because that key is the wallet's 
 will not accept a mutation signed by anything else. There is no recovery path — renaming the salt
 does not lock the user out of an app, it makes their funds unreachable.
 
-**A second salt costs a second WebAuthn prompt.** mera returns the first PRF output for one salt per
-ceremony (`getPasskeyPrfOutput`), so `signIn` runs a second assertion for the `device` salt, pinned
-to the credential the first one chose. Two prompts at sign-in, none afterwards.
+**Both salts ride one WebAuthn prompt (SEN-176).** PRF takes two salts per ceremony
+(`eval.first`/`eval.second`), and each output depends only on (credential, salt), not on the slot.
+mera 0.2.0 only exposes `first`, so `patches/@category-labs__mera@0.2.0.patch` (pnpm
+`patchedDependencies`) adds an optional `prfSecondSalt` → `prfSecondOutput` to
+`getPasskeyPrfOutput`, `createPasskeyWithPrfOutput` and both WebAuthn clients. A provider that does
+not answer `second` gets the old second assertion for `device`, pinned to the credential the first
+one chose. `apps/mobile/scripts/prf-equivalence.ts` proves both paths byte-identical (address and
+device SPKI) on Chrome's virtual authenticator — re-run it whenever mera or the patch changes. The
+patch is keyed to mera 0.2.0: upgrading mera means re-making it with `pnpm patch` (without it,
+`prfSecondSalt` is a type error).
 
 ### Perpl trade-key label: `sente.perpl.trade-key.v1`
 
