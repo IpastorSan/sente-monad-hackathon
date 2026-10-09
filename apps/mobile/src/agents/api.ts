@@ -1049,6 +1049,12 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
     switch (error.reason) {
       case 'agent_not_found':
         return { title: 'Agent not found', detail: 'It may belong to a different account.' };
+      case 'run_in_progress':
+        // SEN-177: the server's message once named the agent by id.
+        return {
+          title: 'This agent is already running',
+          detail: 'One run at a time. You can ask again when it’s done.',
+        };
       case 'mandate_invalid':
         return { title: 'The API refused this mandate', detail: error.message };
       case 'model_not_allowed':

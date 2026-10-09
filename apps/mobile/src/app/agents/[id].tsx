@@ -27,7 +27,7 @@
  */
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { formatAtoms, parseAmount } from '@/agents/amounts';
 import {
@@ -39,6 +39,7 @@ import {
   type AgentScheduleStatusDto,
   type AgentSummary,
   type PreparedMandateChange,
+  type RunOutcome,
 } from '@/agents/api';
 import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
@@ -70,6 +71,8 @@ import {
 } from '@/agents/cockpit';
 import { FUNDING_TOKENS } from '@/agents/fund';
 import { fundAgent } from '@/agents/initialFunding';
+import { alreadyRunning, liveRun, runningLine, waitForRunStart } from '@/agents/runState';
+import type { RunSummary } from '@/agents/terminal';
 import { clockTime, type LedgerEntry } from '@/agents/ledger';
 import {
   depositHeadline,
@@ -86,7 +89,7 @@ import {
 } from '@/agents/ledgerView';
 import { describeMandate, type Enforcer, type Token } from '@/agents/mandate';
 import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usage';
-import { LiveRunSection, RunHistorySection } from '@/agents/AgentRuns';
+import { LiveRunSection, RunHistorySection, useAgentRuns } from '@/agents/AgentRuns';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
 import { useSession } from '@/session';
@@ -126,6 +129,9 @@ type SheetId = 'fund' | 'run' | 'return' | 'revoke' | 'details';
  * or the expiry gauge — so the rows under the gauge leave them out. `returnTo`
  * is in Details: it is an address, not a limit.
  */
+/** Where the live run's terminal sits, so a started run can scroll it into view. */
+const LIVE_RUN_ID = 'agent-live-run';
+
 const NOT_A_ROW = new Set([
   'maxOrderNotional',
   'expiresAt',
@@ -167,6 +173,10 @@ export default function AgentScreen() {
   // The whole trail, tailed while the screen is focused: History draws it, and
   // Overview's stats, equity and best trades are read from it.
   const events = useAgentEvents(id);
+  // SEN-178's runs, read once for the terminal and (SEN-177) the header and
+  // Run now: an open run says "Running…" before a second one meets the 409.
+  const [runNudge, setRunNudge] = useState(0);
+  const runs = useAgentRuns(id ?? '', runNudge);
 
   const refreshBalances = useCallback((address: Agent['address']) => {
     readBalances(address).then(setBalances, () => setBalances(null));
@@ -247,13 +257,33 @@ export default function AgentScreen() {
   const active = agent.status === 'active';
   const now = Date.now();
   const trading = active && isTrading(summary, now);
+  const open = liveRun(runs);
+  /** A Run now the API took: close the sheet and show its terminal streaming. */
+  const runStarted = () => {
+    setSheet(null);
+    setTab('overview');
+    setRunNudge((n) => n + 1);
+    if (Platform.OS === 'web') {
+      setTimeout(
+        () =>
+          globalThis.document
+            ?.getElementById(LIVE_RUN_ID)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+        400,
+      );
+    }
+  };
   const amend = () => router.push({ pathname: '/agents/new', params: { amend: agent.id } });
 
   return (
     <Screen
       refreshing={refreshing}
       onRefresh={() => void refresh()}
-      footer={active ? <AskBar agent={agent} onOpen={() => setSheet('run')} /> : undefined}
+      footer={
+        active ? (
+          <AskBar agent={agent} running={open !== null} onOpen={() => setSheet('run')} />
+        ) : undefined
+      }
     >
       <TopBar
         back={{ label: 'Agents', onPress: backToList }}
@@ -283,7 +313,9 @@ export default function AgentScreen() {
               <Tag label={`${agent.preset.name}${agent.preset.customized ? ' · edited' : ''}`} />
             ) : null}
             <Text style={text.caption}>{modelLabel(agent.model)}</Text>
-            {active ? (
+            {active && open ? (
+              <Pill label="Running…" tone="live" />
+            ) : active ? (
               <Pill label={trading ? 'Trading' : 'Watching'} tone={trading ? 'live' : 'idle'} />
             ) : (
               <Pill label="Revoked" tone="revoked" />
@@ -291,6 +323,10 @@ export default function AgentScreen() {
           </View>
         </View>
       </View>
+
+      {open ? (
+        <Text style={[text.caption, text.num, styles.running]}>{runningLine(open, now)}</Text>
+      ) : null}
 
       {notice ? <Notice tone={notice.tone} title={notice.title} detail={notice.detail} /> : null}
 
@@ -311,7 +347,11 @@ export default function AgentScreen() {
       </View>
 
       {/* SEN-178: the run terminal — live on Overview, every kept run on History. */}
-      {tab === 'overview' ? <LiveRunSection agentId={agent.id} /> : null}
+      {tab === 'overview' ? (
+        <View nativeID={LIVE_RUN_ID}>
+          <LiveRunSection agentId={agent.id} runs={runs} />
+        </View>
+      ) : null}
 
       {tab === 'overview' ? (
         <Overview
@@ -331,7 +371,7 @@ export default function AgentScreen() {
       ) : tab === 'history' ? (
         <>
           <History agent={agent} events={events} now={now} />
-          <RunHistorySection agentId={agent.id} />
+          <RunHistorySection agentId={agent.id} runs={runs} />
         </>
       ) : (
         <MandateCard
@@ -352,7 +392,17 @@ export default function AgentScreen() {
         onSent={finish}
         initial={{ token: askedToken, amount: askedAmount }}
       />
-      <RunSheet agent={agent} visible={sheet === 'run'} onClose={close} />
+      <RunSheet
+        agent={agent}
+        visible={sheet === 'run'}
+        onClose={close}
+        live={open}
+        onStarted={runStarted}
+        onFinished={(next) => {
+          if (next) setNotice(next);
+          void load();
+        }}
+      />
       <ReturnSheet agent={agent} visible={sheet === 'return'} onClose={close} onDone={finish} />
       <RevokeSheet agent={agent} visible={sheet === 'revoke'} onClose={close} onDone={finish} />
     </Screen>
@@ -364,10 +414,26 @@ export default function AgentScreen() {
  * field. Both open the run sheet, whose instruction field is the ask — the
  * full Ask sheet with suggestions is U-11's.
  */
-function AskBar({ agent, onOpen }: { agent: Agent; onOpen: () => void }) {
+function AskBar({
+  agent,
+  running,
+  onOpen,
+}: {
+  agent: Agent;
+  /** A run is open (SEN-177): Run now waits for it rather than meeting a 409. */
+  running: boolean;
+  onOpen: () => void;
+}) {
   return (
     <View style={styles.askBar}>
-      <Button label="Run now" kind="soft" size="sm" icon="bolt" onPress={onOpen} />
+      <Button
+        label={running ? 'Running…' : 'Run now'}
+        kind="soft"
+        size="sm"
+        icon="bolt"
+        disabled={running}
+        onPress={onOpen}
+      />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Ask ${agent.name} to do something`}
@@ -1272,10 +1338,19 @@ function RunSheet({
   agent,
   visible,
   onClose,
+  live,
+  onStarted,
+  onFinished,
 }: {
   agent: Agent;
   visible: boolean;
   onClose: () => void;
+  /** The run open right now, if any (SEN-177). */
+  live: RunSummary | null;
+  /** The API took the run: the page shows it streaming in its terminal. */
+  onStarted: () => void;
+  /** A started run ended; a notice only when there is something to say. */
+  onFinished: (notice: NoticeState | null) => void;
 }) {
   const { agents: api } = useSession();
   const [instruction, setInstruction] = useState('');
@@ -1287,29 +1362,62 @@ function RunSheet({
     onClose();
   };
 
+  const describeRunError = async (error: unknown): Promise<NoticeState> => {
+    if (error instanceof AgentsApiError && error.reason === 'run_in_progress') {
+      const runs = await api?.runs(agent.id).catch(() => null);
+      return { tone: 'info', ...alreadyRunning(agent.name, liveRun(runs), Date.now()) };
+    }
+    return { tone: 'error', ...describeAgentsError(error) };
+  };
+
+  const finished = (result: RunOutcome): NoticeState => {
+    if (result.kind === 'unavailable') {
+      return {
+        tone: 'info',
+        title: 'Not available yet',
+        detail:
+          'This server can’t run agents on demand yet. The button starts working once the agent runner ships.',
+      };
+    }
+    const { iterations, stopReason, costUsd } = result.result;
+    return {
+      tone: 'ok',
+      title: 'Run finished',
+      detail: `${iterations} steps · stopped on ${stopReason}${costUsd !== undefined ? ` · $${costUsd.toFixed(4)}` : ''}`,
+    };
+  };
+
   const run = async () => {
     if (!api) return;
+    if (live) {
+      setOutcome({ tone: 'info', ...alreadyRunning(agent.name, live, Date.now()) });
+      return;
+    }
     setBusy(true);
     setOutcome(null);
+    // `POST /run` answers only when the run has ENDED. Close as soon as it
+    // has started instead, and let the terminal show it (SEN-177).
+    const since = Date.now();
+    const request = api.run(agent.id, instruction.trim() || undefined);
+    const started = await waitForRunStart({
+      since,
+      settled: request,
+      runs: () => api.runs(agent.id),
+    });
+    if (started === 'started') {
+      setBusy(false);
+      setInstruction('');
+      onStarted();
+      request.then(
+        (result) => onFinished(result.kind === 'unavailable' ? finished(result) : null),
+        (error: unknown) => void describeRunError(error).then(onFinished),
+      );
+      return;
+    }
     try {
-      const result = await api.run(agent.id, instruction.trim() || undefined);
-      if (result.kind === 'unavailable') {
-        setOutcome({
-          tone: 'info',
-          title: 'Not available yet',
-          detail:
-            'This server can’t run agents on demand yet. The button starts working once the agent runner ships.',
-        });
-      } else {
-        const { iterations, stopReason, costUsd } = result.result;
-        setOutcome({
-          tone: 'ok',
-          title: 'Run finished',
-          detail: `${iterations} steps · stopped on ${stopReason}${costUsd !== undefined ? ` · $${costUsd.toFixed(4)}` : ''}`,
-        });
-      }
+      setOutcome(finished(await request));
     } catch (error) {
-      setOutcome({ tone: 'error', ...describeAgentsError(error) });
+      setOutcome(await describeRunError(error));
     } finally {
       setBusy(false);
     }
@@ -1582,6 +1690,7 @@ const styles = StyleSheet.create({
   inline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   // Overview
   hero: { marginTop: 18, gap: 4 },
+  running: { marginTop: 8 },
   figure: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 2 },
   pushRight: { marginLeft: 'auto' },
   pnlLine: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginTop: 6 },

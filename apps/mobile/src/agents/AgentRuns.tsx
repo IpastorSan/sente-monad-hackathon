@@ -8,9 +8,11 @@
  * - `RunHistorySection` (History): the last runs the server keeps (ten), each
  *   opening its own terminal in place.
  *
- * Both read `GET /agents/:id/runs` while the screen is focused: every 1.5 s
- * while a run is live, every 6 s otherwise, so a scheduled run shows up on its
- * own. An API without the route renders nothing at all.
+ * Both show `useAgentRuns`, which reads `GET /agents/:id/runs` while the
+ * screen is focused: every 1.5 s while a run is live, every 6 s otherwise, so a
+ * scheduled run shows up on its own. An API without the route renders nothing
+ * at all. The page calls the hook once and hands the list to both, and to its
+ * header (SEN-177: "Running…" and the Run now button).
  */
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -23,8 +25,11 @@ import { Pill } from '@/ui/goban';
 import { Section, SectionLink } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
 
-/** The agent's runs, newest first; `null` until read, or when the route is missing. */
-export function useAgentRuns(agentId: string): RunSummary[] | null {
+/**
+ * The agent's runs, newest first; `null` until read, or when the route is
+ * missing. Changing `nudge` reads again at once (a Run now that just started).
+ */
+export function useAgentRuns(agentId: string, nudge = 0): RunSummary[] | null {
   const { agents: api } = useSession();
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
 
@@ -55,14 +60,13 @@ export function useAgentRuns(agentId: string): RunSummary[] | null {
         stopped = true;
         if (timer !== undefined) clearTimeout(timer);
       };
-    }, [api, agentId]),
+    }, [api, agentId, nudge]),
   );
 
   return runs;
 }
 
-export function LiveRunSection({ agentId }: { agentId: string }) {
-  const runs = useAgentRuns(agentId);
+export function LiveRunSection({ agentId, runs }: { agentId: string; runs: RunSummary[] | null }) {
   const latest = runs?.[0];
   /** The run whose terminal is up: one that went live here, or the last one, opened. */
   const [shown, setShown] = useState<string | null>(null);
@@ -102,8 +106,13 @@ export function LiveRunSection({ agentId }: { agentId: string }) {
   );
 }
 
-export function RunHistorySection({ agentId }: { agentId: string }) {
-  const runs = useAgentRuns(agentId);
+export function RunHistorySection({
+  agentId,
+  runs,
+}: {
+  agentId: string;
+  runs: RunSummary[] | null;
+}) {
   const [open, setOpen] = useState<string | null>(null);
 
   if (!runs || runs.length === 0) return null;

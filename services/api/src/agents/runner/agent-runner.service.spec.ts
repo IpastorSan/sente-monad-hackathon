@@ -219,6 +219,9 @@ describe('AgentRunnerService', () => {
     const second: unknown = await h.run().catch((e: unknown) => e);
     expect(second).toBeInstanceOf(AgentRefusedError);
     expect(second).toMatchObject({ reason: 'run_in_progress' });
+    // Said for a person (SEN-177): the agent's name, never its id.
+    expect((second as Error).message).toMatch(/is already running \(started \d+ s ago\)/);
+    expect((second as Error).message).not.toContain(h.agent.id);
     expect(h.runner.isRunning(h.agent.id)).toBe(true);
 
     hold.resolve();

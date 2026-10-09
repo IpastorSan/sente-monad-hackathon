@@ -114,8 +114,8 @@ const SNAPSHOT_DEPTH_LEVELS = 5;
 @Injectable()
 export class AgentRunnerService {
   private readonly logger = new Logger(AgentRunnerService.name);
-  /** Agents with a run open in this process. One run per agent at a time. */
-  private readonly running = new Set<string>();
+  /** Agents with a run open in this process, and when each began. One run per agent at a time. */
+  private readonly running = new Map<string, number>();
 
   constructor(
     private readonly agents: AgentsService,
@@ -152,13 +152,16 @@ export class AgentRunnerService {
       throw new AgentRefusedError('agent_revoked', `agent ${agentId} is revoked and cannot run`);
     }
     // Checked and claimed with no await in between, so two callers cannot both pass.
-    if (this.running.has(agentId)) {
+    const open = this.running.get(agentId);
+    if (open !== undefined) {
+      // Said for a person: the app shows it. No id — the caller knows which agent.
+      const seconds = Math.max(0, Math.round((Date.now() - open) / 1000));
       throw new AgentRefusedError(
         'run_in_progress',
-        `agent ${agentId} is already running; one run per agent at a time`,
+        `${agent.name} is already running (started ${seconds} s ago); one run at a time`,
       );
     }
-    this.running.add(agentId);
+    this.running.set(agentId, Date.now());
     try {
       return await this.execute(principal, agent, options);
     } finally {
