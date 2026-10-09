@@ -1,11 +1,13 @@
 # Sente
 
-Sente is a mobile trading app on **Monad** where you hire an AI agent to trade for
-you, and the authority you hand it is a **mandate** — instruments, per-trade size,
-leverage, an expiry — that is enforced by a hardware enclave the agent does not
-control. You fund a wallet, write a mandate, hire an agent, and read back every
-decision it made on an Agent Ledger; you can amend or revoke the mandate from your
-phone at any time.
+Sente is a trading app on **Monad**, for Android and the desktop web, where you
+hire an AI agent to trade for you, and the authority you hand it is a
+**mandate** — venues and markets, per-transaction size, leverage, an expiry —
+enforced by a hardware enclave the agent does not control. You sign in with a
+passkey, get a wallet only your device can move money from, write a mandate,
+hire an agent, and read back every decision it made on an Agent Ledger; you can
+amend or revoke the mandate at any time. You can also trade Kuru spot and Perpl
+perps yourself from the same wallet.
 
 > **The key that trades can never raise its own limit.**
 
@@ -14,6 +16,61 @@ of making it literally true. Built for the Monad Metropolis hackathon; everythin
 below that says "live" happened on Monad testnet (chain **10143**) on the date
 given. Everything that has not happened says so, in
 [Status and limits](#status-and-limits).
+
+## Try it
+
+- **Web app: <https://sente.lol>**, in **Google Chrome** on a desktop or laptop,
+  with the passkey saved to **Google Password Manager**. Chromium has no Google
+  Password Manager passkeys, and the Bitwarden extension takes over the prompt
+  without the PRF extension the wallet is derived from (pick "Use your device"
+  in its popup). Other providers are not measured
+  ([`docs/web.md`](docs/web.md#provider-matrix)).
+- **Android APK: <https://sente.lol/download/sente.apk>** (Android 9 or later,
+  sideloading allowed). Same domain and same derivation as the web app.
+- **How it works: <https://sente.lol/how-it-works>**, readable without signing in.
+- **Judging walkthrough: [`docs/judges.md`](docs/judges.md).**
+
+Everything runs on Monad testnet; the tokens have no value.
+
+## What is live
+
+- **Passkey sign-in, no seed phrase.** One passkey, two keys derived from its PRF
+  output: a secp256k1 key that identifies you to the API, and a P-256 **device
+  key** that owns your wallet and your agents' mandates. Both salts ride one
+  WebAuthn prompt where the provider evaluates both. On the web, a sealed,
+  tab-scoped copy keeps you signed in across reloads for up to 8 hours.
+- **A Privy wallet owned by your device key.** Sente's API creates it and cannot
+  sign for it, which was measured live (`docs/user-wallet.md`). Privy sponsors its
+  gas, so it needs no MON.
+- **A starter kit.** Each new wallet is sent 250 AUSD and 100 USDC once, under a
+  daily cap: enough to open a Perpl account (100 AUSD) and to clear Kuru's
+  10 USDC minimum order.
+- **Trading yourself.** Kuru spot (limit and market orders, cancel, withdraw)
+  and Perpl perps (account setup, trade-key enrollment, market and limit orders,
+  close, cancel). Sente's server plans each step; the app checks every one
+  against what it computes itself and refuses anything it does not recognise
+  **before** the device key signs ([`verifyKuru.ts`](apps/mobile/src/trade/verifyKuru.ts),
+  [`verifyPerpl.ts`](apps/mobile/src/trade/verifyPerpl.ts)).
+- **Agents.** Six presets (Guardian, Range Trader, Mean Reverter, Trend Rider,
+  DCA Stacker, Funding Harvester) or your own prompt. Each agent gets its own
+  Privy wallet under a mandate compiled to a Privy policy, and is funded while
+  you hire it. **Run now** streams the run into a live terminal (tool calls,
+  refusals and who refused, tokens, cost); a schedule (one minute to seven days)
+  runs it unattended, and **watchers** wake a scheduled agent only when a price
+  or indicator condition fires, checked without the model. Its tools read
+  candles, quotes, indicators, depth, funding, balances and Nansen signals, and
+  place, cancel, deposit and withdraw. Amend and revoke are signed by your
+  device key; "Return funds" can only pay your own wallet, because that address
+  is compiled into the policy, and it works on a revoked agent too. An MCP
+  endpoint lets your own AI client drive one agent under the same checks. Any
+  agent can be forked under your own mandate (its prompt only if its owner
+  published it), and a Top board ranks agents from an Envio index of Kuru fills
+  (not yet served by a live index, see below).
+- **AI credits.** Each user gets their own OpenRouter key with a one-off 10 USD
+  free tier; the Credits screen shows what each agent and run spent.
+- **Profiles.** A generated avatar and name per wallet, editable on Account.
+- **How it works**, an in-app page that says what is enforced where and what is
+  not proven yet ([`content.ts`](apps/mobile/src/howItWorks/content.ts)).
 
 ---
 
@@ -85,18 +142,23 @@ revocation.
 ## Architecture
 
 ```
-apps/mobile         Expo + expo-router, React Native. A DEV CLIENT, not Expo Go:
-                    react-native-passkey and Skia are native modules.
+apps/mobile         Expo + expo-router, React Native, for Android and (exported) the
+                    web app at sente.lol. On Android a DEV CLIENT or the release APK,
+                    not Expo Go: react-native-passkey and Skia are native modules.
                     src/auth/      passkey → wallet key + device key (Mera, PRF)
-                    src/agents/    hire, mandate form, approval, Agent Ledger
-services/api        NestJS. auth, wallet, agents, venues, credits, gas, chain,
-                    leaderboard, and an MCP endpoint so you can bring your own agent.
+                    src/trade/     tickets, and the verifiers that gate every signature
+                    src/agents/    hire, mandate form, approval, Ledger, run terminal
+services/api        NestJS. auth, wallet, trade, markets, agents (runner, scheduler,
+                    watchers), credits, gas, starter kit, profile, leaderboard, and
+                    an MCP endpoint so you can bring your own agent.
 packages/mandate    the mandate type, the Privy policy compiler, the pre-check
 packages/venues     one `Venue` interface; ./kuru (spot) and ./perpl (perps) adapters
+packages/presets    the six preset strategies the app hires from
 services/indexer    Envio HyperIndex over Kuru fills (Perpl's volume does not fit
                     Envio's event cap). Deliberately NOT a pnpm workspace member
                     (it vendors its own toolchain).
-infra               Caddy serving sente.lol and the WebAuthn association files
+infra               Caddy (sente.lol, api.sente.lol, the Perpl relay, the APK),
+                    deploy, and the post-deploy live checks
 ```
 
 `packages/venues` is the piece worth opening first if you came for the trading.
@@ -107,33 +169,43 @@ that do, one user intent each so every one is individually authorizable. Strateg
 and agent tools are written against that interface, so a mandate routes to either
 venue without the strategy knowing which.
 
-The two venues have **different account owners, on purpose**. Perpl's API-key
+**One Privy wallet owns the account on both venues.** Perpl's API-key
 enrollment is `ecrecover`-only — an ERC-1271 signature from a smart account gets
-the same `400` as garbage, proven on chain — so the passkey EOA owns the Perpl
-account. Kuru Spot V2 accepts a contract caller, so there a smart account is the
-`AccountCore` root and deposit → order is one atomic ERC-7579 batch. Each is the
-only arrangement that works for its venue.
+the same `400` as garbage, proven on chain — and a Privy wallet signs with plain
+ECDSA, even after its EIP-7702 delegation. So the user's device-owned wallet (or
+an agent's own wallet) opens the Perpl account, enrolls its keys and is the Kuru
+`AccountCore` root. An earlier Kernel smart account is no longer on any trade
+path; its routes remain until they are removed (SEN-45).
 
-API surface, all of it behind a session bearer token except `/health`:
+API surface, all of it behind a session bearer token except `/health`, `/auth`,
+`/presets`, `/mcp` (its own per-agent token) and the Alchemy webhook (its own
+signature):
 
 ```
 POST /auth/challenge · POST /auth/session          sign a nonce, get a token
 POST /wallet/register · GET /wallet                the user's device-owned Privy wallet
+POST /wallet/send/prepare · .../send/execute       a sponsored send the phone signs
+GET  /trade/capabilities · POST /trade/prepare     the user's own trades:
+POST /trade/:id/commit · GET /trade/:id            planned here, verified and signed on the phone
+POST /trade/perpl/enroll/prepare · .../commit      Perpl trade-key enrollment
+GET  /markets · /markets/tickers · .../depth · .../klines · .../quote
+GET  /portfolio · /portfolio/fills · /portfolio/history
 GET  /agents · POST /agents · GET /agents/:id      hire and read
-GET  /agents/:id/events                            the Agent Ledger feed
+GET  /agents/:id/events · /agents/:id/runs         the Agent Ledger and run transcripts
 POST /agents/:id/mandate/prepare · PATCH .../mandate
-POST /agents/:id/revoke/prepare   · POST .../revoke
-POST /agents/:id/run · POST /agents/:id/fork
-GET  /leaderboard · GET /venues · GET /chain/blocks/:n/consensus
-POST /credits/provision · POST /gas/drip · /mcp
+POST /agents/:id/revoke/prepare   · POST .../revoke · POST .../return
+POST /agents/:id/run · PATCH .../schedule · PUT .../watchers · POST .../fork
+GET  /presets · GET /leaderboard · GET /chain/blocks/:n/consensus
+GET  /credits · POST /credits/provision · GET/PATCH /profile · POST /gas/drip
 GET  /creators/me/fees                             what forks of your agents owe you
+/mcp                                               bring your own agent
 ```
 
 ---
 
-## Fees
+## Business model
 
-Sente earns on spot volume, through Kuru's builder fee: **every Kuru order Sente
+**Sente earns on spot volume, through Kuru's builder fee: every Kuru order Sente
 composes — yours and your agents' — pays Sente 0.10% (10 bps) of its notional**,
 on top of Kuru's own fee, into the treasury. **Perpl trades carry no Sente fee.**
 
@@ -143,15 +215,20 @@ on top of Kuru's own fee, into the treasury. **Perpl trades carry no Sente fee.*
   because that is the one approval rule its enclave policy holds; Kuru refuses an
   order to any builder the account did not approve.
 - **Creators share it.** When someone forks your published agent, 3 of the 10 bps
-  on each of that fork's Kuru fills are owed to you. Sente records them as they
-  happen and pays them from the treasury periodically
+  (0.03%) on each of that fork's Kuru fills are owed to you. Sente records them as
+  they happen and pays them from the treasury periodically
   (`GET /creators/me/fees`, `docs/agents.md`).
 - **Shown before you confirm.** A prepared Kuru trade carries the fee and its
   estimate ("Sente fee 0.10%, ≈ 0.02 USDC"), and a completed one what was actually
   charged.
+- **AI is the user's own cost.** Agent runs are billed to the user's own
+  OpenRouter key. Sente pays a one-off 10 USD free tier per user; paid credit
+  packs are built behind `CREDITS_PURCHASES_ENABLED` and are off: no payment is
+  implemented ([`docs/openrouter.md`](docs/openrouter.md)).
 
-Off unless `KURU_BUILDER_ADDRESS` is set; the details are in `docs/kuru.md`
-("Builder fee"), `docs/user-trading.md` and `docs/privy-policy-enforcement.md`.
+The fee is off unless `KURU_BUILDER_ADDRESS` is set; the details are in
+`docs/kuru.md` ("Builder fee"), `docs/user-trading.md` and
+`docs/privy-policy-enforcement.md`.
 
 ---
 
@@ -182,8 +259,14 @@ mise exec -- pnpm --filter @sente/api run start:dev     # :3000
 mise exec -- pnpm --filter @sente/mobile run start      # Metro, for the dev client
 ```
 
-The app needs a **custom dev client**, not Expo Go, and it is Android-only (iOS
-needs a paid Apple account and a Mac; neither exists here). Building it:
+The web build is `mise exec -- pnpm --filter @sente/mobile run export:web -- --clear`
+(`--clear`, because Metro's cache can keep an earlier build's API URL; see
+`CLAUDE.md`). It renders anywhere, but a passkey
+ceremony only completes on `https://sente.lol` or a subdomain, because `sente.lol`
+is the rpId (`docs/web.md`).
+
+On Android the app needs a **custom dev client**, not Expo Go (iOS needs a paid
+Apple account and a Mac; neither exists here). Building it:
 
 ```bash
 cd apps/mobile
@@ -212,6 +295,29 @@ mise exec -- pnpm --filter @sente/api run erc8004:live            # identity + r
 mise exec -- pnpm --filter @sente/venues run kuru:live
 mise exec -- pnpm --filter @sente/venues run live:perpl
 ```
+
+### Tests and live checks
+
+`pnpm run test` runs every package's unit suite. The suites
+that carry the security claims are cross-checks rather than mocks:
+`apps/mobile/src/trade/contract.test.ts` runs the server's real trade planners
+against the phone's real verifiers, and
+`services/api/src/agents/demo/policy.property.spec.ts` checks the policy compiler
+against a model of the enclave with generated mandates and calls. [`docs/testing/test-audit-2026-10-09.md`](docs/testing/test-audit-2026-10-09.md)
+is the latest audit of every tier, including what the unit tests cannot catch:
+an external service changing under a pinned constant.
+
+Two read-only checks run against the live services, after every deploy:
+
+```bash
+mise exec -- pnpm run drift:check   # every pinned Kuru/Perpl/OpenRouter/Envio value vs the live service
+infra/live-check.sh [--box]         # PASS/FAIL per line: health, smoke sign-in, markets, tickers,
+                                    # drift, leaderboard, trading flags; --box adds the box's own view
+```
+
+Browser and e2e tests never touch production: they refuse an API under
+`sente.lol` before launching anything (`CLAUDE.md`, "Tests never touch
+production").
 
 ---
 
@@ -272,8 +378,9 @@ carry no expiry, because a rule that can only move funds toward the owner must
 outlive the mandate: a Kuru `withdraw` that pays `msg.sender` and nothing else
 (`0x6b12d44db57c0655e3c415596848c4e04913035ac10e5963e31755032a068c7b`), and an
 ERC-20 `transfer` pinned to one recipient
-(`0xc9e1cb5f383c28088f967fbf40c44c16151eb99dc6d0ab02e564a5739d25d048`). Revocation
-still stops them — it empties the whole policy.
+(`0xc9e1cb5f383c28088f967fbf40c44c16151eb99dc6d0ab02e564a5739d25d048`). Since
+SEN-17 a revoke replaces the policy with exactly these two rules
+(`compileRevocationRules`), so a revoked agent's funds can still come home.
 
 **Privy gas sponsorship** (2026-09-24). After the app's dashboard gas-sponsorship
 step, `probe:privy-sponsor` re-ran with 13 checks and a **sponsored ERC-20 transfer
@@ -283,12 +390,11 @@ work. Two things the probe answered that are worth knowing before you build on i
 the response carries a **user-operation hash, not a transaction hash**, and the
 wallet afterwards carries an **EIP-7702 delegation** (`eth_getCode` went from `0x`
 to a delegation designator) while keeping its address. A second sponsored send
-fired immediately after the first was refused `transaction_broadcast_failure` and
-that is unresolved. Note that
-[`docs/privy-sponsorship.md`](docs/privy-sponsorship.md) and
-[`docs/user-wallet.md`](docs/user-wallet.md) were written on 2026-09-18, before the
-dashboard step, and still describe sponsorship as off; every other check in them
-stands.
+fired immediately after the first was refused `transaction_broadcast_failure`:
+SEN-42 traced it to the first send's EIP-7702 delegation bumping the nonce, and
+sends from the user's wallet are now spaced 4 s apart (`CLAUDE.md` gotcha 12).
+[`docs/privy-sponsorship.md`](docs/privy-sponsorship.md),
+[`docs/user-wallet.md`](docs/user-wallet.md).
 
 **Monad's own behaviour, measured because it changes how you write code.** Blocks
 are 300 ms and the consensus states are reachable over plain RPC: watching 5 blocks
@@ -301,27 +407,27 @@ under Monad's 10 MON reserve can only send again after ~3 blocks, so every gas d
 goes through a reserve-aware dispatcher. [`docs/monad-testnet-assets.md`](docs/monad-testnet-assets.md),
 [`CLAUDE.md`](CLAUDE.md) gotchas 4 and 12.
 
-**Checks at this commit.** Root `typecheck`, `lint` (eslint plus `prettier --check`),
-`build` and `test` all pass — 701 API, 167 mobile, 80 `@sente/venues`, 46
-`@sente/mandate` — and `check:indexer` runs the Envio indexer's own 29 tests from a
-clean `npm ci`. The Android bundle exports and the debug dev-client APK builds; see
-the caveat below about what that does and does not prove.
+**Checks.** On 2026-10-09 root `typecheck` and `test` passed — 1,741 API,
+1,270 mobile (1 skipped), 137 `@sente/venues`, 72 `@sente/presets`, 57
+`@sente/mandate` — and `check:indexer` runs the Envio indexer's own 29 tests from
+a clean `npm ci`. Passing unit tests say nothing about drift in the live services;
+that is what `drift:check` and `live-check.sh` are for (above).
 
 ---
 
 ## Bounty integrations
 
-| Track                      | What is actually built                                                                                                                                                                                          | State                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Privy**                  | Four features, not one: server wallets, the policy engine as the mandate, key quorums for the owner/signer split, and native gas sponsorship                                                                    | Enforcement, ownership and sponsorship verified live; sponsored sends from the user's wallet are in the app (funding an agent, returning its funds)                                                                                                                                                                                                                                                                   |
-| **Mera — One Passkey**     | One passkey, two namespaced PRF salts, two independent keys: a secp256k1 wallet key and a P-256 **capability** key that owns the user's wallet and every agent mandate policy                                   | Derivation, namespacing and "nothing is persisted in plaintext" are pinned by tests and passed on a physical phone; on web, a sealed tab-scoped copy survives reloads; no cross-device test has been run                                                                                                                                                                                                              |
-| **Agora — mobile trading** | Passkey sign-in, an AUSD balance leading the home screen, and perps executed on Perpl                                                                                                                           | Passed on a physical Android phone (2026-09-25). The live Perpl fills are an agent's, placed under the user's mandate with the user's AUSD, not a manual perp ticket                                                                                                                                                                                                                                                  |
-| **Kuru — spot**            | `@sente/venues/kuru`: Spot V2 `AccountCore` + `OrderBook.batch`, atomic deposit-and-place as one ERC-7579 batch, recipient-pinned withdraw                                                                      | Real settlement on 10143, hashes above                                                                                                                                                                                                                                                                                                                                                                                |
-| **Perpl — API**            | `@sente/venues/perpl`: onboarding, Ed25519 API-key enrollment, POST_ONLY and market orders, leverage, close                                                                                                     | A 5x position opened and closed by an autonomous agent                                                                                                                                                                                                                                                                                                                                                                |
-| **Envio — HyperIndex**     | `services/indexer`, Kuru Spot V2 fills: packed-calldata decoder, per-account and per-market stats with moving-average realised PnL, daily VWAP, account-id → address contract reads, feeding `GET /leaderboard` | 29 tests; the handlers replayed against a real Kuru fill (2026-10-09). Kuru only since SEN-171: the first Envio Cloud deployment (2026-10-09) also indexed Perpl and hit the free plan's 100k-event cap within minutes — Perpl alone emits ~216k events an hour. The Kuru-only config is sized at ~70k events through 2026-11-08 and is not redeployed yet; Perpl on the leaderboard comes from the agents' own trail |
-| **ERC-8004**               | Identity minted on hire, each settled verdict written to the Reputation Registry as realised PnL in basis points; registrar and reviewer are deliberately different EOAs                                        | Registries read live (Identity `0x8004A818BFB912233c491871b3d84c89A494BD9e`, Reputation `0x8004B663056A597Dffe9eCcC1965A193B7388713`), gas measured against the real calldata; **no transaction sent**                                                                                                                                                                                                                |
-| **Nansen**                 | `smart_money_signals` as a gated agent **read** tool plus a per-run snapshot, cached because the free plan is small                                                                                             | Live against the real API; Nansen covers Monad **mainnet** only and its coverage there is near empty, so the tool answers `no_data` truthfully rather than inventing a signal                                                                                                                                                                                                                                         |
-| **OpenRouter / Kimi**      | Credits _are_ OpenRouter keys: one per user with a hard monthly USD limit. Two allowlisted models, `moonshotai/kimi-k2.6` and `anthropic/claude-sonnet-5`                                                       | Tool round trips verified live for both models                                                                                                                                                                                                                                                                                                                                                                        |
+| Track                      | What is actually built                                                                                                                                                                                                                                | State                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Privy**                  | Four features, not one: server wallets, the policy engine as the mandate, key quorums for the owner/signer split, and native gas sponsorship                                                                                                          | Enforcement, ownership and sponsorship verified live; sponsored sends from the user's wallet are in the app (funding an agent, returning its funds)                                                                                                                                                                                                                                                                   |
+| **Mera — One Passkey**     | One passkey, two namespaced PRF salts in one WebAuthn prompt (a committed patch to mera adds the second salt), two independent keys: a secp256k1 wallet key and a P-256 **capability** key that owns the user's wallet and every agent mandate policy | Derivation, namespacing and "nothing is persisted in plaintext" are pinned by tests and passed on a physical phone; one-prompt and two-prompt paths proven byte-identical on Chrome's virtual authenticator; Chrome + Google Password Manager signed in on production; no cross-device test has been run                                                                                                              |
+| **Agora — mobile trading** | Passkey sign-in, an AUSD balance leading the home screen, a Kuru spot ticket and a Perpl perp ticket (setup, market and limit orders, close) from the user's own wallet, each step verified on the device before it signs                             | Sign-in, hire and funding passed on a physical Android phone (2026-09-25); the live Perpl fills above are an agent's, under the user's mandate. The user's own Kuru trades and a perp round trip ran live through the app's trade code (2026-10-09, `docs/user-trading.md`), not yet through the app's screens on production                                                                                          |
+| **Kuru — spot**            | `@sente/venues/kuru`: Spot V2 `AccountCore` + `OrderBook.batch`, atomic deposit-and-place as one ERC-7579 batch, recipient-pinned withdraw                                                                                                            | Real settlement on 10143, hashes above                                                                                                                                                                                                                                                                                                                                                                                |
+| **Perpl — API**            | `@sente/venues/perpl`: onboarding, Ed25519 API-key enrollment, POST_ONLY and market orders, leverage, close                                                                                                                                           | A 5x position opened and closed by an autonomous agent                                                                                                                                                                                                                                                                                                                                                                |
+| **Envio — HyperIndex**     | `services/indexer`, Kuru Spot V2 fills: packed-calldata decoder, per-account and per-market stats with moving-average realised PnL, daily VWAP, account-id → address contract reads, feeding `GET /leaderboard`                                       | 29 tests; the handlers replayed against a real Kuru fill (2026-10-09). Kuru only since SEN-171: the first Envio Cloud deployment (2026-10-09) also indexed Perpl and hit the free plan's 100k-event cap within minutes — Perpl alone emits ~216k events an hour. The Kuru-only config is sized at ~70k events through 2026-11-08 and is not redeployed yet; Perpl on the leaderboard comes from the agents' own trail |
+| **ERC-8004**               | Identity minted on hire, each settled verdict written to the Reputation Registry as realised PnL in basis points; registrar and reviewer are deliberately different EOAs                                                                              | Registries read live (Identity `0x8004A818BFB912233c491871b3d84c89A494BD9e`, Reputation `0x8004B663056A597Dffe9eCcC1965A193B7388713`), gas measured against the real calldata; **no transaction sent**                                                                                                                                                                                                                |
+| **Nansen**                 | `smart_money_signals` as a gated agent **read** tool plus a per-run snapshot, cached because the free plan is small                                                                                                                                   | Live against the real API; Nansen covers Monad **mainnet** only and its coverage there is near empty, so the tool answers `no_data` truthfully rather than inventing a signal                                                                                                                                                                                                                                         |
+| **OpenRouter / Kimi**      | Credits _are_ OpenRouter keys: one per user, with a one-off 10 USD free tier as a hard limit OpenRouter enforces. Two allowlisted models, `moonshotai/kimi-k2.6` and `anthropic/claude-sonnet-5`                                                      | Tool round trips verified live for both models                                                                                                                                                                                                                                                                                                                                                                        |
 
 Not claimed: **Alchemy**. Privy's paymaster happens to report
 `sponsorship_provider: alchemy`, but that is Privy's plumbing, not an integration
@@ -332,51 +438,73 @@ claimed until a real delivery has been seen.
 
 ## Status and limits
 
-Read this section before the demo video.
-
+- **Testnet only.** Monad testnet (chain 10143), Kuru and Perpl testnet
+  deployments. Android and desktop web; iOS is out of scope. One API process on
+  one server (Madrid, `europe-southwest1`), with no failover. It moved from the
+  US on 2026-10-09 because Perpl testnet's trading socket refuses US addresses.
+- **Kuru changed its testnet market set on 2026-10-09.** <!-- SEN-185: what
+  Sente now pins, which markets the app lists, and what an agent hired before
+  the change must do (amend), once the migration is merged. -->
+- **Passkey providers.** Measured to work: Google Chrome on desktop with Google
+  Password Manager (2026-10-09, on production: sign-in, wallet registered,
+  starter kit sent). Measured not to: Chromium (no Google Password Manager
+  passkeys) and the Bitwarden extension (takes over the ceremony without PRF).
+  Not measured: 1Password, Chrome's profile-local passkeys, Windows Hello,
+  iCloud Keychain, and signing in on the desktop through a phone's QR code.
+  Google Password Manager's prompt count has not been recorded: one is expected
+  when it evaluates both salts at creation.
+- **Same wallet on phone and web is expected, not checked.** Same rpId, same
+  salts, same derivation; nobody has yet compared the address from a passkey the
+  Android app made with the one the web app derives from it.
 - **Verified on a physical phone** (Xiaomi, HyperOS, Android 16, 2026-09-25):
   passkey sign-in with PRF on both salts, the same wallet after a reinstall, hire,
   sponsored funding, an agent run, a phone-signed amend and return-to-owner.
   Revoke was not tapped on the device.
-- **The web build is the judge path.** The same app runs in desktop Chrome at
-  `sente.lol`, with a desktop layout and browser passkeys. Because the passkey's
-  domain is an input to the wallet, a passkey in Google Password Manager is meant
-  to give the same wallet on the web and on the phone; that cross-device check is
-  pending. Passkey providers without PRF (Bitwarden, 1Password, Chrome's
-  profile-local store) cannot hold a Sente wallet.
-- **One passkey prompt where the provider allows it.** Sign-in asks for both PRF
-  salts in one WebAuthn ceremony (`eval.first` and `eval.second`), through a
-  committed patch to mera; a provider that ignores the second salt gets a second,
-  pinned prompt. Both paths derive byte-identical keys against Chrome's virtual
-  authenticator (`apps/mobile/scripts/prf-equivalence.ts`); Google Password
-  Manager's prompt count is not yet measured.
-- **Nothing is persisted in plaintext; on web, a sealed tab-scoped copy survives
-  reloads.** For up to 8 hours a reloaded tab reopens the session without a
-  prompt, from a copy encrypted under a non-extractable browser key. Script
-  running in the page could use that copy while the tab is open; closing the tab
-  or signing out ends it ([`docs/web.md`](docs/web.md#staying-signed-in-across-a-reload)).
-- **Manual trading is behind `USER_TRADING`**, off by default. The Kuru spot
-  ticket is built and verified by the phone before it signs; the manual Perpl
-  ticket is not finished. Agents trade both venues.
+- **Signed in across a reload on the web, for up to 8 hours.** Nothing is stored
+  in plaintext: a reloaded tab reopens the session from a copy encrypted under a
+  non-extractable browser key. Script running in the page could use that copy
+  while the tab is open; closing the tab or signing out ends it
+  ([`docs/web.md`](docs/web.md#staying-signed-in-across-a-reload)).
+- **Manual trading.** Kuru runs 1-5 and the Perpl onboarding, enrollment and a
+  2x round trip were run live on 2026-10-09 through the app's own trade code,
+  driven from Node against a local API ([`docs/user-trading.md`](docs/user-trading.md)).
+  The perp ticket's limit orders and cancels (SEN-179) have not been run live,
+  and neither venue's ticket has a recorded run through the production web app
+  yet. <!-- MEASURE: replace with the dry run's Kuru order and perp round trip
+  from https://sente.lol, with tx hashes. -->
+- **On the web, Perpl orders go through Sente's relay.** Perpl testnet refuses
+  browser origins (its trading socket answers `sente.lol` with 403 and its API
+  sends no CORS headers), so the web build reaches it through `api.sente.lol/perpl`.
+  Perpl authenticates a socket once, with a sign-in frame the user's trade key
+  signs, and every later order frame on it is unsigned: whoever runs the relay
+  could inject orders into an open socket. It can never withdraw, which is an
+  on-chain transaction the user's wallet signs. The Android app connects to Perpl
+  directly. The live perp round trip above connected directly, not through the
+  relay.
+- **No stop-loss or take-profit orders.** Neither venue offers them on testnet.
+  The Guardian preset and the other presets' stops are price lines an agent
+  checks when it runs, so the price can pass a line between runs.
 - **The Sente fee has not landed on chain yet.** The builder-fee legs are built,
   verified by the phone and compiled into agents' policies, and off until
   `KURU_BUILDER_ADDRESS` is set. Which side Kuru charges, in which token, and
   whether Privy matches the builder overloads are confirmed only by the first live
   taker fill (`docs/agents.md`, "Live probe").
-- **On the web, Perpl orders go through Sente's proxy.** Perpl testnet refuses
-  browser origins (its trading socket answers `sente.lol` with 403 and its API
-  sends no CORS headers), so the web build reaches it through `api.sente.lol/perpl`.
-  Perpl authenticates a socket once, with a sign-in frame the user's trade key
-  signs, and every later order frame on it is unsigned: whoever runs the proxy
-  could inject orders into an open socket. It can never withdraw, which is an
-  on-chain transaction the user's wallet signs. The Android app connects to Perpl
-  directly. Testnet only.
-- **Two unset credentials each degrade a feature to a named "unconfigured"
-  answer**: the two ERC-8004 EOAs (no agent is ever registered on chain) and the
-  Alchemy webhook keys. Nothing invents a number to fill the gap.
-- **Some state is still in memory.** The user-wallet registry, the agent store,
-  the agent event log and venue credentials persist under `STATE_DIR`; auth
-  challenges and prepared operations do not survive a restart.
+- **Credits stop at the free tier.** A user who spends the 10 USD has no way to
+  buy more on this deployment; their key stays exhausted until raised by hand.
+- **Nansen has nothing to say about Monad testnet.** Nansen covers Monad mainnet
+  only, and its coverage there is near empty, so the agents' tool answers
+  `no_data` rather than inventing a signal.
+- **ERC-8004 is built and simulated, not sent.** The registries are read live and
+  the registration and feedback calldata is gas-measured against them, but the
+  registrar and reviewer keys are not configured, so no agent has been registered
+  on chain ([`docs/erc8004.md`](docs/erc8004.md)).
+- **The leaderboard has not been answered by a live index.** The Kuru-only Envio
+  config is not redeployed yet ([`docs/indexer.md`](docs/indexer.md)); Perpl
+  results come from the agents' own event logs, labelled and unranked.
+- **Some state is still in memory, and there is one writer.** Wallets, agents,
+  event logs, run transcripts, watchers, venue keys and the rest persist under
+  `STATE_DIR`; auth challenges and prepared operations do not survive a restart,
+  and only one API process may hold the directory.
 - **`AGENT_PRECHECK=off` and `AGENT_MANDATE_OWNER=server` are demo switches.** The
   first removes layer 1 so the enclave can be seen refusing alone; the second
   restores the weaker pre-Phase-3 ownership so the scripted demo can act as the
@@ -388,7 +516,6 @@ Read this section before the demo video.
   to ~1.4 s to propagate.
 - **Revoke leaves the recovery rules armed.** A revoked agent cannot trade, but
   its funds can still go back to the owner's wallet and nowhere else.
-- **Testnet only.** Android and desktop web; iOS is out of scope.
 - **Test vectors use published keys.** Anvil/Hardhat defaults appear in tests and
   two live scripts, on purpose. Anything derived from them is controllable by
   anyone — never send it something of value.
@@ -396,5 +523,5 @@ Read this section before the demo video.
 Every one of these is tracked, and the docs that record the measurements are
 indexed in [`docs/README.md`](docs/README.md). [`CLAUDE.md`](CLAUDE.md) is the
 toolchain, the permanent values (`rpId: sente.lol` is an input to every user's
-wallet address and can never change) and thirteen gotchas that cost real time to
+wallet address and can never change) and the gotchas that cost real time to
 find.
