@@ -32,7 +32,8 @@ export interface IndexerAccountBalance {
 }
 
 /**
- * `Account`: one venue trading account, with Envio's own cross-market rollup.
+ * `Account`: one Kuru trading account, with Envio's own cross-market rollup.
+ * Kuru is the only venue the indexer covers (SEN-171; `LEADERBOARD_COVERAGE`).
  * `address` is null until the venue's registration event is seen, which is why
  * a row can be matched to an agent only by a non-null address.
  */

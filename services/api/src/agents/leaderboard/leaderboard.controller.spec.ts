@@ -24,6 +24,7 @@ const EMPTY: LeaderboardResponseDto = {
   notes: [],
   minTrades: 3,
   source: { kind: 'unconfigured', message: 'no indexer' },
+  coverage: { indexed: ['kuru'], notIndexed: [] },
   generatedAt: '2026-09-17T00:00:00.000Z',
 };
 
