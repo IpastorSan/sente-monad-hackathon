@@ -71,13 +71,16 @@ const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
  * Everything the phone accepts in an enrollment payload, in ONE place.
  *
  * ──────────────────────────────────────────────────────────────────────────
- * PENDING PROBE P5. Mirrors `PERPL_ENROLL_FIELDS` and `ENROLL_TIME_SKEW_MS`
- * in `services/api/src/trade/perpl-enroll-format.ts` and the struct in
- * `PERPL_API_KEY_TYPED_DATA` (`@sente/venues/perpl`), which are the best
- * reading of the 2026-09-10/11 observations. When P5 records Perpl's live
- * payloads, the server pins them there and THIS constant follows in the same
- * change: `contract.test.ts` fails until the two agree. Narrow, never widen:
- * every spelling accepted here is one a compromised server may choose.
+ * PINNED BY PROBE P5 (SEN-82, 2026-10-09). Mirrors `PERPL_ENROLL_FIELDS`,
+ * `ENROLL_TIME_SKEW_MS` and `perplPublicKeyField` in
+ * `services/api/src/trade/perpl-enroll-format.ts` and the struct in
+ * `PERPL_API_KEY_TYPED_DATA` (`@sente/venues/perpl`): what Perpl's live
+ * `/v1/api-key/payload` served for a trade- and a read-scoped key, recorded
+ * verbatim in `docs/user-trading.md` §P5. Each field accepts the ONE spelling
+ * Perpl used. If Perpl changes one, the server re-pins it there and THIS
+ * constant follows in the same change: `contract.test.ts` fails until the two
+ * agree. Narrow, never widen: every spelling accepted here is one a
+ * compromised server may choose.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * Mirrored rather than imported so that what the phone signs changes only
@@ -117,22 +120,25 @@ export const PERPL_ENROLL_PINNED = {
     ],
   },
   statement: 'I authorize the creation of Perpl API key with the specified scope and parameters',
-  /** The message's `scope` per role: the `scope_mask` as a decimal string (read 1, trade 2). */
-  scope: { trade: '2', read: '1' } satisfies Record<EnrollRole, string>,
   /**
-   * Fields we never ask Perpl to fill, and the spellings of "not set" each
-   * accepts. `builderId` and `maxBuilderFeePer100K` are the builder fee: any
-   * other value lets a third party skim every order placed with the key.
+   * The message's `scope` per role: the EFFECTIVE mask Perpl grants, not the
+   * one we ask for. Trade implies read, so a trade request (mask 2) comes
+   * back `'3'`; read alone (mask 1) comes back `'1'`.
+   */
+  scope: { trade: '3', read: '1' } satisfies Record<EnrollRole, string>,
+  /**
+   * Fields we never ask Perpl to fill, and how Perpl spells "not set" for
+   * each: `'0'` for the numeric ones, `''` for the text ones. `builderId` and
+   * `maxBuilderFeePer100K` are the builder fee: any other value lets a third
+   * party skim every order placed with the key.
    */
   empty: {
-    expiresAt: ['', '0'],
-    ipCidrs: [''],
-    origin: [''],
-    builderId: [''],
-    maxBuilderFeePer100K: ['', '0'],
-  } satisfies Record<string, readonly string[]>,
-  /** How the message's `publicKey` may spell the 32 key bytes. */
-  publicKeyEncodings: ['hex', 'base64'] as readonly ('hex' | 'base64')[],
+    expiresAt: '0',
+    ipCidrs: '',
+    origin: '',
+    builderId: '0',
+    maxBuilderFeePer100K: '0',
+  } satisfies Record<string, string>,
   /** `time` is Unix milliseconds and may sit this far from the phone's clock. */
   timeSkewMs: 5 * 60 * 1000,
 } as const;
@@ -672,7 +678,9 @@ function messageProblem(typed: Eip712, expected: EnrollItemExpectation): string 
   if (m['statement'] !== pinned.statement) return 'its statement is not Perpl’s API-key statement';
 
   const key = publicKeyBytes(m['publicKey'] as string);
-  if (key === undefined) return `its public key ${String(m['publicKey'])} is not a 32-byte key`;
+  if (key === undefined) {
+    return `its public key ${String(m['publicKey'])} is not a 32-byte key in Perpl's spelling`;
+  }
   if ('equals' in expected.publicKey) {
     if (key !== expected.publicKey.equals.toLowerCase()) {
       return 'it enrolls a key that is not this phone’s';
@@ -686,8 +694,8 @@ function messageProblem(typed: Eip712, expected: EnrollItemExpectation): string 
   }
   if (m['label'] !== expected.label) return `its label is ${String(m['label'])}`;
 
-  for (const [name, allowed] of Object.entries(pinned.empty)) {
-    if (!(allowed as readonly string[]).includes(m[name] as string)) {
+  for (const [name, empty] of Object.entries(pinned.empty)) {
+    if (m[name] !== empty) {
       return name === 'builderId' || name === 'maxBuilderFeePer100K'
         ? `it lets a builder charge a fee on every order (${name} ${String(m[name])})`
         : `its ${name} is ${String(m[name])}, which this app never asks for`;
@@ -708,31 +716,23 @@ function messageProblem(typed: Eip712, expected: EnrollItemExpectation): string 
 }
 
 /**
- * The message's `publicKey` as lowercase `0x` hex, if it spells 32 bytes in an
- * encoding {@link PERPL_ENROLL_PINNED} accepts.
+ * The message's `publicKey` as lowercase `0x` hex, if it spells 32 bytes the
+ * one way Perpl does (P5): unpadded base64url, 43 characters, re-encoded from
+ * the `0x` hex we send. Hex, standard base64 and a padded form all refuse.
  */
 function publicKeyBytes(field: string): Hex | undefined {
-  const encodings = PERPL_ENROLL_PINNED.publicKeyEncodings;
-  if (encodings.includes('hex')) {
-    const hex = field.startsWith('0x') ? field : `0x${field}`;
-    if (/^0x[0-9a-fA-F]{64}$/.test(hex)) return hex.toLowerCase() as Hex;
-  }
-  if (encodings.includes('base64') && /^[A-Za-z0-9+/_-]{43}=?$/.test(field)) {
-    return base64ToHex(field);
-  }
-  return undefined;
+  return /^[A-Za-z0-9_-]{43}$/.test(field) ? base64UrlToHex(field) : undefined;
 }
 
-const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
-/** Base64 or base64url (43 chars, optional pad) → 32 bytes as hex. No `Buffer` on Hermes. */
-function base64ToHex(field: string): Hex | undefined {
-  const text = field.replace(/=$/, '').replace(/-/g, '+').replace(/_/g, '/');
+/** Unpadded base64url (43 chars) → 32 bytes as hex. No `Buffer` on Hermes. */
+function base64UrlToHex(text: string): Hex | undefined {
   let bits = 0;
   let acc = 0;
   let hex = '0x';
   for (const char of text) {
-    acc = (acc << 6) | BASE64.indexOf(char);
+    acc = (acc << 6) | BASE64URL.indexOf(char);
     bits += 6;
     if (bits >= 8) {
       bits -= 8;

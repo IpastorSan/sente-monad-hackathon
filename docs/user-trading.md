@@ -292,8 +292,26 @@ and was not tested here.
 
 Key slots: account 1028 now holds 9 of Perpl's 16 (three server read keys from
 three `commit` attempts, the trade key, one harness read key and four
-diagnostic keys from `supersede`). The server's read key is in memory only and
-is lost on restart.
+diagnostic keys from `supersede`). The server's read key was in memory only and
+lost on restart; SEN-174 now persists it, sealed, in `user-venue-secrets.json`.
+
+The phone's verifier (`PERPL_ENROLL_PINNED` in
+`apps/mobile/src/trade/verifyPerpl.ts`) follows the same pins: scope `"3"` for
+the trade key and `"1"` for the read key, `builderId`, `expiresAt` and
+`maxBuilderFeePer100K` exactly `"0"`, `ipCidrs` and `origin` exactly `""`, and
+the public key only as unpadded base64url. `contract.test.ts` fails if either
+side drifts from the other.
+
+## Known gaps
+
+- **`/trade/perpl/account` reports `forwarding: false` after an API restart**
+  for an account that is already onboarded. Order forwarding is not readable
+  on chain, so `TradeService.knownForwarding` believes it only from a completed
+  `perpl.onboard` trade, and that evidence does not outlive the process. The
+  next onboarding plans the forwarding leg again (harmless, but it costs a
+  sponsored user operation and the app shows the account as half set up). A
+  fix reads forwarding from Perpl through the server's read key, which SEN-174
+  now persists, or persists the evidence itself.
 
 ## Spend
 

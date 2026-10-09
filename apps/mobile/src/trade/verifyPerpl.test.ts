@@ -17,7 +17,6 @@ import {
   PERPL_EXCHANGE_ABI,
   PERPL_TESTNET_CONTRACTS,
   perplOnboardingCalls,
-  SCOPE,
   type PerplOnboardingParams,
 } from '@sente/venues/perpl';
 import { encodeFunctionData, getAddress, toFunctionSelector, type Address, type Hex } from 'viem';
@@ -340,7 +339,14 @@ const CTX: EnrollVerifyContext = {
   now: NOW,
 };
 
-/** Perpl's payload as served (cf. `perpl-enroll.service.spec.ts`'s `servedPayload`). */
+/** How Perpl spells a key in the message (P5): the 32 bytes as unpadded base64url. */
+const perplKey = (hex: Hex): string => Buffer.from(hex.slice(2), 'hex').toString('base64url');
+
+/**
+ * Perpl's payload as served, in the spellings P5 recorded live
+ * (`docs/user-trading.md` §P5; cf. `perpl-enroll.service.spec.ts`'s
+ * `servedPayload`). Literal values, not the pin, so a wrong pin fails here.
+ */
 function served(role: EnrollRole, publicKey: Hex, label: string): PerplTypedData {
   return {
     types: {
@@ -366,14 +372,15 @@ function served(role: EnrollRole, publicKey: Hex, label: string): PerplTypedData
     message: {
       signer: WALLET.toLowerCase(),
       statement: PERPL_API_KEY_TYPED_DATA.statement,
-      publicKey,
-      scope: String(SCOPE[role]),
+      publicKey: perplKey(publicKey),
+      // The effective scope: trade implies read.
+      scope: role === 'trade' ? '3' : '1',
       label,
-      expiresAt: '',
+      expiresAt: '0',
       ipCidrs: '',
       origin: '',
-      builderId: '',
-      maxBuilderFeePer100K: '',
+      builderId: '0',
+      maxBuilderFeePer100K: '0',
       time: `0x${NOW.toString(16)}`,
     },
   };
@@ -458,24 +465,42 @@ test('the digest is the one the venue computes for the proof of possession', asy
   assert.equal(result.digest, venue);
 });
 
-test('accepts the other "empty" spellings and every public-key encoding the pin lists', () => {
-  const zeros = withMessage({ expiresAt: '0', maxBuilderFeePer100K: '0' });
-  assert.equal(verifyEnrollmentPrepare(prepared({ served: zeros }), CTX).ok, true);
-  const bare = TRADE_KEY.slice(2);
-  assert.equal(
-    verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: bare }) }), CTX).ok,
-    true,
-  );
-  const b64 = Buffer.from(bare, 'hex').toString('base64');
-  assert.equal(
-    verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: b64 }) }), CTX).ok,
-    true,
-  );
-  const b64url = Buffer.from(bare, 'hex').toString('base64url');
-  assert.equal(
-    verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: b64url }) }), CTX).ok,
-    true,
-  );
+test('accepts the live P5 trade payload, verbatim', () => {
+  // `docs/user-trading.md` §P5: the trade-scope `/v1/api-key/payload` answer.
+  const wallet = getAddress('0x0d46fB9bD65FF35604cD654Cf98C5bb6ac75cdaF');
+  const key: Hex = '0x2be8e424ff7f6ed41da4af772874a880db8a8f78636784806c3fd2ccd6d4b31c';
+  const time = 0x1a121595e56;
+  const live = (t: PerplTypedData): PerplTypedData => ({
+    ...t,
+    domain: {
+      ...t.domain,
+      salt: '0x00000000000000000000000000000000000000006ac90ca3895a93c38d4d3fb0',
+    },
+    message: {
+      builderId: '0',
+      expiresAt: '0',
+      ipCidrs: '',
+      label: 'sente-trade-live',
+      maxBuilderFeePer100K: '0',
+      origin: '',
+      publicKey: 'K-jkJP9_btQdpK93KHSogNuKj3hjZ4SAbD_SzNbUsxw',
+      scope: '3',
+      signer: wallet,
+      statement: PERPL_API_KEY_TYPED_DATA.statement,
+      time: `0x${time.toString(16)}`,
+    },
+  });
+  const trade = item('trade', { served: live });
+  const verdict = verifyEnrollment(trade, {
+    walletId: WALLET_ID,
+    wallet,
+    prepareId: PREPARE_ID,
+    role: 'trade',
+    label: 'sente-trade-live',
+    publicKey: { equals: key },
+    now: time,
+  });
+  assert.equal(verdict.ok, true, JSON.stringify(verdict));
 });
 
 test('accepts a time at the edge of the skew window', () => {
@@ -539,6 +564,23 @@ test('refuses a builder id', () => {
   );
 });
 
+test('refuses "not set" spelled any way but the one Perpl uses', () => {
+  // The pre-P5 guesses: `''` for the numeric fields, `'0'` for the text ones.
+  for (const [field, value] of [
+    ['expiresAt', ''],
+    ['builderId', ''],
+    ['maxBuilderFeePer100K', ''],
+    ['ipCidrs', '0'],
+    ['origin', '0'],
+  ] as const) {
+    assert.equal(
+      verifyEnrollmentPrepare(prepared({ served: withMessage({ [field]: value }) }), CTX).ok,
+      false,
+      `${field} '${value}'`,
+    );
+  }
+});
+
 test('refuses an expiry, an IP restriction or an origin nobody asked for', () => {
   for (const field of ['expiresAt', 'ipCidrs', 'origin']) {
     refused(
@@ -557,27 +599,47 @@ test('refuses another signer', () => {
 
 test('refuses a trade key that is not this phone’s', () => {
   refused(
-    verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: READ_KEY }) }), CTX),
+    verifyEnrollmentPrepare(
+      prepared({ served: withMessage({ publicKey: perplKey(READ_KEY) }) }),
+      CTX,
+    ),
     /not this phone’s/,
   );
 });
 
 test('refuses a read item that enrolls the phone’s own key', () => {
   refused(
-    verifyEnrollmentPrepare(prepared({}, { served: withMessage({ publicKey: TRADE_KEY }) }), CTX),
+    verifyEnrollmentPrepare(
+      prepared({}, { served: withMessage({ publicKey: perplKey(TRADE_KEY) }) }),
+      CTX,
+    ),
     /this phone’s own key/,
   );
 });
 
-test('refuses a public key that is not 32 bytes, or a non-canonical base64 spelling', () => {
+test('refuses a public key that is not 32 bytes, or not spelled as unpadded base64url', () => {
   refused(
     verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: '0x1234' }) }), CTX),
     /not a 32-byte key/,
   );
+  // The same 32 bytes in every spelling Perpl did not use.
+  const bytes = Buffer.from(TRADE_KEY.slice(2), 'hex');
+  for (const other of [
+    TRADE_KEY,
+    TRADE_KEY.slice(2),
+    bytes.toString('base64'),
+    `${bytes.toString('base64url')}=`,
+  ]) {
+    if (other === perplKey(TRADE_KEY)) continue;
+    refused(
+      verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: other }) }), CTX),
+      /not a 32-byte key/,
+    );
+  }
   // Same 32 bytes, but the two spare bits set: a second spelling of one key.
-  const b64 = Buffer.from(TRADE_KEY.slice(2), 'hex').toString('base64');
-  const last = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const dirty = b64.slice(0, 42) + last[last.indexOf(b64[42]!) | 1] + '=';
+  const b64 = perplKey(TRADE_KEY);
+  const last = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const dirty = b64.slice(0, 42) + last[last.indexOf(b64[42]!) | 1];
   if (dirty !== b64) {
     refused(
       verifyEnrollmentPrepare(prepared({ served: withMessage({ publicKey: dirty }) }), CTX),
@@ -588,14 +650,16 @@ test('refuses a public key that is not 32 bytes, or a non-canonical base64 spell
 
 test('refuses the wrong scope on either item', () => {
   refused(
-    verifyEnrollmentPrepare(prepared({ served: withMessage({ scope: '3' }) }), CTX),
-    /scope is 3, not trade/,
+    verifyEnrollmentPrepare(prepared({ served: withMessage({ scope: '2' }) }), CTX),
+    /scope is 2, not trade/,
   );
   // The server's read key with trade scope would let the server trade.
-  refused(
-    verifyEnrollmentPrepare(prepared({}, { served: withMessage({ scope: '2' }) }), CTX),
-    /scope is 2, not read/,
-  );
+  for (const scope of ['3', '2']) {
+    refused(
+      verifyEnrollmentPrepare(prepared({}, { served: withMessage({ scope }) }), CTX),
+      new RegExp(`scope is ${scope}, not read`),
+    );
+  }
 });
 
 test('refuses a stale or future time', () => {
