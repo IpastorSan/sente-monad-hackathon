@@ -103,6 +103,36 @@ on its own. Sente's own agents' Kuru fills count toward the same total. Watch
 the deployment's processed-event count; if a burst starts, the fix is to
 redeploy with a later `start_block`, not to add events back.
 
+### SEN-185: the books above were retired; the indexer follows Set D
+
+Everything above measured **Set C**. "Sep 25 – Oct 9: none seen" was not a quiet
+market: on 2026-09-25 Kuru moved testnet to new books on a new AccountCore
+(`docs/kuru.md`, "Set D"), and `config.yaml` was still pointed at the old ones.
+It now names the five Set-D OrderBooks and AccountCore `0xdbaa…8038`, and the
+`AccountRegistered` signature is Set D's
+`(uint40 indexed accountId, uint40 indexed rootAccountId, address indexed rootOwner, uint16 subaccountSeq)`.
+
+Set D's rates, sampled 2026-10-09 the same way (`eth_getLogs` over 100-block
+windows spread evenly, 60–150 windows per period, ~284,000 blocks a day), against
+the five OrderBooks and AccountCore:
+
+| Period before 2026-10-09 19:20 UTC | `TradesPacked` | `BookUpdatesPacked` | `SpotReserveUpdated` |
+| ---------------------------------- | -------------- | ------------------- | -------------------- |
+| 0–2 days                           | none seen      | ~530 / day (MON)    | ~930 / day           |
+| 2–7 days                           | none seen      | ~320 / day          | ~170 / day           |
+| 7–15 days                          | none seen      | ~1,100 / day        | ~1,100 / day         |
+| 14–16 days                         | none seen      | none seen           | none seen            |
+
+Not one `TradesPacked` in ~45,000 sampled blocks: well under ~20 a day. The only
+landed fill found is on USDT-USDC, tx `0x7b9f5355…b741` (block 68,588,224).
+AccountCore had registered nine accounts in all (`getAccountOwner(1…9)`), so its
+`Deposit`/`Withdrawal`/`AccountRegistered` add a handful.
+
+So **`start_block` is 65294187** (2026-09-24 12:21:45 UTC), the first block with
+code at the Set-D AccountCore: the indexer covers the deployment's whole life,
+every registration included, for well under 1% of the 100k cap. Sente's own
+agents will be most of the volume from here; watch the count once they trade.
+
 ---
 
 ## What is indexed
@@ -214,15 +244,18 @@ Two cheaper fixes do not work, and it is worth writing down why:
   the §budget.
 
 So `src/lib/accountAddress.ts` resolves the id with
-`AccountCore.userAddressById(uint40)` the first time the account is seen,
+`AccountCore.getAccountOwner(uint40)` the first time the account is seen,
 through an Envio **effect** — deduplicated and cached, so it is one RPC read per
 account id ever, not one per fill. It is a contract read, not an event, so it
 costs nothing against the event cap.
 
-The call is not in Kuru's docs; it was found by selector and verified against
-the live contract — `userAddressById(62)` and `(47)` answer the two accounts of
-the §proven fill. `accountAddress.test.ts` pins the exact calldata and the exact
-responses, so an ABI drift fails loudly. An unknown id answers the zero address,
+On Set C the call was `userAddressById(uint40)`, found by selector and verified
+against the live contract (`(62)` and `(47)` answered the two accounts of the
+§proven fill). Set D's AccountCore reverts on it (SEN-185): an id there has no
+address of its own, only a root owner, and `getAccountOwner` answers it —
+`(1)` `0xc64346f7…8143`, `(5)` `0xd26aCBf9…C883`, read 2026-10-09.
+`accountAddress.test.ts` pins the exact calldata and the exact responses, so an
+ABI drift fails loudly. An unknown id answers the zero address,
 which is stored as **no address**, never as `0x000…0` (that would match an
 agent's wallet exactly as badly as a wrong one). A revert is read the same way;
 a transport failure throws, so Envio retries instead of caching a null.
@@ -500,6 +533,13 @@ and the `rpc:` entry in `config.yaml` for the indexer.
 
 ## Proven live runs
 
+**Set D, 2026-10-09 (SEN-185):** `live-range.ts 68588224`, the USDT-USDC fill
+`0x7b9f5355…b741`, with `config.yaml` as committed. Two trades: account 5
+(taker, `0xd26acbf9…c883`) sold 4.109682 USDT at 0.999355 and 6.790318 at
+0.998955 into account 4 (maker, `0xfa0fff2f…f1e`), notional 10.890253 USDC, day
+VWAP 0.9991058. Both addresses came from `getAccountOwner`; the market seeds
+decoded the 10^6 size precision. The Set-C run below is the older evidence.
+
 Run with the real handlers over real blocks, in memory, via Envio's
 `createTestIndexer()` — no Postgres, no account:
 
@@ -596,22 +636,22 @@ needs a fresh deployment, and the 30-day clock starts again with it.
 
 ## Verification
 
-| Check                       | Command                               | State                                    |
-| --------------------------- | ------------------------------------- | ---------------------------------------- |
-| Unit tests (29)             | `mise exec -- npm test`               | pass                                     |
-| Indexer typecheck           | `mise exec -- npm run typecheck`      | pass                                     |
-| Config vs chain             | `mise exec -- npm run verify:topics`  | pass (`Withdrawal` unobserved, below)    |
-| Real blocks → real entities | `scripts/local/live-range.ts <block>` | pass (2026-10-09, Kuru)                  |
-| The indexer, from the root  | `mise exec -- pnpm run check:indexer` | pass                                     |
-| Live GraphQL query          | `envio dev` + Hasura on :8080         | **not run**                              |
-| Envio Cloud, Kuru-only      | `envio-cloud …`                       | **not deployed** (first one hit the cap) |
+| Check                       | Command                               | State                                                                 |
+| --------------------------- | ------------------------------------- | --------------------------------------------------------------------- |
+| Unit tests (29)             | `mise exec -- npm test`               | pass                                                                  |
+| Indexer typecheck           | `mise exec -- npm run typecheck`      | pass                                                                  |
+| Config vs chain             | `mise exec -- npm run verify:topics`  | pass on Set D, 2026-10-09 (`Deposit`, `Withdrawal` unobserved)        |
+| Real blocks → real entities | `scripts/local/live-range.ts <block>` | pass (2026-10-09): Set C block 61406913; Set D block 68588224 (below) |
+| The indexer, from the root  | `mise exec -- pnpm run check:indexer` | pass                                                                  |
+| Live GraphQL query          | `envio dev` + Hasura on :8080         | **not run**                                                           |
+| Envio Cloud, Kuru-only      | `envio-cloud …`                       | **not deployed** (first one hit the cap)                              |
 
 ## Open work
 
 1. **Redeploy** the Kuru-only config and watch its processed-event count
    against §budget.
 2. **Prove the GraphQL queries** above against a live Hasura.
-3. **Kuru `Withdrawal` has never been observed on chain** in the windows
+3. **Kuru `Withdrawal` has never been observed on chain** (nor, on Set D, `Deposit`) in the windows
    scanned. Its signature comes straight from the SDK ABI and its topic-count
    check is the same shape as `Deposit`, which _was_ observed — but it is
    verified by argument, not by a log.

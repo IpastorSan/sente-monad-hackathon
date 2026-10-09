@@ -20,6 +20,22 @@ inferred rather than observed it says so.
 
 AUSD is **6 decimals**, not 18. Scale by `1e6`.
 
+The two Kuru rows above are Kuru's V1 docs and were never used. Kuru's Spot V2
+addresses are in `docs/kuru.md`, and they changed once:
+
+| Kuru set            | AccountCore                                  | Quote USDC                                   | Funding                                   |
+| ------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
+| Set C (previous)    | `0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22` | `0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E` | public faucet `0x25B1…91E9`, 12 h/address |
+| **Set D (current)** | `0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038` | `0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1` | **no public faucet**; ask Kuru            |
+
+Set D (listed since 2026-09-25, pinned by SEN-185 on 2026-10-09) also has new
+WETH, WBTC (replacing cbBTC), XAUT and USDT tokens; all read back on chain on
+2026-10-09 (`symbol()`, `decimals()`, `AccountCore.supportedSpotTokens(i)`).
+Set-C USDC held in a wallet or a Set-C AccountCore account trades on no current
+book, and the Set-C faucet pays only Set-C tokens. Anything that funds the Kuru
+leg — the starter kit, `scripts/fund-agent.ts`, the treasury — needs Set-D USDC
+from Kuru.
+
 ## Getting testnet AUSD
 
 **It is documented** — on Agora's [contract-deployments page](https://docs.agora.finance/developer/contract-deployments),

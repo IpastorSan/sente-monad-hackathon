@@ -840,9 +840,75 @@ survived an expired mandate. Tx hashes are in `docs/agents.md`.
 - `withdraw` names no recipient: AccountCore pays `msg.sender`. The ABI
   handed to Privy has that one function, so `withdrawFromAccount` and
   `transferBetweenAccounts` fail to decode and are refused. That is the same
-  mechanism the `batch` rule uses.
+  mechanism the `batch` rule uses. **Set C only — see SEN-185 below.**
 - A calldata param called `to` (`transfer.to`) is fine. It is distinct from
   the transaction's `to`.
+
+## Kuru's account-id AccountCore: both custody calls name a third party (SEN-185)
+
+Kuru's current deployment (`docs/kuru.md`, "Set D") replaced the two calls the
+rules above relied on:
+
+| Set C                                    | Set D                                                              | What the policy must now pin     |
+| ---------------------------------------- | ------------------------------------------------------------------ | -------------------------------- |
+| `deposit(token, amount)` → the caller    | `deposit(address rootOwner, token, amount)` → `rootOwner`'s root   | `deposit.rootOwner` = the agent  |
+| `withdraw(token, amount)` → `msg.sender` | `withdraw(uint40 rootAccountId, token, amount, address recipient)` | `withdraw.recipient` = the owner |
+
+Unpinned, a server holding the trading key could fund a stranger's Kuru account
+up to the per-deposit cap, again and again, or withdraw the agent's collateral
+to anyone. So, since SEN-185:
+
+- **Withdraw** is `Kuru: withdraw to the owner`: `to` = AccountCore and
+  `withdraw.recipient eq returnTo`, with the one-function ABI (so
+  `transferBetweenAccounts` and `fulfillApprovedWithdrawal` still fail to
+  decode). Collateral now goes **straight to the owner**, not to the agent's
+  wallet first; `POST /agents/:id/return` and the agent's `withdraw` tool both
+  name `returnTo`. A mandate with no `returnTo` has no withdraw rule at all, live
+  or revoked (fail closed).
+- **Deposit** rules gain `deposit.rootOwner eq <agent wallet>` when the compiler
+  knows the wallet — every amend (`CompileOptions.agentAddress`). The ABI is the
+  owner-address overload only; `deposit(uint40 rootAccountId, …)` fails to
+  decode. **A hire cannot pin it**: Privy creates the policy before the wallet,
+  so a freshly hired agent's deposit rules carry no owner pin until its first
+  amend. That is a narrower guarantee than Set C's, written down rather than
+  hidden; closing it means provisioning the wallet first and attaching the
+  policy after, which changes the SEN-31/SEN-43 hire flow and needs its own live
+  probe.
+- The phone's mirror pins the same two fields (`expectedPolicyRules(mandate,
+builder, agentAddress)`), and the blob hashes for `kuruDeposit` and
+  `kuruWithdraw` changed with the ABIs, so an app build without SEN-185 refuses
+  every amend and revoke the new API composes. Ship the app with the API.
+
+### Re-PATCHing the agents hired before it
+
+Every live agent policy names the Set-C AccountCore and books, so **no existing
+agent can trade, deposit or withdraw on Kuru until its policy is re-PATCHed**
+(CLAUDE.md gotcha 13). The stored mandate names Set-C addresses too, which
+`parseMandate` now refuses by name ("the cbBTC-USDC book Kuru retired on
+2026-09-25; name WBTC-USDC (0x8661…) instead").
+
+- **What the owner sees.** `GET /agents/:id` carries `kuruRetired: { message,
+moves, mandate }` while the stored mandate names a retired book or token;
+  the app shows the message on the agent screen, and its Amend form opens with
+  every retired book and token carried to its successor (`formFromMandate`).
+  Any Kuru order or deposit the agent tries is refused at layer 1 as
+  `kuru_market_retired` with the same sentence, never as a bare
+  `policy_violation`.
+- **Server-owned agents** (`ownerKind: 'server'`): `PATCH /agents/:id/mandate`
+  with `kuruRetired.mandate` as the body, or call `AgentsService.amendMandate`
+  with it. One call per agent; it recompiles with the agent's address, so the
+  new deposit rules are pinned.
+- **Device-owned agents**: only the owner, from an app build carrying SEN-185:
+  open the agent, tap Amend, confirm. Nothing on the server can do it.
+- **Revoked agents** keep Set-C recovery rules (withdraw to themselves on the
+  Set-C AccountCore, transfers of Set-C tokens). They cannot be amended; their
+  Set-C collateral can still be pulled with those rules by a script built on
+  the Set-C ABI, by hand.
+- **Set-C balances.** What an agent deposited into the Set-C AccountCore is
+  still there and only its current (pre-amend) policy can withdraw it — an
+  amend replaces that rule with the Set-D one. If those balances matter, run a
+  Set-C withdraw before amending. They are Set-C tokens, which trade on no
+  current book.
 
 ## The Sente fee rules (SEN-184)
 

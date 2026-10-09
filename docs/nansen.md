@@ -23,13 +23,13 @@ on mainnet, that is context for what the agent does on testnet.
   `tokenForMarket` in `services/api/src/agents/tools/nansen.ts`. A perp symbol
   like `BTC-PERP` reads its base and maps to cbBTC.
 
-  | Base(s)        | Token | Monad mainnet address (lowercase)            |
-  | -------------- | ----- | -------------------------------------------- |
-  | `MON`          | MON   | `0x0000…0000` (native) and WMON below        |
-  | `WMON`         | WMON  | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` |
-  | `WETH`, `ETH`  | WETH  | `0xee8c0e9f1bffb4eb878d8f15f368a02a35481242` |
-  | `cbBTC`, `BTC` | cbBTC | `0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b` |
-  | `XAUt`, `PAXG` | XAUt0 | `0x01bff41798a0bcf287b996046ca68b395dbc1071` |
+  | Base(s)                | Token | Monad mainnet address (lowercase)            |
+  | ---------------------- | ----- | -------------------------------------------- |
+  | `MON`                  | MON   | `0x0000…0000` (native) and WMON below        |
+  | `WMON`                 | WMON  | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` |
+  | `WETH`, `ETH`          | WETH  | `0xee8c0e9f1bffb4eb878d8f15f368a02a35481242` |
+  | `WBTC`, `cbBTC`, `BTC` | cbBTC | `0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b` |
+  | `XAUT`/`XAUt`, `PAXG`  | XAUt0 | `0x01bff41798a0bcf287b996046ca68b395dbc1071` |
 
   **Source for every address:** the official Monad token list,
   `github.com/monad-crypto/token-list`, `tokenlist-mainnet.json` at commit
