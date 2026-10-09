@@ -187,3 +187,9 @@ test('parsePlans never reads a malformed answer as open', () => {
   assert.deepEqual(odd.plans, CLOSED_PLANS.plans);
   assert.equal(parsePlans({ purchasesEnabled: true }).note, null);
 });
+
+test('the free tier is one-off by default: no reset unless the server says otherwise (SEN-183)', () => {
+  assert.deepEqual(CLOSED_PLANS.freeTier, { usd: 10, reset: null });
+  const parsed = parsePlans({ purchasesEnabled: false, freeTier: { usd: 10 } });
+  assert.deepEqual(parsed.freeTier, { usd: 10, reset: null });
+});

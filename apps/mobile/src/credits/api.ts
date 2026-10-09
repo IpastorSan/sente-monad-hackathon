@@ -77,7 +77,7 @@ export const PURCHASES_CLOSED_NOTE = 'Purchases open after the testnet demo.';
 export const CLOSED_PLANS: CreditPlans = {
   purchasesEnabled: false,
   note: PURCHASES_CLOSED_NOTE,
-  freeTier: { usd: 10, reset: 'monthly' },
+  freeTier: { usd: 10, reset: null },
   plans: [
     { id: 'pack_10', usd: 10 },
     { id: 'pack_20', usd: 20 },

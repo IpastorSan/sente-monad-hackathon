@@ -183,11 +183,11 @@ describe('GET /credits', () => {
       limitUsd: 10,
       remainingUsd: 10,
       usedUsd: 0,
-      reset: { period: 'monthly', rollover: false },
+      reset: { period: null, rollover: false },
       usage: { estimated: true, byAgent: [], recentRuns: [], unattributedUsd: 0 },
     });
-    expect(body.reset.resetsAt).toMatch(/^\d{4}-\d{2}-01T00:00:00\.000Z$/);
-    expect(body.reset.summary).toContain('1st of each month');
+    expect(body.reset.resetsAt).toBeNull();
+    expect(body.reset.summary).toBe('A one-off allowance: it does not reset.');
     expect(fake.calls).toHaveLength(0);
   });
 
@@ -238,7 +238,7 @@ describe('plans and purchases', () => {
       purchasesEnabled: false,
       note: 'Purchases open after the testnet demo.',
       currency: 'USD',
-      freeTier: { usd: 10, reset: 'monthly' },
+      freeTier: { usd: 10, reset: null },
       plans: [
         { id: 'pack_10', usd: 10 },
         { id: 'pack_20', usd: 20 },

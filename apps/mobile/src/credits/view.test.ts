@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 import {
   autoTopUpLine,
+  emptyNoticeCopy,
   formatUsd,
   freeTierLine,
   isCreditsReason,
@@ -99,6 +100,17 @@ test('run rows and the share spent', () => {
   assert.equal(runsLabel(3), '3 runs');
   assert.equal(spentShare({ limitUsd: 10, remainingUsd: 7.5 }), 0.25);
   assert.equal(spentShare({ limitUsd: null, remainingUsd: null }), 0);
+});
+
+test('the empty-tier notice never promises a refill for a one-off allowance', () => {
+  assert.deepEqual(emptyNoticeCopy(null), {
+    title: 'Your free credits are used up',
+    detail: 'Your agents can’t run until you add more credits.',
+  });
+  assert.deepEqual(emptyNoticeCopy('monthly'), {
+    title: 'This month’s credits are used up',
+    detail: 'Your agents can’t run until the credits refill.',
+  });
 });
 
 test('only the out-of-credits reasons link to the Credits screen', () => {

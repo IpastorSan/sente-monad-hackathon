@@ -6,6 +6,7 @@ import {
   CreditsService,
   nextResetUtc,
 } from './credits.service';
+import type { LimitReset } from './openrouter.client';
 import {
   InMemoryCreditKeyStore,
   type CreditKeyClaim,
@@ -46,7 +47,7 @@ async function refusal(promise: Promise<unknown>): Promise<CreditsRefusedError> 
 }
 
 describe('CreditsService.provision', () => {
-  it('mints a key with the default limit, a monthly reset, BYOK counted, and the user attributed', async () => {
+  it('mints a key with the default limit, a one-off reset, BYOK counted, and the user attributed', async () => {
     const { fake, service } = setup();
 
     const result = await service.provision(USER);
@@ -56,12 +57,12 @@ describe('CreditsService.provision', () => {
       limitUsd: 5,
       remainingUsd: 5,
       usageMonthUsd: 0,
-      resetsAt: expect.stringMatching(/^\d{4}-\d{2}-01T00:00:00\.000Z$/),
+      resetsAt: null,
     });
     expect(creates(fake)[0]?.body).toEqual({
       name: 'sente:user-1',
       limit: 5,
-      limit_reset: 'monthly',
+      limit_reset: null,
       include_byok_in_limit: true,
       external: { user: 'user-1' },
     });
@@ -133,7 +134,7 @@ describe('CreditsService.provision', () => {
 });
 
 describe('CreditsService.status', () => {
-  it('maps limit, remaining, monthly usage and the next monthly reset', async () => {
+  it('maps limit, remaining and usage, with no reset for the one-off free tier', async () => {
     const { fake, service } = setup();
     await service.provision(USER);
     fake.spend('hash1', 1.25);
@@ -144,7 +145,7 @@ describe('CreditsService.status', () => {
       limitUsd: 5,
       remainingUsd: 3.75,
       usageMonthUsd: 1.25,
-      resetsAt: '2026-10-01T00:00:00.000Z',
+      resetsAt: null,
     });
   });
 
@@ -164,15 +165,22 @@ describe('CreditsService.status', () => {
   });
 });
 
-describe('the free tier raise (SEN-183)', () => {
+describe('the free tier raise and one-off conversion (SEN-183)', () => {
   const tenDollars: CreditsConfig = { ...configured, defaultLimitUsd: 10 };
 
-  /** A user minted under the old $5 default, now read by a server whose default is $10. */
+  /**
+   * A user minted under the old $5 default, back when the free tier still
+   * reset monthly, now read by a server whose default is $10 and whose free
+   * tier is one-off. Provisioning itself always mints with a null reset
+   * today, so the legacy monthly reset is applied by hand afterwards to
+   * simulate a key that predates that change.
+   */
   async function legacyUser(options: { failUpdate?: number } = {}) {
     const fake = fakeOpenRouter({ failUpdate: options.failUpdate });
     const store = new InMemoryCreditKeyStore();
     const old = new CreditsService(configured, createOpenRouterKeys(configured, fake.fetch), store);
     await old.provision(USER);
+    Object.assign(fake.keys.get('hash1')!, { limit_reset: 'monthly' });
     fake.spend('hash1', 1.25);
     const service = new CreditsService(
       tenDollars,
@@ -185,7 +193,24 @@ describe('the free tier raise (SEN-183)', () => {
   const patches = (fake: ReturnType<typeof fakeOpenRouter>) =>
     fake.calls.filter((call) => call.method === 'PATCH');
 
-  it('raises a key below the free tier on its first read, keeping what was spent', async () => {
+  /** Provisions a single $10-default user, then overrides hash1's limit/reset before reading it. */
+  async function raiseWithOverride(overrides: { limit?: number | null; limit_reset?: LimitReset }) {
+    const fake = fakeOpenRouter();
+    const store = new InMemoryCreditKeyStore();
+    const service = new CreditsService(
+      tenDollars,
+      createOpenRouterKeys(tenDollars, fake.fetch),
+      store,
+    );
+    await service.provision(USER);
+    Object.assign(fake.keys.get('hash1')!, overrides);
+
+    const view = await service.status(USER);
+
+    return { limitUsd: view.limitUsd, patchBodies: patches(fake).map((call) => call.body) };
+  }
+
+  it('raises a key below the free tier and converts its reset, keeping what was spent', async () => {
     const { fake, service } = await legacyUser();
 
     const view = await service.status(USER, new Date('2026-10-09T12:00:00Z'));
@@ -194,9 +219,9 @@ describe('the free tier raise (SEN-183)', () => {
       limitUsd: 10,
       remainingUsd: 8.75,
       usageMonthUsd: 1.25,
-      resetsAt: '2026-11-01T00:00:00.000Z',
+      resetsAt: null,
     });
-    expect(patches(fake).map((call) => call.body)).toEqual([{ limit: 10 }]);
+    expect(patches(fake).map((call) => call.body)).toEqual([{ limit: 10, limit_reset: null }]);
   });
 
   it('is idempotent: once raised, later reads (and provisions) never PATCH again', async () => {
@@ -210,7 +235,24 @@ describe('the free tier raise (SEN-183)', () => {
     expect(patches(fake)).toHaveLength(1);
   });
 
-  it('never lowers a key, and leaves one that is not ours or not monthly alone', async () => {
+  it('converts a legacy monthly key to one-off without lowering a limit already above target', async () => {
+    const { limitUsd, patchBodies } = await raiseWithOverride({
+      limit: 25,
+      limit_reset: 'monthly',
+    });
+
+    expect(limitUsd).toBe(25);
+    expect(patchBodies).toEqual([{ limit: 25, limit_reset: null }]);
+  });
+
+  it('raises any of our enabled keys below the target, whatever their reset, converting it too', async () => {
+    const { limitUsd, patchBodies } = await raiseWithOverride({ limit: 5, limit_reset: 'weekly' });
+
+    expect(limitUsd).toBe(10);
+    expect(patchBodies).toEqual([{ limit: 10, limit_reset: null }]);
+  });
+
+  it('never lowers a key above target, and leaves one that is not ours, odd-reset-but-funded, or disabled alone', async () => {
     const fake = fakeOpenRouter();
     const store = new InMemoryCreditKeyStore();
     const service = new CreditsService(
@@ -222,7 +264,7 @@ describe('the free tier raise (SEN-183)', () => {
     for (const user of users) await service.provision(user);
     Object.assign(fake.keys.get('hash1')!, { limit: 25 });
     Object.assign(fake.keys.get('hash2')!, { limit: 5, name: 'handmade' });
-    Object.assign(fake.keys.get('hash3')!, { limit: 5, limit_reset: 'weekly' });
+    Object.assign(fake.keys.get('hash3')!, { limit: 25, limit_reset: 'weekly' });
     Object.assign(fake.keys.get('hash4')!, { limit: 5, disabled: true });
 
     for (const user of users) await service.status(user);
@@ -248,12 +290,12 @@ describe('CreditsService.standing', () => {
     expect(await service.standing(USER, new Date('2026-10-09T12:00:00Z'))).toEqual({
       provisioned: false,
       mode: 'per-user',
-      limitReset: 'monthly',
+      limitReset: null,
       view: {
         limitUsd: 10,
         remainingUsd: 10,
         usageMonthUsd: 0,
-        resetsAt: '2026-11-01T00:00:00.000Z',
+        resetsAt: null,
       },
     });
     expect(fake.calls).toHaveLength(0);
@@ -266,7 +308,7 @@ describe('CreditsService.standing', () => {
     expect(await service.standing(USER)).toMatchObject({
       provisioned: true,
       mode: 'per-user',
-      limitReset: 'monthly',
+      limitReset: null,
       view: { limitUsd: 5 },
     });
   });
@@ -365,7 +407,7 @@ function minted() {
     disabled: false,
     limit: 5,
     limit_remaining: 5,
-    limit_reset: 'monthly' as const,
+    limit_reset: null,
     include_byok_in_limit: true,
     usage: 0,
     usage_daily: 0,

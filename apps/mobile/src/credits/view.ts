@@ -111,6 +111,23 @@ export function paymentLine(assets: readonly string[]): string {
   return `Paid in ${names} from your wallet.`;
 }
 
+/**
+ * The empty-free-tier Notice's title and detail: a one-off allowance (`null`)
+ * says there is no refill to wait for; a resetting one promises the credits
+ * are coming back.
+ */
+export function emptyNoticeCopy(period: LimitReset): { title: string; detail: string } {
+  return period === null
+    ? {
+        title: 'Your free credits are used up',
+        detail: 'Your agents can’t run until you add more credits.',
+      }
+    : {
+        title: 'This month’s credits are used up',
+        detail: 'Your agents can’t run until the credits refill.',
+      };
+}
+
 /** A run's cost for its row: `$0.0042`, or `no cost reported`. */
 export function runCost(costUsd: number | null): string {
   if (costUsd === null) return 'no cost reported';

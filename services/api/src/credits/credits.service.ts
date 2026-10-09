@@ -11,6 +11,7 @@ import {
   type LimitReset,
   type OpenRouterKey,
   type OpenRouterKeyApi,
+  type UpdateKeyInput,
 } from './openrouter.client';
 import { CREDIT_KEYS, type CreditKeyRecord, type CreditKeyStore } from './store/credit-key-store';
 
@@ -20,8 +21,13 @@ export const OPENROUTER_KEYS = Symbol('OPENROUTER_KEYS');
 /** DI token for the shared inference key's `GET /key` reader. Null outside shared mode. */
 export const OPENROUTER_SHARED = Symbol('OPENROUTER_SHARED');
 
-/** How the free tier's limit resets: OpenRouter's monthly window, 00:00 UTC on the 1st. */
-export const FREE_TIER_RESET: LimitReset = 'monthly';
+/**
+ * How the free tier's limit resets: never (SEN-183). It is a one-off USD
+ * allowance on the user's OpenRouter key — once spent, it stays spent; there
+ * is no monthly refill. A user who runs out later buys credits instead
+ * (`purchase/`), though that flow is flagged off for the testnet demo.
+ */
+export const FREE_TIER_RESET: LimitReset = null;
 
 /**
  * Bound when OPENROUTER_MANAGEMENT_KEY is unset. Every call refuses with
@@ -95,8 +101,9 @@ export interface ProvisionResult extends CreditsView {
 
 /**
  * Per-user OpenRouter keys ARE the credit system: each key carries a hard USD
- * limit that resets monthly, and OpenRouter meters and enforces it. We do no
- * metering of our own — `status` is a read-through of the key.
+ * limit — by default a one-off allowance that never resets (SEN-183) — and
+ * OpenRouter meters and enforces it. We do no metering of our own — `status`
+ * is a read-through of the key.
  */
 @Injectable()
 export class CreditsService {
@@ -263,30 +270,42 @@ export class CreditsService {
   }
 
   /**
-   * SEN-183 migration: a key minted under an older, lower default (5 USD) is
-   * raised to today's free tier the first time it is read. Idempotent — a key
-   * already at or above the free tier is never touched, so this only ever
-   * RAISES; a limit is never lowered here. Only keys that look like ours and
-   * like the free tier qualify: named `sente:<userId>` and resetting monthly.
-   * A failed PATCH is logged and not retried by this process; the read still
-   * answers with the key as it is.
+   * SEN-183 migration: a key minted under an older, lower default (5 USD), or
+   * under the pre-one-off monthly reset, is brought up to today's free tier
+   * the first time it is read. Idempotent, and only ever RAISES or CONVERTS —
+   * a limit is never lowered here. Only keys that look like ours qualify:
+   * named `sente:<userId>`, enabled, and either below the current default or
+   * still carrying `'monthly'` — the free tier's own reset before this became
+   * one-off, so a key that still has it predates the change and must convert
+   * even if its limit is already fine. A qualifying key is PATCHed with
+   * `limit_reset: null` and, when it has a numeric limit, `limit:
+   * max(current, target)` — the max keeps the PATCH a no-op on the limit for
+   * a key already at or above the free tier that only needed its reset
+   * converted. A failed PATCH is logged and not retried by this process; the
+   * read still answers with the key as it is.
    */
   private async raiseToFreeTier(key: OpenRouterKey): Promise<OpenRouterKey> {
     const target = this.config.defaultLimitUsd;
-    const qualifies =
-      key.limit !== null &&
-      key.limit < target &&
-      key.limit_reset === FREE_TIER_RESET &&
-      typeof key.name === 'string' &&
-      key.name.startsWith('sente:') &&
-      !key.disabled;
+    const isOurs = typeof key.name === 'string' && key.name.startsWith('sente:') && !key.disabled;
+    const belowTarget = key.limit !== null && key.limit < target;
+    const legacyMonthly = key.limit_reset === 'monthly';
+    const qualifies = isOurs && (belowTarget || legacyMonthly);
     if (!qualifies || this.raiseTried.has(key.hash)) {
       return key;
     }
     this.raiseTried.add(key.hash);
+    const raisedLimit = key.limit === null ? null : Math.max(key.limit, target);
+    const patch: UpdateKeyInput = { limit_reset: FREE_TIER_RESET };
+    if (raisedLimit !== null) {
+      patch.limit = raisedLimit;
+    }
     try {
-      const raised = await this.keys.updateKey(key.hash, { limit: target });
-      this.logger.log(`raised an OpenRouter key from $${key.limit} to the $${target} free tier`);
+      const raised = await this.keys.updateKey(key.hash, patch);
+      this.logger.log(
+        raisedLimit !== null
+          ? `raised an OpenRouter key from $${key.limit} to the $${raisedLimit} one-off free tier`
+          : 'converted an OpenRouter key to the one-off free tier',
+      );
       return raised;
     } catch (error) {
       this.logger.warn(`could not raise an OpenRouter key to the free tier: ${errorText(error)}`);
