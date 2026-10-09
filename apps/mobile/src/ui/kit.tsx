@@ -320,6 +320,37 @@ export function Button({
   );
 }
 
+/**
+ * Copy a value to the clipboard (SEN-177). Web only: the app ships no native
+ * clipboard module, and adding one would invalidate every installed dev
+ * client (CLAUDE.md, gotcha 5). On a phone the button is absent and the text
+ * beside it stays `selectable`, so a long press still copies it.
+ */
+export function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const clipboard =
+    Platform.OS === 'web' && typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+  if (!clipboard) return null;
+  const copy = () => {
+    clipboard.writeText(value).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1600);
+      },
+      () => undefined,
+    );
+  };
+  return (
+    <Button
+      label={copied ? 'Copied' : label}
+      kind="secondary"
+      size="sm"
+      icon={copied ? 'check' : 'copy'}
+      onPress={copy}
+    />
+  );
+}
+
 /** Buttons side by side, sharing the width. */
 export function ButtonRow({ children }: { children: ReactNode }) {
   return <View style={styles.buttonRow}>{children}</View>;

@@ -197,13 +197,13 @@ export default function AgentScreen() {
     setRefreshing(false);
   };
 
-  // Arriving from the list's inline "Return" opens the return sheet once, not
-  // on every refetch.
+  // Arriving from the list's inline "Return", or from the hire screen's "Fund"
+  // (SEN-177), opens that sheet once, not on every refetch.
   const opened = useRef(false);
   useEffect(() => {
-    if (agent && askedSheet === 'return' && !opened.current) {
+    if (agent && (askedSheet === 'return' || askedSheet === 'fund') && !opened.current) {
       opened.current = true;
-      setSheet('return');
+      setSheet(askedSheet);
     }
   }, [agent, askedSheet]);
 

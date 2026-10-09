@@ -46,15 +46,18 @@ import { MandateSummary } from '@/agents/MandateSummary';
 import {
   defaultMandateForm,
   formFromMandate,
+  quoteUnit,
   type MandateErrors,
   type MandateForm,
 } from '@/agents/mandate';
 import { mandateToSend, presetValues, resolveExpiry, type PresetChoice } from '@/agents/presets';
 import { readBack } from '@/agents/readback';
 import { useSession } from '@/session';
+import { API_URL } from '@/wallet/api';
 import {
   Button,
   Card,
+  CopyButton,
   DisclosureRow,
   Field,
   IconButton,
@@ -642,37 +645,79 @@ export default function HireAgentScreen() {
   );
 }
 
+/**
+ * SEN-177: what to do next, in the order people need it. Funding comes first
+ * because a new agent's wallet is empty and can trade nothing; the MCP token is
+ * an optional, advanced extra, so it sits below, explained before it is shown.
+ */
 function Hired({ result }: { result: HireAgentResult }) {
   const router = useRouter();
   const { agent, mcpToken } = result;
+  const open = (sheet?: 'fund') =>
+    router.replace({
+      pathname: '/agents/[id]',
+      params: sheet ? { id: agent.id, sheet } : { id: agent.id },
+    });
+  const endpoint = `${API_URL.replace(/\/+$/, '')}/mcp`;
+  const config = JSON.stringify(
+    {
+      mcpServers: {
+        sente: { type: 'http', url: endpoint, headers: { Authorization: `Bearer ${mcpToken}` } },
+      },
+    },
+    null,
+    2,
+  );
   return (
     <Screen
       footer={
-        <Button
-          label="Open agent"
-          kind="primary"
-          onPress={() => router.replace({ pathname: '/agents/[id]', params: { id: agent.id } })}
-        />
+        <View style={styles.hiredActions}>
+          <Button label={`Fund ${agent.name}`} kind="primary" onPress={() => open('fund')} />
+          <Button label={`Go to ${agent.name}`} kind="secondary" onPress={() => open()} />
+        </View>
       }
     >
       <TopBar />
       <Text style={text.display}>{agent.name} is hired</Text>
-      <Section label="Wallet">
+      <Text style={[text.dim, styles.subtitle]}>
+        Its wallet starts empty. Fund it with what it trades, {quoteUnit(agent.mandate)}, so it has
+        something to work with.
+      </Text>
+      <Section label="Its wallet" aside={<CopyButton value={agent.address} />}>
         <Text style={text.mono} selectable>
           {agent.address}
         </Text>
-        <Text style={text.dim}>Empty for now. Fund it from the agent’s page.</Text>
       </Section>
-      <Section label="MCP token · shown once">
+
+      <Section label="Connect your own AI client · optional">
+        <Text style={text.dim}>
+          Sente runs {agent.name} for you, so you can skip this. To drive it from your own AI client
+          instead, such as Claude Code or any MCP client, connect that client to Sente’s MCP server
+          with the token below. It gets the same tools {agent.name} uses, held to the same mandate.
+        </Text>
         <Card>
+          <Row label="Server" value={endpoint} mono />
+          <View style={styles.tokenHead}>
+            <Text style={text.label}>Token · shown once</Text>
+            <CopyButton value={mcpToken} />
+          </View>
           <Text style={[text.mono, styles.token]} selectable>
             {mcpToken}
           </Text>
+          <Text style={[text.caption, styles.after]}>
+            Sente keeps only a hash of it, so it can’t show it again. Send it as{' '}
+            <Text style={text.mono}>Authorization: Bearer …</Text>. Revoking the agent cuts it off.
+          </Text>
         </Card>
-        <Text style={[text.dim, styles.after]}>
-          Sente keeps only a hash of it, so this is the only time it appears. You need it only to
-          connect an outside MCP client to this agent.
-        </Text>
+        <View style={styles.tokenHead}>
+          <Text style={text.caption}>As a JSON config, e.g. Claude Code’s .mcp.json:</Text>
+          <CopyButton value={config} />
+        </View>
+        <Card>
+          <Text style={[text.mono, styles.token]} selectable>
+            {config}
+          </Text>
+        </Card>
       </Section>
     </Screen>
   );
@@ -695,6 +740,15 @@ const styles = StyleSheet.create({
   explain: { marginTop: 10, alignSelf: 'flex-start' },
   readBack: { fontSize: 15, lineHeight: 22, color: color.textDim },
   token: { color: color.text },
+  tokenHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  hiredActions: { gap: 10 },
   sheetLead: { marginTop: 6, marginBottom: 8 },
   approvalActions: { marginTop: 16, gap: 10 },
 });
