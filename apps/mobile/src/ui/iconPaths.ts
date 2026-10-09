@@ -39,6 +39,8 @@ export const PATHS = {
   // same eye struck through.
   balances: 'M2 12Q12 1 22 12Q12 23 2 12zM15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0',
   balancesHidden: 'M2 12Q12 1 22 12Q12 23 2 12zM15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0M4 4l16 16',
+  // The rail's "How it works" (SEN-181): a question mark in a circle.
+  help: 'M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4M12 17h.01',
 } as const;
 
 export type IconName = keyof typeof PATHS;
