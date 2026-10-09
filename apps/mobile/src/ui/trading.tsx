@@ -30,6 +30,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { Icon } from './icons';
 import { Sparkline } from './chart/Sparkline';
 import type { Decimal } from './chart/geometry';
 import { color, font, RADIUS, text } from './theme';
@@ -176,10 +177,13 @@ export function MarketRow({
   perp,
   divider = true,
   onPress,
+  starred = false,
 }: {
   symbol: string;
   /** Venue or quote, e.g. `Kuru spot`, `Perpl perps`. */
   subline: string;
+  /** A favourite: a filled star leads the subline. */
+  starred?: boolean;
   price: Decimal;
   /** The market's tick; sets the decimals shown. */
   tick?: Decimal;
@@ -200,7 +204,7 @@ export function MarketRow({
       disabled={!onPress}
       style={({ pressed }) => [styles.mkt, divider && styles.mktDivider, pressed && styles.pressed]}
       accessibilityRole={onPress ? 'button' : undefined}
-      accessibilityLabel={`${symbol}${perp ? ' perpetual' : ''}, ${subline}, ${shownPrice}, ${change}`}
+      accessibilityLabel={`${symbol}${perp ? ' perpetual' : ''}${starred ? ', favourite' : ''}, ${subline}, ${shownPrice}, ${change}`}
     >
       <TokenGlyph symbol={symbol} />
       <View style={styles.mktMain}>
@@ -209,9 +213,14 @@ export function MarketRow({
           {perp ? ' ' : null}
           {perp ? <PerpTag leverage={perp.leverage} /> : null}
         </Text>
-        <Text style={text.caption} numberOfLines={1}>
-          {subline}
-        </Text>
+        <View style={styles.mktSub}>
+          {starred ? (
+            <Icon name="star" size={14} color={color.purpleHi} fill={color.purpleHi} />
+          ) : null}
+          <Text style={[text.caption, styles.grow]} numberOfLines={1}>
+            {subline}
+          </Text>
+        </View>
       </View>
       <View style={styles.mktSpark}>
         {points && points.length > 1 ? (
@@ -544,6 +553,8 @@ const styles = StyleSheet.create({
   mktDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.line },
   pressed: { opacity: 0.7 },
   mktMain: { flex: 1, minWidth: 0, gap: 1 },
+  mktSub: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  grow: { flex: 1, minWidth: 0 },
   mktSpark: { width: 64, height: 28 },
   mktPx: { alignItems: 'flex-end', gap: 1 },
   side: {

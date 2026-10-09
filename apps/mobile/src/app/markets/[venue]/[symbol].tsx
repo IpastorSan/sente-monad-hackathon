@@ -84,7 +84,19 @@ import { canEmbedTicket, TicketPanel } from '@/trade/TicketScreen';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { Sigil, Stone } from '@/ui/goban';
-import { Button, Card, Loading, Notice, Section, Sheet, TopBar, useWide, WIDE_MAX } from '@/ui/kit';
+import { Icon } from '@/ui/icons';
+import {
+  Button,
+  Card,
+  isHovered,
+  Loading,
+  Notice,
+  Section,
+  Sheet,
+  TopBar,
+  useWide,
+  WIDE_MAX,
+} from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import {
   AsOf,
@@ -724,11 +736,21 @@ function StarButton({
       accessibilityState={{ selected: starred }}
       hitSlop={8}
       onPress={onPress}
-      style={({ pressed }) => [styles.star, starred && styles.starOn, pressed && styles.pressed]}
+      style={(state) => [
+        styles.star,
+        starred && styles.starOn,
+        isHovered(state) && styles.starHover,
+        state.pressed && styles.pressed,
+      ]}
     >
-      <Text style={[styles.starGlyph, starred && { color: color.purpleHi }]}>
-        {starred ? '★' : '☆'}
-      </Text>
+      {(state) => (
+        <Icon
+          name="star"
+          size={20}
+          color={starred || isHovered(state) ? color.purpleHi : color.textDim}
+          fill={starred ? color.purpleHi : undefined}
+        />
+      )}
     </Pressable>
   );
 }
@@ -941,8 +963,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  starOn: { borderColor: color.purple },
-  starGlyph: { fontSize: 17, lineHeight: 20, color: color.textDim },
+  starOn: { borderColor: color.purple, backgroundColor: 'rgba(131, 110, 249, 0.16)' },
+  starHover: { borderColor: color.lineStrong, backgroundColor: color.well },
   cta: {
     position: 'absolute',
     left: 0,

@@ -17,11 +17,14 @@ export function Icon({
   size = 20,
   color = palette.textDim,
   strokeWidth = 1.8,
+  fill,
 }: {
   name: IconName;
   size?: number;
   color?: string;
   strokeWidth?: number;
+  /** Fills a closed glyph (a starred star); stroke-only when omitted. */
+  fill?: string;
 }) {
   // The viewBox scales the stroke with the glyph, as the native Group's scale does.
   return (
@@ -29,7 +32,7 @@ export function Icon({
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
+      fill={fill ?? 'none'}
       stroke={color}
       strokeWidth={strokeWidth}
       strokeLinecap="round"

@@ -39,6 +39,8 @@ export const PATHS = {
   // same eye struck through.
   balances: 'M2 12Q12 1 22 12Q12 23 2 12zM15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0',
   balancesHidden: 'M2 12Q12 1 22 12Q12 23 2 12zM15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0M4 4l16 16',
+  // Favourites (SEN-179): one closed outline, so `fill` turns it solid for "on".
+  star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.85L12 16.9l-5.25 2.75 1-5.85L3.5 9.7l5.9-.9z',
 } as const;
 
 export type IconName = keyof typeof PATHS;

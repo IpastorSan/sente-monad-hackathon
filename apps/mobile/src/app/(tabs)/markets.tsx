@@ -12,15 +12,16 @@
  * named above the half of the list that is left; a failed first load is an
  * error with a retry.
  *
- * Favourites are local to the device and toggled with a long press, because
- * the row has no room for a star and the asset page (U-6) owns the visible
- * one. Choices with a rule behind them are in `markets/select.ts` and
+ * Favourites are local to the device. A favourite's row leads its subline
+ * with a filled star; on a phone a long press toggles it, and on the web
+ * (SEN-179), where there is a pointer, the star is a button of its own that
+ * shows on hover. The asset page (U-6) has the same star. Choices with a rule behind them are in `markets/select.ts` and
  * `markets/marketsView.ts`, under test.
  */
 import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { MarketDto } from '@/markets/api';
 import { useMarkets, useTickers } from '@/markets/hooks';
@@ -49,7 +50,8 @@ import {
   type ThemeId,
 } from '@/markets/select';
 import { useSparklines } from '@/markets/useSparklines';
-import { Button, Chip, Loading, Notice, Screen, Section } from '@/ui/kit';
+import { Icon } from '@/ui/icons';
+import { Button, Chip, isHovered, Loading, Notice, Screen, Section, useWide } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import { AsOf, ChangeText, MarketRow, TokenGlyph } from '@/ui/trading';
 
@@ -82,6 +84,7 @@ const EMPTY: Record<MarketFilter, string> = {
 export default function MarketsScreen() {
   const router = useRouter();
   const markets = useMarkets();
+  const wide = useWide();
   const tickers = useTickers();
   const [filter, setFilter] = useState<MarketFilter>('all');
   const [theme, setTheme] = useState<ThemeId | null>(null);
@@ -184,7 +187,8 @@ export default function MarketsScreen() {
             {MARKET_FILTERS.map(({ id, label: chip }) => (
               <Chip
                 key={id}
-                label={id === 'favourites' ? '★' : chip}
+                label={id === 'favourites' ? 'Favourites' : chip}
+                icon={id === 'favourites' ? 'star' : undefined}
                 selected={filter === id}
                 onPress={() => setFilter(id)}
               />
@@ -255,18 +259,36 @@ export default function MarketsScreen() {
                       { name: 'longpress', label: starred ? 'Unstar' : 'Star' },
                     ]}
                     onAccessibilityAction={() => star(market)}
-                    style={({ pressed }) => pressed && styles.pressed}
+                    style={({ pressed }) => [styles.rowLine, pressed && styles.pressed]}
                   >
-                    <MarketRow
-                      symbol={market.base}
-                      subline={`${starred ? '★ ' : ''}${venueLine(market)}`}
-                      price={price ?? ''}
-                      tick={market.tickSize}
-                      changePct={asPercent(changeOf(market, index))}
-                      points={sparkPoints(klines.get(key) ?? [], price)}
-                      perp={market.kind === 'perp' ? { leverage: market.maxLeverage } : undefined}
-                      divider={i < shown.length - 1}
-                    />
+                    {(state) => (
+                      <>
+                        {Platform.OS === 'web' ? (
+                          <RowStar
+                            starred={starred}
+                            visible={starred || isHovered(state)}
+                            symbol={market.symbol}
+                            hang={wide}
+                            onPress={() => star(market)}
+                          />
+                        ) : null}
+                        <View style={styles.rowMain}>
+                          <MarketRow
+                            symbol={market.base}
+                            subline={venueLine(market)}
+                            starred={starred && Platform.OS !== 'web'}
+                            price={price ?? ''}
+                            tick={market.tickSize}
+                            changePct={asPercent(changeOf(market, index))}
+                            points={sparkPoints(klines.get(key) ?? [], price)}
+                            perp={
+                              market.kind === 'perp' ? { leverage: market.maxLeverage } : undefined
+                            }
+                            divider={i < shown.length - 1}
+                          />
+                        </View>
+                      </>
+                    )}
                   </Pressable>
                 );
               })
@@ -275,6 +297,52 @@ export default function MarketsScreen() {
         </>
       )}
     </Screen>
+  );
+}
+
+/**
+ * The web row's star (SEN-179): a button in the row's leading gutter, shown on
+ * hover and kept when the market is a favourite, so a pointer can toggle what
+ * a phone toggles with a long press. Its own press never opens the market.
+ */
+function RowStar({
+  starred,
+  visible,
+  symbol,
+  hang,
+  onPress,
+}: {
+  starred: boolean;
+  visible: boolean;
+  symbol: string;
+  /** Hung in the margin left of the column (wide), so the rows stay aligned with the header. */
+  hang: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={
+        starred ? `Remove ${symbol} from favourites` : `Add ${symbol} to favourites`
+      }
+      accessibilityState={{ selected: starred }}
+      onPress={onPress}
+      style={(state) => [
+        styles.rowStar,
+        hang && styles.rowStarHung,
+        !visible && styles.rowStarIdle,
+        isHovered(state) && styles.rowStarHover,
+      ]}
+    >
+      {(state) => (
+        <Icon
+          name="star"
+          size={16}
+          color={starred || isHovered(state) ? color.purpleHi : color.textFaint}
+          fill={starred ? color.purpleHi : undefined}
+        />
+      )}
+    </Pressable>
   );
 }
 
@@ -364,4 +432,19 @@ const styles = StyleSheet.create({
   stackOverlap: { marginLeft: -7 },
   themeChange: { fontSize: 12, lineHeight: 17 },
   empty: { paddingVertical: 16 },
+  rowLine: { flexDirection: 'row', alignItems: 'center' },
+  rowMain: { flex: 1, minWidth: 0 },
+  rowStar: {
+    width: 28,
+    height: 28,
+    marginLeft: -6,
+    marginRight: 4,
+    borderRadius: RADIUS.stone,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowStarHung: { marginLeft: -36, marginRight: 8 },
+  // Invisible but still there, so a keyboard can reach it and the rows never shift.
+  rowStarIdle: { opacity: 0 },
+  rowStarHover: { backgroundColor: color.well },
 });
