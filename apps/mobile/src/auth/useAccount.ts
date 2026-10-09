@@ -4,7 +4,11 @@
  * Owns exactly one live `WalletSession` at a time and is responsible for its
  * lifetime: replacing a session ends the old one, signing out ends the current
  * one, and unmounting ends whatever is live. Key material never outlives the
- * component.
+ * component in plaintext.
+ *
+ * On web, the first frame also tries to reopen a session this tab sealed
+ * before a reload (SEN-176, `restoreWallet`); signing out and forgetting the
+ * passkey destroy that sealed copy.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Address, LocalAccount } from 'viem';
@@ -14,6 +18,8 @@ import type { AuthorizationPayload } from './deviceKey';
 import {
   createWallet,
   describeAuthError,
+  forgetSealedSession,
+  restoreWallet,
   signIn as signInWithPasskey,
   type AuthErrorDescription,
   type StoredCredential,
@@ -21,7 +27,7 @@ import {
 } from './mera';
 
 export type AccountStatus =
-  /** Reading the stored credential hint. First frame only. */
+  /** Reading the stored hint and, on web, any session sealed before a reload. */
   | 'restoring'
   /** No live session. `hasCredential` says whether a passkey is known here. */
   | 'signedOut'
@@ -56,7 +62,7 @@ export type UseAccount = {
   createPasskey: (userName: string) => Promise<void>;
   /** Asserts an existing passkey and opens a session. */
   signIn: () => Promise<void>;
-  /** Ends the session, keeping the stored hint. */
+  /** Ends the session, keeping the stored hint. Destroys a sealed copy (web). */
   signOut: () => void;
   /**
    * Ends the session and deletes the stored hint — the stateless test. Signing
@@ -85,18 +91,6 @@ export function useAccount(): UseAccount {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void loadCredential().then((credential) => {
-      if (cancelled) return;
-      setStoredCredential(credential);
-      setStatus('signedOut');
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   /** Installs a session, ending whatever it replaces. */
   const adopt = useCallback((next: WalletSession | null) => {
     const previous = sessionRef.current;
@@ -105,6 +99,26 @@ export function useAccount(): UseAccount {
     setSession(next);
     setStatus(next === null ? 'signedOut' : 'ready');
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const credential = await loadCredential();
+      // Web only: a session this tab sealed before a reload, if it is still
+      // valid and belongs to this hint. Never throws; `null` on Android.
+      const restored = await restoreWallet(credential);
+      if (cancelled) {
+        restored?.end();
+        return;
+      }
+      setStoredCredential(credential);
+      if (restored !== null) adopt(restored);
+      else setStatus('signedOut');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adopt]);
 
   const run = useCallback(
     async (open: () => Promise<WalletSession>) => {
@@ -148,11 +162,13 @@ export function useAccount(): UseAccount {
   const signOut = useCallback(() => {
     setError(null);
     adopt(null);
+    void forgetSealedSession();
   }, [adopt]);
 
   const forget = useCallback(async () => {
     setError(null);
     adopt(null);
+    await forgetSealedSession();
     await clearCredential();
     if (mountedRef.current) setStoredCredential(null);
   }, [adopt]);

@@ -21,12 +21,16 @@
  * sign-in is prompt-free: `signDigest` and `signPrivyAuthorization` both sign
  * locally from the derived keys.
  *
+ * On web, a signed-in tab also survives a reload: the session's two secrets
+ * are sealed under a non-extractable key for the life of the tab
+ * (`./sessionSeal.web.ts`, `docs/web.md`). On Android that is a no-op.
+ *
  * The same ceremonies run on Android and in a browser; only the WebAuthn
  * transport differs, and `./webauthnClient` picks it per platform (SEN-165).
  */
 import { createSecp256k1SigningSession, type Secp256k1SigningSession } from '@category-labs/mera';
 import { toViemAccount } from '@category-labs/mera/viem';
-import type { Address, LocalAccount } from 'viem';
+import { isAddressEqual, type Address, type LocalAccount } from 'viem';
 
 import {
   assertKeyMaterial,
@@ -41,6 +45,7 @@ import {
   signPrivyAuthorization as signWithDeviceKey,
   type AuthorizationPayload,
 } from './deviceKey';
+import { clearSealedSession, sealSession, unsealSession } from './sessionSeal';
 import { webAuthnClient } from './webauthnClient';
 
 // The error classifier lives in a React-Native-free module so node can test it;
@@ -125,7 +130,8 @@ type OpenSessionInput = {
  * own copy of `privateKey`; the device key is derived here and kept, because
  * nothing else copies it, so the session holds those 32 bytes and wipes them in
  * `end()`. That is the whole of the device key's lifetime: derived at sign-in,
- * live for the session, gone at sign-out, never written anywhere.
+ * live for the session, gone at sign-out, never written anywhere in plaintext
+ * (on web, its PRF output is sealed for the tab's lifetime — see `openAndSeal`).
  *
  * On any failure the half-built signing session is ended and the device key
  * wiped before the error propagates, so a throw never leaves key material live.
@@ -173,10 +179,16 @@ function openWalletSession({
   }
 }
 
-/** Opens the session from fresh material and wipes both secrets on every path. */
-function openSession(material: SessionKeyMaterial): WalletSession {
+/**
+ * A fresh sign-in's last step: opens the session, seals the material for a
+ * reload (web; a no-op on Android, and a failure there only costs a prompt
+ * after the next reload), and wipes both secrets on every path.
+ */
+async function openAndSeal(material: SessionKeyMaterial): Promise<WalletSession> {
   try {
-    return openWalletSession(material);
+    const session = openWalletSession(material);
+    await sealSession({ ...material, address: session.address });
+    return session;
   } finally {
     zeroize(material.privateKey, material.devicePrfOutput);
   }
@@ -219,7 +231,7 @@ export async function createWallet({
     timeout: PASSKEY_TIMEOUT_MS,
     webAuthnClient,
   });
-  return openSession(material);
+  return openAndSeal(material);
 }
 
 export type SignInOptions = CeremonyOptions & {
@@ -249,8 +261,42 @@ export async function signIn({
     timeout: PASSKEY_TIMEOUT_MS,
     webAuthnClient,
   });
-  return openSession(material);
+  return openAndSeal(material);
 }
+
+/**
+ * Reopens a session sealed by an earlier sign-in in this browser tab, with no
+ * ceremony. `null` (and the seal cleared) when there is none, or when it does
+ * not belong to `hint`: a different credential than the stored hint, or a
+ * rebuilt address that is not the one sealed with it. Always `null` on Android.
+ *
+ * The session is rebuilt by the same `openWalletSession` sign-in uses, from
+ * the same two secrets sign-in would have derived, so it is the same session.
+ */
+export async function restoreWallet(hint: StoredCredential | null): Promise<WalletSession | null> {
+  const sealed = await unsealSession();
+  if (sealed === null) return null;
+  let session: WalletSession | undefined;
+  try {
+    if (hint?.credentialId !== sealed.credential.credentialId) {
+      throw new Error('sealed session belongs to another passkey');
+    }
+    session = openWalletSession(sealed);
+    if (!isAddressEqual(session.address, sealed.address as Address)) {
+      throw new Error('sealed session rebuilt a different address');
+    }
+    return session;
+  } catch {
+    session?.end();
+    await clearSealedSession();
+    return null;
+  } finally {
+    zeroize(sealed.privateKey, sealed.devicePrfOutput);
+  }
+}
+
+/** Forgets the sealed copy of the session (sign-out, "forget this passkey"). */
+export { clearSealedSession as forgetSealedSession };
 
 /**
  * Opens a session, runs `use`, and ends the session in a `finally`.

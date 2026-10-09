@@ -41,8 +41,9 @@ export type Session = {
   readonly smart: UseSmartAccount;
   /**
    * The API session: a bearer token the passkey account signed for (SEN-37).
-   * Held in memory only, and shared by every API client so they cannot end up
-   * authenticated as two different users.
+   * Held in memory (on web, also sealed for the tab; see `./auth`), and shared
+   * by every API client so they cannot end up authenticated as two different
+   * users.
    */
   readonly api: SessionAuth;
   /** `null` until signed in: agents are scoped to the owner address. */

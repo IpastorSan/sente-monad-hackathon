@@ -6,16 +6,25 @@
  * sign the exact string it returns with the Mera viem account, and swap the
  * signature for a bearer token.
  *
- * THE TOKEN IS NEVER PERSISTED. Not in `platform/kv`, not in state that
- * outlives the process: a stored token is a credential someone can lift off the
- * device, and this one is worth nothing to keep — the passkey re-derives the
- * key on the next launch, so signing in again costs one HTTP round trip and no
- * user interaction (the session key signs without a biometric prompt, see
- * `auth/mera.ts`).
+ * THE TOKEN IS NEVER PERSISTED IN PLAINTEXT, and never in `platform/kv`. A
+ * stored token is a credential someone can lift off the device, and it is
+ * cheap to replace: with a live wallet session, signing in again costs one HTTP
+ * round trip and no user interaction (the session key signs without a
+ * biometric prompt, see `auth/mera.ts`).
+ *
+ * On Android it lives in memory only. On web (SEN-176) it is also sealed into
+ * `sessionStorage` next to the sealed wallet session, encrypted under the same
+ * non-extractable key (`auth/sessionSeal.web.ts`), so a reload reuses it
+ * instead of signing a fresh challenge. That copy dies with the tab, is
+ * cleared on sign-out, and is never trusted past its own expiry or for another
+ * address. Script running in the page while the tab is open could decrypt it
+ * through WebCrypto, exactly as it could read the in-memory one; `docs/web.md`,
+ * "Staying signed in across a reload", states that trade-off.
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { LocalAccount } from 'viem';
 
+import { sealApiToken, unsealApiToken } from '@/auth/sessionSeal';
 import { unboundFetch } from '@/platform/fetch';
 import { API_URL, type SessionAuth } from '@/wallet/api';
 
@@ -112,9 +121,19 @@ export async function requestSessionToken(
   return api.session(account.address, signature);
 }
 
+/** Where a token is kept across a reload. A no-op store on Android. */
+export type TokenStore = {
+  load(address: string): Promise<string | null>;
+  save(address: string, token: string, expiresAt: string): Promise<void>;
+};
+
+const SEALED_TOKENS: TokenStore = { load: unsealApiToken, save: sealApiToken };
+
 export type UseSessionAuthOptions = {
   /** Injectable for specs and for pointing at another API instance. */
   api?: AuthApi;
+  /** Injectable for specs. Defaults to the tab-scoped sealed copy (web only). */
+  tokens?: TokenStore;
 };
 
 /**
@@ -126,12 +145,15 @@ export type UseSessionAuthOptions = {
  */
 export function useSessionAuth(
   account: LocalAccount | null,
-  { api: injectedApi }: UseSessionAuthOptions = {},
+  { api: injectedApi, tokens = SEALED_TOKENS }: UseSessionAuthOptions = {},
 ): SessionAuth {
   const api = useMemo(() => injectedApi ?? new AuthApi(), [injectedApi]);
   const tokenRef = useRef<string | null>(null);
   const accountRef = useRef<LocalAccount | null>(account);
   const inFlightRef = useRef<Promise<string | null> | null>(null);
+  // The first token for an account may come from the sealed copy (a reload);
+  // every later refresh means the one we had was refused, so it signs.
+  const mayReuseRef = useRef(true);
 
   // Signing out, or signing in as someone else, invalidates the token: it names
   // the previous address and must never be sent for the new one. Done during
@@ -140,6 +162,7 @@ export function useSessionAuth(
   if (accountRef.current?.address !== account?.address) {
     tokenRef.current = null;
     accountRef.current = account;
+    mayReuseRef.current = true;
   }
 
   const refresh = useCallback(async (): Promise<string | null> => {
@@ -147,13 +170,23 @@ export function useSessionAuth(
     if (signer === null) return null;
     if (inFlightRef.current !== null) return inFlightRef.current;
 
-    const attempt = requestSessionToken(signer, api)
-      .then((session) => {
-        // Discard a token that arrived after the user signed out or switched.
-        if (accountRef.current?.address !== signer.address) return null;
-        tokenRef.current = session.token;
-        return session.token;
-      })
+    const reuse = mayReuseRef.current;
+    mayReuseRef.current = false;
+    const attempt = (async (): Promise<string | null> => {
+      let token = reuse ? await tokens.load(signer.address).catch(() => null) : null;
+      let fresh: SessionResponse | null = null;
+      if (token === null) {
+        fresh = await requestSessionToken(signer, api);
+        token = fresh.token;
+      }
+      // Discard a token that arrived after the user signed out or switched.
+      if (accountRef.current?.address !== signer.address) return null;
+      tokenRef.current = token;
+      if (fresh !== null) {
+        void tokens.save(signer.address, fresh.token, fresh.expiresAt).catch(() => undefined);
+      }
+      return token;
+    })()
       .catch(() => null)
       .finally(() => {
         inFlightRef.current = null;
@@ -161,7 +194,7 @@ export function useSessionAuth(
 
     inFlightRef.current = attempt;
     return attempt;
-  }, [api]);
+  }, [api, tokens]);
 
   // Sign in as soon as there is a key to sign with, so the first screen does
   // not have to spend a 401 discovering there is no session yet.
