@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="800" viewBox="0 0 2400 800">
+<rect width="2400" height="800" fill="#0D0A19"/>
+<circle cx="400" cy="400" r="230" fill="#836EF9" stroke="#A898FF" stroke-width="9"/>
+<text x="400" y="408" text-anchor="middle" dominant-baseline="central" font-family="Noto Sans CJK TC" font-weight="900" font-size="270" fill="#0D0A19">先</text>
+<text x="720" y="400" dominant-baseline="central" font-family="Bricolage Grotesque" font-weight="700" font-size="300" fill="#F4F1FF" letter-spacing="-6">Sente</text>
+<text x="728" y="610" font-family="Bricolage Grotesque" font-weight="700" font-size="64" fill="#A898FF">AI agents, enclave-bounded, on Monad</text>
+</svg>
