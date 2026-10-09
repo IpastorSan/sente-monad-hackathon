@@ -21,7 +21,7 @@ sente.lol {
 	# passkey association on both platforms.
 	# The release APK (SEN-51). Its own directory on the box, uploaded by hand
 	# (docs/deploy.md "Where judges get it"), so a deploy never re-ships 170 MB.
-	handle /download/* {
+	handle_path /download/* {
 		root * /srv/download
 		@apk path *.apk
 		header @apk Content-Type application/vnd.android.package-archive
