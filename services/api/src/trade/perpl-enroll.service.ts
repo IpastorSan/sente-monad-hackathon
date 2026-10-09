@@ -84,6 +84,15 @@ const FORMAT_CHANGED = 'Perpl changed its sign-up format; update the app';
 /** Items are always in this order, and `signatures[i]` signs `items[i]`. */
 const ROLES: readonly EnrollRole[] = ['trade', 'read'];
 
+/**
+ * The order the payloads are fetched AND submitted in. Perpl refuses a
+ * payload older than the last key it enrolled for the account — the same bare
+ * 400 as a bad signature (probe P5, 2026-10-09: two read payloads A then B,
+ * B enrolled first, A refused). So the one submitted first must be fetched
+ * first. Read goes first, for the reason `commit` gives.
+ */
+const SUBMIT_ORDER: readonly EnrollRole[] = ['read', 'trade'];
+
 export interface EnrollPrepareItem {
   readonly role: EnrollRole;
   /** What the device key signs: the Privy `eth_signTypedData_v4` request. */
@@ -235,8 +244,8 @@ export class PerplEnrollService {
     };
 
     try {
-      const items: PendingItem[] = [];
-      for (const role of ROLES) {
+      const fetchedItems: PendingItem[] = [];
+      for (const role of SUBMIT_ORDER) {
         const { publicKeyHex, label } = keys[role];
         const fetched = await this.perplCall(
           () =>
@@ -271,7 +280,7 @@ export class PerplEnrollService {
           },
         };
         const idempotencyKey = enrollIdempotencyKey(id, role);
-        items.push({
+        fetchedItems.push({
           role,
           path,
           body,
@@ -283,6 +292,8 @@ export class PerplEnrollService {
           digest: fetched.digest,
         });
       }
+      // The wire order stays [trade, read]: `signatures[i]` signs `items[i]`.
+      const items = ROLES.map((role) => fetchedItems.find((item) => item.role === role)!);
 
       const pending: PendingEnrollment = {
         id,

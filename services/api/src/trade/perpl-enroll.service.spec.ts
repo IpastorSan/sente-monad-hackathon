@@ -7,6 +7,7 @@ import {
   PERPL_NETWORKS,
   newSecretKey,
   publicKeyOf,
+  SCOPE,
   toViemTypedData,
   type PerplTypedData,
 } from '@sente/venues/perpl';
@@ -23,6 +24,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { PrivyClient } from '../agents/privy/privy.client';
 import type { UserWalletBinding } from '../wallet/store/user-wallet-registry';
 import { TRADE_CHAIN_ID, type TradeConfig } from './trade.config';
+import { perplPublicKeyField } from './perpl-enroll-format';
 import {
   ed25519Sign,
   enrollRefusalToHttpException,
@@ -57,7 +59,14 @@ const PHONE_SECRET = newSecretKey();
 const PHONE_PUBLIC: Hex = bytesToHex(publicKeyOf(PHONE_SECRET));
 
 /** An 11-field payload shaped like the live one (constants.ts, 2026-09-11). */
-function servedPayload(body: Record<string, unknown>): PerplTypedData {
+/** What Perpl writes back for a requested mask: the effective scope, trade implying read (P5). */
+function servedScope(mask: unknown): string {
+  const requested = Number(mask);
+  return String(requested & SCOPE.trade ? requested | SCOPE.read : requested);
+}
+
+/** A payload in the exact live format probe P5 recorded (docs/user-trading.md §P5). */
+function servedPayload(body: Record<string, unknown>, servedAt = T0.getTime()): PerplTypedData {
   return {
     types: {
       EIP712Domain: [
@@ -82,15 +91,15 @@ function servedPayload(body: Record<string, unknown>): PerplTypedData {
     message: {
       signer: String(body['address']),
       statement: PERPL_API_KEY_TYPED_DATA.statement,
-      publicKey: String(body['public_key']),
-      scope: String(body['scope_mask']),
+      publicKey: perplPublicKeyField(body['public_key'] as Hex),
+      scope: servedScope(body['scope_mask']),
       label: String(body['label']),
-      expiresAt: '',
+      expiresAt: '0',
       ipCidrs: '',
       origin: '',
-      builderId: '',
-      maxBuilderFeePer100K: '',
-      time: `0x${T0.getTime().toString(16)}`,
+      builderId: '0',
+      maxBuilderFeePer100K: '0',
+      time: `0x${servedAt.toString(16)}`,
     },
   };
 }
@@ -124,27 +133,33 @@ function harness(
   const privyHeaders: Record<string, string>[] = [];
   const served = new Map<string, PerplTypedData>(); // public key -> typed data
   const enrolled: { publicKey: string; scope: string }[] = [];
+  let lastEnrolledTime = 0n;
 
   const perplFetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     if (url.endsWith('/payload')) {
       calls.push({ to: 'perpl', what: `payload:${String(body['scope_mask'])}`, body });
-      const typed = servedPayload(body);
+      // Each payload a millisecond after the last, as the live clock moves.
+      const typed = servedPayload(body, T0.getTime() + served.size);
       o.tamper?.(typed);
-      served.set(String(body['public_key']), typed);
+      served.set(typed.message['publicKey']!, typed);
       return new Response(JSON.stringify({ typed_data: typed, mac: `mac-${body['scope_mask']}` }));
     }
     const typed = body['typed_data'] as PerplTypedData;
     calls.push({ to: 'perpl', what: `enroll:${typed.message['scope']}`, body });
     if (o.enrollStatus) return new Response('nope', { status: o.enrollStatus });
+    // Live rule (P5): a payload older than the last enrolled one is a bare 400.
+    const time = BigInt(typed.message['time']!);
+    if (time < lastEnrolledTime) return new Response('Bad Request', { status: 400 });
+    lastEnrolledTime = time;
     const viemTyped = toViemTypedData(typed) as Parameters<typeof hashTypedData>[0];
     const signer = await recoverTypedDataAddress({
       ...viemTyped,
       signature: body['signature'] as Hex,
     });
     if (signer !== WALLET.address) return new Response('bad signature', { status: 400 });
-    const publicKey = typed.message['publicKey'] as Hex;
+    const publicKey = bytesToHex(Buffer.from(typed.message['publicKey']!, 'base64url'));
     if (!ed25519Verify(publicKey, hashTypedData(viemTyped), body['pop_signature'] as Hex)) {
       return new Response('bad pop', { status: 400 });
     }
@@ -235,10 +250,12 @@ describe('PerplEnrollService.prepare', () => {
     expect(prepared.expiresAt).toBe(new Date(T0.getTime() + 5 * 60 * 1000).toISOString());
     expect(prepared.items.map((i) => i.role)).toEqual(['trade', 'read']);
     // Trade key: the phone's, trade scope. Read key: the server's, read scope.
-    expect(calls.map((c) => c.what)).toEqual(['payload:2', 'payload:1']);
-    expect(calls[0]!.body).toMatchObject({ public_key: PHONE_PUBLIC, label: 'sente-phone' });
-    expect(calls[1]!.body['public_key']).not.toBe(PHONE_PUBLIC);
-    expect(calls[1]!.body['label']).toBe(READ_KEY_LABEL);
+    // Fetched read first: Perpl refuses a payload older than the last one enrolled,
+    // and commit submits read first.
+    expect(calls.map((c) => c.what)).toEqual(['payload:1', 'payload:2']);
+    expect(calls[1]!.body).toMatchObject({ public_key: PHONE_PUBLIC, label: 'sente-phone' });
+    expect(calls[0]!.body['public_key']).not.toBe(PHONE_PUBLIC);
+    expect(calls[0]!.body['label']).toBe(READ_KEY_LABEL);
 
     for (const item of prepared.items) {
       expect(item.payload).toMatchObject({
@@ -254,7 +271,10 @@ describe('PerplEnrollService.prepare', () => {
       const body = item.payload.body as { params: { typed_data: { primary_type: string } } };
       expect(body.params.typed_data.primary_type).toBe('PerplRegisterApiKey');
     }
-    expect(prepared.items[0]!.typedData.message['publicKey']).toBe(PHONE_PUBLIC);
+    expect(prepared.items[0]!.typedData.message['publicKey']).toBe(
+      perplPublicKeyField(PHONE_PUBLIC),
+    );
+    expect(prepared.items.map((i) => i.typedData.message['scope'])).toEqual(['3', '1']);
     // Nothing reached Privy: prepare signs nothing.
     expect(calls.some((c) => c.to === 'privy')).toBe(false);
   });
@@ -283,8 +303,28 @@ describe('PerplEnrollService.prepare', () => {
     ['a builder id', (t) => (t.message['builderId'] = 'skimmer')],
     ['a builder fee', (t) => (t.message['maxBuilderFeePer100K'] = '50')],
     ['another signer', (t) => (t.message['signer'] = `0x${'be'.repeat(20)}`)],
-    ['another public key', (t) => (t.message['publicKey'] = `0x${'11'.repeat(32)}`)],
-    ['a wider scope', (t) => (t.message['scope'] = '3')],
+    [
+      'another public key',
+      (t) => (t.message['publicKey'] = perplPublicKeyField(`0x${'11'.repeat(32)}`)),
+    ],
+    [
+      'our key in another encoding (hex)',
+      (t) => {
+        if (t.message['publicKey'] === perplPublicKeyField(PHONE_PUBLIC)) {
+          t.message['publicKey'] = PHONE_PUBLIC;
+        }
+      },
+    ],
+    [
+      'a read key widened to trade',
+      (t) => {
+        if (t.message['scope'] === '1') t.message['scope'] = '3';
+      },
+    ],
+    ['a trade key narrowed to the requested mask', (t) => (t.message['scope'] = '2')],
+    ['an expiry', (t) => (t.message['expiresAt'] = '1791560221000')],
+    ['an empty builder id spelled differently', (t) => (t.message['builderId'] = '')],
+    ['an IP allowlist', (t) => (t.message['ipCidrs'] = '10.0.0.0/8')],
     ['an origin', (t) => (t.message['origin'] = 'https://evil.example')],
     ['a stale time', (t) => (t.message['time'] = `0x${(T0.getTime() - 6 * 60_000).toString(16)}`)],
     ['another chain', (t) => (t.domain.chainId = '0x8f')],
@@ -299,16 +339,6 @@ describe('PerplEnrollService.prepare', () => {
 
   it('does not pin the domain salt, which drifts day to day', async () => {
     const { service } = harness({ tamper: (t) => (t.domain.salt = `0x${'ab'.repeat(32)}`) });
-    await expect(service.prepare(ALICE, PREPARE)).resolves.toBeDefined();
-  });
-
-  it('accepts the same key in base64 until P5 pins its encoding', async () => {
-    const b64 = Buffer.from(hexToBytes(PHONE_PUBLIC)).toString('base64');
-    const { service } = harness({
-      tamper: (t) => {
-        if (t.message['publicKey'] === PHONE_PUBLIC) t.message['publicKey'] = b64;
-      },
-    });
     await expect(service.prepare(ALICE, PREPARE)).resolves.toBeDefined();
   });
 
@@ -343,12 +373,12 @@ describe('PerplEnrollService.commit', () => {
       popSignature: phonePop(prepared.items[0]!.typedData),
     });
 
-    expect(result).toEqual({ apiKey: 'token-2', accountId: '505', readKey: 'linked' });
+    expect(result).toEqual({ apiKey: 'token-3', accountId: '505', readKey: 'linked' });
     expect(h.calls.map((c) => `${c.to}:${c.what}`)).toEqual([
-      'privy:sign:2',
+      'privy:sign:3',
       'privy:sign:1',
       'perpl:enroll:1',
-      'perpl:enroll:2',
+      'perpl:enroll:3',
     ]);
     // Forwarded verbatim and alone, under the signed idempotency key.
     expect(h.privyHeaders.map((hdr) => hdr['privy-authorization-signature'])).toEqual([
@@ -360,9 +390,9 @@ describe('PerplEnrollService.commit', () => {
       `sente-enroll:${prepared.prepareId}:read`,
     ]);
     // The fake Perpl verified the wallet signature and both proofs of possession.
-    expect(h.enrolled.map((e) => e.scope)).toEqual(['1', '2']);
+    expect(h.enrolled.map((e) => e.scope)).toEqual(['1', '3']);
 
-    expect(await h.secrets.getPerplTradeToken(ALICE.userId)).toBe('token-2');
+    expect(await h.secrets.getPerplTradeToken(ALICE.userId)).toBe('token-3');
     const read = await h.secrets.getPerplRead(ALICE.userId);
     expect(read?.apiKey).toBe('token-1');
     // The stored key is the one Perpl enrolled at read scope.
