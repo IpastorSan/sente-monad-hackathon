@@ -25,6 +25,9 @@
 # It writes nothing, funds nothing and needs no secret. The one key involved is
 # generated and discarded by smoke-sign.mjs. Safe to run repeatedly, including
 # against a live demo.
+#
+#   SMOKE_TOKEN_FILE=…  write the minted session token there (0600), for a
+#                       caller that makes authenticated reads next (live-check.sh).
 set -uo pipefail
 
 API="${1:-${API:-https://api.sente.lol}}"
@@ -98,6 +101,11 @@ say "4. The challenge flow, end to end, with a key made up on the spot"
 if signed=$("$NODE_BIN" "$HERE/smoke-sign.mjs" "$API" 2>&1); then
   eval "$signed"
   pass "POST /auth/challenge -> signed -> POST /auth/session minted a token for ${SMOKE_ADDRESS}"
+  # live-check.sh reuses this session for its authenticated reads. The token
+  # belongs to a throwaway address with no wallet, and the file is the caller's.
+  if [ -n "${SMOKE_TOKEN_FILE:-}" ]; then
+    (umask 077; printf '%s\n' "$SMOKE_TOKEN" > "$SMOKE_TOKEN_FILE")
+  fi
 
   # 404 is the CORRECT answer here and the one to expect: the token is valid, the
   # guard let it through, and this brand-new address has no registered wallet

@@ -35,7 +35,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "live:perpl": "node --no-warnings scripts/perpl-live.ts",
-    "probe:perpl-feed": "node --no-warnings scripts/perpl-feed-probe.ts"
+    "probe:perpl-feed": "node --no-warnings scripts/perpl-feed-probe.ts",
+    "drift:check": "node --no-warnings --env-file-if-exists=../../.env scripts/drift-check.ts"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",

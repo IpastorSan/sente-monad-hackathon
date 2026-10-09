@@ -16,7 +16,8 @@
     "check:indexer": "cd services/indexer && npm ci --no-audit --no-fund && npm run typecheck && npm test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "claim:ausd": "pnpm --filter @sente/mobile run claim:ausd"
+    "claim:ausd": "pnpm --filter @sente/mobile run claim:ausd",
+    "drift:check": "pnpm --filter @sente/venues run drift:check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

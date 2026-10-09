@@ -17,6 +17,10 @@
 #   SENTE_API_TAG=…   deploy an image that is already on the box instead of
 #                     building one. THIS IS THE ROLLBACK: pass a tag from
 #                     `docker image ls sente-api` on the box.
+#   HEALTH_TIMEOUT=…  seconds to wait for the API container to report healthy
+#                     (default 120: an e2-small booting the API takes longer
+#                     than a minute). Never healthy in time = exit non-zero.
+#   SKIP_BOX_CHECK=1  run live-check.sh without --box (no SSH checks on the box).
 #
 # ORDER, and it is not arbitrary:
 #
@@ -24,7 +28,9 @@
 #   2. DNS: A @, A www, A api -> the box's IP
 #   3. push-secrets.sh       the API refuses to start without /opt/sente/api.env
 #   4. deploy.sh             this
-#   5. verify.sh             deploy.sh runs it for you at the end
+#   5. live-check.sh --box   deploy.sh runs it for you at the end: verify.sh,
+#                            smoke.sh, authenticated reads, the drift check and
+#                            the box's own view (SEN-186). Non-zero on any FAIL.
 set -euo pipefail
 
 PROJECT="${PROJECT:-}"
@@ -36,6 +42,8 @@ SKIP_API="${SKIP_API:-0}"
 ALLOW_NO_DNS="${ALLOW_NO_DNS:-0}"
 SKIP_WEB="${SKIP_WEB:-0}"
 DRY_RUN="${DRY_RUN:-0}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+SKIP_BOX_CHECK="${SKIP_BOX_CHECK:-0}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
@@ -274,23 +282,36 @@ gcloud compute ssh "$NAME" --project "$PROJECT" --zone "$ZONE" --quiet --command
 # the rollback tags survive while the disk does not fill.
 
 if [ "$SKIP_API" != 1 ]; then
-  say "Waiting for the API's health check to pass"
-  for _ in $(seq 1 30); do
+  say "Waiting up to ${HEALTH_TIMEOUT}s for the API's health check to pass"
+  start=$SECONDS
+  state=''
+  while :; do
     state="$(gcloud compute ssh "$NAME" --project "$PROJECT" --zone "$ZONE" --quiet \
       --command "sudo docker inspect -f '{{.State.Health.Status}}' sente-api" 2>/dev/null || true)"
-    echo "    $state"
-    [ "$state" = healthy ] && break
-    [ "$state" = unhealthy ] && break
+    echo "    ${state:-no answer} ($((SECONDS - start))s)"
+    [ "$state" = healthy ] || [ "$state" = unhealthy ] || [ $((SECONDS - start)) -ge "$HEALTH_TIMEOUT" ] && break
     sleep 5
   done
-  if [ "${state:-}" != healthy ]; then
-    echo
-    echo "    The API is not healthy. Its boot log says why — a bad environment is"
-    echo "    a failed boot here by design, and it names the variable:"
-    echo "      gcloud compute ssh $NAME --project $PROJECT --zone $ZONE --command 'sudo docker logs --tail 50 sente-api'"
+  # A deploy whose API never comes up is a failed deploy, not a warning: stop
+  # here, before the checks below report on a box that is not serving.
+  if [ "$state" != healthy ]; then
+    die "the API is '${state:-unknown}' after ${HEALTH_TIMEOUT}s, not healthy. Its boot log
+       says why — a bad environment is a failed boot here by design, and it names
+       the variable:
+         gcloud compute ssh $NAME --project $PROJECT --zone $ZONE --command 'sudo docker logs --tail 50 sente-api'
+       Still booting? Re-run the checks alone: ./live-check.sh --box
+       Roll back: SENTE_API_TAG=<previous tag> ./deploy.sh"
   fi
 fi
 
-say "Verifying"
-sleep 5
-SKIP_API="$SKIP_API" SKIP_WEB="$SKIP_WEB" API_HOST="$API_HOST" ./verify.sh "$SITE_HOST"
+# live-check.sh runs verify.sh and smoke.sh itself, then the reads that need a
+# session, the drift check and (with --box) the box's own view. Every check is a
+# read, so it is safe on a live deploy. Its exit code is this script's.
+say "Live check"
+# The health wait above already proved the API up; without it, give Caddy's
+# reload a moment.
+if [ "$SKIP_API" = 1 ]; then sleep 5; fi
+box=(--box)
+{ [ "$SKIP_API" = 1 ] || [ "$SKIP_BOX_CHECK" = 1 ]; } && box=()
+SKIP_API="$SKIP_API" SKIP_WEB="$SKIP_WEB" API_BASE="https://$API_HOST" \
+  PROJECT="$PROJECT" ZONE="$ZONE" NAME="$NAME" ./live-check.sh "${box[@]}" "$SITE_HOST"

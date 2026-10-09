@@ -18,7 +18,8 @@
 // `createPerplTrader`. Nothing here imports the API. Point it at an API started
 // with USER_TRADING=1 — never production:
 //
-//   --api http://localhost:3100   (default)
+//   --api http://localhost:3100   (default; a *.sente.lol host exits 2 unless
+//                                 --really-production is also passed)
 //   --keys <file>                 the throwaway keys, created 0600 on first run and
 //                                 reused after, so a re-run is the same user
 //   --out <file.json>             every step's hashes, for docs/user-trading.md
@@ -70,6 +71,7 @@ import type { AuthorizationPayload } from '../src/auth/deviceKey.ts';
 import { perplTradeKey } from '../src/auth/perplKey.ts';
 import { publicClient } from '../src/chain/client.ts';
 import { TradeApi } from '../src/trade/api.ts';
+import { isProductionHost } from './productionGuard.ts';
 import {
   runTrade,
   TradePriceMovedError,
@@ -106,6 +108,15 @@ function option(name: string): string | undefined {
 }
 
 const API = (option('api') ?? 'http://localhost:3100').replace(/\/+$/, '');
+// Production registers a real wallet and sends it a starter kit of real testnet
+// funds (CLAUDE.md, "Tests never touch production"). Refused unless asked for by name.
+if (isProductionHost(API) && !argv.includes('--really-production')) {
+  console.error(
+    `trade-live: refusing --api ${API}, which is production. Point it at a local API ` +
+      'started with USER_TRADING=1, or pass --really-production if Ignacio asked for a live run.',
+  );
+  process.exit(2);
+}
 const KEYS_FILE = resolve(option('keys') ?? '.trade-live-keys.json');
 const OUT_FILE = option('out');
 
