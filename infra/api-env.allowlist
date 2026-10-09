@@ -117,6 +117,11 @@ ALCHEMY_NOTIFY_TIMEOUT_MS
 ENVIO_GRAPHQL_URL
 
 # ---------------------------------------------------------------------------
+# SEN-184: the Sente builder fee on Kuru (off when the address is unset)
+KURU_BUILDER_ADDRESS
+KURU_BUILDER_FEE_PPS
+KURU_BUILDER_AGENTS
+
 # DENY — never leaves this laptop, and push-secrets.sh says why if it finds one.
 # A `DENY ` prefix, a name (or a name ending in `*` to match a whole prefix),
 # then the reason, which is printed verbatim if the key turns up.
