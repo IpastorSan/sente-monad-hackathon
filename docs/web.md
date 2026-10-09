@@ -89,16 +89,18 @@ cross-device "same address" question cannot be simulated this way.
 
 ## Provider matrix
 
-| Provider                                            | PRF in the browser | Status                               |
-| --------------------------------------------------- | ------------------ | ------------------------------------ |
-| CDP virtual authenticator, `hasPrf: true`           | yes                | **Measured** — full flow, above      |
-| CDP virtual authenticator, `hasPrf: false`          | no                 | **Measured** — readable error, above |
-| Chrome desktop + Google Password Manager            | expected           | Not measured — needs a human (below) |
-| Chrome desktop → Android phone via QR (hybrid), GPM | expected           | Not measured — needs a human         |
-| GPM passkey created by the Android app, used on web | expected           | Not measured — needs a human         |
-| Windows Hello                                       | unknown            | Not measured — no Windows machine    |
-| iCloud Keychain (Safari / Chrome on macOS)          | unknown            | Not measured — no Mac                |
-| Chrome profile-local passkeys (desktop)             | unknown            | Not measured                         |
+| Provider                                            | PRF in the browser | Status                                                                                                                        |
+| --------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| CDP virtual authenticator, `hasPrf: true`           | yes                | **Measured** — full flow, above                                                                                               |
+| CDP virtual authenticator, `hasPrf: false`          | no                 | **Measured** — readable error, above                                                                                          |
+| Chrome desktop + Google Password Manager            | yes                | **Measured** 2026-10-09 (Linux, Chrome; prod: sign-in, wallet registered, starter kit sent)                                   |
+| Chromium desktop (Linux)                            | n/a                | **Measured** 2026-10-09 — no GPM passkeys in Chromium; use Google Chrome                                                      |
+| Bitwarden extension                                 | no                 | **Measured** 2026-10-09 — intercepts the ceremony; no PRF. Pick "Use your device" in its popup or turn its passkey prompt off |
+| Chrome desktop → Android phone via QR (hybrid), GPM | expected           | 2026-10-09: from Chromium on Linux the phone hangs on "Connecting to another device"; retry from Chrome                       |
+| GPM passkey created by the Android app, used on web | expected           | Not measured — needs a human                                                                                                  |
+| Windows Hello                                       | unknown            | Not measured — no Windows machine                                                                                             |
+| iCloud Keychain (Safari / Chrome on macOS)          | unknown            | Not measured — no Mac                                                                                                         |
+| Chrome profile-local passkeys (desktop)             | unknown            | Not measured                                                                                                                  |
 
 The app's web copy recommends only the two "expected" rows (GPM in Chrome, or a phone
 through the QR code). Do not add a provider to judge copy until it has a measured row.
