@@ -53,21 +53,37 @@ import {
   type KuruMarketConfig,
   type KuruToken,
 } from '@sente/venues/kuru';
+import {
+  ERC20_APPROVE_ABI,
+  PERPL_API_KEY_TYPED_DATA,
+  PERPL_TESTNET_CONTRACTS,
+  requestEnrollPayload,
+  toViemTypedData,
+  type PerplContext,
+} from '@sente/venues/perpl';
 import fc from 'fast-check';
 import {
+  ContractFunctionRevertedError,
   encodeFunctionData,
   getAddress,
+  hashTypedData,
   isAddressEqual,
   keccak256,
   maxUint256,
   parseEther,
   toBytes,
   type Address,
+  type Hex,
   type PublicClient,
+  type TypedDataDefinition,
 } from 'viem';
 
+import { toPrivyTypedData } from '../../../../services/api/src/agents/privy/agent-wallet.ts';
 import { PrivyClient } from '../../../../services/api/src/agents/privy/privy.client.ts';
-import { tradeIdempotencyKey } from '../../../../services/api/src/trade/idempotency-key.ts';
+import {
+  enrollIdempotencyKey as serverEnrollIdempotencyKey,
+  tradeIdempotencyKey,
+} from '../../../../services/api/src/trade/idempotency-key.ts';
 import {
   KuruPlanRefusedError,
   packSteps,
@@ -77,11 +93,22 @@ import {
   type PlannedStep,
 } from '../../../../services/api/src/trade/kuru-planner.ts';
 import {
+  ENROLL_TIME_SKEW_MS,
+  enrollPayloadProblem,
+  PERPL_ENROLL_FIELDS,
+  READ_KEY_LABEL,
+} from '../../../../services/api/src/trade/perpl-enroll-format.ts';
+import {
+  PerplPlanRefusedError,
+  planPerplOnboard,
+} from '../../../../services/api/src/trade/perpl-planner.ts';
+import {
   sponsoredCallTransaction,
   sponsoredSendBody,
   walletRpcPath,
 } from '../../../../services/api/src/wallet/send/sponsored-send.ts';
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
+import { perplTradeKey } from '../auth/perplKey.ts';
 import {
   runTrade,
   TradeApprovalRefusedError,
@@ -89,7 +116,24 @@ import {
   type TradeOutcome,
 } from './flow.ts';
 import { depositCapAtoms, readMarketFacts, worstPriceUnits } from './kuruMarket.ts';
-import type { PreparedStep, PreparedTrade, TradeIntent, TradeView } from './types.ts';
+import type {
+  EnrollPrepareItem,
+  EnrollPrepareResult,
+  EnrollRole,
+  PerplOnboardIntent,
+  PerplTypedData,
+  PreparedStep,
+  PreparedTrade,
+  TradeIntent,
+  TradeView,
+} from './types.ts';
+import {
+  enrollIdempotencyKey,
+  PERPL_ENROLL_PINNED,
+  PERPL_READ_KEY_LABEL,
+  verifyEnrollmentPrepare,
+  verifyPerplOnboard,
+} from './verifyPerpl.ts';
 
 const WALLET = getAddress('0x1111111111111111111111111111111111111111');
 const WALLET_ID = 'wallet00000000000000test';
@@ -930,4 +974,475 @@ test('property: any single-field tamper of a planned place is refused, nothing s
     }),
     { numRuns: 300 },
   );
+});
+
+// ===========================================================================
+// Perpl (SEN-98): the server's real `perpl-planner.ts` and enrollment format
+// against the phone's `verifyPerpl.ts`.
+//
+// `PerplEnrollService.prepare` itself has decorators and extensionless
+// imports, so it is mirrored in `serverEnrollPrepare` from its erasable
+// parts: the venue's `requestEnrollPayload`, the format check
+// `enrollPayloadProblem`, `toPrivyTypedData`, `PrivyClient.authorizationPayload`
+// and `enrollIdempotencyKey` — the same calls in the same order.
+// ===========================================================================
+
+const PERPL_EXCHANGE = PERPL_TESTNET_CONTRACTS.exchange;
+const PERPL_AUSD = PERPL_TESTNET_CONTRACTS.collateral;
+const PERPL_MIN = 100_000_000n;
+
+/** The slice of the live testnet `/pub/context` onboarding reads (as `perpl-planner.spec.ts`). */
+const PERPL_CONTEXT = {
+  chain: { chain_id: 10143 },
+  instances: [
+    {
+      id: 12,
+      address: PERPL_EXCHANGE.toLowerCase(),
+      collateral_token_id: 1,
+      min_account_open_amount: PERPL_MIN.toString(),
+      min_deposit_amount: '10000000',
+      min_withdraw_amount: '10000',
+    },
+  ],
+  tokens: [
+    {
+      id: 1,
+      address: PERPL_AUSD,
+      symbol: 'AUSD',
+      name: 'AUSD',
+      decimals: 6,
+      display_precision: 2,
+    },
+  ],
+  markets: [],
+} as unknown as PerplContext;
+
+/** `accountId` absent: no Perpl account yet (`getAccountByAddr` reverts). */
+function perplChain(accountId?: bigint): PublicClient {
+  const readContract = ({ functionName }: { functionName: string }) => {
+    if (functionName === 'getAccountByAddr') {
+      if (accountId === undefined) {
+        return Promise.reject(new ContractFunctionRevertedError({ abi: [], functionName }));
+      }
+      return Promise.resolve({ accountId, balanceCNS: 0n, lockedBalanceCNS: 0n });
+    }
+    if (functionName === 'balanceOf') return Promise.resolve(10n ** 12n);
+    return Promise.reject(new Error(`fake chain: no ${functionName}`));
+  };
+  return { readContract } as unknown as PublicClient;
+}
+
+const onboardIntent = (amount: bigint): PerplOnboardIntent => ({
+  kind: 'perpl.onboard',
+  clientTradeId: TRADE_ID,
+  amountAtoms: amount.toString(),
+});
+
+type OnboardLeg = { kind: PlannedStep['kind']; call: KuruCall };
+
+type OnboardServer = {
+  readonly atomic: boolean;
+  readonly accountId?: bigint;
+  readonly forwarding: boolean | null;
+  /** Rewrites the planned legs before they are packed and enveloped. */
+  readonly legs?: (legs: OnboardLeg[]) => OnboardLeg[];
+};
+
+/** `TradeService.prepare` for a Perpl onboarding: the real planner, the real envelopes. */
+async function serverOnboard(intent: PerplOnboardIntent, s: OnboardServer) {
+  const deps = {
+    client: perplChain(s.accountId),
+    wallet: WALLET,
+    context: PERPL_CONTEXT,
+    atomicBatch: s.atomic,
+    forwarding: s.forwarding,
+  };
+  const plan = await planPerplOnboard(intent, deps);
+  const planned = s.legs
+    ? packSteps(
+        s.legs(plan.steps.flatMap(onboardLegs)).map((leg) => ({ ...leg, title: leg.kind })),
+        deps,
+        'tampered',
+      )
+    : plan.steps;
+  return planned.map((step, index) => envelope(step, index, intent.clientTradeId));
+}
+
+/** A planned step's legs; a batch is always `[approve, create, forward?]`. */
+function onboardLegs(step: PlannedStep): OnboardLeg[] {
+  if (step.kind !== 'batch') return [{ kind: step.kind, call: step.calls[0]! }];
+  const kinds = ['perpl.approve', 'perpl.createAccount', 'perpl.allowForwarding'] as const;
+  return step.calls.map((call, i) => ({ kind: kinds[i]!, call }));
+}
+
+const verifyOnboard = (steps: readonly PreparedStep[], intent: PerplOnboardIntent) =>
+  verifyPerplOnboard(steps, { walletId: WALLET_ID, wallet: WALLET, intent });
+
+const ONBOARD_CASES = [
+  ['a fresh wallet', undefined, null, ['approve', 'createAccount', 'allowForwarding']],
+  ['a fresh wallet, forwarding known on', undefined, true, ['approve', 'createAccount']],
+  ['an open account, forwarding unknown', 63n, null, ['allowForwarding']],
+  ['an open account, forwarding off', 63n, false, ['allowForwarding']],
+] as const;
+
+for (const atomic of [false, true]) {
+  for (const [label, accountId, forwarding, kinds] of ONBOARD_CASES) {
+    test(`Perpl onboarding: the phone signs the plan for ${label}, atomic=${atomic}`, async () => {
+      const intent = onboardIntent(150_000_000n);
+      const steps = await serverOnboard(intent, { atomic, accountId, forwarding });
+      const expected = atomic && kinds.length > 1 ? ['batch'] : kinds.map((k) => `perpl.${k}`);
+      assert.deepEqual(
+        steps.map((s) => s.kind),
+        expected,
+      );
+      assert.deepEqual(verifyOnboard(steps, intent), { ok: true });
+    });
+  }
+}
+
+test('Perpl onboarding: the phone and the server agree on the minimum', async () => {
+  const intent = onboardIntent(PERPL_MIN);
+  assert.deepEqual(
+    verifyOnboard(await serverOnboard(intent, { atomic: false, forwarding: null }), intent),
+    { ok: true },
+  );
+  const below = onboardIntent(PERPL_MIN - 1n);
+  await assert.rejects(
+    serverOnboard(below, { atomic: false, forwarding: null }),
+    (e: unknown) => e instanceof PerplPlanRefusedError && e.reason === 'below_min_account_open',
+  );
+  // An open account skips the amount on the server; the phone still refuses
+  // to have confirmed a deposit Perpl would never accept.
+  const resumed = await serverOnboard(below, { atomic: false, accountId: 63n, forwarding: null });
+  assert.equal(verifyOnboard(resumed, below).ok, false);
+});
+
+test('Perpl onboarding: a plan for another amount than the user confirmed is refused', async () => {
+  for (const atomic of [false, true]) {
+    const steps = await serverOnboard(onboardIntent(200_000_000n), { atomic, forwarding: null });
+    const verdict = verifyOnboard(steps, onboardIntent(150_000_000n));
+    assert.equal(verdict.ok, false);
+    assert.match((verdict as { problem: string }).problem, /another amount than you confirmed/);
+  }
+});
+
+const approveTo = (spender: Address, amount: bigint): KuruCall => ({
+  to: PERPL_AUSD,
+  value: 0n,
+  data: encodeFunctionData({
+    abi: ERC20_APPROVE_ABI,
+    functionName: 'approve',
+    args: [spender, amount],
+  }),
+});
+
+const ONBOARD_TAMPERS: readonly [string, (legs: OnboardLeg[]) => OnboardLeg[], RegExp][] = [
+  [
+    'an approval to another spender',
+    (legs) =>
+      legs.map((l) =>
+        l.kind === 'perpl.approve' ? { ...l, call: approveTo(ATTACKER, 150_000_000n) } : l,
+      ),
+    /not the Perpl Exchange/,
+  ],
+  [
+    'an unlimited approval',
+    (legs) =>
+      legs.map((l) =>
+        l.kind === 'perpl.approve' ? { ...l, call: approveTo(PERPL_EXCHANGE, maxUint256) } : l,
+      ),
+    /not exactly the deposit/,
+  ],
+  [
+    'a dropped createAccount',
+    (legs) => legs.filter((l) => l.kind !== 'perpl.createAccount'),
+    /not followed by opening/,
+  ],
+  [
+    'forwarding sent to another target',
+    (legs) =>
+      legs.map((l) =>
+        l.kind === 'perpl.allowForwarding' ? { ...l, call: { ...l.call, to: ATTACKER } } : l,
+      ),
+    /not the Perpl Exchange/,
+  ],
+];
+
+for (const atomic of [false, true]) {
+  for (const [name, edit, reason] of ONBOARD_TAMPERS) {
+    test(`Perpl onboarding: ${name} is refused, atomic=${atomic}`, async () => {
+      const intent = onboardIntent(150_000_000n);
+      const steps = await serverOnboard(intent, { atomic, forwarding: null, legs: edit });
+      const verdict = verifyOnboard(steps, intent);
+      assert.equal(verdict.ok, false);
+      assert.match((verdict as { problem: string }).problem, reason);
+    });
+  }
+}
+
+test('Perpl onboarding: an untampered repack is byte-identical to the plan', async () => {
+  const intent = onboardIntent(150_000_000n);
+  for (const atomic of [false, true]) {
+    const honest = await serverOnboard(intent, { atomic, forwarding: null });
+    const repacked = await serverOnboard(intent, { atomic, forwarding: null, legs: (l) => l });
+    assert.deepEqual(
+      repacked.map((s) => s.payload),
+      honest.map((s) => s.payload),
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Enrollment.
+
+const ENROLL_NOW = new Date('2026-10-09T12:00:00Z');
+const ENROLL_PREPARE_ID = '9c3e1a2b-4d5f-4a6b-8c7d-0e1f2a3b4c5d';
+const PHONE_TRADE_KEY = perplTradeKey(new Uint8Array(32).fill(7), WALLET).publicKeyHex;
+const SERVER_READ_KEY: Hex = `0x${'ab'.repeat(32)}`;
+const PHONE_LABEL = 'sente-phone';
+
+/** Perpl's `/payload` answer to our request, as `perpl-enroll.service.spec.ts` serves it. */
+function perplServes(body: Record<string, unknown>): PerplTypedData {
+  return {
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+        { name: 'salt', type: 'bytes32' },
+      ],
+      PerplRegisterApiKey: PERPL_API_KEY_TYPED_DATA.types.PerplRegisterApiKey.map((f) => ({
+        ...f,
+      })),
+    },
+    primaryType: 'PerplRegisterApiKey',
+    domain: {
+      name: 'perpl.xyz',
+      version: '1',
+      chainId: '0x279f',
+      verifyingContract: '0x0000000000000000000000000000000000000000',
+      salt: '0x00000000000000000000000000000000000000006aa3eb20368ca5c38d4d3fb0',
+    },
+    message: {
+      signer: String(body['address']).toLowerCase(),
+      statement: PERPL_API_KEY_TYPED_DATA.statement,
+      publicKey: String(body['public_key']),
+      scope: String(body['scope_mask']),
+      label: String(body['label']),
+      expiresAt: '',
+      ipCidrs: '',
+      origin: '',
+      builderId: '',
+      maxBuilderFeePer100K: '',
+      time: `0x${ENROLL_NOW.getTime().toString(16)}`,
+    },
+  };
+}
+
+type EnrollTamper = (typed: PerplTypedData, role: EnrollRole) => PerplTypedData;
+
+/**
+ * `PerplEnrollService.prepare`, per role: fetch Perpl's payload, run the
+ * format check on it, compose the Privy request the device key signs. The
+ * service stops at the first problem; this collects them, so a test can say
+ * which side caught what.
+ */
+async function serverEnrollPrepare(tamper?: EnrollTamper) {
+  const problems: string[] = [];
+  const items: EnrollPrepareItem[] = [];
+  const keys: Record<EnrollRole, { publicKeyHex: Hex; label: string }> = {
+    trade: { publicKeyHex: PHONE_TRADE_KEY, label: PHONE_LABEL },
+    read: { publicKeyHex: SERVER_READ_KEY, label: READ_KEY_LABEL },
+  };
+  for (const role of ['trade', 'read'] as const) {
+    const { publicKeyHex, label } = keys[role];
+    const fetchImpl = ((_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const served = perplServes(body);
+      const typed = tamper ? tamper(served, role) : served;
+      return Promise.resolve(new Response(JSON.stringify({ typed_data: typed, mac: 'mac' })));
+    }) as typeof fetch;
+    const fetched = await requestEnrollPayload({
+      restUrl: 'https://perpl.test/api',
+      chainId: 10143,
+      address: WALLET,
+      publicKeyHex,
+      scope: PERPL_ENROLL_FIELDS.scopeMask[role],
+      label,
+      fetchImpl,
+    });
+    const problem = enrollPayloadProblem(fetched.typed_data, {
+      role,
+      chainId: 10143,
+      signer: WALLET,
+      publicKeyHex,
+      label,
+      now: ENROLL_NOW,
+    });
+    if (problem) problems.push(`${role}: ${problem}`);
+    const path = walletRpcPath(WALLET_ID);
+    const body = {
+      method: 'eth_signTypedData_v4',
+      params: {
+        typed_data: toPrivyTypedData(fetched.typedData as unknown as TypedDataDefinition),
+      },
+    };
+    items.push({
+      role,
+      payload: privy.authorizationPayload('POST', path, body, {
+        idempotencyKey: serverEnrollIdempotencyKey(ENROLL_PREPARE_ID, role),
+      }),
+      typedData: fetched.typed_data,
+    });
+  }
+  const prepared: EnrollPrepareResult = {
+    prepareId: ENROLL_PREPARE_ID,
+    expiresAt: new Date(ENROLL_NOW.getTime() + 300_000).toISOString(),
+    items,
+  };
+  return { prepared, problems };
+}
+
+const ENROLL_CTX = {
+  walletId: WALLET_ID,
+  wallet: WALLET,
+  tradePublicKeyHex: PHONE_TRADE_KEY,
+  tradeLabel: PHONE_LABEL,
+  now: ENROLL_NOW.getTime(),
+};
+
+test('Perpl enrollment: the phone pins what the server pins (P5 updates both)', () => {
+  const pinned = PERPL_ENROLL_PINNED;
+  const venue = PERPL_API_KEY_TYPED_DATA;
+  assert.deepEqual(pinned.types.PerplRegisterApiKey, venue.types.PerplRegisterApiKey);
+  assert.equal(pinned.statement, venue.statement);
+  assert.equal(pinned.primaryType, venue.primaryType);
+  assert.equal(pinned.domain.name, venue.domain.name);
+  assert.equal(pinned.domain.version, venue.domain.version);
+  assert.equal(pinned.domain.chainId, venue.domain.chainId);
+  assert.equal(pinned.domain.verifyingContract, venue.domain.verifyingContract);
+  assert.deepEqual(pinned.scope, PERPL_ENROLL_FIELDS.scopeField);
+  assert.deepEqual(pinned.empty, PERPL_ENROLL_FIELDS.empty);
+  assert.equal(pinned.timeSkewMs, ENROLL_TIME_SKEW_MS);
+  assert.equal(PERPL_READ_KEY_LABEL, READ_KEY_LABEL);
+  for (const role of ['trade', 'read'] as const) {
+    assert.equal(
+      enrollIdempotencyKey(ENROLL_PREPARE_ID, role),
+      serverEnrollIdempotencyKey(ENROLL_PREPARE_ID, role),
+    );
+  }
+});
+
+test('Perpl enrollment: the phone signs what the server prepares, with the server’s digest', async () => {
+  const { prepared, problems } = await serverEnrollPrepare();
+  assert.deepEqual(problems, []);
+  const verdict = verifyEnrollmentPrepare(prepared, ENROLL_CTX);
+  assert.ok(verdict.ok, JSON.stringify(verdict));
+  // `requestEnrollPayload`'s digest: what the server's read key signs its PoP over.
+  const trade = prepared.items[0]!;
+  assert.equal(verdict.digest, hashTypedData(toViemTypedData(trade.typedData as never) as never));
+});
+
+/** Variants of Perpl's payload the server's format accepts; the phone must too. */
+const ENROLL_ACCEPTED: Record<string, EnrollTamper> = {
+  'zero expiry and zero builder fee': (t) => ({
+    ...t,
+    message: { ...t.message, expiresAt: '0', maxBuilderFeePer100K: '0' },
+  }),
+  'a public key without 0x': (t) => ({
+    ...t,
+    message: { ...t.message, publicKey: t.message['publicKey']!.slice(2) },
+  }),
+  'a base64 public key': (t) => ({
+    ...t,
+    message: {
+      ...t.message,
+      publicKey: Buffer.from(t.message['publicKey']!.slice(2), 'hex').toString('base64'),
+    },
+  }),
+};
+
+for (const [name, tamper] of Object.entries(ENROLL_ACCEPTED)) {
+  test(`Perpl enrollment: both sides accept ${name}`, async () => {
+    const { prepared, problems } = await serverEnrollPrepare(tamper);
+    assert.deepEqual(problems, []);
+    const verdict = verifyEnrollmentPrepare(prepared, ENROLL_CTX);
+    assert.ok(verdict.ok, JSON.stringify(verdict));
+  });
+}
+
+const withFields =
+  (fields: Record<string, string>, only?: EnrollRole): EnrollTamper =>
+  (t, role) =>
+    only && role !== only ? t : { ...t, message: { ...t.message, ...fields } };
+
+/** One drift per rule: the server's format check and the phone must BOTH refuse it. */
+const ENROLL_REFUSED: Record<string, { tamper: EnrollTamper; phone: RegExp }> = {
+  'drifted types (a field added)': {
+    tamper: (t) => ({
+      ...t,
+      types: {
+        ...t.types,
+        PerplRegisterApiKey: [
+          ...t.types['PerplRegisterApiKey']!,
+          { name: 'extra', type: 'string' },
+        ],
+      },
+      message: { ...t.message, extra: '' },
+    }),
+    phone: /struct is not the one/,
+  },
+  'a builder fee': {
+    tamper: withFields({ maxBuilderFeePer100K: '25' }),
+    phone: /builder charge a fee/,
+  },
+  'a builder id': { tamper: withFields({ builderId: 'skim' }), phone: /builder charge a fee/ },
+  'a trade key that is not the phone’s': {
+    tamper: withFields({ publicKey: `0x${'cd'.repeat(32)}` }, 'trade'),
+    phone: /not this phone’s/,
+  },
+  'a trade scope on the server’s read key': {
+    tamper: withFields({ scope: String(PERPL_ENROLL_FIELDS.scopeMask.trade) }, 'read'),
+    phone: /scope is 2, not read/,
+  },
+  'every scope on the trade key': {
+    tamper: withFields({ scope: '3' }, 'trade'),
+    phone: /scope is 3/,
+  },
+  'a stale time': {
+    tamper: withFields({
+      time: `0x${(ENROLL_NOW.getTime() - ENROLL_TIME_SKEW_MS - 1).toString(16)}`,
+    }),
+    phone: /stale/,
+  },
+  'another label': { tamper: withFields({ label: 'other' }, 'trade'), phone: /label is other/ },
+  'another chain id': {
+    tamper: (t) => ({ ...t, domain: { ...t.domain, chainId: '0x1' } }),
+    phone: /chain 1/,
+  },
+  'a verifying contract': {
+    tamper: (t) => ({ ...t, domain: { ...t.domain, verifyingContract: ATTACKER } }),
+    phone: /names contract/,
+  },
+};
+
+for (const [name, { tamper, phone }] of Object.entries(ENROLL_REFUSED)) {
+  test(`Perpl enrollment: both sides refuse ${name}`, async () => {
+    const { prepared, problems } = await serverEnrollPrepare(tamper);
+    assert.notDeepEqual(problems, [], 'the server format check let it through');
+    const verdict = verifyEnrollmentPrepare(prepared, ENROLL_CTX);
+    assert.equal(verdict.ok, false, 'the phone would sign it');
+    assert.match((verdict as { problem: string }).problem, phone);
+  });
+}
+
+test('Perpl enrollment: another signer is refused by the venue client and by the phone', async () => {
+  // `requestEnrollPayload` throws on another signer (the service answers
+  // `perpl_format_changed`); the phone refuses one on its own as well.
+  await assert.rejects(serverEnrollPrepare(withFields({ signer: ATTACKER })), /names signer/);
+  const { prepared } = await serverEnrollPrepare();
+  const verdict = verifyEnrollmentPrepare(prepared, { ...ENROLL_CTX, wallet: ATTACKER });
+  assert.equal(verdict.ok, false);
+  assert.match((verdict as { problem: string }).problem, /not your wallet/);
 });

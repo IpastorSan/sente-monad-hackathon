@@ -398,9 +398,11 @@ loading raw TypeScript out of `node_modules`.
 | `node --test` (`src/**/*.test.ts`) | `src/` via `source` | The test script passes `--conditions=source`. `@sente/mandate` is a devDependency so specs can run the API's own `parseMandate`.                                                                                               |
 
 One mobile spec reaches into the API on purpose: `src/trade/contract.test.ts` (SEN-125) runs the
-server's `trade/kuru-planner.ts`, `trade/idempotency-key.ts`, `wallet/send/sponsored-send.ts` and
-`agents/privy/privy.client.ts` by relative path against the phone's verifier. Those four (and what
-they import) must stay erasable syntax with `.ts` specifiers, or `pnpm run test` breaks in
+server's `trade/kuru-planner.ts`, `trade/perpl-planner.ts`, `trade/perpl-enroll-format.ts`,
+`trade/idempotency-key.ts`, `wallet/send/sponsored-send.ts`, `agents/privy/privy.client.ts` and
+`agents/privy/agent-wallet.ts` by relative path against the phone's verifiers (`verifyKuru.ts`,
+`verifyPerpl.ts`). Those (and what they import) must stay erasable syntax with `.ts` specifiers,
+or `pnpm run test` breaks in
 `apps/mobile`, not in the API. It lives here rather than in jest because the API's `rootDir: ./src`
 would make its `tsc` reject a spec importing `apps/mobile/src`.
 

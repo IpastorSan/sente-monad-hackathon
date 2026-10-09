@@ -83,6 +83,43 @@ export type PreparedTrade = {
 };
 
 // ---------------------------------------------------------------------------
+// Perpl API-key enrollment (SEN-100, plan M-T18). Copied from
+// `services/api/src/trade/perpl-enroll.service.ts` and `@sente/venues/perpl`'s
+// `wire.ts`; change one and change the other.
+// ---------------------------------------------------------------------------
+
+export type EnrollRole = 'trade' | 'read';
+
+/** EIP-712 typed data exactly as Perpl serves it: hex-string `chainId` and `time`. */
+export type PerplTypedData = {
+  readonly types: Record<string, readonly { readonly name: string; readonly type: string }[]>;
+  readonly primaryType: string;
+  readonly domain: {
+    readonly name: string;
+    readonly version: string;
+    readonly chainId: string;
+    readonly verifyingContract: string;
+    readonly salt: string;
+  };
+  readonly message: Record<string, string>;
+};
+
+export type EnrollPrepareItem = {
+  readonly role: EnrollRole;
+  /** What the device key signs: the Privy `eth_signTypedData_v4` request. */
+  readonly payload: AuthorizationPayload;
+  /** Perpl's typed data verbatim; the trade key's proof of possession signs its digest. */
+  readonly typedData: PerplTypedData;
+};
+
+/** `POST /trade/perpl/enroll/prepare`. Items are `[trade, read]`, in that order. */
+export type EnrollPrepareResult = {
+  readonly prepareId: string;
+  readonly expiresAt: string;
+  readonly items: readonly EnrollPrepareItem[];
+};
+
+// ---------------------------------------------------------------------------
 // Responses of `/trade` (SEN-102, plan M-T20). Copied from
 // `services/api/src/trade/dto/trade.dto.ts` and `trade-store.ts` (SEN-96);
 // change one and change the other, or the app and the API disagree silently.
