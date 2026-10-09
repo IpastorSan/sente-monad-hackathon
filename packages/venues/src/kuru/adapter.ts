@@ -71,7 +71,7 @@ import {
   approveBuilderCall,
   builderApprovalCovers,
   cancelOrderCall,
-  decodeBuilderFees,
+  builderFeePaidAtoms,
   decodeMakerFills,
   decodeOrderOutcome,
   depositCalls,
@@ -131,11 +131,11 @@ export type KuruSubmitter = {
  */
 export type KuruBuilderSettings = KuruBuilderFee & {
   /**
-   * The expiry to approve the builder until, in Unix seconds, given the time
-   * now. An agent passes its mandate's `expiresAt`, which its policy pins as
-   * the ceiling.
+   * How far out to approve the builder: a fixed Unix-seconds `at` (an agent's
+   * mandate `expiresAt`, which its policy pins as the ceiling) or `ttlSeconds`
+   * from now (a user's year).
    */
-  readonly approvalExpiry: (nowSeconds: number) => bigint;
+  readonly approvalExpiry: { readonly at: bigint } | { readonly ttlSeconds: number };
   /** Re-approve when the current approval has less than this left. Default 1 day. */
   readonly renewWithinSeconds?: number;
 };
@@ -221,6 +221,12 @@ export class KuruVenue implements Venue {
   readonly #params = new Map<Address, Promise<KuruMarketParams>>();
   readonly #builder: KuruBuilderSettings | undefined;
   readonly #now: () => number;
+  /**
+   * Unix seconds until which the account's builder approval is known to cover
+   * the next order, so a venue kept per agent reads `getBuilderApproval` once
+   * per approval rather than once per order.
+   */
+  #approvalCoversUntil = 0;
   #accountId: bigint | undefined;
 
   constructor(config: KuruVenueConfig) {
@@ -324,17 +330,18 @@ export class KuruVenue implements Venue {
     const builder = this.#builder;
     if (!builder) return [];
     const nowSeconds = Math.floor(this.#now() / 1000);
+    if (nowSeconds < this.#approvalCoversUntil) return [];
     const approval = await this.builderApproval(builder.address);
     const renew = builder.renewWithinSeconds ?? BUILDER_APPROVAL_RENEW_WITHIN_SECONDS;
-    if (builderApprovalCovers(approval, builder.feePps, nowSeconds, renew)) return [];
-    return [
-      approveBuilderCall(
-        this.#accountCore,
-        builder.address,
-        builder.feePps,
-        builder.approvalExpiry(nowSeconds),
-      ),
-    ];
+    if (builderApprovalCovers(approval, builder.feePps, nowSeconds, renew)) {
+      this.#approvalCoversUntil = Number(approval.expiry) - renew;
+      return [];
+    }
+    const expiry =
+      'at' in builder.approvalExpiry
+        ? builder.approvalExpiry.at
+        : BigInt(nowSeconds + builder.approvalExpiry.ttlSeconds);
+    return [approveBuilderCall(this.#accountCore, builder.address, builder.feePps, expiry)];
   }
 
   deposit(asset: string, amount: Decimal): Promise<KuruExecution> {
@@ -698,7 +705,15 @@ export class KuruVenue implements Venue {
   ): Promise<Order> {
     // The approval leg goes first: AccountCore refuses a builder order the
     // account has not approved, and the whole list lands as one unit.
-    const execution = await this.#submit([...(await this.builderApprovalCalls()), prepared.call]);
+    const approval = await this.builderApprovalCalls();
+    let execution: KuruExecution;
+    try {
+      execution = await this.#submit([...approval, prepared.call]);
+    } catch (error) {
+      // A revert may be AccountCore refusing a revoked approval: read it again next time.
+      this.#approvalCoversUntil = 0;
+      throw error;
+    }
     // Read after submitting: a first order can arrive in the same batch as the
     // deposit that registers the account.
     const accountId = await this.accountId();
@@ -723,9 +738,13 @@ export class KuruVenue implements Venue {
     if (!builder) return order;
     // What the builder was actually paid, from AccountCore's own events.
     const quote = prepared.market.quote;
-    const paid = decodeBuilderFees(execution.logs, this.#accountCore, builder.address, accountId)
-      .filter((fee) => isAddressEqual(fee.asset, quote.address))
-      .reduce((sum, fee) => sum + fee.amount, 0n);
+    const paid = builderFeePaidAtoms(
+      execution.logs,
+      this.#accountCore,
+      builder.address,
+      accountId,
+      quote.address,
+    );
     return { ...order, builderFee: fromUnits(paid, quote.decimals), builderFeeAsset: quote.symbol };
   }
 

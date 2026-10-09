@@ -222,7 +222,6 @@ export class TradeService {
 
   capabilities(): TradeCapabilitiesDto {
     const { enabled, atomicBatch, chainId, perpl } = this.config;
-    const builder = this.config.kuruBuilder ?? null;
     // Perpl behind its own flag (SEN-174): a deployment turns it on only once
     // the app can onboard, enroll and order, or users would be stranded.
     return {
@@ -231,7 +230,7 @@ export class TradeService {
       chainId,
       venues: { kuru: enabled, perpl },
       // SEN-184: what the phone must have been built with; it compares.
-      kuruBuilder: builder ? { address: builder.address, feePps: builder.feePps } : null,
+      kuruBuilder: this.config.kuruBuilder ?? null,
     };
   }
 

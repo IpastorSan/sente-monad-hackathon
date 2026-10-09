@@ -254,5 +254,7 @@ function messageOf(error: unknown): string {
 /** What distinguishes one builder setting from another for the venue cache. */
 function builderKey(builder: KuruBuilderSettings | undefined): string {
   if (!builder) return '';
-  return `${builder.address.toLowerCase()}:${builder.feePps}:${builder.approvalExpiry(0)}`;
+  const expiry = builder.approvalExpiry;
+  const until = 'at' in expiry ? `at${expiry.at}` : `ttl${expiry.ttlSeconds}`;
+  return `${builder.address.toLowerCase()}:${builder.feePps}:${until}`;
 }

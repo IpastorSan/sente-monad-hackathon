@@ -15,7 +15,7 @@
  *
  * The verifier (`verifyKuru.ts`) accepts a builder order only at exactly this
  * builder and rate, and an approval only for this builder, at most this rate,
- * expiring within {@link BUILDER_APPROVAL_MAX_SECONDS}. `GET /trade/capabilities`
+ * expiring within `BUILDER_APPROVAL_MAX_SECONDS` (`@sente/venues/kuru`). `GET /trade/capabilities`
  * names the server's builder; `kuruBuilderAgrees` turns manual Kuru trading
  * off when the two differ, so a deploy that changed the fee without an app
  * release reads as "trading off", not as a refusal at the signature.
@@ -24,22 +24,19 @@
  *
  * Pure TS: `kuruBuilder.test.ts` runs under plain node.
  */
-import { getAddress, isAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
+import {
+  builderFeeAtoms,
+  SENTE_MAX_BUILDER_FEE_PPS,
+  type KuruBuilderFee,
+} from '@sente/venues/kuru';
+import { getAddress, isAddress, isAddressEqual, zeroAddress } from 'viem';
 
-export type KuruBuilderPin = { readonly address: Address; readonly feePps: number };
-
-/** The API's default and Sente's ceiling: 10 bps. */
-export const SENTE_MAX_FEE_PPS = 10_000;
-
-/** How far out an approval may expire: the planner's year, plus a day for clock skew. */
-export const BUILDER_APPROVAL_MAX_SECONDS = 366 * 86_400;
-
-const PPS = 10_000_000n;
+export type KuruBuilderPin = KuruBuilderFee;
 
 /**
  * The pin from the two build variables. `null` — refuse every builder leg —
  * when the address is unset, malformed or zero, or the rate is not a whole
- * number in 1..{@link SENTE_MAX_FEE_PPS}: a broken pin must fail closed, and
+ * number in 1..{@link SENTE_MAX_BUILDER_FEE_PPS}: a broken pin must fail closed, and
  * throwing at module load would take the whole app down instead.
  */
 export function parseKuruBuilderPin(
@@ -49,10 +46,10 @@ export function parseKuruBuilderPin(
   const address = rawAddress?.trim();
   if (!address || !isAddress(address, { strict: false })) return null;
   if (isAddressEqual(address, zeroAddress)) return null;
-  const text = rawFeePps?.trim() || String(SENTE_MAX_FEE_PPS);
+  const text = rawFeePps?.trim() || String(SENTE_MAX_BUILDER_FEE_PPS);
   if (!/^\d{1,9}$/.test(text)) return null;
   const feePps = Number(text);
-  if (feePps <= 0 || feePps > SENTE_MAX_FEE_PPS) return null;
+  if (feePps <= 0 || feePps > SENTE_MAX_BUILDER_FEE_PPS) return null;
   return { address: getAddress(address), feePps };
 }
 
@@ -87,7 +84,7 @@ export function kuruBuilderAgrees(
  * may pay less.
  */
 export function senteFeeEstimateAtoms(notionalAtoms: bigint, pin: KuruBuilderPin): bigint {
-  return (notionalAtoms * BigInt(pin.feePps) + PPS - 1n) / PPS;
+  return builderFeeAtoms(notionalAtoms, pin.feePps);
 }
 
 /** `pps` as a percentage for copy: 10000 → "0.1". */

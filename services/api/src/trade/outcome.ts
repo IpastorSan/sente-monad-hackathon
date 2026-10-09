@@ -23,16 +23,17 @@
  */
 
 import {
-  decodeBuilderFees,
+  builderFeePaidAtoms,
   decodeOrderOutcome,
   KURU_TESTNET_CONTRACTS,
+  KURU_TESTNET_MARKETS,
   formatOrderId,
   fromUnits,
   precisionDecimals,
   toPlacedOrder,
   type KuruLog,
 } from '@sente/venues/kuru';
-import type { Address } from 'viem';
+import { isAddressEqual, type Address } from 'viem';
 
 import type {
   KuruPlaceContext,
@@ -52,12 +53,14 @@ function senteFeePaid(
   accountId: bigint,
   place: KuruPlaceContext,
 ): string {
-  const paid = decodeBuilderFees(
+  const quote = KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, place.market))!.quote;
+  const paid = builderFeePaidAtoms(
     logs,
     KURU_TESTNET_CONTRACTS.accountCore,
     place.builder!.address,
     accountId,
-  ).reduce((sum, fee) => sum + fee.amount, 0n);
+    quote.address,
+  );
   return fromUnits(paid, place.quoteDecimals);
 }
 

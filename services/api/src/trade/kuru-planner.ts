@@ -16,7 +16,7 @@
  * - with a Sente builder configured (SEN-184), the place leg is the builder
  *   `batch` overload at exactly that builder and rate, and `approveBuilder`
  *   appears only when the wallet's approval does not cover it, for that
- *   builder, at that rate, expiring in {@link KURU_BUILDER_APPROVAL_SECONDS};
+ *   builder, at that rate, expiring in `BUILDER_APPROVAL_SECONDS` (a year);
  * - `approve` is for the deposit amount exactly — never unlimited;
  * - a transaction carries `value` only for a native-MON deposit;
  * - `clientOrderId == keccak256(utf8(clientTradeId))`;
@@ -32,6 +32,7 @@
  */
 
 import {
+  BUILDER_APPROVAL_SECONDS,
   builderFeeAtoms,
   depositCalls,
   encodeNativeOrder,
@@ -65,11 +66,7 @@ import {
   type PublicClient,
 } from 'viem';
 
-import {
-  feePpsToBps,
-  KURU_BUILDER_APPROVAL_SECONDS,
-  type KuruBuilderConfig,
-} from '../fees/kuru-builder.config.ts';
+import { feePpsToBps, type KuruBuilderConfig } from '../fees/kuru-builder.config.ts';
 import type { KuruPlaceContext, StepKind } from './trade-store.ts';
 
 /** Plan "Shared wire types". Amounts are decimal strings of integer atoms/units. */
@@ -224,15 +221,15 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
     ...(deps.now ? { now: deps.now } : {}),
     ...(builder
       ? {
-          builder: {
-            ...builder,
-            approvalExpiry: (nowSeconds: number) =>
-              BigInt(nowSeconds + KURU_BUILDER_APPROVAL_SECONDS),
-          },
+          builder: { ...builder, approvalExpiry: { ttlSeconds: BUILDER_APPROVAL_SECONDS } },
         }
       : {}),
   });
-  const params = await venue.marketParams(market.symbol);
+  // Independent reads, in parallel: the approval needs only the wallet.
+  const [params, approvalCalls] = await Promise.all([
+    venue.marketParams(market.symbol),
+    venue.builderApprovalCalls(),
+  ]);
 
   // Checked here rather than left to `encodeNativeOrder` so each refusal has
   // its own reason; the adapter then re-checks the same things when encoding.
@@ -318,7 +315,7 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
     legs.push({ kind: 'deposit', title: `Deposit ${amount} to Kuru`, call: deposit });
   }
   // After the deposit, which registers a first-time account in AccountCore.
-  const [approveBuilder] = await venue.builderApprovalCalls();
+  const [approveBuilder] = approvalCalls;
   if (builder && approveBuilder) {
     legs.push({
       kind: 'approveBuilder',

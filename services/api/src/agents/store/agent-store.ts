@@ -1,4 +1,4 @@
-import type { Mandate } from '@sente/mandate';
+import type { KuruBuilderGrant, Mandate } from '@sente/mandate';
 import type { ParamValue } from '@sente/presets';
 import type { Address, Hash } from 'viem';
 
@@ -53,7 +53,7 @@ export interface AgentRecord {
    * the plain overloads, which that policy still signs (CLAUDE.md gotcha 13).
    * An amend recompiles the policy and sets it.
    */
-  readonly kuruBuilder?: { readonly address: Address; readonly maxFeePps: number };
+  readonly kuruBuilder?: KuruBuilderGrant;
   /** The provider's (Privy's) wallet id. */
   readonly walletId: string;
   /**

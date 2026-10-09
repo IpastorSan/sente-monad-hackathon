@@ -342,6 +342,19 @@ export type KuruBuilderFee = {
 export const KURU_MAX_BUILDER_FEE_PPS = 100_000;
 
 /**
+ * Sente's own ceiling on its builder fee, 10 bps (SEN-184): the API refuses to
+ * boot above it and the phone refuses to pin above it. One constant so the two
+ * cannot disagree.
+ */
+export const SENTE_MAX_BUILDER_FEE_PPS = 10_000;
+
+/** How long a user's `approveBuilder` lasts: a year. */
+export const BUILDER_APPROVAL_SECONDS = 365 * 86_400;
+
+/** The furthest out the phone lets an approval expire: a year plus a day for clock skew. */
+export const BUILDER_APPROVAL_MAX_SECONDS = BUILDER_APPROVAL_SECONDS + 86_400;
+
+/**
  * `batch(0, [order], [])`: one order for the calling account. With `builder`,
  * the builder-fee overload, which also pays `builder.feePps` of the notional
  * to `builder` — only if the account approved that builder at that rate.
@@ -481,7 +494,6 @@ const BUILDER_FEE_ACCRUED = kuruAbi.accountCoreAbi.filter(
 export type KuruBuilderFeePaid = {
   readonly asset: Address;
   readonly amount: bigint;
-  readonly feePps: number;
 };
 
 /**
@@ -515,14 +527,26 @@ export function decodeBuilderFees(
       builder: Address;
       asset: Address;
       takerAccountId: number | bigint;
-      builderFeePps: number;
       amount: bigint;
     };
     if (!isAddressEqual(args.builder, builder)) continue;
     if (BigInt(args.takerAccountId) !== takerAccountId) continue;
-    paid.push({ asset: args.asset, amount: args.amount, feePps: Number(args.builderFeePps) });
+    paid.push({ asset: args.asset, amount: args.amount });
   }
   return paid;
+}
+
+/** The total of {@link decodeBuilderFees} in one asset (the market's quote), in its atoms. */
+export function builderFeePaidAtoms(
+  logs: readonly KuruLog[],
+  accountCore: Address,
+  builder: Address,
+  takerAccountId: bigint,
+  asset: Address,
+): bigint {
+  return decodeBuilderFees(logs, accountCore, builder, takerAccountId)
+    .filter((fee) => isAddressEqual(fee.asset, asset))
+    .reduce((sum, fee) => sum + fee.amount, 0n);
 }
 
 /** Where a resting order lives. */

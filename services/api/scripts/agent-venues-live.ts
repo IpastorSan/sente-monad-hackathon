@@ -137,10 +137,10 @@ async function main(): Promise<number> {
   const out = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;
 
   // SEN-184: the policy carries the Sente-fee rules, and Kuru orders pay it.
-  const builderConfig = process.argv.includes('--builder')
-    ? loadKuruBuilderConfig(process.env)
-    : null;
-  if (process.argv.includes('--builder') && !builderConfig) {
+  const wantBuilder = process.argv.includes('--builder');
+  const builderTake = wantBuilder && process.argv.includes('--builder-take');
+  const builderConfig = wantBuilder ? loadKuruBuilderConfig(process.env) : null;
+  if (wantBuilder && !builderConfig) {
     console.log('--builder needs KURU_BUILDER_ADDRESS in the env file');
     return 1;
   }
@@ -247,7 +247,7 @@ async function main(): Promise<number> {
         (builder
           ? AGENT_APPROVE_BUILDER_GAS +
             KURU_BUILDER_ORDER_SURCHARGE_GAS * 2n +
-            (process.argv.includes('--builder-take') ? KURU_MEASURED_GAS.placeTakingOneLevel : 0n)
+            (builderTake ? KURU_MEASURED_GAS.placeTakingOneLevel : 0n)
           : 0n)) +
     (perplAccount === null && !skipPerpl
       ? PERPL_ONBOARDING_GAS.approve +
@@ -368,7 +368,7 @@ async function main(): Promise<number> {
     if (cancelled.status !== 'cancelled') throw new Error(`cancel ended ${cancelled.status}`);
 
     // SEN-184: one taker fill, the order that should pay Sente's fee.
-    if (builder && process.argv.includes('--builder-take')) {
+    if (builder && builderTake) {
       const takeSize = (Math.ceil(KURU_ORDER_NOTIONAL / bestBid / step_) * step_).toFixed(
         decimalsOf(market.stepSize),
       );

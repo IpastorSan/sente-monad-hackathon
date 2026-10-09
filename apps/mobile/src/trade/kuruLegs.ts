@@ -34,7 +34,12 @@
  * token, which market, sizes, prices, `userId == 0`, the slot) is reported for
  * M-T10 to compare.
  */
-import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_MARKETS, NATIVE_TOKEN } from '@sente/venues/kuru';
+import {
+  KURU_MAX_BUILDER_FEE_PPS,
+  KURU_TESTNET_CONTRACTS,
+  KURU_TESTNET_MARKETS,
+  NATIVE_TOKEN,
+} from '@sente/venues/kuru';
 import {
   decodeFunctionData,
   encodeFunctionData,
@@ -130,9 +135,6 @@ export type KuruRefusal = { readonly ok: false; readonly problem: string };
 
 /** A builder-config overload's trailing tuple: who is paid, in pps of the notional. */
 export type KuruBuilderConfig = { readonly builder: Address; readonly feePps: number };
-
-/** AccountCore's `MAX_FEE_PPS()` (1%). Anything above it can only revert. */
-const KURU_MAX_BUILDER_FEE_PPS = 100_000;
 
 const NATIVE_ORDER = {
   name: 'orders',

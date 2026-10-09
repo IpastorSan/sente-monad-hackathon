@@ -86,7 +86,7 @@ describe('agentKuruBuilder: old policies fall back to the plain overload (gotcha
     );
     expect(settings).toMatchObject({ address: TREASURY, feePps: 10_000 });
     // The approval never outlives the mandate: the policy caps it there.
-    expect(settings!.approvalExpiry(1_700_000_000)).toBe(2_000_000_000n);
+    expect(settings!.approvalExpiry).toEqual({ at: 2_000_000_000n });
   });
 
   it('pays nothing for an agent hired before SEN-184 or with the fee off', () => {

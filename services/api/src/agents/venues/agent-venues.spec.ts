@@ -116,7 +116,7 @@ describe('AgentVenues', () => {
     const fee = {
       address: getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8'),
       feePps: 10_000,
-      approvalExpiry: () => 2_000_000_000n,
+      approvalExpiry: { at: 2_000_000_000n },
     };
     const plain = await h.venues.forAgent(AGENT);
     expect(plain.kuru.builder).toBeUndefined();
@@ -127,7 +127,7 @@ describe('AgentVenues', () => {
     expect((await h.venues.forAgent(AGENT, { kuruBuilder: { ...fee } })).kuru).toBe(withFee.kuru);
 
     // An amend that moved the mandate's expiry moves the approval's ceiling too.
-    const extended = { ...fee, approvalExpiry: () => 2_100_000_000n };
+    const extended = { ...fee, approvalExpiry: { at: 2_100_000_000n } };
     expect((await h.venues.forAgent(AGENT, { kuruBuilder: extended })).kuru).not.toBe(withFee.kuru);
     expect((await h.venues.forAgent(AGENT)).kuru.builder).toBeUndefined();
   });

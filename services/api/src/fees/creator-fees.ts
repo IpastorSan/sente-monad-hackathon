@@ -26,6 +26,8 @@
  */
 import { randomUUID } from 'node:crypto';
 
+import { isHash } from 'viem';
+
 import { JsonRecordFile } from '../state/json-file.ts';
 
 export const CREATOR_FEES = Symbol('CREATOR_FEES');
@@ -143,7 +145,7 @@ export class CreatorFeeLedger {
    */
   payout(input: NewPayout): CreatorFeePayout {
     if (input.amountAtoms <= 0n) throw new Error('a payout must be positive');
-    if (!/^0x[0-9a-fA-F]{64}$/.test(input.txHash)) {
+    if (!isHash(input.txHash)) {
       throw new Error(`"${input.txHash}" is not a transaction hash`);
     }
     if (this.#records.some((r) => r.txHash.toLowerCase() === input.txHash.toLowerCase())) {

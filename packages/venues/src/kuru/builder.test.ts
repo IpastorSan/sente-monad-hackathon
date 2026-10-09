@@ -143,7 +143,7 @@ test('decodeBuilderFees: only this builder, this taker, and AccountCore’s own 
     { ...feeLog(BUILDER, usdc, 63n, 999n), address: other },
   ];
   assert.deepEqual(decodeBuilderFees(logs, ACCOUNT_CORE, BUILDER, 63n), [
-    { asset: usdc, amount: 20_000n, feePps: 10_000 },
+    { asset: usdc, amount: 20_000n },
   ]);
 });
 
@@ -151,9 +151,11 @@ function builderVenue(
   approval: { maxFeePps: number; expiry: bigint; active: boolean },
   submitter: KuruSubmitter,
   nowMs: number,
+  reads: string[] = [],
 ): KuruVenue {
   const publicClient = {
     readContract: ({ functionName }: { functionName: string }) => {
+      reads.push(functionName);
       if (functionName === 'getBuilderApproval') return Promise.resolve(approval);
       if (functionName === 'userRegistry') return Promise.resolve(63);
       if (functionName === 'getMarketParams') {
@@ -174,7 +176,7 @@ function builderVenue(
     publicClient,
     submitter,
     now: () => nowMs,
-    builder: { ...SENTE_FEE, approvalExpiry: () => 1_900_000_000n },
+    builder: { ...SENTE_FEE, approvalExpiry: { at: 1_900_000_000n } },
   });
 }
 
@@ -216,9 +218,33 @@ test('placeLimit approves the builder first when the account never did', async (
 test('placeLimit skips the approval while it still covers the rate', async () => {
   const { submitter, submitted } = capturing();
   const covered = { maxFeePps: 10_000, expiry: BigInt(NOW_MS / 1000 + 30 * 86_400), active: true };
-  const venue = builderVenue(covered, submitter, NOW_MS);
+  const reads: string[] = [];
+  const venue = builderVenue(covered, submitter, NOW_MS, reads);
   await venue.placeLimit(LIMIT);
   assert.deepEqual(submitted, [[placeOrderCall(MON_USDC.address, ORDER, undefined, SENTE_FEE)]]);
+  // A covering approval is remembered: the next order does not read it again.
+  await venue.placeLimit(LIMIT);
+  assert.equal(reads.filter((r) => r === 'getBuilderApproval').length, 1);
+});
+
+test('a user venue approves for its ttl from now', async () => {
+  const { submitter, submitted } = capturing();
+  const publicClient = {
+    readContract: ({ functionName }: { functionName: string }) =>
+      functionName === 'getBuilderApproval'
+        ? Promise.resolve({ maxFeePps: 0, expiry: 0n, active: false })
+        : Promise.reject(new Error(functionName)),
+  } as unknown as PublicClient;
+  const venue = new KuruVenue({
+    publicClient,
+    submitter,
+    now: () => NOW_MS,
+    builder: { ...SENTE_FEE, approvalExpiry: { ttlSeconds: 3600 } },
+  });
+  assert.deepEqual(await venue.builderApprovalCalls(), [
+    approveBuilderCall(ACCOUNT_CORE, BUILDER, 10_000, BigInt(NOW_MS / 1000 + 3600)),
+  ]);
+  assert.equal(submitted.length, 0);
 });
 
 test('the placed order reports the builder fee AccountCore accrued for this account', async () => {

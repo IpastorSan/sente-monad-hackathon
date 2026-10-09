@@ -25,8 +25,14 @@
  *
  * Erasable syntax and `.ts`-free imports only: nothing here needs Nest.
  */
-import type { KuruBuilderSettings } from '@sente/venues/kuru';
-import { getAddress, isAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
+import type { KuruBuilderGrant } from '@sente/mandate';
+import {
+  ratioToDecimal,
+  SENTE_MAX_BUILDER_FEE_PPS,
+  type KuruBuilderFee,
+  type KuruBuilderSettings,
+} from '@sente/venues/kuru';
+import { getAddress, isAddress, isAddressEqual, zeroAddress } from 'viem';
 
 /**
  * DI token: the builder AGENTS' policies are compiled with and their orders
@@ -34,25 +40,10 @@ import { getAddress, isAddress, isAddressEqual, zeroAddress, type Address } from
  */
 export const AGENT_KURU_BUILDER = Symbol('AGENT_KURU_BUILDER');
 
-/** 10 bps: `feePps / 10_000_000`. */
-export const DEFAULT_KURU_BUILDER_FEE_PPS = 10_000;
-/** The most Sente will ever charge, whatever the env says. */
-export const MAX_KURU_BUILDER_FEE_PPS = 10_000;
+/** 10 bps: `feePps / 10_000_000`. Also the most Sente charges (`SENTE_MAX_BUILDER_FEE_PPS`). */
+export const DEFAULT_KURU_BUILDER_FEE_PPS = SENTE_MAX_BUILDER_FEE_PPS;
 
-/**
- * How long a user's `approveBuilder` lasts: one year. The planner re-approves
- * once less than a day is left, so a user signs the approval about once a
- * year, and the phone accepts no expiry further out than
- * {@link KURU_BUILDER_APPROVAL_MAX_SECONDS}.
- */
-export const KURU_BUILDER_APPROVAL_SECONDS = 365 * 86_400;
-/** The phone's ceiling: a year plus a day for clock skew. */
-export const KURU_BUILDER_APPROVAL_MAX_SECONDS = 366 * 86_400;
-
-export interface KuruBuilderConfig {
-  readonly address: Address;
-  readonly feePps: number;
-}
+export type KuruBuilderConfig = KuruBuilderFee;
 
 type Env = Record<string, string | undefined>;
 
@@ -69,9 +60,9 @@ export function loadKuruBuilderConfig(env: Env = process.env): KuruBuilderConfig
     throw new Error(`KURU_BUILDER_FEE_PPS "${text}" is not a whole number of pps`);
   }
   const feePps = Number(text);
-  if (feePps <= 0 || feePps > MAX_KURU_BUILDER_FEE_PPS) {
+  if (feePps <= 0 || feePps > SENTE_MAX_BUILDER_FEE_PPS) {
     throw new Error(
-      `KURU_BUILDER_FEE_PPS ${feePps} is outside 1..${MAX_KURU_BUILDER_FEE_PPS} ` +
+      `KURU_BUILDER_FEE_PPS ${feePps} is outside 1..${SENTE_MAX_BUILDER_FEE_PPS} ` +
         '(10000 pps = 10 bps, the most Sente charges)',
     );
   }
@@ -87,11 +78,7 @@ export function describeKuruBuilder(config: KuruBuilderConfig | null): string {
 
 /** 10000 pps -> "10". Basis points are 1000 pps each. */
 export function feePpsToBps(feePps: number): string {
-  const whole = Math.trunc(feePps / 1000);
-  const rest = feePps % 1000;
-  return rest === 0
-    ? String(whole)
-    : `${whole}.${String(rest).padStart(3, '0').replace(/0+$/, '')}`;
+  return ratioToDecimal(BigInt(feePps), 1000n, 3);
 }
 
 /**
@@ -102,12 +89,6 @@ export function loadAgentKuruBuilder(env: Env = process.env): KuruBuilderConfig 
   const config = loadKuruBuilderConfig(env);
   const agents = env['KURU_BUILDER_AGENTS']?.trim();
   return agents === '0' || agents === 'false' ? null : config;
-}
-
-/** What a policy was compiled to allow (`@sente/mandate`'s `KuruBuilderGrant`). */
-export interface AgentBuilderGrant {
-  readonly address: Address;
-  readonly maxFeePps: number;
 }
 
 /**
@@ -127,7 +108,7 @@ export const AGENT_BUILDER_RENEW_WITHIN_SECONDS = 60;
  */
 export function agentKuruBuilder(
   agent: {
-    readonly kuruBuilder?: AgentBuilderGrant;
+    readonly kuruBuilder?: KuruBuilderGrant;
     readonly mandate: { readonly expiresAt: number };
   },
   config: KuruBuilderConfig | null,
@@ -137,12 +118,11 @@ export function agentKuruBuilder(
   if (!isAddressEqual(grant.address, config.address) || config.feePps > grant.maxFeePps) {
     return undefined;
   }
-  const expiresAt = BigInt(agent.mandate.expiresAt);
   return {
     address: config.address,
     feePps: config.feePps,
     // The policy caps `expiry` at the mandate's own expiry.
-    approvalExpiry: () => expiresAt,
+    approvalExpiry: { at: BigInt(agent.mandate.expiresAt) },
     renewWithinSeconds: AGENT_BUILDER_RENEW_WITHIN_SECONDS,
   };
 }

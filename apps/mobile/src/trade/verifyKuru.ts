@@ -26,6 +26,7 @@
  * Pure TS: `verifyKuru.test.ts` runs under plain node.
  */
 import {
+  BUILDER_APPROVAL_MAX_SECONDS,
   KURU_TESTNET_MARKETS,
   NATIVE_TOKEN,
   parseOrderId,
@@ -43,7 +44,7 @@ import {
   type KuruLeg,
   type KuruOrder,
 } from './kuruLegs.ts';
-import { BUILDER_APPROVAL_MAX_SECONDS, type KuruBuilderPin } from './kuruBuilder.ts';
+import type { KuruBuilderPin } from './kuruBuilder.ts';
 import { depositCapAtoms, worstPriceUnits, type MarketFacts } from './kuruMarket.ts';
 import type {
   KuruCancelIntent,
