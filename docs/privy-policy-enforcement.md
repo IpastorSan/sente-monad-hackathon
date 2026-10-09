@@ -869,15 +869,61 @@ to anyone. So, since SEN-185:
   knows the wallet — every amend (`CompileOptions.agentAddress`). The ABI is the
   owner-address overload only; `deposit(uint40 rootAccountId, …)` fails to
   decode. **A hire cannot pin it**: Privy creates the policy before the wallet,
-  so a freshly hired agent's deposit rules carry no owner pin until its first
-  amend. That is a narrower guarantee than Set C's, written down rather than
-  hidden; closing it means provisioning the wallet first and attaching the
-  policy after, which changes the SEN-31/SEN-43 hire flow and needs its own live
-  probe.
+  so a freshly hired agent's deposit rules carry no owner pin. SEN-188 closes
+  that with an amend right after every hire, and keeps the agent off Kuru
+  deposits until it lands — see "The deposit pin after every hire" below.
 - The phone's mirror pins the same two fields (`expectedPolicyRules(mandate,
 builder, agentAddress)`), and the blob hashes for `kuruDeposit` and
   `kuruWithdraw` changed with the ABIs, so an app build without SEN-185 refuses
   every amend and revoke the new API composes. Ship the app with the API.
+
+### The deposit pin after every hire (SEN-188)
+
+The hire's policy is compiled before the wallet exists, so between the hire
+and its first amend the enclave would sign a deposit crediting **any** Kuru
+account, within the per-deposit cap, as many times as the server's trading key
+asked. Provisioning the wallet first and attaching the policy after would
+change the SEN-31/SEN-43 hire flow; instead every hire is followed by one
+amend with the same mandate, compiled with the new wallet's address:
+
+| Owner                        | Who runs the pinning amend                                                                                                                                                                                                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `device` (production)        | **The app**, as a step of the hire ("Securing deposits…"): prepare → `verifyPolicyPatch` → device-key sign → commit, through `amendMandateWithApproval` (`apps/mobile/src/agents/depositPin.ts`). The device key is already in the session (SEN-176), so there is no second passkey prompt. |
+| `server` (dev and demo only) | **The API**, inside `AgentsService.hire`/`fork` (`pinKuruDeposit`), right after provisioning, with `PRIVY_MANDATE_OWNER_KEY`.                                                                                                                                                               |
+
+Hire, fork and preset hire all take this path: the API's `completeHire` is
+shared, and the app's two hire screens (`app/agents/new.tsx` for hire and fork,
+`app/presets/[id]/configure.tsx` for presets) both run the step between the
+hire and the optional funding.
+
+**Until the pin lands, the agent does not deposit to Kuru.** `AgentRecord`
+carries `kuruDepositPinned`: `false` from the hire (unless the mandate has no
+Kuru deposit to pin), `true` from the first amend that lands — every amend
+compiles with the agent's address, through either path. The `deposit` tool
+refuses while it is false, as `kuru_deposit_unpinned`, **whatever
+`AGENT_PRECHECK` says**, and `get_mandate` tells the model up front. Kuru orders
+against what AccountCore already holds, withdrawals, Perpl and reads are
+unaffected. So the unpinned rule exists in the enclave for the seconds the
+amend takes, and nothing in Sente exercises it.
+
+What the phone checks is unchanged from SEN-185: the amend's rules must equal
+`expectedPolicyRules(mandate, builder, agent.address)`, so a payload whose
+deposit names any other `rootOwner` — or none — is refused before signing, and
+the hire screen says so. The pin is only as good as the API's copy of
+`agent.address`, which is the one address the phone has for the agent.
+
+If the pin fails (network, a refused signature, an older app build) the hire
+stands: the hired screen offers **Secure deposits**, and the agent page shows a
+warning with the same button until `kuruDepositPinned` is true. A failed
+server-side pin is logged and retried by any amend. `GET /agents/:id` returns
+the flag as `kuruDepositPinned`.
+
+**Existing agents** (stored before SEN-188) read the flag as unset, so they are
+held to `false` until their next amend — including agents amended between
+SEN-185 and SEN-188, whose policy is already pinned; one more amend records
+it. They need an amend for Kuru's retired markets anyway, and when
+`kuruRetired` is present the agent page asks for that amend alone, since it
+pins too.
 
 ### Re-PATCHing the agents hired before it
 
@@ -897,7 +943,7 @@ moves, mandate }` while the stored mandate names a retired book or token;
 - **Server-owned agents** (`ownerKind: 'server'`): `PATCH /agents/:id/mandate`
   with `kuruRetired.mandate` as the body, or call `AgentsService.amendMandate`
   with it. One call per agent; it recompiles with the agent's address, so the
-  new deposit rules are pinned.
+  new deposit rules are pinned and `kuruDepositPinned` becomes true.
 - **Device-owned agents**: only the owner, from an app build carrying SEN-185:
   open the agent, tap Amend, confirm. Nothing on the server can do it.
 - **Revoked agents** keep Set-C recovery rules (withdraw to themselves on the

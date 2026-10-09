@@ -275,6 +275,39 @@ When the agent is short, the script prints the exact `agent:fund` command and
 stops. Each run enrolls one new Perpl key, because the secret store is in
 memory.
 
+## Securing a new agent's Kuru deposits (SEN-188)
+
+Kuru's AccountCore credits the account a `deposit` names, and a hire's policy
+cannot name the agent's: Privy creates the policy before the wallet. So a hire
+is two policy writes, not one:
+
+```
+POST /agents (or /agents/:id/fork)   policy compiled without the wallet: deposit unpinned
+  -> the pinning amend, same mandate   deposit.rootOwner = the agent's own wallet
+```
+
+- **Device-owned agents** (production): the app runs the amend as a hire step,
+  "Securing deposits…", through the ordinary prepare → verify → sign → commit
+  path (`apps/mobile/src/agents/depositPin.ts`). The phone refuses a payload
+  whose deposit is pinned to any other address, or not pinned at all. The
+  device key is already in the session, so there is no passkey prompt.
+- **Server-owned agents**: `AgentsService` re-PATCHes the policy itself right
+  after provisioning (`pinKuruDeposit`). A failure there is logged and never
+  fails the hire.
+
+Until the amend lands, `kuruDepositPinned` is `false` on the agent (and on
+`GET /agents/:id`), and the `deposit` tool refuses with
+`kuru_deposit_unpinned` — pre-check on or off. Nothing else is refused: Kuru
+orders against AccountCore's balance, withdrawals, Perpl and reads all work.
+`get_mandate` carries `kuruDepositsBlocked` while it lasts, so the model knows
+before it tries.
+
+If the app's amend fails, the hired screen shows the reason and a **Secure
+deposits** button, and the agent page shows a warning with the same button
+until the flag is true. Any later amend sets it too. The whole argument, and
+what existing agents need, is in `docs/privy-policy-enforcement.md`, "The
+deposit pin after every hire".
+
 ## Getting the money back: withdraw and return to owner (SEN-15, SEN-17)
 
 An agent funds its own Kuru account, so its mandate must also let that money
@@ -296,7 +329,7 @@ where its wallet could not reach it.
 the rule is now `Kuru: withdraw to the owner` with `withdraw.recipient` pinned
 to `returnTo`, collateral goes straight home, and a mandate without `returnTo`
 has no withdraw rule. Deposits name a `rootOwner`, pinned to the agent on every
-amend. The table and the first bullet below describe Set C, and the live runs
+amend — including the one that follows every hire (SEN-188, below). The table and the first bullet below describe Set C, and the live runs
 in this section all landed on Set C (`docs/privy-policy-enforcement.md`,
 "Kuru's account-id AccountCore").
 
