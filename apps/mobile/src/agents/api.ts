@@ -1124,6 +1124,13 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
             'Its wallet is out of MON, and moving funds costs gas. Send it a little MON and try ' +
             'again — the message says how much.',
         };
+      case 'credits_exhausted':
+        // SEN-183: the screen showing it links to Credits (`CreditsLink`).
+        return {
+          title: 'Out of AI credits',
+          detail:
+            'This month’s free tier is spent, so the agent can’t call its model until it refills.',
+        };
       case 'agent_wallets_unconfigured':
         return {
           title: 'Agent wallets aren’t configured on this API',

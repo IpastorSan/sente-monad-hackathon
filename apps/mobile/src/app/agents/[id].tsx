@@ -86,6 +86,7 @@ import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usa
 import { LiveRunSection, RunHistorySection } from '@/agents/AgentRuns';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
+import { CreditsLink } from '@/credits/CreditsLink';
 import { useSession } from '@/session';
 import { describeSendError, sendSponsored } from '@/wallet/send';
 import { Chart } from '@/ui/chart/Chart';
@@ -115,7 +116,13 @@ import {
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
 
-type NoticeState = { tone: NoticeTone; title: string; detail?: string };
+/** `reason`: the API's refusal, when one is worth a link (SEN-183: out of credits → Credits). */
+type NoticeState = {
+  tone: NoticeTone;
+  title: string;
+  detail?: string;
+  reason?: string | undefined;
+};
 type SheetId = 'fund' | 'run' | 'return' | 'revoke' | 'details';
 
 /**
@@ -670,6 +677,7 @@ function Cadence({
       <Text style={[text.caption, styles.after]}>
         {scheduleLine(schedule, agent.schedule, now)}
       </Text>
+      <CreditsLink reason={schedule?.paused?.reason} />
       {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
     </Section>
   );
@@ -1285,7 +1293,11 @@ function RunSheet({
         });
       }
     } catch (error) {
-      setOutcome({ tone: 'error', ...describeAgentsError(error) });
+      setOutcome({
+        tone: 'error',
+        ...describeAgentsError(error),
+        reason: error instanceof AgentsApiError ? error.reason : undefined,
+      });
     } finally {
       setBusy(false);
     }
@@ -1307,6 +1319,7 @@ function RunSheet({
       {outcome ? (
         <Notice tone={outcome.tone} title={outcome.title} detail={outcome.detail} />
       ) : null}
+      <CreditsLink reason={outcome?.reason} />
       <Button
         label="Run now"
         kind="primary"

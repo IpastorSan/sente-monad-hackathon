@@ -56,6 +56,15 @@ export default function Account() {
         </Text>
       </Section>
 
+      <Section label="AI credits">
+        <ActionRow
+          icon="bolt"
+          title="Credits"
+          detail="What’s left of your free tier, and what each agent spent."
+          onPress={() => router.push('/credits')}
+        />
+      </Section>
+
       <Section label="Passkey">
         <Row label="Signing key" value={address ?? '—'} mono />
         <Text style={[text.caption, styles.note]}>
