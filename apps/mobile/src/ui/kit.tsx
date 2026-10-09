@@ -462,6 +462,21 @@ export function Field({
 }
 
 /** A checkbox or radio row. */
+/**
+ * Space toggles a checkbox or radio on the web, as it does a native one;
+ * react-native-web's Pressable only answers Enter for those roles.
+ */
+function spaceToggles(onPress: () => void): object {
+  if (Platform.OS !== 'web') return {};
+  return {
+    onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+      if (event.key !== ' ') return;
+      event.preventDefault();
+      onPress();
+    },
+  };
+}
+
 export function SelectRow({
   title,
   detail,
@@ -478,8 +493,11 @@ export function SelectRow({
   return (
     <Pressable
       accessibilityRole={mode === 'radio' ? 'radio' : 'checkbox'}
+      // `aria-checked` too: react-native-web drops `accessibilityState.checked`.
       accessibilityState={{ checked: selected }}
+      aria-checked={selected}
       onPress={onPress}
+      {...spaceToggles(onPress)}
       style={({ pressed }) => [styles.selectRow, pressed && styles.pressed]}
     >
       <View style={[mode === 'radio' ? styles.radio : styles.check, selected && styles.markOn]}>

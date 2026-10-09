@@ -71,6 +71,7 @@ import {
 } from '@/agents/cockpit';
 import { FUNDING_TOKENS } from '@/agents/fund';
 import { fundAgent } from '@/agents/initialFunding';
+import { RiskConfirm } from '@/agents/Risks';
 import { alreadyRunning, liveRun, runningLine, waitForRunStart } from '@/agents/runState';
 import type { RunSummary } from '@/agents/terminal';
 import { clockTime, type LedgerEntry } from '@/agents/ledger';
@@ -177,6 +178,12 @@ export default function AgentScreen() {
   // Run now: an open run says "Running…" before a second one meets the 409.
   const [runNudge, setRunNudge] = useState(0);
   const runs = useAgentRuns(id ?? '', runNudge);
+  /**
+   * SEN-177: an agent hired before the app asked about risks shows them once,
+   * before its first run or schedule. Holds the action waiting on that.
+   */
+  const [riskGate, setRiskGate] = useState<{ then: () => void } | null>(null);
+  const [acking, setAcking] = useState(false);
 
   const refreshBalances = useCallback((address: Agent['address']) => {
     readBalances(address).then(setBalances, () => setBalances(null));
@@ -258,6 +265,24 @@ export default function AgentScreen() {
   const now = Date.now();
   const trading = active && isTrading(summary, now);
   const open = liveRun(runs);
+  const guarded = (action: () => void) => {
+    if (agent.riskAcknowledgedAt) action();
+    else setRiskGate({ then: action });
+  };
+  const confirmRisks = async () => {
+    const waiting = riskGate;
+    setAcking(true);
+    try {
+      if (api) setAgent(await api.acknowledgeRisk(agent.id));
+    } catch {
+      // An API without the route: acknowledged here, for this visit.
+      setAgent({ ...agent, riskAcknowledgedAt: new Date().toISOString() });
+    } finally {
+      setAcking(false);
+      setRiskGate(null);
+    }
+    waiting?.then();
+  };
   /** A Run now the API took: close the sheet and show its terminal streaming. */
   const runStarted = () => {
     setSheet(null);
@@ -281,7 +306,11 @@ export default function AgentScreen() {
       onRefresh={() => void refresh()}
       footer={
         active ? (
-          <AskBar agent={agent} running={open !== null} onOpen={() => setSheet('run')} />
+          <AskBar
+            agent={agent}
+            running={open !== null}
+            onOpen={() => guarded(() => setSheet('run'))}
+          />
         ) : undefined
       }
     >
@@ -363,6 +392,7 @@ export default function AgentScreen() {
           entries={events.entries}
           now={now}
           onReturn={() => setSheet('return')}
+          guard={guarded}
           onScheduled={(updated) => {
             setAgent(updated);
             void load();
@@ -405,6 +435,13 @@ export default function AgentScreen() {
       />
       <ReturnSheet agent={agent} visible={sheet === 'return'} onClose={close} onDone={finish} />
       <RevokeSheet agent={agent} visible={sheet === 'revoke'} onClose={close} onDone={finish} />
+      <RiskConfirm
+        visible={riskGate !== null}
+        agentName={agent.name}
+        busy={acking}
+        onConfirm={() => void confirmRisks()}
+        onClose={() => setRiskGate(null)}
+      />
     </Screen>
   );
 }
@@ -460,6 +497,7 @@ function Overview({
   entries,
   now,
   onReturn,
+  guard,
   onScheduled,
 }: {
   agent: Agent;
@@ -470,6 +508,8 @@ function Overview({
   entries: LedgerEntry[];
   now: number;
   onReturn: () => void;
+  /** SEN-177: runs `action` once the risks are acknowledged. */
+  guard: (action: () => void) => void;
   onScheduled: (agent: Agent) => void;
 }) {
   const active = agent.status === 'active';
@@ -617,7 +657,13 @@ function Overview({
       )}
 
       {active ? (
-        <Cadence agent={agent} schedule={schedule} now={now} onScheduled={onScheduled} />
+        <Cadence
+          agent={agent}
+          schedule={schedule}
+          now={now}
+          guard={guard}
+          onScheduled={onScheduled}
+        />
       ) : null}
     </View>
   );
@@ -725,11 +771,13 @@ function Cadence({
   agent,
   schedule,
   now,
+  guard,
   onScheduled,
 }: {
   agent: Agent;
   schedule: AgentScheduleStatusDto | null;
   now: number;
+  guard: (action: () => void) => void;
   onScheduled: (agent: Agent) => void;
 }) {
   const { agents: api } = useSession();
@@ -758,7 +806,12 @@ function Cadence({
             key={option.label}
             label={busy === option.seconds ? '…' : option.label}
             selected={option.seconds === current}
-            onPress={() => void choose(option.seconds)}
+            onPress={() =>
+              // Turning a schedule on spends credits on its own: risks first.
+              option.seconds === null || option.seconds === current
+                ? void choose(option.seconds)
+                : guard(() => void choose(option.seconds))
+            }
           />
         ))}
       </Chips>

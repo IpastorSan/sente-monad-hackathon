@@ -251,6 +251,37 @@ describe('AgentsService', () => {
     });
   });
 
+  describe('risk acknowledgement (SEN-177)', () => {
+    it('records it at hire and fork when ticked, and nothing when not', async () => {
+      const { service } = setup();
+      const acked = await service.hire(ALICE, hireInput({ riskAcknowledged: true }));
+      expect(acked.agent.riskAcknowledgedAt).toEqual(acked.agent.createdAt);
+      const silent = await service.hire(ALICE, hireInput());
+      expect(silent.agent.riskAcknowledgedAt).toBeUndefined();
+
+      const fork = await service.fork(BOB, acked.agent.id, {
+        mandate: mandateInput(),
+        riskAcknowledged: true,
+      });
+      expect(fork.agent.riskAcknowledgedAt).toEqual(fork.agent.createdAt);
+      // The forker's own acknowledgement, never inherited from the source.
+      const bare = await service.fork(BOB, acked.agent.id, { mandate: mandateInput() });
+      expect(bare.agent.riskAcknowledgedAt).toBeUndefined();
+    });
+
+    it('records a later acknowledgement once, and only for the owner', async () => {
+      const { service } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      const first = await service.acknowledgeRisk(ALICE, agent.id);
+      expect(Number.isFinite(first.riskAcknowledgedAt?.getTime())).toBe(true);
+      const again = await service.acknowledgeRisk(ALICE, agent.id);
+      expect(again.riskAcknowledgedAt).toEqual(first.riskAcknowledgedAt);
+      expect((await refusal(service.acknowledgeRisk(BOB, agent.id))).reason).toBe(
+        'agent_not_found',
+      );
+    });
+  });
+
   /**
    * The Phase 3 half: whose key owns the mandate. `device` mode is driven
    * through the real `DeviceMandateOwners` over the real registry, so the spec

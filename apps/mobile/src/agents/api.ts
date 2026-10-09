@@ -141,6 +141,8 @@ type AgentFields = {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /** When the owner acknowledged the risks (SEN-177); absent if never, or from an older API. */
+  riskAcknowledgedAt?: string;
   /**
    * The agent's own run cadence (SEN-67). `null` when it has none; absent from
    * an API that predates the field, which reads the same.
@@ -189,6 +191,8 @@ export type HireAgentRequest = {
   preset?: HirePresetRef;
   /** Run on its own every `everySeconds` (SEN-67); omitted, it has no cadence of its own. */
   schedule?: AgentSchedule;
+  /** The owner ticked the risk acknowledgement (SEN-177). */
+  riskAcknowledged?: boolean;
 };
 
 /** `PresetRefDto` on `POST /agents`. */
@@ -207,6 +211,8 @@ export type ForkAgentRequest = {
   mandate: AgentMandate;
   /** Omitted, the API names the copy `<source name> (fork)`. */
   name?: string;
+  /** As on a hire (SEN-177). */
+  riskAcknowledged?: boolean;
 };
 
 export type HireAgentResult = {
@@ -637,6 +643,7 @@ export class AgentsApi {
         ...(request.public !== undefined ? { public: request.public } : {}),
         ...(request.preset !== undefined ? { preset: request.preset } : {}),
         ...(request.schedule !== undefined ? { schedule: request.schedule } : {}),
+        ...(request.riskAcknowledged ? { riskAcknowledged: true } : {}),
       },
     );
     return { agent: fromWireAgent(agent), mcpToken };
@@ -658,9 +665,23 @@ export class AgentsApi {
       {
         mandate: toWireMandate(request.mandate),
         ...(request.name !== undefined ? { name: request.name } : {}),
+        ...(request.riskAcknowledged ? { riskAcknowledged: true } : {}),
       },
     );
     return { agent: fromWireAgent(agent), mcpToken };
+  }
+
+  /**
+   * `POST /agents/:id/risk-acknowledgement` (SEN-177) — records, once, that the
+   * owner acknowledged the risks: for an agent hired before the app asked.
+   */
+  async acknowledgeRisk(id: string): Promise<Agent> {
+    return fromWireAgent(
+      await this.request<WireAgent>(
+        'POST',
+        `/agents/${encodeURIComponent(id)}/risk-acknowledgement`,
+      ),
+    );
   }
 
   /**

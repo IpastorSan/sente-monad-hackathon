@@ -63,6 +63,7 @@ import {
 } from '@/agents/mandate';
 import { mandateToSend, presetValues, resolveExpiry, type PresetChoice } from '@/agents/presets';
 import { readBack } from '@/agents/readback';
+import { RiskCard } from '@/agents/Risks';
 import { useSession } from '@/session';
 import { API_URL } from '@/wallet/api';
 import { sendSponsored } from '@/wallet/send';
@@ -194,6 +195,8 @@ export default function HireAgentScreen() {
   const [fundAmount, setFundAmount] = useState('');
   const [fundBalance, setFundBalance] = useState<bigint | null>(null);
   const [funding, setFunding] = useState<FundingState | null>(null);
+  /** SEN-177: the risk tick that gates Hire and Fork (not an amend). */
+  const [risksAccepted, setRisksAccepted] = useState(false);
   /**
    * SEN-44: on a device-owned agent the amend is not sent from here. The API
    * prepares the enclave PATCH, this holds it, and the sheet below shows what
@@ -378,6 +381,7 @@ export default function HireAgentScreen() {
               api.fork(fork, {
                 mandate: result.mandate,
                 ...(name.trim() !== '' ? { name: name.trim() } : {}),
+                riskAcknowledged: risksAccepted,
               })
           : () =>
               api.hire({
@@ -387,6 +391,7 @@ export default function HireAgentScreen() {
                 model,
                 mandate: result.mandate,
                 public: isPublic,
+                riskAcknowledged: risksAccepted,
               });
         // SEN-177: hire, then fund through the Fund sheet's own path. The
         // hired screen shows at once; a funding failure never undoes the hire.
@@ -487,7 +492,9 @@ export default function HireAgentScreen() {
       label={SUBMIT_LABEL[mode]}
       kind="primary"
       busy={submitting}
-      disabled={!mandateResult.ok || fundCheck.kind === 'invalid'}
+      disabled={
+        !mandateResult.ok || fundCheck.kind === 'invalid' || (mode !== 'amend' && !risksAccepted)
+      }
       onPress={() => void submit()}
     />
   ) : (
@@ -671,6 +678,14 @@ export default function HireAgentScreen() {
                 ? `Forking creates your own agent with this policy attached. The strategy carries over; the source’s wallet, prompt and mandate do not. ${startsEmpty}`
                 : `Hiring creates the agent’s wallet with this policy attached. ${startsEmpty}`}
           </Text>
+          {amend ? null : (
+            <View style={styles.risks}>
+              <RiskCard
+                accepted={risksAccepted}
+                onToggle={() => setRisksAccepted(!risksAccepted)}
+              />
+            </View>
+          )}
           {submitError ? (
             <Notice tone="error" title={submitError.title} detail={submitError.detail} />
           ) : null}
@@ -855,6 +870,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   hiredActions: { gap: 10 },
+  risks: { marginTop: 18 },
   sheetLead: { marginTop: 6, marginBottom: 8 },
   approvalActions: { marginTop: 16, gap: 10 },
 });

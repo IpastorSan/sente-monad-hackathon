@@ -110,6 +110,7 @@ export class AgentsController {
         mandate: body.mandate,
         ...(body.preset ? { preset: body.preset } : {}),
         ...(body.public !== undefined ? { public: body.public } : {}),
+        ...(body.riskAcknowledged !== undefined ? { riskAcknowledged: body.riskAcknowledged } : {}),
         ...(typeof body.schedule?.everySeconds === 'number'
           ? { schedule: { everySeconds: body.schedule.everySeconds } }
           : {}),
@@ -336,6 +337,19 @@ export class AgentsController {
   }
 
   /**
+   * Records that the owner acknowledged the risks (SEN-177): the app asks once,
+   * before the first run or schedule of an agent hired before it asked at hire.
+   * Idempotent. 404 `agent_not_found` for someone else's agent.
+   */
+  @Post(':id/risk-acknowledgement')
+  @HttpCode(HttpStatus.OK)
+  async acknowledgeRisk(@Param() params: AgentIdParamDto): Promise<AgentResponseDto> {
+    return this.guard(async () =>
+      toAgentResponse(await this.agents.acknowledgeRisk(this.auth.principal(), params.id)),
+    );
+  }
+
+  /**
    * Set or clear the agent's own run cadence (SEN-67). `{ everySeconds: null }`
    * clears it. 400 outside 60..604800 s (a minute to a week, SEN-158), 404 `agent_not_found` for someone
    * else's agent, 409 `agent_revoked`.
@@ -445,6 +459,7 @@ export class AgentsController {
       const { agent, mcpToken } = await this.agents.fork(this.auth.principal(), params.id, {
         mandate: body.mandate,
         ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.riskAcknowledged !== undefined ? { riskAcknowledged: body.riskAcknowledged } : {}),
       });
       return { agent: toAgentResponse(agent), mcpToken };
     });
