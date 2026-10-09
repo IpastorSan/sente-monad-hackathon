@@ -27,6 +27,15 @@ ALCHEMY_GAS_POLICY_ID
 WALLET_CONFIRMATION_POLL_MS
 WALLET_CONFIRMATION_TIMEOUT_MS
 WALLET_PREPARE_TTL_MS
+# Floor between two sponsored sends from one user wallet; a trade's steps wait on it.
+WALLET_SEND_SPACING_MS
+
+# --- the user's own manual trading (services/api/src/trade) ---
+# Off unless set to 1. Turning it on also needs a web build and an APK with
+# EXPO_PUBLIC_USER_TRADING=1 (docs/deploy.md, "Turning user trading on").
+USER_TRADING
+# Perps in the app (SEN-174). Read only with USER_TRADING on.
+USER_TRADING_PERPL
 
 # --- Privy (agent wallets, the user's wallet, the mandate policies) ---
 # The two P-256 keys are the most dangerous values in the file: replacing one

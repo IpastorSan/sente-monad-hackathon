@@ -380,6 +380,56 @@ docker stop sente-caddy-test
 `SITE_BASE` points `verify.sh` at the local Caddy; the `.curlrc` makes every curl
 in it trust the internal CA and resolve `sente.lol` to localhost.
 
+## Turning user trading on
+
+Manual Buy/Sell (the `/trade` routes, `services/api/src/trade/`) is off by
+default, and it takes two switches that are set in different places. Either one
+alone leaves trading off: the app shows the Trade button only when its build
+opted in **and** `GET /trade/capabilities` says `enabled: true`
+(`apps/mobile/src/trade/api.ts#isTradingEnabled`).
+
+| Switch                       | Where                                        | Takes effect                       |
+| ---------------------------- | -------------------------------------------- | ---------------------------------- |
+| `USER_TRADING=1`             | `.env` → `push-secrets.sh` → `api.env`       | at the next `docker compose up -d` |
+| `EXPO_PUBLIC_USER_TRADING=1` | the environment of the web build and the APK | only in a bundle built with it     |
+| `USER_TRADING_PERPL=1`       | `.env`, as above; read only with trading on  | perps in the app (SEN-174)         |
+| `WALLET_SEND_SPACING_MS`     | `.env`, as above; default 4000 if unset      | the floor between a trade's steps  |
+
+In order:
+
+```bash
+# 1. The server flag. Put USER_TRADING=1 in the repo .env, then deliver it.
+cd infra
+DRY_RUN=1 ./push-secrets.sh                      # USER_TRADING must be listed as sent
+PROJECT=… ZONE=… ./push-secrets.sh
+
+# 2. Rebuild the web app with the build flag and ship it with the API.
+#    deploy.sh exports with --clear, which this needs: Metro's cache does not key
+#    on EXPO_PUBLIC_* values (see "Building it" above).
+EXPO_PUBLIC_USER_TRADING=1 PROJECT=… ZONE=… ./deploy.sh
+
+# 3. Check the server side from outside. A session is needed for every /trade
+#    route except this one.
+curl -s https://api.sente.lol/trade/capabilities   # 401 without a session; in the app: enabled true
+```
+
+Then build a release APK with `EXPO_PUBLIC_USER_TRADING=1` next to
+`EXPO_PUBLIC_API_URL` in the bundling step's environment ([the recipe](#the-release-apk)):
+an APK built without it never shows trading, whatever the server says.
+
+Leave `USER_TRADE_ATOMIC_BATCH` unset: steps run one sponsored send at a time,
+which is the mode the live run in `docs/user-trading.md` exercised. Trades live
+in memory, so a deploy during a demo forgets any in flight (their funds are
+safe, in the wallet or the user's Kuru account). Every step is a Privy-sponsored
+send, paid from the Privy app's gas credits.
+
+Turning it off is the reverse: remove `USER_TRADING` (or set it empty), push the
+secrets and `docker compose up -d` (a `deploy.sh` does that). The app reads the
+capabilities once per sign-in (`useTradingEnabled.ts`), so a signed-in user
+loses the Trade button at their next sign-in or page reload; until then the
+routes answer 404 `trading_disabled`. The bundle does not need a rebuild for
+that direction.
+
 ## The release APK
 
 Four facts, and each one is a way for a build that looks fine to fail:
