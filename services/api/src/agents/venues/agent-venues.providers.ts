@@ -1,10 +1,16 @@
 import { Logger, type Provider } from '@nestjs/common';
+import { onboardingParams } from '@sente/venues/perpl';
 import { createPublicClient, http, type PublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
 import { statePath } from '../../state/json-file';
 import { StateDirLease } from '../../state/state.module';
+import { cachedPerplContext, type PerplContextSource } from '../../trade/perpl-context';
 import { AGENT_WALLETS, type AgentWalletProvider } from '../agent-wallet.provider';
+import { AGENT_EVENTS, type AgentEventLog } from '../events/agent-event-log';
+import { WriteSpacer } from '../runner/write-spacing';
+import { AGENT_STORE, type AgentStore } from '../store/agent-store';
+import { AgentTools } from '../tools/context';
 import {
   AGENT_SECRETS,
   InMemoryAgentSecretStore,
@@ -17,7 +23,8 @@ import {
   FileAgentSecretStore,
   agentSecretsKey,
 } from './file-agent-secret-store';
-import { PerplAgentAccounts, perplAccountReader } from './perpl-agent';
+import { PerplAgentAccounts, perplAccountReader, perplAllowanceReader } from './perpl-agent';
+import { AGENT_PERPL_CONTEXT, AgentPerplOnboarder, perplOnboardingChain } from './perpl-onboarding';
 
 /** DI token for the Monad public client the agents' venues read and broadcast through. */
 export const AGENT_PUBLIC_CLIENT = Symbol('AGENT_PUBLIC_CLIENT');
@@ -78,7 +85,55 @@ export const agentVenuesProviders: Provider[] = [
       secrets: AgentSecretStore,
       client: PublicClient,
     ) =>
-      new PerplAgentAccounts({ sender, wallets, secrets, accountOf: perplAccountReader(client) }),
+      new PerplAgentAccounts({
+        sender,
+        wallets,
+        secrets,
+        accountOf: perplAccountReader(client),
+        // SEN-187: a resumed opening does not approve twice.
+        allowanceOf: perplAllowanceReader(client),
+      }),
+  },
+  {
+    // Perpl's live context, for the account-opening minimum (SEN-187).
+    provide: AGENT_PERPL_CONTEXT,
+    useFactory: (): PerplContextSource => cachedPerplContext(),
+  },
+  {
+    // SEN-187: Sente opens each Perpl agent's account once it is funded.
+    provide: AgentPerplOnboarder,
+    inject: [
+      PerplAgentAccounts,
+      AGENT_SECRETS,
+      AGENT_PUBLIC_CLIENT,
+      AGENT_EVENTS,
+      AGENT_STORE,
+      AGENT_PERPL_CONTEXT,
+      WriteSpacer,
+      AgentTools,
+    ],
+    useFactory: (
+      accounts: PerplAgentAccounts,
+      secrets: AgentSecretStore,
+      client: PublicClient,
+      events: AgentEventLog,
+      agents: AgentStore,
+      context: PerplContextSource,
+      spacer: WriteSpacer,
+      tools: AgentTools,
+    ) =>
+      new AgentPerplOnboarder({
+        accounts,
+        secrets,
+        chain: perplOnboardingChain(client),
+        events,
+        agents,
+        minimum: async () => onboardingParams(await context()).minAccountOpenAmount,
+        // The order the agent's own signing tools take them in: spacing
+        // outside, the per-agent write lock inside (runner/write-spacing.ts).
+        exclusive: (agentId, task) => spacer.run(agentId, () => tools.writeLock.run(agentId, task)),
+        logger: new Logger('PerplOnboarding'),
+      }),
   },
   {
     provide: AgentVenues,
@@ -106,4 +161,6 @@ export const agentVenuesExports = [
   AgentVenues,
   PerplAgentAccounts,
   AgentTransactionSender,
+  // SEN-187: the deposit webhook kicks it.
+  AgentPerplOnboarder,
 ];

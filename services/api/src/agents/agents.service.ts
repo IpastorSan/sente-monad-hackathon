@@ -11,7 +11,11 @@ import {
   type PolicyRule,
 } from '@sente/mandate';
 import { renderPreset } from '@sente/presets';
-import { isAddressEqual, type Address } from 'viem';
+import {
+  PERPL_COLLATERAL_DECIMALS,
+  PERPL_TESTNET_MIN_ACCOUNT_OPEN_ATOMS,
+} from '@sente/venues/perpl';
+import { formatUnits, isAddressEqual, type Address } from 'viem';
 
 import type { Principal } from '../auth/principal';
 import { AGENT_KURU_BUILDER, type KuruBuilderConfig } from '../fees/kuru-builder.config';
@@ -47,6 +51,11 @@ import {
 } from './store/agent-store';
 import { generateMcpToken, hashMcpToken, MCP_TOKEN_PREFIX } from './store/mcp-token';
 import { ERC8004_WRITER, type Erc8004Reputation } from './reputation/erc8004';
+import {
+  AGENT_PERPL_CONTEXT,
+  perplOpeningMinimum,
+  type PerplContextSource,
+} from './venues/perpl-onboarding';
 import { ALCHEMY_NOTIFY, type AlchemyNotifyAddresses } from '../webhooks/alchemy-notify';
 
 export interface HireAgentInput {
@@ -325,6 +334,14 @@ export class AgentsService {
     @Optional()
     @Inject(AGENT_KURU_BUILDER)
     private readonly kuruBuilder?: KuruBuilderConfig | null,
+    /**
+     * Perpl's live context, for the account-opening minimum a Perpl mandate's
+     * collateral cap must reach (SEN-187). Optional: without it, the testnet
+     * minimum is the bar.
+     */
+    @Optional()
+    @Inject(AGENT_PERPL_CONTEXT)
+    private readonly perplContext?: PerplContextSource,
   ) {}
 
   /**
@@ -1085,6 +1102,7 @@ export class AgentsService {
    */
   private async parseFor(principal: Principal, raw: unknown): Promise<Mandate> {
     const mandate = this.parse(raw);
+    await this.assertPerplCanOpen(mandate);
     const resolved = await this.returnAddressFor(principal);
     if (!resolved) {
       if (!mandate.returnTo) return mandate;
@@ -1104,6 +1122,29 @@ export class AgentsService {
       );
     }
     return { ...mandate, returnTo: resolved };
+  }
+
+  /**
+   * A Perpl mandate whose collateral cap is under Perpl's account-opening
+   * minimum can never trade a perp: opening the account is one approve and one
+   * `createAccount` of at least the minimum, and the enclave caps both at the
+   * per-transaction collateral cap (SEN-187). Refused here, at hire, fork and
+   * amend, instead of discovered after the owner has funded the agent.
+   */
+  private async assertPerplCanOpen(mandate: Mandate): Promise<void> {
+    if (!mandate.venues.includes('perpl')) return;
+    const minimum = this.perplContext
+      ? await perplOpeningMinimum(this.perplContext)
+      : PERPL_TESTNET_MIN_ACCOUNT_OPEN_ATOMS;
+    const cap = mandate.perpl.maxCollateralAtoms;
+    if (cap >= minimum) return;
+    const ausd = (atoms: bigint) => formatUnits(atoms, PERPL_COLLATERAL_DECIMALS);
+    throw new AgentRefusedError(
+      'mandate_invalid',
+      `invalid mandate: perpl.maxCollateralAtoms is ${ausd(cap)} AUSD, but Perpl needs at least ` +
+        `${ausd(minimum)} AUSD to open the agent's account, and the cap applies to that ` +
+        `deposit. Raise it to ${ausd(minimum)} AUSD or more, or leave Perpl out.`,
+    );
   }
 
   private returnAddressFor(principal: Principal): Promise<Address | undefined> {

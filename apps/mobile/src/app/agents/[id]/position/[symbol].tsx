@@ -728,6 +728,7 @@ function RunEntry({ entry }: { entry: LedgerEntry }) {
       break;
     }
     case 'deposit':
+    case 'account':
       return null;
   }
   return (

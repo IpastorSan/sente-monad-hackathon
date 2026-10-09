@@ -20,6 +20,7 @@ import {
   PerplNotOnboardedError,
   PerplOnboardingError,
   perplAccountInfo,
+  perplOnboardingGas,
 } from './perpl-agent';
 import { perplEnrollPayload as payload } from './testing/perpl-enroll-fake';
 
@@ -55,6 +56,8 @@ function harness(
     reverted?: number;
     refuseTypedData?: boolean;
     secrets?: AgentSecretStore;
+    /** AUSD already approved to the Exchange; absent, no allowance reader is wired. */
+    allowance?: bigint;
   } = {},
 ) {
   let accountId = options.accountId ?? null;
@@ -90,7 +93,8 @@ function harness(
       Promise.resolve(`0x${(++broadcasts).toString(16).padStart(64, '0')}` as Hex),
     waitForReceipt: (hash) => {
       const success = broadcasts !== options.reverted;
-      if (success && broadcasts === 3) accountId = 493n;
+      const sent = signedTxs[signedTxs.length - 1]?.data ?? '';
+      if (success && sent.startsWith('0xcab13915')) accountId = 493n;
       return Promise.resolve({
         transactionHash: hash,
         success,
@@ -128,6 +132,9 @@ function harness(
     wallets,
     secrets,
     accountOf: (address: Address) => Promise.resolve(address === AGENT.address ? accountId : null),
+    ...(options.allowance !== undefined
+      ? { allowanceOf: () => Promise.resolve(options.allowance!) }
+      : {}),
     fetchImpl,
   });
   return {
@@ -174,9 +181,67 @@ describe('PerplAgentAccounts.onboard', () => {
       accountId: 77n,
       onboarded: false,
       transactions: [],
+      steps: [],
     });
     expect(h.signedTxs).toHaveLength(0);
     expect(h.requests).toHaveLength(0);
+  });
+
+  it('opens with the amount asked for, and reports it', async () => {
+    const h = harness();
+    const result = await h.accounts.onboard(AGENT, 150_000_000n);
+    expect(result).toMatchObject({
+      onboarded: true,
+      amount: 150_000_000n,
+      steps: ['approve', 'createAccount', 'allowOrderForwarding'],
+    });
+  });
+
+  it('resumes after a landed approve: no second approve when the allowance covers it (SEN-187)', async () => {
+    const h = harness({ allowance: 100_000_000n });
+    const result = await h.accounts.onboard(AGENT, 100_000_000n, { forwarding: null });
+    expect(result.steps).toEqual(['createAccount', 'allowOrderForwarding']);
+    expect(h.signedTxs.map((tx) => tx.data?.slice(0, 10))).toEqual(['0xcab13915', '0x7962f910']);
+    expect(result.accountId).toBe(493n);
+  });
+
+  it('approves again when the allowance is short of the amount', async () => {
+    const h = harness({ allowance: 99_999_999n });
+    const result = await h.accounts.onboard(AGENT, 100_000_000n);
+    expect(result.steps).toEqual(['approve', 'createAccount', 'allowOrderForwarding']);
+  });
+
+  it('resumes an account opened without forwarding: only the grant is sent (SEN-187)', async () => {
+    const h = harness({ accountId: 77n });
+    const result = await h.accounts.onboard(AGENT, undefined, { forwarding: false });
+    expect(result).toMatchObject({
+      accountId: 77n,
+      onboarded: false,
+      steps: ['allowOrderForwarding'],
+    });
+    expect(h.signedTxs.map((tx) => tx.data?.slice(0, 10))).toEqual(['0x7962f910']);
+    expect(h.signedTxs[0]!.gas_limit).toBe(hex(PERPL_ONBOARDING_GAS.allowOrderForwarding));
+  });
+
+  it('lets beforeSend see the exact legs and their gas, and refuse them all', async () => {
+    const h = harness();
+    const seen: unknown[] = [];
+    await expect(
+      h.accounts.onboard(AGENT, undefined, {
+        beforeSend: (plan) => {
+          seen.push(plan);
+          throw new Error('short of gas');
+        },
+      }),
+    ).rejects.toThrow('short of gas');
+    expect(seen).toEqual([
+      {
+        steps: ['approve', 'createAccount', 'allowOrderForwarding'],
+        gas: perplOnboardingGas(['approve', 'createAccount', 'allowOrderForwarding']),
+        accountId: null,
+      },
+    ]);
+    expect(h.signedTxs).toHaveLength(0);
   });
 
   it('stops at a reverted createAccount and never signs the forwarding call', async () => {

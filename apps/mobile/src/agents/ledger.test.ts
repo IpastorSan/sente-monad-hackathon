@@ -58,6 +58,36 @@ function none(events: readonly LedgerEvent[]): void {
   assert.deepEqual(toLedgerEntries(events), []);
 }
 
+test('Sente opening the agent’s Perpl account is a Ledger row, and so is why it could not (SEN-187)', () => {
+  const opened = only('account', [
+    event(1, 'onboarding', {
+      venue: 'perpl',
+      status: 'opened',
+      trigger: 'fund',
+      message: 'Opened Perpl account 505 with 100 AUSD',
+      txHashes: [`0x${'1a'.repeat(32)}`, `0x${'2b'.repeat(32)}`, `0x${'3c'.repeat(32)}`],
+    }),
+  ]);
+  assert.deepEqual(opened, {
+    kind: 'account',
+    seq: 1,
+    at: AT + 1_000,
+    venue: 'perpl',
+    status: 'opened',
+    message: 'Opened Perpl account 505 with 100 AUSD',
+    txHash: `0x${'1a'.repeat(32)}`,
+  });
+  const gas = only('account', [
+    event(2, 'onboarding', {
+      venue: 'perpl',
+      status: 'needs_gas',
+      message: 'Couldn’t open the Perpl account: the agent needs 0.0355 MON for gas',
+    }),
+  ]);
+  assert.equal(gas.status, 'needs_gas');
+  assert.equal(gas.txHash, null);
+});
+
 test('a thesis keeps the agent’s own words, its direction and its invalidation', () => {
   const entry = only('thesis', [
     event(

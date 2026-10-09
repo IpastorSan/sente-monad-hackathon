@@ -26,8 +26,8 @@ import { formatAtoms, formatFixedAtoms, groupThousands, normalizeDecimal } from 
 import { BALANCE_PLACES } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 
-/** The five things the Ledger shows. */
-export type LedgerEntryKind = 'thesis' | 'trade' | 'refusal' | 'verdict' | 'deposit';
+/** The things the Ledger shows: five the agent's trading produces, and the account Sente opened for it. */
+export type LedgerEntryKind = 'thesis' | 'trade' | 'refusal' | 'verdict' | 'deposit' | 'account';
 
 /** Which way the agent is positioned. */
 export type Direction = 'long' | 'short';
@@ -209,7 +209,25 @@ export type DepositEntry = Base & {
   consensus: EventConsensus | null;
 };
 
-export type LedgerEntry = ThesisEntry | TradeEntry | RefusalEntry | VerdictEntry | DepositEntry;
+/**
+ * Sente opening the agent's own venue account (SEN-187): the Perpl account
+ * opened with the owner's AUSD, its key enrolled — or why not yet (gas, a
+ * refusal), said once rather than left as a silent spinner. The API's
+ * `onboarding` event; no tool produced it, so it has no tool.
+ */
+export type AccountEntry = Base & {
+  kind: 'account';
+  venue: string | null;
+  /** `opened`, `resumed`, `enrolled`, `needs_gas` or `failed`. */
+  status: string;
+  /** The API's sentence: "Opened Perpl account 505 with 100 AUSD". */
+  message: string;
+  /** The opening's first transaction, or the one that reverted. */
+  txHash: string | null;
+};
+
+export type LedgerEntry =
+  ThesisEntry | TradeEntry | RefusalEntry | VerdictEntry | DepositEntry | AccountEntry;
 
 /**
  * The event trail -> the Ledger, oldest first.
@@ -245,6 +263,9 @@ function toLedgerEntry(event: LedgerEvent): LedgerEntry | null {
     // Funds arriving, from the Alchemy webhook rather than from a tool (SEN-30).
     case 'deposit':
       return depositEntry(event);
+    // Sente opening the agent's venue account (SEN-187).
+    case 'onboarding':
+      return accountEntry(event);
     default:
       // `run` is a summary, and the Ledger shows what happened, not that the
       // runner woke up.
@@ -363,6 +384,22 @@ function depositEntry(event: LedgerEvent): DepositEntry {
     txHash: text(detail, 'txHash'),
     blockNumber: numberAt(detail, 'blockNumber'),
     consensus: event.consensus ?? null,
+  };
+}
+
+function accountEntry(event: LedgerEvent): AccountEntry {
+  const detail = event.detail;
+  const hashes = detail['txHashes'];
+  const first = Array.isArray(hashes) && typeof hashes[0] === 'string' ? hashes[0] : null;
+  return {
+    kind: 'account',
+    seq: event.seq,
+    at: event.at,
+    ...runOf(event),
+    venue: text(detail, 'venue'),
+    status: text(detail, 'status') ?? 'failed',
+    message: text(detail, 'message') ?? '',
+    txHash: first ?? text(detail, 'txHash'),
   };
 }
 

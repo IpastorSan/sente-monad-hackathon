@@ -12,6 +12,7 @@ import { AgentsService } from '../../agents.service';
 import { ServerMandateOwners } from '../../mandate-owner';
 import { InMemoryAgentEventLog } from '../../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../../store/agent-store';
+import type { AgentPerplOnboarder } from '../../venues/perpl-onboarding';
 import { FakeAgentWalletProvider } from '../../testing/fake-agent-wallet.provider';
 import { AgentTools } from '../../tools/context';
 import { testAgent } from '../../tools/testing/agent-fixture';
@@ -33,6 +34,8 @@ export async function runnerHarness(
     config?: Partial<AgentRunnerConfig>;
     creditsConfigured?: boolean;
     precheck?: boolean;
+    /** SEN-187: what opens the agent's Perpl account before its tools run. */
+    perplOnboarding?: Pick<AgentPerplOnboarder, 'ensure'>;
   } = {},
 ) {
   const store = new InMemoryAgentStore();
@@ -83,6 +86,7 @@ export async function runnerHarness(
     (key, { timeoutMs }) => createOpenRouterClient(key, { timeoutMs, fetch: api.fetch }),
     new WriteSpacer({ spacingMs: config.writeSpacingMs }),
     transcripts,
+    options.perplOnboarding,
   );
   const principal = { userId: agent.userId };
 

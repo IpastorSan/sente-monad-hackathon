@@ -50,6 +50,7 @@ import {
   demoLedger,
   heldLabel,
   shortHash,
+  type AccountEntry,
   type DepositEntry,
   type LedgerEntry,
   type RefusalEntry,
@@ -58,6 +59,7 @@ import {
   type VerdictEntry,
 } from '@/agents/ledger';
 import {
+  accountOpened,
   countLabel,
   depositHeadline,
   depositSource,
@@ -310,6 +312,8 @@ function bodyFor(entry: LedgerEntry): ReactNode {
       return <VerdictBody entry={entry} />;
     case 'deposit':
       return <DepositBody entry={entry} />;
+    case 'account':
+      return <AccountBody entry={entry} />;
   }
 }
 
@@ -394,6 +398,23 @@ function DepositBody({ entry }: { entry: DepositEntry }) {
       )}
       <Hash hash={entry.txHash} />
       <Ramp entry={entry} />
+    </>
+  );
+}
+
+/** Sente opening the agent's venue account (SEN-187), or why it has not yet. */
+function AccountBody({ entry }: { entry: AccountEntry }) {
+  return (
+    <>
+      <Meta at={entry.at}>
+        <Text style={accountOpened(entry) ? text.strong : [text.strong, text.dim]}>
+          {accountOpened(entry) ? entry.message : 'Perps not open yet'}
+        </Text>
+      </Meta>
+      {accountOpened(entry) ? null : (
+        <Text style={[text.body, styles.tight]}>{entry.message || '—'}</Text>
+      )}
+      <Hash hash={entry.txHash} />
     </>
   );
 }

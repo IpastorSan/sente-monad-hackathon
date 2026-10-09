@@ -72,6 +72,15 @@ export const PERPL_ENROLL_VERIFYING_CONTRACT: Address =
 export const PERPL_ENROLL_STATEMENT =
   'I authorize the creation of Perpl API key with the specified scope and parameters';
 
+/**
+ * Perpl's testnet account-opening minimum, 100 AUSD in atoms — mirrors
+ * `PERPL_TESTNET_MIN_ACCOUNT_OPEN_ATOMS`, pinned equal by `mandate.test.ts`.
+ * Opening the agent's account is one deposit of at least this, and the
+ * mandate's collateral cap bounds that deposit, so a smaller cap could never
+ * trade a perp; the API refuses such a hire (SEN-187), and the form says so first.
+ */
+export const PERPL_MIN_OPEN_ATOMS = 100_000_000n;
+
 export const KURU_MARKETS: readonly KuruMarketConfig[] = KURU_TESTNET_MARKETS;
 export const KURU_TOKENS: readonly Token[] = Object.values(KURU_TESTNET_TOKENS);
 
@@ -227,6 +236,11 @@ export function buildMandate(form: MandateForm, now: number): BuildResult {
     const collateral = parseAmount(form.perplCollateral, AUSD.decimals);
     if (collateral === null || collateral === 0n) {
       errors.perplCollateral = 'Enter the most AUSD one transfer may move into Perpl.';
+    } else if (collateral < PERPL_MIN_OPEN_ATOMS) {
+      const minimum = formatAtoms(PERPL_MIN_OPEN_ATOMS, AUSD.decimals);
+      errors.perplCollateral =
+        `Perpl opens an account with at least ${minimum} AUSD, and this cap bounds that ` +
+        `deposit. Set ${minimum} AUSD or more.`;
     } else {
       perpl.maxCollateralAtoms = collateral;
     }

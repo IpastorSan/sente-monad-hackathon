@@ -160,11 +160,13 @@ function describe(
         title: `${name} received ${depositAmount(entry)}${entry.asset !== null ? ` ${entry.asset}` : ''}`,
         detail: null,
       };
+    case 'account':
+      return { stone: stoneFor(entry), title: entry.message, detail: null };
   }
 }
 
 function blockOf(entry: LedgerEntry): LatestMove['block'] {
-  if (entry.kind === 'thesis' || entry.kind === 'refusal') return null;
+  if (entry.kind === 'thesis' || entry.kind === 'refusal' || entry.kind === 'account') return null;
   if (entry.blockNumber === null) return null;
   return { number: entry.blockNumber, consensus: entry.consensus };
 }

@@ -16,6 +16,7 @@ import {
   PERPL_API_KEY_TYPED_DATA,
   PERPL_COLLATERAL_DECIMALS,
   PERPL_TESTNET_CONTRACTS,
+  PERPL_TESTNET_MIN_ACCOUNT_OPEN_ATOMS,
 } from '@sente/venues/perpl';
 import { getAddress, type Address } from 'viem';
 
@@ -25,6 +26,7 @@ import {
   PERPL_ENROLL_STATEMENT,
   PERPL_ENROLL_VERIFYING_CONTRACT,
   PERPL_EXCHANGE,
+  PERPL_MIN_OPEN_ATOMS,
   buildMandate,
   defaultMandateForm,
   describeMandate,
@@ -167,6 +169,25 @@ test('each field refuses with its own message', () => {
   assert.ok(perpl.perplCollateral);
   assert.ok(perpl.perplMarkets);
   assert.ok(perpl.maxLeverage);
+});
+
+test('a Perpl collateral cap under Perpl’s 100 AUSD opening minimum is refused, with why (SEN-187)', () => {
+  assert.equal(PERPL_MIN_OPEN_ATOMS, PERPL_TESTNET_MIN_ACCOUNT_OPEN_ATOMS);
+  const under = buildMandate(
+    form({ kuru: false, perpl: true, perplCollateral: '99.99', perplMarkets: 'BTC-PERP' }),
+    NOW,
+  );
+  assert.equal(under.ok, false);
+  assert.equal(
+    under.ok ? undefined : under.errors.perplCollateral,
+    'Perpl opens an account with at least 100 AUSD, and this cap bounds that deposit. ' +
+      'Set 100 AUSD or more.',
+  );
+  const exactly = buildMandate(
+    form({ kuru: false, perpl: true, perplCollateral: '100', perplMarkets: 'BTC-PERP' }),
+    NOW,
+  );
+  assert.equal(exactly.ok, true);
 });
 
 test('parsePerplMarkets splits on commas and spaces and drops repeats', () => {

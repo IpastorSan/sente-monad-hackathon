@@ -180,7 +180,7 @@ export function MandateStep({
             suffix={AUSD.symbol}
             placeholder="0"
             error={errors.perplCollateral}
-            hint="The most one transfer may move into Perpl."
+            hint="The most one transfer may move into Perpl. At least 100: opening the agent’s Perpl account takes 100 AUSD."
           />
           <Field
             label="Markets"

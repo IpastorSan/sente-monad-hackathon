@@ -123,6 +123,39 @@ describe('WebhooksService.handleAlchemy', () => {
     expect(deposit?.tool).toBeUndefined();
   });
 
+  it('tells the after-deposit hook once per recorded deposit, so a Perpl account can open (SEN-187)', async () => {
+    const told: string[] = [];
+    const service = new WebhooksService(
+      CONFIGURED,
+      new InMemoryAgentEventLog(),
+      addresses,
+      (id) => {
+        told.push(id);
+        return Promise.resolve();
+      },
+    );
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    const body = raw(delivery());
+    await service.handleAlchemy(body, sign(body));
+    await service.handleAlchemy(body, sign(body)); // Alchemy's retry: not a second deposit
+    expect(told).toEqual([AGENT_ID]);
+  });
+
+  it('answers Alchemy even when the after-deposit hook fails', async () => {
+    const service = new WebhooksService(CONFIGURED, new InMemoryAgentEventLog(), addresses, () =>
+      Promise.reject(new Error('Perpl is down')),
+    );
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    const warned = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+    const body = raw(delivery());
+    await expect(service.handleAlchemy(body, sign(body))).resolves.toEqual({
+      received: true,
+      appended: 1,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('Perpl is down'));
+  });
+
   it('appends nothing on a repeated delivery — Alchemy retries, and a retry is not a second deposit', async () => {
     const { service, log } = setup();
     const body = raw(delivery());

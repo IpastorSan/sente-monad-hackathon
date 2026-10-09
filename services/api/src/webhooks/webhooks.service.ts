@@ -23,6 +23,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -54,6 +55,16 @@ export interface AgentAddresses {
   /** Case-insensitive: Alchemy sends lower case, `AgentRecord.address` is EIP-55. */
   agentIdForAddress(address: string): Promise<string | undefined>;
 }
+
+/** DI token for what happens after a deposit is recorded (SEN-187). */
+export const AGENT_DEPOSITED = Symbol('AGENT_DEPOSITED');
+
+/**
+ * Told about each agent a delivery credited, after its `deposit` is on the
+ * log: the agent's Perpl account may have been waiting for exactly this AUSD.
+ * Must not throw into the webhook; a failure is logged and dropped.
+ */
+export type AgentDeposited = (agentId: string) => Promise<void>;
 
 /**
  * Why a verified delivery appended nothing. A union rather than a bare `string`
@@ -101,6 +112,7 @@ export class WebhooksService {
     @Inject(ALCHEMY_CONFIG) private readonly config: AlchemyConfig,
     @Inject(AGENT_EVENTS) private readonly events: AgentEventLog,
     @Inject(AGENT_ADDRESSES) private readonly agents: AgentAddresses,
+    @Optional() @Inject(AGENT_DEPOSITED) private readonly deposited?: AgentDeposited,
   ) {}
 
   async handleAlchemy(
@@ -159,6 +171,7 @@ export class WebhooksService {
       this.remember(key);
       if (await this.appendDeposit(agentId, detail)) {
         appended += 1;
+        this.notifyDeposited(agentId);
       } else {
         this.seen.delete(key);
         failed += 1;
@@ -192,6 +205,17 @@ export class WebhooksService {
       );
       return false;
     }
+  }
+
+  /** Fire and forget: Alchemy's answer never waits on, or fails with, a venue account. */
+  private notifyDeposited(agentId: string): void {
+    if (!this.deposited) return;
+    this.deposited(agentId).catch((error: unknown) =>
+      this.logger.warn(
+        `agent ${agentId}: after-deposit hook failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
   }
 
   private remember(key: string): void {

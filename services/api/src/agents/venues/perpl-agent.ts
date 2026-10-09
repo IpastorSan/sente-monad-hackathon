@@ -24,6 +24,7 @@ import {
 import {
   BaseError,
   ContractFunctionRevertedError,
+  erc20Abi,
   isAddressEqual,
   type Address,
   type Hex,
@@ -116,11 +117,13 @@ export async function perplAccountInfo(
 }
 
 export class PerplOnboardingError extends Error {
+  readonly step: string;
   readonly transactionHash: Hex;
 
   constructor(step: string, transactionHash: Hex) {
     super(`Perpl onboarding: ${step} reverted in ${transactionHash}`);
     this.name = 'PerplOnboardingError';
+    this.step = step;
     this.transactionHash = transactionHash;
   }
 }
@@ -135,11 +138,65 @@ export class PerplNotOnboardedError extends Error {
   }
 }
 
+export type PerplOnboardingStep = 'approve' | 'createAccount' | 'allowOrderForwarding';
+
 export interface PerplOnboarding {
   readonly accountId: bigint;
-  /** False when the account already existed and nothing was sent. */
+  /** True when this call opened the account (`createAccount` was sent). */
   readonly onboarded: boolean;
+  /** One hash per transaction sent, in the order of `steps`. */
   readonly transactions: readonly Hex[];
+  /** What was sent, in order. Empty when nothing was. */
+  readonly steps: readonly PerplOnboardingStep[];
+  /** AUSD atoms the new account was opened with; absent unless `onboarded`. */
+  readonly amount?: bigint;
+}
+
+/** What {@link PerplAgentAccounts.onboard} is about to send, for a caller's last check. */
+export interface PerplOnboardingPlan {
+  readonly steps: readonly PerplOnboardingStep[];
+  /** The sum of the steps' fixed limits: what Monad charges (gotcha 4). */
+  readonly gas: bigint;
+  /** The account that already exists, when only forwarding is left to grant. */
+  readonly accountId: bigint | null;
+}
+
+export interface PerplOnboardOptions {
+  /**
+   * Whether the account is known to forward orders. `true` (the default) leaves
+   * an existing account alone, as `onboard` always did. `false` or `null`
+   * (unknown) re-grants forwarding on an existing account — the resume after a
+   * run that died between `createAccount` and `allowOrderForwarding`. The
+   * Exchange's `getAccountByAddr` does not say, and re-granting is harmless.
+   */
+  readonly forwarding?: boolean | null;
+  /**
+   * Called with what is about to be sent, before anything is signed. Throw to
+   * send nothing — the gas gate (SEN-187) lives here, so it sees the exact legs.
+   */
+  readonly beforeSend?: (plan: PerplOnboardingPlan) => void | Promise<void>;
+}
+
+/** Resolves the AUSD an address has approved to the Exchange. */
+export type PerplAllowanceReader = (owner: Address) => Promise<bigint>;
+
+/** {@link PerplAllowanceReader} over `AUSD.allowance(owner, Exchange)`. */
+export function perplAllowanceReader(
+  client: PublicClient,
+  contracts: { exchange: Address; collateral: Address } = PERPL_TESTNET_CONTRACTS,
+): PerplAllowanceReader {
+  return (owner) =>
+    client.readContract({
+      address: contracts.collateral,
+      abi: erc20Abi,
+      functionName: 'allowance',
+      args: [owner, contracts.exchange],
+    });
+}
+
+/** The gas Monad will charge for these onboarding steps: their fixed limits, summed. */
+export function perplOnboardingGas(steps: readonly PerplOnboardingStep[]): bigint {
+  return steps.reduce((sum, step) => sum + PERPL_ONBOARDING_GAS[step], 0n);
 }
 
 export interface PerplAgentAccountsOptions {
@@ -147,18 +204,23 @@ export interface PerplAgentAccountsOptions {
   readonly wallets: AgentWalletProvider;
   readonly secrets: AgentSecretStore;
   readonly accountOf: PerplAccountReader;
+  /**
+   * The wallet's AUSD allowance to the Exchange. With it, an approve that
+   * already landed (a run that died before `createAccount`) is not sent again;
+   * without it, every opening approves.
+   */
+  readonly allowanceOf?: PerplAllowanceReader;
   /** Defaults to testnet. */
   readonly network?: PerplNetwork;
   readonly fetchImpl?: typeof fetch;
 }
-
-const STEPS = ['approve', 'createAccount', 'allowOrderForwarding'] as const;
 
 export class PerplAgentAccounts {
   readonly #sender: AgentTransactionSender;
   readonly #wallets: AgentWalletProvider;
   readonly #secrets: AgentSecretStore;
   readonly #accountOf: PerplAccountReader;
+  readonly #allowanceOf: PerplAllowanceReader | undefined;
   readonly #network: PerplNetwork;
   readonly #fetch: typeof fetch;
   /** One enrollment per agent at a time: concurrent callers share it. */
@@ -169,6 +231,7 @@ export class PerplAgentAccounts {
     this.#wallets = options.wallets;
     this.#secrets = options.secrets;
     this.#accountOf = options.accountOf;
+    this.#allowanceOf = options.allowanceOf;
     this.#network = options.network ?? PERPL_NETWORKS.testnet;
     this.#fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
   }
@@ -179,19 +242,26 @@ export class PerplAgentAccounts {
 
   /**
    * Opens the agent's Perpl account: approve → createAccount(amount) →
-   * allowOrderForwarding(true), three Privy-signed transactions through the
-   * wallet's queue. `amount` defaults to the venue minimum (100 AUSD on
-   * testnet) and must fit the mandate's `perpl.maxCollateralAtoms`, or the
-   * enclave refuses the approve and nothing is sent.
+   * allowOrderForwarding(true), Privy-signed transactions through the wallet's
+   * queue. `amount` defaults to the venue minimum (100 AUSD on testnet) and
+   * must fit the mandate's `perpl.maxCollateralAtoms`, or the enclave refuses
+   * the approve and nothing is sent.
    *
-   * A no-op when the account exists. Caveat: if a previous run died between
-   * `createAccount` and `allowOrderForwarding`, the account exists with
-   * forwarding OFF and every order fails with `sr: 34`; that is visible on the
-   * trading socket (`accountState().fw`), not from this read.
+   * It RESUMES (SEN-187): an approve that already covers `amount` is not sent
+   * again (with `allowanceOf`), and an existing account gets only the
+   * forwarding grant when `options.forwarding` is not `true`. With an account
+   * and forwarding known on, it sends nothing.
    */
-  async onboard(agent: AgentIdentity, amount?: bigint): Promise<PerplOnboarding> {
+  async onboard(
+    agent: AgentIdentity,
+    amount?: bigint,
+    options: PerplOnboardOptions = {},
+  ): Promise<PerplOnboarding> {
     const existing = await this.accountId(agent);
-    if (existing !== null) return { accountId: existing, onboarded: false, transactions: [] };
+    const forwarding = options.forwarding ?? true;
+    if (existing !== null && forwarding === true) {
+      return { accountId: existing, onboarded: false, transactions: [], steps: [] };
+    }
 
     const params = onboardingParams(await this.#context());
     // The mandate policy was compiled against PERPL_TESTNET_CONTRACTS; if the
@@ -206,19 +276,37 @@ export class PerplAgentAccounts {
       );
     }
 
-    const calls = perplOnboardingCalls(params, amount);
+    const opening = amount ?? params.minAccountOpenAmount;
+    const [approve, create, forward] = perplOnboardingCalls(params, opening);
+    const legs: { step: PerplOnboardingStep; call: typeof approve }[] = [];
+    if (existing === null) {
+      const approved = this.#allowanceOf ? await this.#allowanceOf(agent.address) : 0n;
+      if (approved < opening) legs.push({ step: 'approve', call: approve });
+      legs.push({ step: 'createAccount', call: create });
+    }
+    legs.push({ step: 'allowOrderForwarding', call: forward });
+    const steps = legs.map((leg) => leg.step);
+    await options.beforeSend?.({ steps, gas: perplOnboardingGas(steps), accountId: existing });
+
     const receipts = await this.#sender.sendAll(
       agent,
-      calls.map((call, i) => ({ ...call, gas: PERPL_ONBOARDING_GAS[STEPS[i]!] })),
+      legs.map(({ step, call }) => ({ ...call, gas: PERPL_ONBOARDING_GAS[step] })),
     );
     const failed = receipts.findIndex((receipt) => !receipt.success);
     if (failed >= 0)
-      throw new PerplOnboardingError(STEPS[failed]!, receipts[failed]!.transactionHash);
+      throw new PerplOnboardingError(steps[failed]!, receipts[failed]!.transactionHash);
 
-    const accountId = await this.accountId(agent);
+    const accountId = existing ?? (await this.accountId(agent));
     if (accountId === null)
       throw new Error(`Perpl onboarding landed but ${agent.address} has no account`);
-    return { accountId, onboarded: true, transactions: receipts.map((r) => r.transactionHash) };
+    const opened = existing === null;
+    return {
+      accountId,
+      onboarded: opened,
+      transactions: receipts.map((r) => r.transactionHash),
+      steps,
+      ...(opened ? { amount: opening } : {}),
+    };
   }
 
   /**

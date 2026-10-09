@@ -14,6 +14,7 @@ import type { Address } from 'viem';
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
+import type { PerpsStatusDto } from './perps.ts';
 import type { RunSummary, RunTranscriptPage } from './terminal.ts';
 
 /** Mirrors `AGENT_MODELS` in `services/api/src/agents/agents.config.ts`. */
@@ -991,6 +992,28 @@ export class AgentsApi {
   portfolio(id: string): Promise<AgentPortfolioDto | null> {
     return this.optional(
       this.request<AgentPortfolioDto>('GET', `/agents/${encodeURIComponent(id)}/portfolio`),
+    );
+  }
+
+  /**
+   * `GET /agents/:id/perpl` (SEN-187) — where the agent's own Perpl account
+   * stands. A read that finds it funded and not yet open starts the opening.
+   * `null` while the route is not deployed.
+   */
+  perplStatus(id: string): Promise<PerpsStatusDto | null> {
+    return this.optional(
+      this.request<PerpsStatusDto>('GET', `/agents/${encodeURIComponent(id)}/perpl`),
+    );
+  }
+
+  /**
+   * `POST /agents/:id/perpl/onboard` (SEN-187) — just funded: open the agent's
+   * Perpl account as soon as the AUSD lands. Answers at once; poll
+   * `perplStatus`. `null` while the route is not deployed.
+   */
+  perplOnboard(id: string): Promise<PerpsStatusDto | null> {
+    return this.optional(
+      this.request<PerpsStatusDto>('POST', `/agents/${encodeURIComponent(id)}/perpl/onboard`, {}),
     );
   }
 
