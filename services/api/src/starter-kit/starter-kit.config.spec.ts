@@ -69,6 +69,13 @@ describe('loadStarterKitConfig', () => {
     expect(config.dailyCapUsers).toBe(7);
   });
 
+  it('leaves the Kuru USDC leg out at STARTER_DRIP_USDC=0, and still sends AUSD (SEN-185)', () => {
+    // Kuru's current USDC has no faucet; a sender short of one token sends nothing.
+    const config = loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: KEY, STARTER_DRIP_USDC: '0' });
+    if (!config.enabled) throw new Error('expected enabled');
+    expect(config.tokens.map((token) => token.symbol)).toEqual(['AUSD']);
+  });
+
   it.each([
     ['not hex', 'nope'],
     ['too short', `0x${'33'.repeat(31)}`],
