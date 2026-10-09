@@ -520,13 +520,25 @@ that needs no session.
 
 `api.sente.lol` is live, and every new wallet registered there is sent a starter kit of real
 testnet funds. On 2026-10-09 a web e2e test built against a cached bundle that still pointed at
-production and registered six throwaway wallets, which cost 1,500 AUSD and 600 USDC. Two rules:
+production and registered six throwaway wallets, which cost 1,500 AUSD and 600 USDC. The rules:
 
 - **Always export the web build with `--clear`** before testing it. Metro's cache ignores
   `EXPO_PUBLIC_*` changes, so a stale bundle keeps whichever API URL it was last built with.
-- **A browser or e2e test blocks every host except its own page and its stub**, and fails if the
-  bundle names `sente.lol` or `api.sente.lol`. Live runs against production happen only when
-  Ignacio asks for one.
+- **A browser or e2e test blocks every host except its own page and its stub.**
+  `apps/mobile/scripts/web-reload-e2e.ts` is the model: before it launches a browser it exits 2
+  on an `API_URL` under `sente.lol`, on a bundle naming any `*.sente.lol` host (`api.sente.lol`),
+  and on a bundle that does not contain `API_URL`. The bare `sente.lol` is in every bundle — it is
+  the rpId — so scan for its subdomains, not for it. In the browser, `context.route` aborts every
+  request it does not serve and `context.routeWebSocket` closes every socket (`route` never sees
+  them).
+- **Live scripts refuse production by default** through `apps/mobile/scripts/productionGuard.ts`,
+  which every new script that calls an API should use. `trade-live.ts` exits 2 on an
+  `--api` under `sente.lol` unless `--really-production` is also passed. Live runs against
+  production happen only when Ignacio asks for one.
+
+The exception is reads. `infra/verify.sh`, `infra/smoke.sh` (a throwaway key that signs in and
+creates no wallet), `infra/live-check.sh` and `pnpm run drift:check` only read, so they run against
+production after every deploy (`docs/deploy.md`, step 5).
 
 The production box is `sente-eu` (GCP project `plenary-anvil-491607-s6`, zone
 `europe-southwest1-a`, 34.175.150.91). It moved from `us-central1` on 2026-10-09 because

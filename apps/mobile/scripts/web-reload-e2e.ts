@@ -8,9 +8,13 @@
  * `API_URL` (default `http://localhost:3000`, or `API_URL`): `/auth/challenge`
  * and `/auth/session` answer, everything else is a 503, which the app shows as
  * an unreachable API and which has no bearing on being signed in. Every other
- * request (the Monad RPC, for one) is aborted and listed, so nothing this
- * harness does reaches a real API or chain; one aimed at a Sente host fails
- * the run, because it means the bundle is not using the stub.
+ * request (the Monad RPC, for one) and every WebSocket is aborted and listed,
+ * so nothing this harness does reaches a real API or chain; one aimed at a
+ * Sente host fails the run, because it means the bundle is not using the stub.
+ *
+ * Before any browser starts it refuses (exit 2) an `API_URL` on `*.sente.lol`,
+ * a bundle naming any `*.sente.lol` host, and a bundle that does not contain
+ * `API_URL` at all.
  *
  * Build the export with `--clear` (or `EXPO_PUBLIC_API_URL` unset): Metro's
  * transform cache is shared between checkouts and can inline the API URL of
@@ -25,11 +29,12 @@
  *
  *   mise exec -- pnpm --filter @sente/mobile run e2e:web-reload
  */
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 
 import { chromium, type Page } from 'playwright-core';
 
+import { isProductionHost } from './productionGuard.ts';
 import { addPrfAuthenticator, CHROME } from './virtualAuthenticator.ts';
 
 const DIST = join(import.meta.dirname, '..', 'dist-web');
@@ -67,6 +72,41 @@ const escaped = new Set<string>();
 /** Every `navigator.credentials` call, across page loads. */
 const ceremonies: string[] = [];
 
+// Production guards, BEFORE a browser exists (CLAUDE.md, "Tests never touch
+// production"). The bare `sente.lol` is the rpId and the page origin this
+// harness fakes, so it is in every bundle; any host BELOW it (`api.sente.lol`)
+// is a real Sente service and means the export was built against production.
+if (isProductionHost(API)) {
+  console.error(`REFUSED  API_URL=${API} is production; this harness only talks to its stub.`);
+  process.exit(2);
+}
+{
+  const jsDir = join(DIST, '_expo', 'static', 'js');
+  const files = await readdir(jsDir, { recursive: true }).catch(() => {
+    console.error(`REFUSED  no bundle at ${jsDir}; export the web build with --clear first.`);
+    process.exit(2);
+  });
+  const sources = await Promise.all(
+    files.filter((f) => f.endsWith('.js')).map((f) => readFile(join(jsDir, f), 'utf8')),
+  );
+  const bundle = sources.join('\n');
+  const production = [...new Set(bundle.match(/[a-z0-9-]+\.sente\.lol/gi) ?? [])];
+  if (production.length > 0) {
+    console.error(
+      `REFUSED  the bundle names ${production.join(', ')}: it was built against production. ` +
+        'Re-export with --clear and EXPO_PUBLIC_API_URL unset or local.',
+    );
+    process.exit(2);
+  }
+  if (!bundle.includes(API)) {
+    console.error(
+      `REFUSED  the bundle does not contain ${API}, so the app would not call the stub. ` +
+        'Re-export with --clear and the same EXPO_PUBLIC_API_URL, or set API_URL to match.',
+    );
+    process.exit(2);
+  }
+}
+
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 let failed = false;
 const expect = (ok: boolean, what: string) => {
@@ -82,6 +122,12 @@ try {
     const url = new URL(route.request().url());
     if (url.protocol !== 'data:' && url.protocol !== 'blob:') escaped.add(url.origin);
     await route.abort();
+  });
+  // Every WebSocket, whatever its host: never connected to a server (no
+  // `connectToServer`), closed at once. `context.route` does not see sockets.
+  await context.routeWebSocket(/.*/, (ws) => {
+    escaped.add(new URL(ws.url()).origin);
+    ws.close();
   });
   await context.route('https://sente.lol/**', async (route) => {
     const { pathname } = new URL(route.request().url());
