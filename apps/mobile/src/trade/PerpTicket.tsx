@@ -58,6 +58,7 @@ import {
   useNow,
   useWebKeys,
 } from '@/trade/ticketKit';
+import { RiskDisclosure, useRiskAck } from '@/trade/RiskDisclosure';
 import { usePerplSetup, type PerplSetup } from '@/trade/usePerplSetup';
 import { Pill } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
@@ -640,6 +641,7 @@ function Review({
   onConfirm: () => void;
 }) {
   const now = useNow(1_000);
+  const risk = useRiskAck('perpl');
   const age = Math.max(0, now - at);
   // A limit carries its own price: the mark's age doesn't bound it.
   const old = limit === null && age > QUOTE_MAX_AGE_MS;
@@ -685,17 +687,28 @@ function Review({
       />
       {limit?.warning ? <Text style={[text.caption, styles.warn]}>{limit.warning}</Text> : null}
       <Row label="Liquidation" value="Shown on your position once it opens" />
+      <RiskDisclosure venue="perpl" ack={risk} />
       <View style={styles.spaced}>
         {!ticket.cta.enabled ? (
           <Button kind="secondary" label={ticket.cta.label} disabled onPress={() => undefined} />
         ) : old ? (
           <Button kind="primary" label="Refresh the mark" onPress={onRefresh} />
+        ) : !risk.ready ? (
+          <Button
+            kind="secondary"
+            label={risk.needed ? 'Tick the box to continue' : 'One moment'}
+            disabled
+            onPress={() => undefined}
+          />
         ) : (
           <HoldToConfirm
             tone={TONE[side]}
             keys
             label={`Hold to ${verb} ${shortSize(size)} ${market.base}${limit ? ` at ${limit.price}` : ''}`}
-            onConfirm={onConfirm}
+            onConfirm={() => {
+              risk.remember();
+              onConfirm();
+            }}
           />
         )}
       </View>

@@ -108,6 +108,7 @@ import {
   useWebKeys,
 } from '@/trade/ticketKit';
 import { PerpTicket } from '@/trade/PerpTicket';
+import { RiskDisclosure, useRiskAck } from '@/trade/RiskDisclosure';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { ComingNext } from '@/ui/ComingNext';
@@ -1066,6 +1067,7 @@ function Review({
   onConfirm: () => void;
 }) {
   const now = useNow(1_000);
+  const risk = useRiskAck('kuru');
   const age = Math.max(0, now - at);
   const old = input.orderType === 'market' && age > QUOTE_MAX_AGE_MS;
   useWebKeys(keys && ticket.cta.enabled && old, (event) => {
@@ -1105,11 +1107,19 @@ function Review({
       {rows.map((row) => (
         <Row key={row.label} label={row.label} value={row.value} mono={row.chain} />
       ))}
+      <RiskDisclosure venue="kuru" ack={risk} />
       <View style={styles.spaced}>
         {!ticket.cta.enabled ? (
           <Button kind="secondary" label={ticket.cta.label} disabled onPress={() => undefined} />
         ) : old ? (
           <Button kind="primary" label="Refresh quote" onPress={onRefresh} />
+        ) : !risk.ready ? (
+          <Button
+            kind="secondary"
+            label={risk.needed ? 'Tick the box to continue' : 'One moment'}
+            disabled
+            onPress={() => undefined}
+          />
         ) : (
           <HoldToConfirm
             tone={SIDE_TONE[input.side]}
@@ -1117,7 +1127,10 @@ function Review({
             label={`Hold to ${input.side} ${sizeLabel}${
               input.orderType === 'limit' ? ` at ${input.limitPrice}` : ''
             }`}
-            onConfirm={onConfirm}
+            onConfirm={() => {
+              risk.remember();
+              onConfirm();
+            }}
           />
         )}
       </View>
