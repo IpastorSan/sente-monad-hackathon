@@ -41,7 +41,7 @@ const WEB_TIP: PasskeyTipCopy = {
     'signed in to Chrome, with sync on. Or choose "Use a phone or tablet" and scan ' +
     'the QR code with your Android phone.',
   note:
-    'Your browser will ask twice: once for your wallet, once for the key that approves ' +
+    'Some browsers ask twice: once for your wallet, once for the key that approves ' +
     "your agents. A passkey that can't derive keys can't create a wallet.",
 };
 
@@ -49,13 +49,11 @@ const WEB_TIP: PasskeyTipCopy = {
 export const PASSKEY_TIP: PasskeyTipCopy = Platform.OS === 'web' ? WEB_TIP : NATIVE_TIP;
 
 /**
- * One line under the welcome buttons. On web it also warns of the two prompts,
- * because a second browser dialog right after the first reads as a bug.
+ * One line under the welcome buttons. Both keys come from one prompt where the
+ * provider evaluates two PRF salts at once (SEN-176); the web tip above still
+ * warns that some ask twice, because a second dialog unannounced reads as a bug.
  */
-export const PASSKEY_CAPTION =
-  Platform.OS === 'web'
-    ? 'No seed phrase. Your wallet is derived from the passkey — confirm it twice.'
-    : 'No seed phrase. Your wallet is derived from the passkey.';
+export const PASSKEY_CAPTION = 'No seed phrase. Your wallet is derived from the passkey.';
 
 const KEY = 'sente.tip.passkey-manager.v1';
 

@@ -14,7 +14,7 @@
  *
  * On web the tip and the caption say the browser-specific things instead
  * (`PASSKEY_TIP`, SEN-165): save to Google Password Manager from Chrome or use a
- * phone through the QR code, and expect two prompts.
+ * phone through the QR code, and that some browsers prompt twice.
  *
  * Signing in lands on the tabs: the moment the session is `ready` this
  * redirects to `/`, so there is no "continue" step after the system sheet.

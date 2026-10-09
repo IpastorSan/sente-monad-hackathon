@@ -105,6 +105,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@category-labs/mera@0.2.0': 78cb6abc11b1c60963172631ec6feae5a77043b45ed040724c8efc16ea60a96d
+
 importers:
 
   .:
@@ -135,7 +138,7 @@ importers:
     dependencies:
       '@category-labs/mera':
         specifier: 0.2.0
-        version: 0.2.0(react-native-passkey@3.6.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.87.1(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(viem@2.56.3(typescript@6.0.3)(zod@3.25.76))
+        version: 0.2.0(patch_hash=78cb6abc11b1c60963172631ec6feae5a77043b45ed040724c8efc16ea60a96d)(react-native-passkey@3.6.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.87.1(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(viem@2.56.3(typescript@6.0.3)(zod@3.25.76))
       '@expo-google-fonts/bricolage-grotesque':
         specifier: ^0.4.1
         version: 0.4.1
@@ -269,6 +272,9 @@ importers:
       fast-check:
         specifier: ^4.10.2
         version: 4.10.2
+      playwright-core:
+        specifier: 1.64.0
+        version: 1.64.0
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -4624,6 +4630,11 @@ packages:
     resolution: {integrity: sha512-HRDzbaKjC+AOWVXxAU/x54COGeIv9eb+6CkDSQoNTt4XyWoIJvuPsXizxu/Fr23EiekbtZwmh1IcIG/l/a10GQ==}
     engines: {node: '>=8'}
 
+  playwright-core@1.64.0:
+    resolution: {integrity: sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   plist@3.1.1:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
     engines: {node: '>=10.4.0'}
@@ -6239,7 +6250,7 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@category-labs/mera@0.2.0(react-native-passkey@3.6.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.87.1(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(viem@2.56.3(typescript@6.0.3)(zod@3.25.76))':
+  '@category-labs/mera@0.2.0(patch_hash=78cb6abc11b1c60963172631ec6feae5a77043b45ed040724c8efc16ea60a96d)(react-native-passkey@3.6.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.87.1(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(viem@2.56.3(typescript@6.0.3)(zod@3.25.76))':
     dependencies:
       '@noble/curves': 2.2.0
       '@noble/hashes': 2.2.0
@@ -10786,6 +10797,8 @@ snapshots:
   pkg-dir@4.2.0:
     dependencies:
       find-up: 4.1.0
+
+  playwright-core@1.64.0: {}
 
   plist@3.1.1:
     dependencies:

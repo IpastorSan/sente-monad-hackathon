@@ -13,31 +13,29 @@
  * salt, which is what owns the user's Privy wallet and its agents' mandate
  * policies (SEN-38). One passkey, many keys.
  *
- * **Cost of the second key: one more WebAuthn prompt at sign-in.** mera returns
- * the *first* PRF output for *one* salt per ceremony, so a second salt needs a
- * second assertion. It is targeted at the credential the first ceremony chose,
- * and refused if the platform answers with a different one — a device key from
- * another passkey would silently own the wrong wallet. Everything after
- * sign-in is still prompt-free: `signDigest` and `signPrivyAuthorization` both
- * sign locally from the derived keys, so neither a transaction nor a Privy
- * approval re-prompts for a biometric.
+ * **One prompt for both keys (SEN-176).** WebAuthn's PRF extension evaluates
+ * two salts in one ceremony, and our mera patch exposes that, so sign-in asks
+ * for both in the same assertion (`./ceremony`). A provider that ignores the
+ * second salt gets the old second assertion, pinned to the credential the first
+ * one chose; the outputs are the same bytes either way. Everything after
+ * sign-in is prompt-free: `signDigest` and `signPrivyAuthorization` both sign
+ * locally from the derived keys.
  *
  * The same ceremonies run on Android and in a browser; only the WebAuthn
  * transport differs, and `./webauthnClient` picks it per platform (SEN-165).
  */
-import {
-  createPasskeyWithPrfOutput,
-  createSecp256k1SigningSession,
-  getPasskeyPrfOutput,
-  type PasskeyCredentialMetadata,
-  type PasskeyCredentialTransport,
-  type Secp256k1SigningSession,
-} from '@category-labs/mera';
+import { createSecp256k1SigningSession, type Secp256k1SigningSession } from '@category-labs/mera';
 import { toViemAccount } from '@category-labs/mera/viem';
 import type { Address, LocalAccount } from 'viem';
 
+import {
+  assertKeyMaterial,
+  createKeyMaterial,
+  type SessionKeyMaterial,
+  type StoredCredential,
+} from './ceremony';
 import { RP_ID } from './constants';
-import { deriveDeviceKey, deriveEvmKey, prfSaltFor, zeroize } from './derive';
+import { deriveDeviceKey, zeroize } from './derive';
 import {
   devicePublicKeySpki,
   signPrivyAuthorization as signWithDeviceKey,
@@ -53,6 +51,10 @@ export { describeAuthError, type AuthErrorDescription } from './authError';
 // node test can pin it (SEN-138); re-exported so every existing import holds.
 export { RP_ID };
 
+// Defined next to the ceremonies, which are React-Native-free; re-exported so
+// every existing import of it from here holds.
+export type { StoredCredential };
+
 /** Name the authenticator shows in its UI. Cosmetic; safe to change. */
 export const RP_NAME = 'Sente';
 
@@ -64,12 +66,6 @@ const RELYING_PARTY = { id: RP_ID, name: RP_NAME } as const;
  * as "the app is broken".
  */
 const PASSKEY_TIMEOUT_MS = 120_000;
-
-/** Stored hints for re-asserting a known credential. Not secrets — see below. */
-export type StoredCredential = {
-  readonly credentialId: string;
-  readonly transports?: readonly PasskeyCredentialTransport[];
-};
 
 /**
  * A live wallet session.
@@ -114,7 +110,7 @@ export type WalletSession = {
 };
 
 type OpenSessionInput = {
-  /** Already-derived secp256k1 key. Borrowed — `openSession` wipes it. */
+  /** Already-derived secp256k1 key. Borrowed — the caller wipes it. */
   privateKey: Uint8Array;
   /** PRF output for `prfSaltFor('device')` — a different salt, a different key. */
   devicePrfOutput: Uint8Array;
@@ -177,62 +173,13 @@ function openWalletSession({
   }
 }
 
-/**
- * Everything between a completed wallet ceremony and a live session, shared by
- * both entry points.
- *
- * Takes ownership of `prfOutput` and wipes all three secrets on every path.
- * The order matters: the wallet PRF output is wiped as soon as the EOA key is
- * derived, *before* the device assertion, because that assertion is a second
- * biometric prompt that can take the full {@link PASSKEY_TIMEOUT_MS} — and of
- * everything in this file it is the one secret that derives every BIP-44 index
- * rather than a single key.
- */
-async function openSession({
-  prfOutput,
-  credential,
-  accountIndex,
-}: {
-  prfOutput: Uint8Array;
-  credential: StoredCredential;
-  accountIndex: number;
-}): Promise<WalletSession> {
-  let privateKey: Uint8Array | undefined;
-  let devicePrfOutput: Uint8Array | undefined;
+/** Opens the session from fresh material and wipes both secrets on every path. */
+function openSession(material: SessionKeyMaterial): WalletSession {
   try {
-    privateKey = deriveEvmKey(prfOutput, accountIndex);
-    zeroize(prfOutput);
-    devicePrfOutput = await deviceKeyPrfOutput(credential);
-    return openWalletSession({ privateKey, devicePrfOutput, credential, accountIndex });
+    return openWalletSession(material);
   } finally {
-    zeroize(prfOutput, privateKey, devicePrfOutput);
+    zeroize(material.privateKey, material.devicePrfOutput);
   }
-}
-
-/**
- * Runs the second assertion, the one that evaluates the `device` salt.
- *
- * Restricted to the credential the wallet ceremony used: WebAuthn would
- * otherwise be free to offer any discoverable passkey for `sente.lol`, and a
- * device key derived from a *different* passkey than the wallet would register
- * an owner the user cannot reproduce the next time they sign in with that
- * wallet.
- */
-async function deviceKeyPrfOutput(credential: StoredCredential): Promise<Uint8Array> {
-  const asserted = await getPasskeyPrfOutput({
-    rpId: RP_ID,
-    credential: toCredentialMetadata(credential),
-    prfSalt: prfSaltFor('device'),
-    timeout: PASSKEY_TIMEOUT_MS,
-    webAuthnClient,
-  });
-  if (asserted.credentialId !== credential.credentialId) {
-    zeroize(asserted.prfOutput);
-    throw new Error(
-      'the device-key assertion answered with a different passkey than the wallet ceremony',
-    );
-  }
-  return asserted.prfOutput;
 }
 
 /** Inputs shared by both ceremonies. */
@@ -251,9 +198,11 @@ export type CreateWalletOptions = CeremonyOptions & {
 /**
  * Registers a new passkey and opens the wallet session it derives.
  *
- * Runs one creation ceremony for the `wallet` salt and one assertion for the
- * `device` salt — two prompts, and three on an authenticator that does not
- * evaluate PRF at creation time and needs mera's fallback assertion.
+ * Asks for both salts in the creation ceremony itself: one prompt on a
+ * provider that evaluates PRF at creation, two on one that only evaluates it
+ * at assertion time (mera's fallback assertion then asks for both salts), and
+ * two on one that ignores the second salt (the device salt then gets its own
+ * pinned assertion).
  *
  * @throws MeraError `PRF_UNAVAILABLE` when the chosen provider has no PRF —
  * see {@link describeAuthError}, which explains this one in user-facing terms.
@@ -263,18 +212,14 @@ export async function createWallet({
   displayName,
   accountIndex = 0,
 }: CreateWalletOptions): Promise<WalletSession> {
-  const created = await createPasskeyWithPrfOutput({
+  const material = await createKeyMaterial({
     rp: RELYING_PARTY,
     user: { name: userName, displayName: displayName ?? userName },
-    prfSalt: prfSaltFor('wallet'),
+    accountIndex,
     timeout: PASSKEY_TIMEOUT_MS,
     webAuthnClient,
   });
-  return openSession({
-    prfOutput: created.prfOutput,
-    credential: { credentialId: created.credentialId, transports: created.transports },
-    accountIndex,
-  });
+  return openSession(material);
 }
 
 export type SignInOptions = CeremonyOptions & {
@@ -289,40 +234,22 @@ export type SignInOptions = CeremonyOptions & {
 /**
  * Asserts an existing passkey and opens the wallet session it derives.
  *
- * Runs two assertion ceremonies, one per salt: the first is free to pick any
- * discoverable credential (which is what makes the account recoverable on a
- * wiped install), the second is pinned to whichever one it picked.
+ * One assertion for both salts, free to pick any discoverable credential
+ * (which is what makes the account recoverable on a wiped install). A provider
+ * that does not evaluate the second salt gets a second assertion, pinned to
+ * whichever credential the first one picked.
  */
 export async function signIn({
   credential,
   accountIndex = 0,
 }: SignInOptions = {}): Promise<WalletSession> {
-  const asserted = await getPasskeyPrfOutput({
-    rpId: RP_ID,
-    ...(credential !== undefined ? { credential: toCredentialMetadata(credential) } : {}),
-    prfSalt: prfSaltFor('wallet'),
+  const material = await assertKeyMaterial({
+    ...(credential !== undefined ? { credential } : {}),
+    accountIndex,
     timeout: PASSKEY_TIMEOUT_MS,
     webAuthnClient,
   });
-  return openSession({
-    prfOutput: asserted.prfOutput,
-    // An assertion does not report transports, so keep the stored hint only
-    // when the platform answered with the credential we asked for.
-    credential: {
-      credentialId: asserted.credentialId,
-      ...(credential?.credentialId === asserted.credentialId && credential.transports !== undefined
-        ? { transports: credential.transports }
-        : {}),
-    },
-    accountIndex,
-  });
-}
-
-function toCredentialMetadata(credential: StoredCredential): PasskeyCredentialMetadata {
-  return {
-    credentialId: credential.credentialId,
-    ...(credential.transports !== undefined ? { transports: credential.transports } : {}),
-  };
+  return openSession(material);
 }
 
 /**
