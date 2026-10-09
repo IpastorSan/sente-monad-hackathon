@@ -698,6 +698,67 @@ After the run the agent holds 0.048 MON and 1 USDC in its wallet, with 11 USDC f
 transactions (approve, deposit, place, cancel) cost about **0.10 MON** of gas — so the 0.15 MON agent gas drip
 (SEN-14) covers roughly one run of this shape.
 
+## Indicators: `get_indicators` (SEN-180)
+
+Models compute indicators badly from raw `get_klines` candles, so Sente computes them. `get_indicators`
+is a read tool in `agents/tools/registry.ts`, gated like every other tool, so the runner and the MCP
+server both offer it. The math is in `agents/tools/indicators.ts`, a pure module.
+
+**Input.**
+
+| Field        | Meaning                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `venue`      | `kuru` or `perpl`                                                                                             |
+| `market`     | must be a market in the agent's mandate, or it is refused `market_not_allowed` (`venue_not_allowed`)          |
+| `timeframes` | 1 to 4 distinct `get_klines` intervals, e.g. `["1h","15m","5m"]` for Elder's triple screen; Perpl has no `1w` |
+| `indicators` | 1 to 8 specs, `{ type, ...params }`; every param is optional                                                  |
+| `lookback`   | candles fetched per timeframe, 2 to 500, default 200                                                          |
+| `series`     | recent values shown per output, 1 to 20, default 5                                                            |
+
+| `type`        | Params and defaults                  | Outputs                                            |
+| ------------- | ------------------------------------ | -------------------------------------------------- |
+| `sma`         | `period=20`                          | value                                              |
+| `ema`         | `period=20` (seeded with the SMA)    | value                                              |
+| `wma`         | `period=20`                          | value                                              |
+| `macd`        | `fast=12, slow=26, signal=9`         | line, signal, histogram                            |
+| `rsi`         | `period=14` (Wilder)                 | value                                              |
+| `stochastic`  | `k=14, d=3, smooth=3`                | k (smoothed %K), d                                 |
+| `atr`         | `period=14` (Wilder)                 | value                                              |
+| `bollinger`   | `period=20, stddev=2` (population σ) | upper, middle, lower, percentB, bandwidth          |
+| `vwap`        | none                                 | value, anchored at the first candle fetched        |
+| `obv`         | none                                 | value, starting from 0 at the first candle         |
+| `adx`         | `period=14` (Wilder)                 | adx, plusDi, minusDi                               |
+| `force_index` | `period=13` (Elder)                  | value: EMA of Δclose × volume                      |
+| `elder_ray`   | `period=13`                          | ema, bullPower (high − EMA), bearPower (low − EMA) |
+
+Periods are integers from 2 to 200 (stochastic `d` and `smooth` from 1), `stddev` from 0.5 to 5, and
+`macd` needs `fast < slow`. Anything else is `invalid_input`.
+
+**Output.** `{ venue, market, timeframes: { "<tf>": { candles, last, indicators, warnings? } } }`.
+`last` is the candle every value is computed on (`t`, `close`, and `closed: false` while it is
+still forming). Each indicator is keyed by its label with defaults filled in (`rsi(14)`,
+`macd(12,26,9)`) and shows `value`, the latest, and `series`, the last few values oldest first.
+Multi-output indicators show both as objects keyed by output. An indicator that has too few
+candles shows `{ value: null, needs, have }` and a warning. It never shows a value computed during
+warm-up. A warning also flags missing candles (the venue skips an interval with no trades, and
+the math treats the series as contiguous), a flat window, and a VWAP with no volume.
+
+Values are decimal strings. Prices carry the market's tick precision plus two places. If the
+catalog cannot say, the closes' own precision is used, at most 8 places. Oscillators carry two
+places, ratios (%b, bandwidth) four, and volume-based values six significant digits. Ratios with a
+zero denominator take their neutral value: RSI 50 on a flat series, stochastic 50 on a flat range,
+%b 0.5 when the bands collapse, and DI/DX 0 without movement.
+
+**Load.** Candles come through `MarketDataService.klines`, the shared TTL cache, with one read per
+timeframe. The tick size comes from the cached catalog. Without the shared service (specs), the
+tool falls back to the agent's own venue, as `get_klines` does.
+
+**Tests.** `indicators.spec.ts` pins SMA, EMA and RSI to the StockCharts ChartSchool worked
+examples. It pins WMA, MACD, ATR, ADX, stochastic, Bollinger, VWAP, OBV, force index and Elder
+ray to small hand-checked series, with the arithmetic in comments. It also covers flat series,
+too few candles, empty windows and gaps. `get-indicators.spec.ts` covers the tool through the
+gate.
+
 ## Authenticating
 
 Every `/agents` route (and `/wallet`, `/credits`, `/chain`, `POST /gas/drip`)

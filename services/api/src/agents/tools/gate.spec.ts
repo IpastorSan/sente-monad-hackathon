@@ -300,6 +300,7 @@ describe('gate', () => {
         quote: unused,
         depth: unused,
         ticker: unused,
+        market: unused,
         mark: (...args) => {
           marks.push(args);
           return mark();
@@ -1091,6 +1092,7 @@ describe('venue pre-flight (SEN-19)', () => {
           };
           return Promise.resolve(dto);
         },
+        market: () => Promise.reject(new Error('not read by these tools')),
       };
       return { marketData, calls };
     }
