@@ -2,7 +2,7 @@
 #
 # Sente leaderboard indexer — Monad testnet (10143). Kuru Spot V2 fills only.
 #
-# Kuru fills come off the four market OrderBook proxies as packed
+# Kuru fills come off the five market OrderBook proxies as packed
 # `TradesPacked` events, decoded by hand in src/lib/packed.ts because the
 # payload is bit-packed, not ABI-encoded. Account custody flows and the
 # id -> address mapping come off AccountCore.
@@ -19,7 +19,8 @@
 # signature fails loudly (zero logs) rather than silently, and a wrong `indexed`
 # flag is caught by the topic-count check, since decoding depends on it.
 #
-# Addresses are the Set-C Spot V2 deployment — the table in
+# Addresses are Kuru's account-id deployment (SEN-185; the Set-C books are
+# retired) — the table in
 # packages/venues/src/kuru/constants.ts is the source of truth; this file is
 # a copy for a standalone runtime that cannot import workspace TS.
 name: sente-kuru-indexer
@@ -38,10 +39,13 @@ field_selection:
 
 chains:
   - id: 10143 # Monad Testnet
-    # 2026-10-02T00:00:00Z (binary searched on-chain), 7 days before the
-    # 2026-10-09 redeploy. Sized against the 100k-event cap, not chosen for
-    # history: see docs/indexer.md §budget before moving it earlier.
-    start_block: 67394632
+    # 2026-09-24T12:21:45Z: the first block holding code at the current
+    # AccountCore (binary searched on-chain, SEN-185), so the whole life of
+    # Kuru's account-id deployment is indexed — every AccountRegistered too.
+    # It fits the 100k-event cap with room to spare: sampled 2026-10-09, these
+    # books emitted no TradesPacked in ~45k sampled blocks over 16 days, and
+    # AccountCore had registered 9 accounts in all. docs/indexer.md §budget.
+    start_block: 65294187
     hypersync_config:
       # HyperSync is the primary source because Monad's public RPC caps
       # eth_getLogs at 100 blocks (docs/monad-testnet-assets.md), which is far
@@ -58,17 +62,18 @@ chains:
     contracts:
       - name: KuruOrderBook
         address:
-          - '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61' # MON-USDC
-          - '0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7' # WETH-USDC
-          - '0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f' # cbBTC-USDC
-          - '0x0B4dD2A7b09d5c5401149fFe51301Cc589017343' # XAUt-USDC
+          - '0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9' # MON-USDC
+          - '0x9d187971B64505Ac81f12c5FD2ac9c5247Ec62F3' # WETH-USDC
+          - '0x8661cB7c5f4f8ae3ee116B63Aa5a23c69110e357' # WBTC-USDC
+          - '0x0E2A5D9378fB61B8eC100Bd770c449F6fdD3e4d6' # XAUT-USDC
+          - '0x4A0888C502e64AEAE11115508Ec0955c70293dba' # USDT-USDC
       - name: KuruAccountCore
-        address: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22'
+        address: '0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038'
 
 contracts:
   - name: KuruOrderBook
     events:
-      # Signature copied from @toxicflow-labs/ts-sdk's spotOrderBookAbi so the
+      # Signature copied from @toxicflow-labs/ts-sdk's orderBookAbi so the
       # topic0 hash cannot drift from what the contract emits.
       - event: 'TradesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, uint24 effectiveTakerFeePps, address builder, uint24 builderFeePps, bytes packedTrades)'
 
@@ -78,4 +83,6 @@ contracts:
       - event: 'Withdrawal(uint40 indexed accountId, address indexed token, address indexed recipient, uint256 amount)'
       # account id -> account address. Without it every leaderboard row is a
       # number nobody can pay.
-      - event: 'AccountRegistered(address indexed account, uint40 indexed accountId, uint40 indexed rootAccountId, address owner, uint16 subaccountSeq)'
+      # SEN-185: the account-id AccountCore's shape — an id, its root, and the
+      # root's owner. Set C's leading `address account` is gone.
+      - event: 'AccountRegistered(uint40 indexed accountId, uint40 indexed rootAccountId, address indexed rootOwner, uint16 subaccountSeq)'

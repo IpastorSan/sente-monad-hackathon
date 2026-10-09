@@ -42,23 +42,27 @@ test('decimalsFromPrecision reads the exponent', () => {
 });
 
 test('Kuru seeds carry the book scale, not the token decimals', () => {
-  const mon = kuruMarketByAddress('0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61');
+  const mon = kuruMarketByAddress('0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9');
   assert.ok(mon);
   assert.equal(mon.symbol, 'MON-USDC');
-  // MON is 18-decimal, but the MON-USDC book sizes in 10^8 units. Confusing the
-  // two overstates base volume and bought/sold by 10^10.
+  // MON is 18-decimal, but the MON-USDC book sizes in 10^6 units (10^8 on the
+  // retired Set-C book, SEN-185). Confusing the
+  // two overstates base volume and bought/sold by 10^12.
   assert.equal(mon.baseDecimals, 18);
-  assert.equal(decimalsFromPrecision(mon.sizePrecision), 8);
+  assert.equal(decimalsFromPrecision(mon.sizePrecision), 6);
   assert.equal(decimalsFromPrecision(mon.pricePrecision), 6);
   // Case-insensitive: the OrderBook proxy emits lowercased srcAddress.
-  assert.ok(kuruMarketByAddress('0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61'));
+  assert.ok(kuruMarketByAddress('0x26cd68436b6a4aeb3ec52abc20a4d121f8b4bac9'));
+  // A retired Set-C book is not a market the indexer knows.
+  assert.equal(kuruMarketByAddress('0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61'), undefined);
   assert.equal(kuruMarketByAddress('0x0000000000000000000000000000000000000001'), undefined);
   assert.equal(KURU_MARKET_SEEDS.length, KURU_MARKETS.length);
 });
 
 test('Kuru token decimals: native MON is 18 and USDC is 6', () => {
   assert.equal(kuruTokenDecimals(NATIVE_TOKEN), 18);
-  assert.equal(kuruTokenDecimals('0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E'), 6);
+  assert.equal(kuruTokenDecimals('0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1'), 6);
+  assert.equal(kuruTokenDecimals('0x7cDC77B348a2E101C766aD290367f3c5F287af18'), 8); // WBTC
   // Unknown token falls back to 18 rather than throwing inside a handler.
   assert.equal(kuruTokenDecimals('0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'), 18);
 });

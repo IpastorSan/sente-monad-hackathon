@@ -17,9 +17,13 @@ import { BigDecimal } from 'envio';
 import { recordMarketDay, type MarketDayInput } from './markets.ts';
 import type { Ctx } from './common.ts';
 
-/** The §proven Kuru fill: tx 0x9d7fbce1…, block 61406913, MON-USDC. */
+/**
+ * The §proven Kuru fill: tx 0x9d7fbce1…, block 61406913, on the retired Set-C
+ * MON-USDC book. Keyed here by today's MON-USDC id (SEN-185): the aggregation
+ * does not care which book, and the old id is no longer a seeded market.
+ */
 const PROVEN_FILL = {
-  marketId: 'kuru-0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61',
+  marketId: 'kuru-0x26cd68436b6a4aeb3ec52abc20a4d121f8b4bac9',
   notional: '9.841599',
   base: '317.73742494',
   price: '0.030974',

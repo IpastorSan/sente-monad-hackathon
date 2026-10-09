@@ -2,13 +2,13 @@
  * Tests for account-id → address resolution.
  *
  * The calldata and the responses below are not invented: they are the exact
- * bytes Monad testnet returned for `eth_call` against the two contracts in
- * AccountCore on 2026-09-18. `userAddressById(62)` and `userAddressById(47)`
- * resolve the two accounts of the live Kuru fill in docs/indexer.md §proven
- * (`kuru-62` taker, `kuru-47` maker), neither of which registered inside the
- * indexed window. If the ABI drifts, the selector changes and these fail —
- * which is the point: the alternative is an indexer that quietly writes a
- * wrong address, or none, onto a leaderboard row.
+ * bytes Monad testnet returned for `eth_call` against Kuru's account-id
+ * AccountCore (0xdbaaDe7B…8038) on 2026-10-09 (SEN-185). `getAccountOwner(1)`
+ * is AccountCore's own fee collector's root; `getAccountOwner(5)` another
+ * root. (Set C's `userAddressById(62)`/`(47)` resolved the §proven fill's two
+ * accounts; that getter reverts on this AccountCore.) If the ABI drifts, the
+ * selector changes and these fail — which is the point: the alternative is an
+ * indexer that quietly writes a wrong address, or none, onto a leaderboard row.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -21,25 +21,25 @@ import {
 } from './accountAddress.ts';
 import { KURU_ACCOUNT_CORE } from './seeds.ts';
 
-/** `userAddressById(uint40)` → `0x686067c5`, argument right-aligned in one word. */
-const KURU_CALLDATA_62 =
-  '0x686067c5000000000000000000000000000000000000000000000000000000000000003e';
+/** `getAccountOwner(uint40)` → `0xe23d95bb`, argument right-aligned in one word. */
+const KURU_CALLDATA_1 =
+  '0xe23d95bb0000000000000000000000000000000000000000000000000000000000000001';
 
-/** The chain's answer for Kuru account 62 — the taker of the §proven fill. */
-const KURU_RESULT_62 = '0x00000000000000000000000015bbc549326dd8d053233c3a546aa7fdabb57256';
+/** The chain's answer for Kuru account 1. */
+const KURU_RESULT_1 = '0x000000000000000000000000c64346f7ddc776b34eaa44c0b61d564797038143';
 
-/** …and for account 47, the maker of the same fill. */
-const KURU_RESULT_47 = '0x00000000000000000000000074443181214751970a785f5675bd372735245c9e';
+/** …and for account 5. */
+const KURU_RESULT_5 = '0x000000000000000000000000d26acbf9930a85f87625d85e1ac7af45ae9ac883';
 
-test('the Kuru call is AccountCore.userAddressById with the id in one word', () => {
-  const call = accountAddressCall(62n);
+test('the Kuru call is AccountCore.getAccountOwner with the id in one word', () => {
+  const call = accountAddressCall(1n);
   assert.equal(call.to, KURU_ACCOUNT_CORE);
-  assert.equal(call.data, KURU_CALLDATA_62);
+  assert.equal(call.data, KURU_CALLDATA_1);
 });
 
-test('the live Kuru answers decode to the two accounts of the proven fill', () => {
-  assert.equal(decodeAccountAddress(KURU_RESULT_62), '0x15bbc549326dd8d053233c3a546aa7fdabb57256');
-  assert.equal(decodeAccountAddress(KURU_RESULT_47), '0x74443181214751970a785f5675bd372735245c9e');
+test('the live Kuru answers decode to the accounts’ root owners', () => {
+  assert.equal(decodeAccountAddress(KURU_RESULT_1), '0xc64346f7ddc776b34eaa44c0b61d564797038143');
+  assert.equal(decodeAccountAddress(KURU_RESULT_5), '0xd26acbf9930a85f87625d85e1ac7af45ae9ac883');
 });
 
 test('"no such account" is no address, never the zero address', () => {
@@ -53,10 +53,10 @@ test('a resolution is one eth_call and its decode', async () => {
   const calls: { to: string; data: string }[] = [];
   const call: EthCall = async (request) => {
     calls.push(request);
-    return KURU_RESULT_62;
+    return KURU_RESULT_1;
   };
-  assert.equal(await readAccountAddress(62n, call), '0x15bbc549326dd8d053233c3a546aa7fdabb57256');
-  assert.deepEqual(calls, [{ to: KURU_ACCOUNT_CORE, data: KURU_CALLDATA_62 }]);
+  assert.equal(await readAccountAddress(1n, call), '0xc64346f7ddc776b34eaa44c0b61d564797038143');
+  assert.deepEqual(calls, [{ to: KURU_ACCOUNT_CORE, data: KURU_CALLDATA_1 }]);
 });
 
 test('a revert is an answer; a transport failure is not', async () => {

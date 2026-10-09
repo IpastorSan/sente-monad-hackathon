@@ -231,13 +231,17 @@ for (let w = 0; w < windows; w++) {
  * "no logs in range" is not the end of the check.
  */
 const EVIDENCE_TXS = [
+  // SEN-185: Kuru's account-id deployment. (Set C's were the fill
+  // 0x9d7fbce1… and account 62's registration 0xf0b6ffc9…; neither touches
+  // the addresses configured now.) No Deposit/Withdrawal on these contracts
+  // had been found by 2026-10-09; those two read "unobserved" until one is.
   {
-    label: 'kuru fill 61406913',
-    hash: '0x9d7fbce17b32fb4585612ed292ba064da5e85c0da865edee6dcfb2aefb2d30fd',
+    label: 'kuru USDT-USDC fill 68588224',
+    hash: '0x7b9f5355aa5de8113aa3aea24e09df8738f39f10ceef76e44f2ef56924a9b741',
   },
   {
-    label: 'kuru account id 62',
-    hash: '0xf0b6ffc917e6965f4e4cb88ed602c018b38e01144f7219ae907c26620e9c1e9a',
+    label: 'kuru AccountCore deploy, account 1 registered',
+    hash: '0x4302ecd39e39003af1705d60b9ff8d6735a6e49cf165ac0b76172533149eaf97',
   },
 ] as const;
 
