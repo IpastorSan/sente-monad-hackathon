@@ -1,8 +1,8 @@
 /**
  * Credits (SEN-183): the AI credits a user's agents spend. Sente gives every
- * user a free tier — 10 USD of model credits a month on their own OpenRouter
- * key — and this screen says how much of it is left, when it refills, and
- * where it went, by agent and by run.
+ * user a free tier — 10 USD of model credits, once, on their own OpenRouter
+ * key, with no monthly refill — and this screen says how much of it is left,
+ * whether (and how) it resets, and where it went, by agent and by run.
  *
  * The free tier is drawn as a row of stones, one per dollar: white while
  * unspent, hollow once spent. The breakdown under it is an estimate (the
@@ -30,6 +30,7 @@ import {
 } from '@/credits/api';
 import {
   autoTopUpLine,
+  emptyNoticeCopy,
   formatUsd,
   freeTierLine,
   paymentLine,
@@ -156,13 +157,7 @@ function FreeTier({ overview }: { overview: CreditsOverview }) {
           detail="It is a development server: every user draws on the same credits, so these numbers are everyone’s."
         />
       ) : null}
-      {empty ? (
-        <Notice
-          tone="error"
-          title="This month’s credits are used up"
-          detail="Your agents can’t run until the credits refill."
-        />
-      ) : null}
+      {empty ? <Notice tone="error" {...emptyNoticeCopy(overview.reset.period)} /> : null}
     </Card>
   );
 }

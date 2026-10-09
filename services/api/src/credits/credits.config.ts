@@ -22,15 +22,16 @@ export interface CreditsConfig {
   sharedKey: string | undefined;
   mode: CreditsMode;
   /**
-   * The free tier (SEN-183): the hard monthly spending limit, in USD, on every
-   * newly provisioned key (per-user mode). Keys minted under a lower default are
-   * raised to it the next time they are read (`CreditsService`).
+   * The free tier (SEN-183): the hard one-off spending limit, in USD, on every
+   * newly provisioned key (per-user mode) — it never refills. Keys minted
+   * under a lower default are raised to it the next time they are read
+   * (`CreditsService`).
    */
   defaultLimitUsd: number;
 }
 
 export const CREDITS_DEFAULTS = {
-  /** SEN-183: 10 USD of model credits a month, on us. Was 5 before. */
+  /** SEN-183: 10 USD of model credits, once, on us. Was 5 before. */
   defaultLimitUsd: 10,
 } as const;
 
@@ -75,7 +76,7 @@ export function loadCreditsConfig(env: NodeJS.ProcessEnv = process.env): Credits
 export function describeCreditsConfig(config: CreditsConfig, logger: Logger): void {
   logger.log(
     `openrouter credits mode ${config.mode}` +
-      (config.mode === 'per-user' ? `, default limit $${config.defaultLimitUsd}/month` : ''),
+      (config.mode === 'per-user' ? `, default limit $${config.defaultLimitUsd} (one-off)` : ''),
   );
   if (config.mode === 'shared') {
     logger.warn(

@@ -82,7 +82,7 @@ const authProvider: Provider = {
 };
 
 /**
- * Inference credits: one OpenRouter API key per user, with a hard monthly USD
+ * Inference credits: one OpenRouter API key per user, with a hard one-off USD
  * limit that OpenRouter enforces. `CreditsService.keyFor` is how the agent
  * runner gets the key; nothing over HTTP ever does.
  */

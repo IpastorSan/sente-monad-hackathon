@@ -3,8 +3,8 @@
 ## Credits are OpenRouter keys
 
 Each user gets their own OpenRouter API key, minted through the Management API with a **hard USD
-limit that resets monthly**. That is the whole credit system. OpenRouter meters usage and enforces
-the limit, so we build no metering of our own.
+limit that does not reset** — a one-off allowance, not a monthly refill. That is the whole credit
+system. OpenRouter meters usage and enforces the limit, so we build no metering of our own.
 
 | Piece                                                | What it does                                                                                                                                                                                                                                                                    |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -21,31 +21,36 @@ ever carries it. The controller builds each response field by field from a view 
 and no hash, and a spec asserts this on the serialised JSON.
 
 Every provisioned key is created with `limit: OPENROUTER_DEFAULT_LIMIT_USD` (default 10, the free
-tier; 5 before SEN-183), `limit_reset: 'monthly'`, `include_byok_in_limit: true`,
-`name: sente:<userId>` and `external: { user: <userId> }`. OpenRouter echoes the last one back as
-`external_user`.
+tier; 5 before SEN-183), `limit_reset: null` (`FREE_TIER_RESET` in `credits.service.ts`),
+`include_byok_in_limit: true`, `name: sente:<userId>` and `external: { user: <userId> }`.
+OpenRouter echoes the last one back as `external_user`.
 
 ## The free tier and buying credits (SEN-183)
 
-Sente does not pay for users' AI beyond a free tier: **10 USD of model credits per calendar month**,
-on us, on the user's own key.
+Sente does not pay for users' AI beyond a free tier: **10 USD of model credits, once**, on us, on
+the user's own key — a one-off allowance, not a monthly refill. A user who spends through it is
+meant to buy more (next section), but that purchase flow is **flagged off for the testnet demo**
+(`CREDITS_PURCHASES_ENABLED`): today the key just stays exhausted until it is raised by hand.
 
 **What the limit actually is.** The key's `limit` is a hard USD cap that OpenRouter enforces; with
-`limit_reset: 'monthly'` OpenRouter zeroes the key's usage counter at 00:00 UTC on the 1st, so
-`limit_remaining = limit − usage_monthly` and the full 10 USD comes back each month. Unused credit
-does **not** carry over: the reset clears usage, it does not add to the limit. A run that would go
-past the cap gets OpenRouter's 402 and ends `credits_exhausted`; the scheduler also skips scheduled
-runs while less than `AGENT_SCHEDULE_MIN_CREDITS_USD` (0.10) is left. If the free tier is meant to
-be a one-off grant instead, mint with `limit_reset: null` (`FREE_TIER_RESET` in
-`credits.service.ts`); `GET /credits` reports whichever the key carries.
+`limit_reset: null` OpenRouter never resets the key's usage counter, so `limit_remaining = limit −
+usage` falls to zero once the 10 USD is spent and stays there — there is no reset to bring it back.
+A run that would go past the cap gets OpenRouter's 402 and ends `credits_exhausted`; the scheduler
+also skips scheduled runs while less than `AGENT_SCHEDULE_MIN_CREDITS_USD` (0.10) is left. `GET
+/credits` reports whichever reset the key actually carries, so a key minted before this was a
+one-off (`limit_reset: 'monthly'`) still reports `monthly` honestly until it is migrated (next
+paragraph).
 
-**Existing keys.** A key minted under the old 5 USD default is raised to the current default the
-first time the API reads it (`GET /credits`, the scheduler's credit check, a run's provision):
-one `PATCH /keys/:hash {limit}`. It only ever raises, and only a key that is ours (`sente:` name),
-monthly and enabled; a failed PATCH is logged and not retried by that process. To cap one user below
-the free tier, disable their key rather than lowering its limit, or the next read raises it again.
-Note the key store is still in memory, so after a restart a user's next run mints a fresh key at the
-current default anyway (see the caveat above).
+**Existing keys.** A key minted under the old 5 USD default, or still carrying the old monthly
+reset, is raised and converted to the one-off free tier the first time the API reads it (`GET
+/credits`, the scheduler's credit check, a run's provision): one `PATCH /keys/:hash {limit,
+limit_reset: null}`, with `limit` sent as `max(current, target)` so it is never lowered — a key
+already at or above the target that only needed its reset converted keeps its own limit. It only
+ever raises or converts, and only for a key that is ours (`sente:` name) and enabled, and either
+below the current default or still resetting monthly; a failed PATCH is logged and not retried by
+that process. To cap one user below the free tier, disable their key rather than lowering its
+limit, or the next read raises it again. Note the key store is still in memory, so after a restart
+a user's next run mints a fresh key at the current default anyway (see the caveat above).
 
 **`GET /credits`** → the four original fields, plus:
 
