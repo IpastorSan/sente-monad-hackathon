@@ -1,4 +1,9 @@
-import { compileMandate, compileRevocationRules, parseMandate } from '@sente/mandate';
+import {
+  compileMandate,
+  compileRevocationRules,
+  parseMandate,
+  type PolicyRule,
+} from '@sente/mandate';
 import { renderPreset } from '@sente/presets';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { PERPL_TESTNET_CONTRACTS, type PerplContext } from '@sente/venues/perpl';
@@ -441,6 +446,70 @@ describe('AgentsService', () => {
       const error = await refusal(service.fork(BOB, source.id, { mandate: mandateInput() }));
       expect(error.reason).toBe('wallet_not_registered');
       expect(wallets.provisioned).toHaveLength(1);
+    });
+
+    describe('the deposit pin after hire (SEN-188)', () => {
+      const pinnedDeposits = (rules: readonly PolicyRule[]) =>
+        rules
+          .filter((r) => r.name.startsWith('Kuru: deposit '))
+          .map((r) => r.conditions.find((c) => c.field === 'deposit.rootOwner'));
+
+      it('leaves the pin to the phone: no server PATCH, and the agent starts unpinned', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+
+        expect(wallets.policyUpdates).toHaveLength(0);
+        expect(agent.kuruDepositPinned).toBe(false);
+        expect(toAgentResponse(agent).kuruDepositPinned).toBe(false);
+        // The hire's policy really is unpinned: that is the gap being closed.
+        expect(pinnedDeposits(wallets.provisioned[0]!.rules)).toEqual([undefined]);
+      });
+
+      it('the same-mandate amend the app runs pins it, and records the flag', async () => {
+        const { service, wallets } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+
+        // What the app sends: the mandate it just hired with, unchanged.
+        const prepared = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+        const { rules } = prepared.payload.body as { rules: PolicyRule[] };
+        expect(rules).toEqual(compileMandate(agent.mandate, { agentAddress: agent.address }));
+        expect(pinnedDeposits(rules)).toEqual([
+          expect.objectContaining({ operator: 'eq', value: agent.address }),
+        ]);
+        // Still unpinned while the change only waits for a signature.
+        expect((await service.get(ALICE, agent.id)).kuruDepositPinned).toBe(false);
+
+        const pinned = await service.commitMandateAmend(ALICE, agent.id, {
+          prepareId: prepared.prepareId,
+          signature: 'device-signature',
+        });
+        expect(pinned.kuruDepositPinned).toBe(true);
+        expect(pinned.mandate).toEqual(agent.mandate);
+        expect(wallets.policies.get(agent.policyId)).toEqual(rules);
+      });
+
+      it('a refused signature leaves it unpinned', async () => {
+        const { service } = await deviceSetup();
+        const { agent } = await service.hire(ALICE, hireInput());
+        const prepared = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+        await service
+          .commitMandateAmend(ALICE, agent.id, { prepareId: prepared.prepareId, signature: 'x' })
+          .catch(() => undefined);
+        expect((await service.get(ALICE, agent.id)).kuruDepositPinned).toBe(false);
+      });
+
+      it('a fork starts unpinned too, and has nothing to pin on a Perpl-only mandate', async () => {
+        const { service } = await deviceSetup(['alice', 'bob']);
+        const { agent: source } = await service.hire(ALICE, hireInput());
+        const { agent: fork } = await service.fork(BOB, source.id, { mandate: mandateInput() });
+        expect(fork.kuruDepositPinned).toBe(false);
+
+        const { agent: perpl } = await service.hire(
+          ALICE,
+          hireInput({ mandate: mandateInput({ venues: ['perpl'] }) }),
+        );
+        expect(perpl.kuruDepositPinned).toBe(true);
+      });
     });
 
     /**
@@ -1061,10 +1130,91 @@ describe('AgentsService', () => {
     });
   });
 
+  describe('the deposit pin after a server-owned hire (SEN-188)', () => {
+    const pinned = (address: Address) => (rules: readonly unknown[]) =>
+      expect(rules).toEqual(
+        compileMandate(parseMandate(mandateInput()), { agentAddress: address }),
+      );
+
+    it('re-PATCHes the new policy with the deposit pinned, right after provisioning', async () => {
+      const { service, wallets } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      // Provisioned unpinned (the wallet did not exist yet), then pinned at once.
+      expect(wallets.provisioned[0]!.rules).toEqual(compileMandate(parseMandate(mandateInput())));
+      expect(wallets.policyUpdates.map((u) => u.policyId)).toEqual([agent.policyId]);
+      pinned(agent.address)(wallets.policies.get(agent.policyId)!);
+      expect(agent.kuruDepositPinned).toBe(true);
+      expect(toAgentResponse(agent).kuruDepositPinned).toBe(true);
+      // The same mandate: nothing else about the agent moved.
+      expect(agent.mandate).toEqual(parseMandate(mandateInput()));
+    });
+
+    it('pins a fork and a preset hire the same way', async () => {
+      const { service, wallets } = setup();
+      const { agent: source } = await service.hire(ALICE, hireInput());
+      const { agent: fork } = await service.fork(BOB, source.id, { mandate: mandateInput() });
+      const { systemPrompt: _p, strategy: _s, ...rest } = hireInput();
+      const { agent: preset } = await service.hire(ALICE, {
+        ...rest,
+        preset: { id: 'guardian', params: { amount: 250 } },
+      });
+
+      for (const agent of [fork, preset]) {
+        expect(agent.kuruDepositPinned).toBe(true);
+        pinned(agent.address)(wallets.policies.get(agent.policyId)!);
+      }
+    });
+
+    it('skips the amend when there is no Kuru deposit to pin', async () => {
+      const { service, wallets } = setup();
+      const { agent } = await service.hire(
+        ALICE,
+        hireInput({ mandate: mandateInput({ venues: ['perpl'] }) }),
+      );
+      expect(wallets.policyUpdates).toHaveLength(0);
+      expect(agent.kuruDepositPinned).toBe(true);
+    });
+
+    it('a failed pin never fails the hire: the agent is stored unpinned, and an amend pins it', async () => {
+      const { service, wallets, store } = setup();
+      wallets.updatePolicyError = new Error('privy 503');
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(agent.status).toBe('active');
+      expect(agent.kuruDepositPinned).toBe(false);
+      expect((await store.get(agent.id))?.kuruDepositPinned).toBe(false);
+
+      wallets.updatePolicyError = undefined;
+      const amended = await service.amendMandate(ALICE, agent.id, mandateInput());
+      expect(amended.kuruDepositPinned).toBe(true);
+      pinned(agent.address)(wallets.policies.get(agent.policyId)!);
+    });
+
+    it('an agent stored before SEN-188 reads unpinned until amended', async () => {
+      const { service, store, wallets } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      const { kuruDepositPinned: _flag, ...legacy } = agent;
+      const old = {
+        ...legacy,
+        id: '22222222-2222-4222-8222-222222222222',
+        mcpTokenHash: 'f'.repeat(64),
+      };
+      await store.insert(old);
+      expect(toAgentResponse(old).kuruDepositPinned).toBe(false);
+
+      wallets.policyUpdates.length = 0;
+      const amended = await service.amendMandate(ALICE, old.id, mandateInput());
+      expect(amended.kuruDepositPinned).toBe(true);
+      expect(toAgentResponse(amended).kuruDepositPinned).toBe(true);
+    });
+  });
+
   describe('ownership', () => {
     it("answers another user's agent with 404-shaped agent_not_found, and touches nothing", async () => {
       const { service, wallets } = setup();
       const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0; // past the pinning amend (SEN-188)
 
       for (const attempt of [
         service.get(BOB, agent.id),
@@ -1100,6 +1250,7 @@ describe('AgentsService', () => {
     it('calls updatePolicy with the recompiled rules and records the new mandate', async () => {
       const { service, wallets } = setup();
       const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0; // past the pinning amend (SEN-188)
 
       const next = mandateInput({
         venues: ['kuru'],
@@ -1121,6 +1272,7 @@ describe('AgentsService', () => {
     it('refuses an invalid mandate without touching the policy', async () => {
       const { service, wallets } = setup();
       const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0; // past the pinning amend (SEN-188)
       const error = await refusal(
         service.amendMandate(ALICE, agent.id, mandateInput({ chainId: 1 })),
       );
@@ -1206,10 +1358,18 @@ describe('AgentsService', () => {
       expect(fork.mandate).not.toEqual(source.agent.mandate);
       expect(fork.policyId).not.toBe(source.agent.policyId);
       expect(fork.address).not.toBe(source.agent.address);
-      // The enclave was never asked to re-write the SOURCE's policy; it still
-      // holds the rules its own owner wrote.
-      expect(wallets.policyUpdates).toEqual([]);
-      expect(wallets.policies.get(source.agent.policyId)).toEqual(wallets.provisioned[0]!.rules);
+      // The enclave was never asked to re-write the SOURCE's policy past its own
+      // pinning amend (SEN-188); the fork's pin went to the fork's policy.
+      expect(wallets.policyUpdates.map((u) => u.policyId)).toEqual([
+        source.agent.policyId,
+        fork.policyId,
+      ]);
+      expect(wallets.policies.get(source.agent.policyId)).toEqual(
+        compileMandate(source.agent.mandate, { agentAddress: source.agent.address }),
+      );
+      expect(wallets.policies.get(fork.policyId)).toEqual(
+        compileMandate(parseMandate(mine), { agentAddress: fork.address }),
+      );
     });
 
     it('names the fork after the source, or after the caller', async () => {
@@ -1301,6 +1461,7 @@ describe('AgentsService', () => {
     it('leaves only the way out, and refuses every later amend', async () => {
       const { service, wallets } = setup(OWNER_WALLET);
       const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0; // past the pinning amend (SEN-188)
       const exit = compileRevocationRules(agent.mandate);
 
       const revoked = await service.revoke(ALICE, agent.id);
@@ -1337,6 +1498,7 @@ describe('AgentsService', () => {
     it('is idempotent once the policy is cleared', async () => {
       const { service, wallets } = setup();
       const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0; // past the pinning amend (SEN-188)
       const first = await service.revoke(ALICE, agent.id);
       const second = await service.revoke(ALICE, agent.id);
       expect(second).toEqual(first);
@@ -1368,6 +1530,7 @@ describe('AgentsService', () => {
     it('still ends on the revocation rules when it races an amend already in flight', async () => {
       const { service, wallets } = setup(OWNER_WALLET);
       const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0; // past the pinning amend (SEN-188)
 
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));

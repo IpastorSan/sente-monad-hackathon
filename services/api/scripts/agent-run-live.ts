@@ -180,7 +180,11 @@ async function main(): Promise<number> {
     const walletId = process.env['PRIVY_AGENT_VENUES_WALLET_ID']!.trim();
     const address = process.env['PRIVY_AGENT_VENUES_WALLET_ADDRESS']!.trim();
     const policyId = process.env['PRIVY_AGENT_VENUES_POLICY_ID']!.trim();
-    await wallets.updatePolicy(policyId, compileMandate(mandate));
+    // Pinned to this wallet (SEN-188), as every agent's policy is after its hire.
+    await wallets.updatePolicy(
+      policyId,
+      compileMandate(mandate, { agentAddress: address as `0x${string}` }),
+    );
     console.log(`policy ${policyId} re-PATCHed for this run; settling ${PATCH_SETTLE_MS} ms`);
     await sleep(PATCH_SETTLE_MS);
 
@@ -198,6 +202,7 @@ async function main(): Promise<number> {
       walletId,
       address,
       policyId,
+      kuruDepositPinned: true,
       mcpTokenHash: createHash('sha256').update(randomUUID()).digest('hex'),
       status: 'active',
       policyCleared: false,

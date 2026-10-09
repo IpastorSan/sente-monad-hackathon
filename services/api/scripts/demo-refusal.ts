@@ -278,7 +278,7 @@ async function main(): Promise<number> {
     // --- Act 1: re-arm the funded wallet under the demo mandate ---------------
     const armStart = Date.now();
     await counter.tagged('owner', () =>
-      wallets.updatePolicy(policyId, demo.demoRules(plan, plan.capUsdc)),
+      wallets.updatePolicy(policyId, demo.demoRules(plan, plan.capUsdc, address)),
     );
     const armMs = Date.now() - armStart;
     const { parseMandate } = await import('@sente/mandate');
@@ -295,6 +295,8 @@ async function main(): Promise<number> {
       walletId,
       address,
       policyId,
+      // Act 1 armed the policy with the deposit pinned to this wallet (SEN-188).
+      kuruDepositPinned: true,
       mcpTokenHash: createHash('sha256').update(randomUUID()).digest('hex'),
       status: 'active',
       policyCleared: false,

@@ -43,6 +43,7 @@ import type { AgentMandateOwnerMode } from '../agents.config';
 import {
   AGENT_SCHEDULE_MAX_SECONDS,
   AGENT_SCHEDULE_MIN_SECONDS,
+  isKuruDepositPinned,
   type AgentRecord,
   type AgentStatus,
 } from '../store/agent-store';
@@ -490,6 +491,15 @@ export interface AgentResponseDto {
   };
   status: AgentStatus;
   /**
+   * Whether the agent may deposit to Kuru (SEN-188): its live policy pins the
+   * account a deposit credits to its own wallet, or its mandate has no Kuru
+   * deposit to pin. `false` right after a hire, until the pinning amend lands —
+   * the app runs it for a device-owned agent, the server for its own — and on
+   * agents hired before SEN-188 until their next amend. While `false`, every
+   * Kuru deposit is refused as `kuru_deposit_unpinned`; nothing else is.
+   */
+  kuruDepositPinned: boolean;
+  /**
    * WHO CAN CHANGE THIS AGENT'S MANDATE (SEN-43), and therefore whether
    * amending or revoking it needs a signature from this phone (SEN-44).
    *
@@ -833,6 +843,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     ...(agent.erc8004AgentId !== undefined ? { erc8004AgentId: agent.erc8004AgentId } : {}),
     ...toKuruRetiredField(agent),
     status: agent.status,
+    kuruDepositPinned: isKuruDepositPinned(agent),
     ownerKind: agent.ownerKind,
     ...(agent.status === 'revoked' ? { policyCleared: agent.policyCleared } : {}),
     createdAt: agent.createdAt.toISOString(),

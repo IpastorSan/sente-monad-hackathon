@@ -1,4 +1,4 @@
-import type { KuruBuilderGrant, Mandate } from '@sente/mandate';
+import { compilesKuruDeposit, type KuruBuilderGrant, type Mandate } from '@sente/mandate';
 import type { ParamValue } from '@sente/presets';
 import type { Address, Hash } from 'viem';
 
@@ -54,6 +54,17 @@ export interface AgentRecord {
    * An amend recompiles the policy and sets it.
    */
   readonly kuruBuilder?: KuruBuilderGrant;
+  /**
+   * Whether the live policy pins every Kuru deposit's `rootOwner` to this
+   * agent's own wallet (SEN-188). A hire cannot: Privy creates the policy
+   * before the wallet, so a fresh hire's deposit rules could credit ANY Kuru
+   * account until a pinning amend lands — the server's own one right after a
+   * server-owned hire, the app's right after a device-owned one. Every amend
+   * compiles with the pin and sets it `true`. Absent (agents stored before
+   * SEN-188) reads as `false`; read it through `isKuruDepositPinned`, which
+   * also answers `true` for a mandate with no Kuru deposit to pin.
+   */
+  readonly kuruDepositPinned?: boolean;
   /** The provider's (Privy's) wallet id. */
   readonly walletId: string;
   /**
@@ -192,6 +203,7 @@ export type AgentPatch = Partial<
     AgentRecord,
     | 'mandate'
     | 'kuruBuilder'
+    | 'kuruDepositPinned'
     | 'mandateSince'
     | 'status'
     | 'policyCleared'
@@ -320,4 +332,15 @@ export class InMemoryAgentStore implements AgentStore {
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
       .map((record) => structuredClone(record));
   }
+}
+
+/**
+ * Whether this agent may deposit to Kuru (SEN-188): its live policy pins the
+ * deposit's credited account to its own wallet, or the mandate compiles no
+ * Kuru deposit rule at all, so there is nothing to pin.
+ */
+export function isKuruDepositPinned(
+  agent: Pick<AgentRecord, 'kuruDepositPinned' | 'mandate'>,
+): boolean {
+  return agent.kuruDepositPinned === true || !compilesKuruDeposit(agent.mandate);
 }

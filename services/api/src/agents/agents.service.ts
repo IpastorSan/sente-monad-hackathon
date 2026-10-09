@@ -4,6 +4,7 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   compileMandate,
   compileRevocationRules,
+  compilesKuruDeposit,
   MandateError,
   parseMandate,
   type AuthorizationPayload,
@@ -178,11 +179,12 @@ export function forkName(sourceName: string): string {
 /**
  * A new mandate and what its compiled policy allows of the Sente fee
  * (SEN-184). `kuruBuilder` is always written, `undefined` included: a policy
- * recompiled with the fee off no longer has the rules.
+ * recompiled with the fee off no longer has the rules. Every amend compiles
+ * with the agent's address, so its deposit rules are pinned (SEN-188).
  */
 function mandateChange(mandate: Mandate, kuruBuilder: AgentRecord['kuruBuilder']): AgentPatch {
   const now = new Date();
-  return { mandate, kuruBuilder, mandateSince: now, updatedAt: now };
+  return { mandate, kuruBuilder, kuruDepositPinned: true, mandateSince: now, updatedAt: now };
 }
 
 function clampAgentName(name: string, sourceName: string): string {
@@ -402,6 +404,8 @@ export class AgentsService {
       id,
       userId: principal.userId,
       ...(kuruBuilder ? { kuruBuilder } : {}),
+      // SEN-188: compiled before the wallet existed, so nothing is pinned yet.
+      kuruDepositPinned: !compilesKuruDeposit(mandate),
       name: input.name,
       systemPrompt: text.systemPrompt,
       strategy: text.strategy,
@@ -495,6 +499,8 @@ export class AgentsService {
       public: false,
       forkedFrom: source.id,
       ...(kuruBuilder ? { kuruBuilder } : {}),
+      // SEN-188: a fork is a hire, compiled before its wallet existed too.
+      kuruDepositPinned: !compilesKuruDeposit(mandate),
       // The fork runs the same preset (SEN-73), but a withheld prompt means it
       // is not running the preset's text, so its results are not the preset's.
       ...(source.preset
@@ -581,15 +587,16 @@ export class AgentsService {
 
   /**
    * The tail every hire shares — a fork is a hire that inherited a strategy, so
-   * it gets the same treatment: the on-chain identity first, then the gas. An
-   * identity that never gets gas is still worth having, and neither may fail
-   * the hire.
+   * it gets the same treatment: the deposit pin first, then the on-chain
+   * identity, then the gas. An identity that never gets gas is still worth
+   * having, and none of the three may fail the hire.
    */
   private async completeHire(
     principal: Principal,
     agent: AgentRecord,
     mcpToken: string,
   ): Promise<HiredAgent> {
+    const pinned = await this.pinKuruDeposit(agent);
     const registration = await this.registerIdentity(agent);
     const gasFunding = await this.fundGas(principal, agent);
     // AFTER the drip, deliberately: the drip is our own MON and is normally
@@ -597,11 +604,45 @@ export class AgentsService {
     await this.watchForDeposits(agent);
     return {
       agent: await this.store.update(agent.id, {
+        ...pinned,
         gasFunding,
         ...(registration.agentId !== undefined ? { erc8004AgentId: registration.agentId } : {}),
       }),
       mcpToken,
     };
+  }
+
+  /**
+   * THE PINNING AMEND (SEN-188). A hire compiles its policy before Privy has
+   * created the wallet, so its Kuru deposit rules cannot name the account they
+   * credit: until re-PATCHed, the trading key could fund ANY Kuru account up to
+   * the per-deposit cap. So every hire is followed by one amend with the same
+   * mandate, compiled with the new wallet's address.
+   *
+   * A server-owned policy is re-PATCHed here, with this server's key. A
+   * device-owned one only its owner's phone can sign, so the app runs that
+   * amend itself (prepare → verify → sign → commit) as a step of the hire, and
+   * `commitMandateAmend` sets the flag. Until then the deposit tool refuses
+   * (`kuru_deposit_unpinned`), so an unpinned rule is never exercised.
+   *
+   * Never throws: a failed pin leaves `kuruDepositPinned: false`, which keeps
+   * the agent off Kuru deposits and nothing else, and an amend retries it.
+   */
+  private async pinKuruDeposit(agent: AgentRecord): Promise<AgentPatch> {
+    if (agent.ownerKind !== 'server' || agent.kuruDepositPinned === true) return {};
+    const { rules } = this.compile(agent.mandate, agent.address);
+    try {
+      await this.wallets.updatePolicy(agent.policyId, rules);
+    } catch (error) {
+      this.logger.warn(
+        `agent ${agent.id} hired, but its Kuru deposits are not pinned to ${agent.address}: ` +
+          `${error instanceof Error ? error.message : String(error)} — it cannot deposit to ` +
+          'Kuru until an amend lands',
+      );
+      return {};
+    }
+    this.logger.log(`pinned agent ${agent.id}'s Kuru deposits to its own wallet ${agent.address}`);
+    return { kuruDepositPinned: true };
   }
 
   /**

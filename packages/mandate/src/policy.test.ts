@@ -42,6 +42,7 @@ import {
   compileMandate,
   compileRevocationRules,
   compileRollingCap,
+  compilesKuruDeposit,
   KURU_APPROVE_BUILDER_RULE,
   KURU_WITHDRAW_RULE,
   readBackCaps,
@@ -224,6 +225,31 @@ test('Kuru deposit: rootOwner is pinned to the agent once its address is known (
     readBackCaps(compileMandate(demoMandate(), { agentAddress: AGENT })).kuruDepositAtoms,
     readBackCaps(compileMandate(demoMandate())).kuruDepositAtoms,
   );
+});
+
+test('compilesKuruDeposit: true exactly when a hire leaves an unpinned deposit rule (SEN-188)', () => {
+  const AGENT = getAddress('0x3333333333333333333333333333333333333333');
+  const unpinned = (rules: readonly PolicyRule[]) =>
+    rules.filter(
+      (r) =>
+        r.name.startsWith('Kuru: deposit ') &&
+        find(r, 'ethereum_calldata', 'deposit.rootOwner') === undefined,
+    ).length;
+  const cases = [
+    demoMandate(),
+    demoMandate({ venues: ['kuru'] }),
+    demoMandate({ venues: ['perpl'] }),
+    demoMandate({ venues: [] }),
+    demoMandate({ kuru: { ...demoMandate().kuru, maxDepositAtoms: {} } }),
+  ];
+  for (const mandate of cases) {
+    const atHire = unpinned(compileMandate(mandate));
+    assert.equal(compilesKuruDeposit(mandate), atHire > 0, JSON.stringify(mandate.venues));
+    // The pinning amend leaves none, whatever the mandate.
+    assert.equal(unpinned(compileMandate(mandate, { agentAddress: AGENT })), 0);
+  }
+  assert.equal(compilesKuruDeposit(demoMandate({ venues: ['perpl'] })), false);
+  assert.equal(compilesKuruDeposit(demoMandate()), true);
 });
 
 test('return to owner: one transfer rule per token, transfer.to pinned to returnTo', () => {
