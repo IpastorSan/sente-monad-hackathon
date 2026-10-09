@@ -19,6 +19,7 @@ import { fakeVenues } from '../../tools/testing/fake-venues';
 import { AgentRunnerService, type RunOptions } from '../agent-runner.service';
 import { createOpenRouterClient } from '../openrouter-client';
 import { AGENT_RUNNER_DEFAULTS, type AgentRunnerConfig } from '../runner.config';
+import { InMemoryRunTranscriptStore } from '../transcript/run-transcript-store';
 import { WriteSpacer } from '../write-spacing';
 import { fakeMessagesApi, type Responder } from './fake-messages';
 
@@ -71,6 +72,7 @@ export async function runnerHarness(
     ...options.config,
   };
   const agents = new AgentsService(store, new FakeAgentWalletProvider(), new ServerMandateOwners());
+  const transcripts = new InMemoryRunTranscriptStore();
   const runner = new AgentRunnerService(
     agents,
     store,
@@ -80,6 +82,7 @@ export async function runnerHarness(
     config,
     (key, { timeoutMs }) => createOpenRouterClient(key, { timeoutMs, fetch: api.fetch }),
     new WriteSpacer({ spacingMs: config.writeSpacingMs }),
+    transcripts,
   );
   const principal = { userId: agent.userId };
 
@@ -95,6 +98,7 @@ export async function runnerHarness(
     api,
     config,
     runner,
+    transcripts,
     principal,
     run: (runOptions?: RunOptions) => runner.run(principal, agent.id, runOptions),
   };

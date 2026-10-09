@@ -36,6 +36,7 @@ import { RegistryReturnAddresses, RETURN_ADDRESSES, type ReturnAddresses } from 
 import { PrivyAgentWalletProvider } from './privy/privy-agent-wallet.provider';
 import { PrivyClient } from './privy/privy.client';
 import {
+  agentRunnerControllers,
   agentRunnerExports,
   agentRunnerImports,
   agentRunnerProviders,
@@ -166,7 +167,8 @@ const authProvider: Provider = {
     ...agentToolsImports,
   ],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
-  controllers: [AgentsController, ...agentToolsControllers],
+  // The run transcripts' routes (SEN-178) come with the runner.
+  controllers: [AgentsController, ...agentToolsControllers, ...agentRunnerControllers],
   providers: [
     configProvider,
     agentWalletsProvider,
