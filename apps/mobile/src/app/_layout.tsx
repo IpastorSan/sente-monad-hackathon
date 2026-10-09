@@ -14,6 +14,9 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { SessionProvider } from '@/session';
 import { useWide } from '@/ui/kit';
 import { color, RADIUS } from '@/ui/theme';
+import { installWebStyles } from '@/ui/webStyles';
+
+installWebStyles();
 
 export default function RootLayout() {
   // Per-weight imports: a package root would bundle every face it ships. These
@@ -37,9 +40,9 @@ export default function RootLayout() {
           screenOptions={{ headerShown: false, contentStyle: { backgroundColor: color.ink } }}
           screenLayout={wide ? desktopSheetLayout : undefined}
         >
-          {/* The dock's Trade button (SEN-109): a ticket over the tab you were on. */}
+          {/* The dock's Trade button (SEN-109): a market picker over the tab you were on. */}
           <Stack.Screen name="trade" options={wide ? DESKTOP_MODAL : { presentation: 'modal' }} />
-          {/* A ticket (SEN-167): on a wide window a sheet too, over the picker or the page. */}
+          {/* A ticket (SEN-167): on a wide window a sheet too, over the page that opened it. */}
           <Stack.Screen name="trade/[venue]/[symbol]" options={wide ? DESKTOP_MODAL : {}} />
           {/* Perps setup (SEN-120): the same sheet, over the ticket that opened it. */}
           <Stack.Screen name="trade/perpl-setup" options={wide ? DESKTOP_MODAL : {}} />

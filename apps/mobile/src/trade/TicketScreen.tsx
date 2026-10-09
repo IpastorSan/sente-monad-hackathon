@@ -251,7 +251,7 @@ function kuruConfig(symbol: string): KuruMarketConfig | null {
  * `canEmbedTicket` and that trading is on; this renders nothing for a market
  * it cannot ticket.
  */
-export function TicketPanel({ market }: { market: MarketDto }) {
+export function TicketPanel({ market, side = 'buy' }: { market: MarketDto; side?: Side }) {
   const [round, setRound] = useState(0);
   const config = useMemo(() => kuruConfig(market.symbol), [market.symbol]);
   if (market.venue === 'perpl') {
@@ -259,7 +259,7 @@ export function TicketPanel({ market }: { market: MarketDto }) {
       <PerpTicket
         key={`${market.symbol}:${round}`}
         market={market}
-        initialSide="long"
+        initialSide={side === 'sell' ? 'short' : 'long'}
         embedded
         onClose={() => setRound((n) => n + 1)}
       />
@@ -272,7 +272,7 @@ export function TicketPanel({ market }: { market: MarketDto }) {
       market={market}
       config={config}
       venue="kuru"
-      initialSide="buy"
+      initialSide={side}
       embedded
       onClose={() => setRound((n) => n + 1)}
     />

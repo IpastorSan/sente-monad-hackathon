@@ -22,6 +22,8 @@
  * itself (`TicketPanel`) for a Kuru market with trading on or a Perpl market
  * with perps on (SEN-120), else the Sell/Buy
  * pair that is pinned to the bottom on a phone. Narrow keeps the phone tree.
+ * A `side` param (from the Trade sheet, SEN-179) preselects the embedded
+ * ticket's side.
  */
 import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -108,8 +110,9 @@ const NO_BARS: readonly KlineDto[] = [];
 
 export default function AssetScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ venue?: string; symbol?: string }>();
+  const params = useLocalSearchParams<{ venue?: string; symbol?: string; side?: string }>();
   const venue = parseVenue(params.venue);
+  const side = params.side === 'sell' || params.side === 'short' ? 'sell' : 'buy';
   const symbol = typeof params.symbol === 'string' ? params.symbol : '';
   const markets = useMarkets();
 
@@ -149,16 +152,19 @@ export default function AssetScreen() {
     return <Missing onBack={back} loading />;
   }
   // Keyed on the market so ranges, scrub and favourites never leak from one market to the next.
-  return <Asset key={marketKey(market)} market={market} venue={venue} onBack={back} />;
+  return <Asset key={marketKey(market)} market={market} venue={venue} side={side} onBack={back} />;
 }
 
 function Asset({
   market,
   venue,
+  side,
   onBack,
 }: {
   market: MarketDto;
   venue: VenueId;
+  /** The side the embedded ticket opens on (wide only). */
+  side: 'buy' | 'sell';
   onBack: () => void;
 }) {
   const router = useRouter();
@@ -454,7 +460,7 @@ function Asset({
           </ScrollView>
           <View style={styles.deskSide}>
             {trading && canEmbedTicket(market, perps) ? (
-              <TicketPanel market={market} />
+              <TicketPanel market={market} side={side} />
             ) : (
               <View style={styles.deskActions}>
                 <Text style={text.label}>Trade {header.title}</Text>
