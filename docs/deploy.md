@@ -580,15 +580,20 @@ curl -sS https://sente.lol/.well-known/assetlinks.json | grep -o '15:FA:[^"]*'
 
 ### Where judges get it
 
-Undecided — see below. The box already serves `/srv/site`, so
-`https://sente.lol/download/sente-release.apk` is one `gcloud compute scp` away;
-what should not happen is committing a ~60 MB binary to the repo.
+**<https://sente.lol/download/sente.apk>** (SEN-51). Caddy serves `/download/*`
+from `/srv/download`, which `infra/docker-compose.yml` mounts read-only from the
+`download/` directory next to the compose file on the box, with an Android
+package content type and `Content-Disposition: attachment`. The APK is uploaded
+there by hand (`gcloud compute scp`), so a deploy never re-ships it and it is
+never committed. On 2026-10-09 a `HEAD` answered 200, 173,723,322 bytes, last
+modified 17:10:18 GMT.
 
 ## Judge access
 
 The submission asks for "credentials". Sente has no passwords — an account _is_ a
 passkey, created on the judge's own device — so "credentials" has to mean
-something else, and this is the shape of it (not yet written for the submission):
+something else. The written path is [`judges.md`](judges.md); what it relies on
+from the deployment:
 
 - the APK and its SHA-256, so they can check what they installed;
 - `https://api.sente.lol/health` as the liveness link;
@@ -645,12 +650,14 @@ agent straight away. `GET /wallet` reports it as
    running Caddy _and_ Node. It should fit — the API idles around 150–250 MB —
    but it is unmeasured on this box. Cheap insurance: a 1 GB swap file. Bumping
    to `e2-small` leaves the free tier.
-4. **Where the APK is hosted**, above.
-5. **`AGENT_TICK_SECONDS` on the box.** Unset means no scheduler, which is the
-   default and the safe answer: with it set, every active agent runs on a timer
-   and spends its owner's OpenRouter credits unprompted. If judges are meant to
-   see an agent act on its own without pressing anything, it has to be set — and
-   then the credit ceiling matters.
+4. ~~Where the APK is hosted~~ — decided: `sente.lol/download/sente.apk`, above.
+5. **`AGENT_TICK_SECONDS` on the box.** No longer what makes agents run on their
+   own: since SEN-67/SEN-71 each agent carries its own schedule, polled every
+   `AGENT_SCHEDULER_POLL_SECONDS` (default 15 s) with a credits guard and a
+   daily run cap, and watchers (SEN-182) wake a scheduled agent on a condition.
+   `AGENT_TICK_SECONDS` is only the default cadence for agents without a schedule
+   of their own; unset (the default), those run only when their owner presses
+   Run now.
 6. **Log retention and alerting.** The compose file caps container logs at
    5 × 10 MB, which stops the disk filling and is not monitoring. Nothing tells
    anyone the API died at 3 a.m.; `restart: unless-stopped` plus the health check

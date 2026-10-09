@@ -81,8 +81,10 @@ OPENROUTER_DEFAULT_LIMIT_USD
 CREDITS_PURCHASES_ENABLED
 
 # --- agent runner ---
-# AGENT_TICK_SECONDS unset = no scheduler. Leave it unset on the box unless you
-# mean to spend judges' credits unprompted.
+# AGENT_TICK_SECONDS is the DEFAULT cadence for agents without a schedule of
+# their own (SEN-71). Unset, those run only by hand; agents their owners
+# scheduled still run. Leave it unset on the box unless you mean to run every
+# unscheduled agent on a timer, spending judges' credits unprompted.
 AGENT_TICK_SECONDS
 AGENT_RUN_TIMEOUT_MS
 AGENT_RUN_MAX_ITERATIONS
@@ -91,7 +93,8 @@ AGENT_WRITE_SPACING_MS
 AGENT_RUNNER_THINKING
 AGENT_PRECHECK
 AGENT_MANDATE_OWNER
-# The scheduler's own knobs (SEN-71); inert while AGENT_TICK_SECONDS is unset.
+# The scheduler's own knobs (SEN-71); live whatever AGENT_TICK_SECONDS says,
+# because per-agent schedules (SEN-67) need them. POLL_SECONDS=off stops all scheduled runs.
 AGENT_SCHEDULER_POLL_SECONDS
 AGENT_SCHEDULE_MAX_CONCURRENT
 AGENT_SCHEDULE_MAX_RUNS_PER_DAY
