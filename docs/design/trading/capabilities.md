@@ -1,7 +1,7 @@
 # Sente — trading capability research (for a trading-first mobile UI)
 
 Read-only research, 2026-09-27. Repo: `~/Work/moveseventyeight/sente`. All paths are relative to it.
-Line numbers are from the current working tree. "Status" vocabulary:
+Line numbers are from the working tree of that date. "Status" vocabulary:
 
 - **exists**: implemented in our code and reachable (at least server-side).
 - **adapter-only**: in `@sente/venues`, but no API route or agent tool exposes it.
@@ -15,6 +15,15 @@ reachable only by agents through `services/api/src/agents/tools/registry.ts`.** 
 route, no quote route, no candles route, and no user-order route.
 
 ---
+
+> **Superseded since this was written (2026-10-09).** Agents now run on a per-agent schedule
+> (`PATCH /agents/:id/schedule`, one minute to seven days, SEN-67/SEN-71) polled every
+> `AGENT_SCHEDULER_POLL_SECONDS` (default 15 s), with a credits guard and a daily run cap;
+> `AGENT_TICK_SECONDS` is only the default cadence for agents without their own. Watchers
+> (SEN-182) wake a scheduled agent when a price or indicator condition fires, checked without the
+> model (`docs/agents.md`, "Watchers"). Agents also have `get_klines`, `quote` and
+> `get_indicators` (SEN-79, SEN-180), and users trade both venues themselves (`/trade`,
+> `docs/user-trading.md`). Rows below that say otherwise describe 2026-09-27.
 
 ## 1. Tradable assets / markets
 
@@ -199,8 +208,9 @@ Natural parameters to expose:
 
 - **No stop-loss / take-profit orders, on either venue.** Kuru's triggers are disabled on the
   testnet Relay; Perpl's are unimplemented and unverified. An "SL/TP" field can only be a _soft_
-  instruction the agent checks when it runs (and runs happen only on manual trigger or a global
-  ≥30 s timer that is off by default). Label it that way, or leave it out.
+  instruction the agent checks when it runs (on 2026-09-27 runs happened only on manual trigger
+  or a global ≥30 s timer that was off by default; since then, per-agent schedules and watchers,
+  see the note at the top). Label it that way, or leave it out.
 - **"Market" orders are bounded IOC limits.** Every market order needs a worst price. Show max
   slippage (the default can be computed) and expect partial fills with the rest cancelled.
 - **Kuru: no reduce-only, no GTD/expiry, no amend, no leverage.** Perpl: isolated margin only,

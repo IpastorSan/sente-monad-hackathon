@@ -7,23 +7,26 @@ same file supersedes it — read to the end before quoting.
 
 Start with `privy-policy-enforcement.md` if you only read one.
 
-| Doc                                                        | Answers                                                                                |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [privy-policy-enforcement.md](privy-policy-enforcement.md) | Which parts of a mandate are really enclave-enforced, and who is allowed to change it  |
-| [demo-refusal.md](demo-refusal.md)                         | How to run the refusal demo, and what each of its five acts proves                     |
-| [agents.md](agents.md)                                     | How an agent's Privy wallet trades on Kuru and Perpl, and what landed on chain         |
-| [user-wallet.md](user-wallet.md)                           | What the user's Privy wallet is, and why this server can never sign for it             |
-| [privy-sponsorship.md](privy-sponsorship.md)               | Whether a user-owned Privy wallet can send with Privy paying the gas                   |
-| [kuru.md](kuru.md)                                         | Which Kuru Spot V2 addresses, APIs and SDK are real, and how the adapter places orders |
-| [perpl.md](perpl.md)                                       | What Perpl's market-data socket and funding REST really send (probed live)             |
-| [monad-testnet-assets.md](monad-testnet-assets.md)         | Which Monad testnet addresses are real, what gas costs, and how to get funded          |
-| [erc8004.md](erc8004.md)                                   | How an agent gets an on-chain ERC-8004 identity and a reputation entry per verdict     |
-| [indexer.md](indexer.md)                                   | What the Envio HyperIndex indexes, and how to run and verify it                        |
-| [leaderboard.md](leaderboard.md)                           | How `GET /leaderboard` is ranked, and what each metric actually counts                 |
-| [openrouter.md](openrouter.md)                             | How per-user model credits are minted, and whether tool use works through OpenRouter   |
-| [nansen.md](nansen.md)                                     | What smart-money data the agents' Nansen tool reads, and how it stays in budget        |
-| [deploy.md](deploy.md)                                     | How to deploy the API and build the release APK, what is secret, and how to roll back  |
-| [web.md](web.md)                                           | Which passkey providers sign in on the web build, what was measured, and what is left  |
+| Doc                                                                  | Answers                                                                                |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [privy-policy-enforcement.md](privy-policy-enforcement.md)           | Which parts of a mandate are really enclave-enforced, and who is allowed to change it  |
+| [demo-refusal.md](demo-refusal.md)                                   | How to run the refusal demo, and what each of its five acts proves                     |
+| [agents.md](agents.md)                                               | How an agent's Privy wallet trades on Kuru and Perpl, and what landed on chain         |
+| [user-wallet.md](user-wallet.md)                                     | What the user's Privy wallet is, and why this server can never sign for it             |
+| [privy-sponsorship.md](privy-sponsorship.md)                         | Whether a user-owned Privy wallet can send with Privy paying the gas                   |
+| [kuru.md](kuru.md)                                                   | Which Kuru Spot V2 addresses, APIs and SDK are real, and how the adapter places orders |
+| [perpl.md](perpl.md)                                                 | What Perpl's market-data socket and funding REST really send (probed live)             |
+| [monad-testnet-assets.md](monad-testnet-assets.md)                   | Which Monad testnet addresses are real, what gas costs, and how to get funded          |
+| [erc8004.md](erc8004.md)                                             | How an agent gets an on-chain ERC-8004 identity and a reputation entry per verdict     |
+| [indexer.md](indexer.md)                                             | What the Envio HyperIndex indexes, and how to run and verify it                        |
+| [leaderboard.md](leaderboard.md)                                     | How `GET /leaderboard` is ranked, and what each metric actually counts                 |
+| [openrouter.md](openrouter.md)                                       | How per-user model credits are minted, and whether tool use works through OpenRouter   |
+| [nansen.md](nansen.md)                                               | What smart-money data the agents' Nansen tool reads, and how it stays in budget        |
+| [deploy.md](deploy.md)                                               | How to deploy the API and build the release APK, what is secret, and how to roll back  |
+| [web.md](web.md)                                                     | Which passkey providers sign in on the web build, what was measured, and what is left  |
+| [user-trading.md](user-trading.md)                                   | What the user's own Kuru and Perpl trades did live, and what the phone verifies        |
+| [judges.md](judges.md)                                               | The path a judge takes through the web app, step by step                               |
+| [testing/test-audit-2026-10-09.md](testing/test-audit-2026-10-09.md) | What each test tier catches, and the live checks that cover external drift             |
 
 Two transcripts sit beside `demo-refusal.md` rather than inside it, because they
 are the evidence for it and are meant to be read unedited:

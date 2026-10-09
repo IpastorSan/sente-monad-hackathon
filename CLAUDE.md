@@ -1,13 +1,16 @@
 # Sente
 
-Sente is a mobile trading app on **Monad** where users hire **AI agents** to trade on their
-behalf, and the authority of each agent is bounded by an **enclave-enforced mandate** — a signed
-policy (instruments, size, leverage, drawdown, time window) that the execution enclave checks
-before it will sign anything, so an agent physically cannot exceed the mandate its owner granted,
-however it is prompted. Users fund a smart account, write a mandate, hire an agent, and watch it
-work; they can revoke or amend the mandate at any time. Venue coverage is **Kuru for spot** and
-**Perpl for perps**, behind one shared `Venue` interface so strategies are written once and the
-adapter decides where the order lands.
+Sente is a trading app on **Monad** (Android and desktop web) where users hire **AI agents** to
+trade on their behalf, and the authority of each agent is bounded by an **enclave-enforced
+mandate** — a Privy policy (contracts and markets, per-transaction caps, collateral that may reach
+Perpl, an expiry) that Privy's signing enclave checks before it will sign anything, so an agent
+cannot exceed the mandate its owner granted, however it is prompted. What the enclave cannot see
+(Perpl order size and leverage, the size inside a Kuru `batch`) Sente's own pre-check enforces.
+Users sign in with a passkey, get a Privy wallet owned by a key derived from it, write a mandate,
+hire an agent, and watch it work; they can revoke or amend the mandate at any time, and trade
+themselves from the same wallet. Venue coverage is **Kuru for spot** and **Perpl for perps**,
+behind one shared `Venue` interface so strategies are written once and the adapter decides where
+the order lands.
 
 ---
 
@@ -29,9 +32,16 @@ Never modify mise config outside this repo (`~/Work/.mise.toml` in particular).
 pnpm workspaces. Globs are in `pnpm-workspace.yaml` (`apps/*`, `services/*`, `packages/*`).
 
 ```
-apps/mobile        Expo / React Native, expo-router. DEV BUILD, not Expo Go.
-services/api       NestJS. Auth, wallet, venues, agents, credits, gas.
-packages/venues    Venue interface + Kuru (./kuru) and Perpl (./perpl) adapters
+apps/mobile        Expo / React Native, expo-router. DEV BUILD, not Expo Go. Also the web
+                   build served at sente.lol (`expo export --platform web`).
+services/api       NestJS. Auth, wallet, trade, agents (runner, scheduler, watchers, MCP),
+                   markets, credits, gas, starter kit, profile, leaderboard, webhooks.
+services/indexer   Envio HyperIndex over Kuru fills. NOT a pnpm workspace member (excluded by
+                   `!services/indexer`): it vendors its own toolchain (`pnpm run check:indexer`).
+packages/mandate   The mandate type, the Privy policy compiler, the pre-check.
+packages/venues    Venue interface + Kuru (./kuru) and Perpl (./perpl) adapters.
+packages/presets   The preset strategies (Guardian, Range Trader, ...) the app hires from.
+infra              Caddy (sente.lol, api.sente.lol, the Perpl proxy), deploy and live checks.
 ```
 
 `apps/mobile/src/auth/` is the passkey wallet, and the split inside it is deliberate:
@@ -347,21 +357,30 @@ The corollary, and the reason ERC-7579 `execType` is always `0x00` in
 verified on chain in that same transaction — the first leg's approval did not persist. A batch that
 half-applies is worse than no batching, and only a real transaction proves which one you have.
 
-### 9. The two venues have different account owners, on purpose
+### 9. Perpl needs an ECDSA owner, so the Privy wallet owns both venues' accounts
 
 **Perpl's API-key enrollment is `ecrecover`-only.** An ERC-1271 signature from the Kernel smart
 account — valid on chain, its own `isValidSignature` returns `0x1626ba7e` — gets the same `400` as
-garbage.
+garbage. A Perpl account owned by a smart account can never obtain an API key.
 
-A **Privy user wallet still passes that bar after its EIP-7702 delegation**, measured in SEN-42
+A **Privy wallet passes that bar, even after its EIP-7702 delegation**, measured in SEN-42
 (docs/privy-sponsorship.md, run 3): an account holding `0xef0100…` code answered
 `eth_signTypedData_v4` with 65 bytes of `r‖s‖v` that `recoverTypedDataAddress` resolved to the
-wallet's own address. So delegation is not what would break Perpl enrollment from a user wallet;
-gotcha 13's drifting `types` still is. A Perpl account owned by a smart account can never obtain an API key, so **the passkey EOA
-owns the Perpl account**, onboarding with three plain transactions (~0.035 MON, covered by the gas
-drip). **Kuru Spot V2 accepts a contract caller**, so there **the Kernel account is the AccountCore
-root** and deposit → order is one atomic ERC-7579 batch. Do not "unify" these: each is the only
-arrangement that works for its venue. Evidence in `docs/monad-testnet-assets.md` and `docs/kuru.md`.
+wallet's own address, and the P5 run (`docs/user-trading.md`) enrolled a trade key that way. So
+delegation is not what would break Perpl enrollment; gotcha 13's drifting `types` still is.
+
+So **one Privy wallet is the owner on both venues**: for a user, the wallet their `device` key owns
+(SEN-40, `docs/user-wallet.md`); for an agent, its own Privy server wallet (`docs/agents.md`). It
+is the Perpl account's owner (onboarding is `approve` → `createAccount` → `allowForwarding` from
+it, `services/api/src/trade/perpl-planner.ts`) and the Kuru `AccountCore` root (**Kuru Spot V2
+accepts any caller**; `trade/kuru-planner.ts` sends approve, deposit and place from it). A user's
+legs are separate Privy-sponsored sends by default; `USER_TRADE_ATOMIC_BATCH` (off) wraps them in
+the delegated wallet's own ERC-7579 `execute` instead.
+
+The Kernel smart account was the user's account until the 2026-09-13 decision recorded in
+`docs/user-wallet.md`. Its routes (`/wallet/kernel*`, `prepare`, `execute`, `operations`) and
+`useSmartAccount` remain until SEN-45 retires them; no trade path uses it. Its measured numbers
+(gotcha 4, the ERC-7579 batch in `docs/kuru.md`) are history, not the current flow.
 
 ### 10. The workspace packages are TS sources, and each consumer loads them differently
 
