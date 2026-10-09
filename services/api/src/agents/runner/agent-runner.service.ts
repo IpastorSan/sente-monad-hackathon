@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import type { BetaMessage, BetaToolRunnerParams } from '@anthropic-ai/sdk/resources/beta/messages';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { KURU_TESTNET_MARKETS } from '@sente/venues/kuru';
-import { isAddressEqual } from 'viem';
+import { formatUnits, isAddressEqual } from 'viem';
 
 import { CreditsRefusedError } from '../../credits/credits.errors';
 import { CreditsService, type CreditsView } from '../../credits/credits.service';
@@ -42,6 +42,7 @@ import {
   type TranscriptEntryBody,
 } from './transcript/run-transcript';
 import { spaceWrites, WriteSpacer } from './write-spacing';
+import { AgentPerplOnboarder, type PerplOnboardingStatus } from '../venues/perpl-onboarding';
 import { wakeNote, type RunWake } from '../watchers/wake';
 
 /**
@@ -136,6 +137,14 @@ export class AgentRunnerService {
      * hand need not know it; without it nothing is recorded.
      */
     @Optional() @Inject(RUN_TRANSCRIPTS) private readonly transcripts?: RunTranscriptStore,
+    /**
+     * SEN-187: a Perpl agent's account is opened (and its key enrolled) before
+     * its tools run, if nothing opened it since it was funded. Optional for the
+     * same reason as the transcripts.
+     */
+    @Optional()
+    @Inject(AgentPerplOnboarder)
+    private readonly perplOnboarding?: Pick<AgentPerplOnboarder, 'ensure'>,
   ) {}
 
   /** Whether `agentId` has a run open right now. */
@@ -224,6 +233,11 @@ export class AgentRunnerService {
       stopReason = 'credits_exhausted';
       error = 'the OpenRouter key has no budget left this month';
     } else {
+      // Before the clock starts: three receipts and an enrollment are not the
+      // model's time to spend. Never fails the run; the outcome is a note.
+      await this.openPerpl(agent, runId, (text) =>
+        record({ kind: 'note', text: redact(text, [key]) }),
+      );
       const abort = new AbortController();
       let timedOut = false;
       let revoked = false;
@@ -379,6 +393,27 @@ export class AgentRunnerService {
       ...(costUsd !== undefined ? { costUsd } : {}),
       events: await this.events.list(agent.id, { runId }),
     };
+  }
+
+  /**
+   * SEN-187: the lazy half of opening a Perpl agent's account — whatever the
+   * post-fund kick did not get to. Joins a flight already running.
+   */
+  private async openPerpl(
+    agent: AgentRecord,
+    runId: string,
+    note: (text: string) => void,
+  ): Promise<void> {
+    if (!this.perplOnboarding || !agent.mandate.venues.includes('perpl')) return;
+    let status: PerplOnboardingStatus;
+    try {
+      status = await this.perplOnboarding.ensure(agent, 'run', runId);
+    } catch (error) {
+      this.logger.warn(`run ${runId}: Perpl onboarding threw: ${String(error)}`);
+      return;
+    }
+    const line = perplNote(status);
+    if (line) note(line);
   }
 
   /**
@@ -556,4 +591,29 @@ function truncate(text: string, max: number): string {
 
 function round(usd: number): number {
   return Math.round(usd * 1e6) / 1e6;
+}
+
+/** The terminal's one line about the agent's Perpl account, when there is news. */
+function perplNote(status: PerplOnboardingStatus): string | undefined {
+  const ausd = (atoms: bigint) => formatUnits(atoms, 6);
+  switch (status.state) {
+    case 'ready':
+      return `Perps ready: Perpl account ${status.accountId}, ${ausd(status.collateralAtoms)} AUSD collateral.`;
+    case 'needs_funds':
+      return (
+        `Perps not open yet: Perpl needs ${ausd(status.minimumAtoms)} AUSD to open an account, ` +
+        `and the agent's wallet holds ${ausd(status.walletAtoms)}.`
+      );
+    case 'cap_below_minimum':
+      return (
+        `Perps can't open: the mandate caps collateral at ${ausd(status.capAtoms)} AUSD, under ` +
+        `Perpl's ${ausd(status.minimumAtoms)} AUSD minimum. Amend the mandate.`
+      );
+    case 'needs_gas':
+    case 'failed':
+    case 'unavailable':
+      return `Perps not open: ${status.message}`;
+    default:
+      return undefined;
+  }
 }

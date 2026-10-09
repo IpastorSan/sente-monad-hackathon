@@ -1,6 +1,7 @@
 import { compileMandate, compileRevocationRules, parseMandate } from '@sente/mandate';
 import { renderPreset } from '@sente/presets';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { PERPL_TESTNET_CONTRACTS, type PerplContext } from '@sente/venues/perpl';
 import { getAddress, type Address, type Hash } from 'viem';
 
 import { loadGasDripConfig } from '../gas/gas.config';
@@ -125,6 +126,78 @@ describe('AgentsService', () => {
       expect(agent.mandate.kuru.markets).toEqual([MARKET_A]);
       expect(agent.mandate.perpl.maxCollateralAtoms).toBe(500_000_000n);
       expect(await store.get(agent.id)).toEqual(agent);
+    });
+
+    it('refuses a Perpl collateral cap under Perpl’s opening minimum, before any Privy call (SEN-187)', async () => {
+      const { service, wallets, store } = setup();
+      const error = await refusal(
+        service.hire(
+          ALICE,
+          hireInput({
+            mandate: mandateInput({
+              perpl: { maxCollateralAtoms: '99999999', maxLeverage: 2, markets: ['BTC-PERP'] },
+            }),
+          }),
+        ),
+      );
+      expect(error.reason).toBe('mandate_invalid');
+      expect(error.message).toBe(
+        'invalid mandate: perpl.maxCollateralAtoms is 99.999999 AUSD, but Perpl needs at least ' +
+          "100 AUSD to open the agent's account, and the cap applies to that deposit. Raise it " +
+          'to 100 AUSD or more, or leave Perpl out.',
+      );
+      expect(wallets.provisioned).toHaveLength(0);
+      expect(await store.listByUser('alice')).toEqual([]);
+    });
+
+    it('reads the opening minimum live, and accepts a cap of exactly it', async () => {
+      const live = (minimum: string) => () =>
+        Promise.resolve({
+          instances: [
+            {
+              address: PERPL_TESTNET_CONTRACTS.exchange,
+              collateral_token_id: 1,
+              min_account_open_amount: minimum,
+              min_deposit_amount: '0',
+            },
+          ],
+          tokens: [{ id: 1, address: PERPL_TESTNET_CONTRACTS.collateral, decimals: 6 }],
+        } as unknown as PerplContext);
+      const perpl = { maxCollateralAtoms: '150000000', maxLeverage: 2, markets: ['BTC-PERP'] };
+      const build = (minimum: string) =>
+        new AgentsService(
+          new InMemoryAgentStore(),
+          new FakeAgentWalletProvider(),
+          new ServerMandateOwners(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          live(minimum),
+        );
+      await expect(
+        build('150000000').hire(ALICE, hireInput({ mandate: mandateInput({ perpl }) })),
+      ).resolves.toBeDefined();
+      const error = await refusal(
+        build('150000001').hire(ALICE, hireInput({ mandate: mandateInput({ perpl }) })),
+      );
+      expect(error.reason).toBe('mandate_invalid');
+    });
+
+    it('a Kuru-only mandate is not held to Perpl’s minimum', async () => {
+      const { service } = setup();
+      await expect(
+        service.hire(
+          ALICE,
+          hireInput({
+            mandate: mandateInput({
+              venues: ['kuru'],
+              perpl: { maxCollateralAtoms: '0', maxLeverage: 1, markets: [] },
+            }),
+          }),
+        ),
+      ).resolves.toBeDefined();
     });
 
     it('refuses an invalid mandate before any Privy call', async () => {

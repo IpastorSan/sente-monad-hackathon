@@ -28,6 +28,15 @@ export const PERPL_TESTNET_CONTRACTS = {
 export const PERPL_COLLATERAL_DECIMALS = 6;
 
 /**
+ * The testnet instance's `min_account_open_amount`: 100 AUSD, in atoms. The
+ * live context stays the authority when anything is SENT (`onboardingParams`);
+ * this is for checks made before a request can be, like refusing a mandate
+ * whose collateral cap could never open an account (SEN-187). Mainnet's is
+ * 10 AUSD, so a mainnet build must not use this.
+ */
+export const PERPL_TESTNET_MIN_ACCOUNT_OPEN_ATOMS = 100_000_000n;
+
+/**
  * The EIP-712 envelope of Perpl's API-key enrollment (`POST /v1/api-key/payload`).
  *
  * Perpl serves this per request rather than publishing it, so these values are

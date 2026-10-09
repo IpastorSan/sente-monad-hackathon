@@ -22,6 +22,10 @@ export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
  * produces. It is appended by `POST /webhooks/alchemy` from an Alchemy Notify
  * Address Activity delivery, so it has no `runId` and no `tool`: nothing the agent
  * did caused it. Its `detail` is `webhooks/alchemy.ts#AgentDepositDetail`.
+ * `onboarding`: Sente opening the agent's own venue account for it (SEN-187) —
+ * the Perpl account opened, its key enrolled, or why that could not happen yet
+ * (a gas shortfall, a refusal). No tool produces it either, so no `tool`; its
+ * `detail` is `venues/perpl-onboarding.ts#OnboardingEventDetail`.
  */
 export const AGENT_EVENT_KINDS = [
   'thesis',
@@ -32,6 +36,7 @@ export const AGENT_EVENT_KINDS = [
   'refusal',
   'run',
   'deposit',
+  'onboarding',
 ] as const;
 export type AgentEventKind = (typeof AGENT_EVENT_KINDS)[number];
 

@@ -7,6 +7,7 @@ import { MON_USDC } from '../tools/testing/agent-fixture';
 import { SENTE_PREAMBLE } from './prompt';
 import { apiError, assistant, text, toolUse } from './testing/fake-messages';
 import { deferred, FIRST_USER_KEY, runnerHarness, waitFor } from './testing/runner-harness';
+import { perplOnboardingWorld } from '../venues/testing/perpl-onboarding-world';
 
 /** Everything the process would print: Nest's logger and the console. */
 const printed: string[] = [];
@@ -310,6 +311,56 @@ describe('AgentRunnerService', () => {
     expect(result.stopReason).toBe('end_turn');
     expect(stamps).toHaveLength(2);
     expect(stamps[1]! - stamps[0]!).toBeGreaterThanOrEqual(75);
+  });
+
+  it('opens a funded Perpl agent’s account before the model is asked anything (SEN-187)', async () => {
+    const world = await perplOnboardingWorld({ ausd: 100 });
+    let modelCallsAtOnboarding = -1;
+    let requests: () => number = () => 0;
+    const h = await runnerHarness({
+      responses: [assistant([text('Nothing to do.')], 'end_turn')],
+      perplOnboarding: {
+        ensure: (agent, trigger, runId) => {
+          modelCallsAtOnboarding = requests();
+          expect(trigger).toBe('run');
+          expect(runId).toMatch(/^run-/);
+          return world.onboarder.ensure(agent, trigger, runId);
+        },
+      },
+    });
+    requests = () => h.api.requests.length;
+    const result = await h.run();
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(modelCallsAtOnboarding).toBe(0);
+    expect(world.state.accountId).toBe(493n);
+    expect(world.enroll.enrollments).toBe(1);
+    const page = h.transcripts.read(h.agent.id, result.runId)!;
+    expect(page.entries).toContainEqual(
+      expect.objectContaining({
+        kind: 'note',
+        text: 'Perps ready: Perpl account 493, 100 AUSD collateral.',
+      }),
+    );
+  });
+
+  it('runs on when the Perpl account cannot open, and says why in the terminal', async () => {
+    const world = await perplOnboardingWorld({ ausd: 100, mon: 0.001 });
+    const h = await runnerHarness({
+      responses: [assistant([text('Nothing to do.')], 'end_turn')],
+      perplOnboarding: world.onboarder,
+    });
+    const result = await h.run();
+    expect(result.stopReason).toBe('end_turn');
+    const notes = h.transcripts
+      .read(h.agent.id, result.runId)!
+      .entries.filter((entry) => entry.kind === 'note')
+      .map((entry) => (entry as { text: string }).text);
+    expect(
+      notes.some((line) =>
+        line.startsWith('Perps not open: Couldn’t open the Perpl account: the agent needs'),
+      ),
+    ).toBe(true);
   });
 
   it('never prints the user’s key, nor puts it in a result or an event', async () => {

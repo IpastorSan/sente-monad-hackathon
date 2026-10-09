@@ -34,6 +34,7 @@ import {
 
 import type { PreparedMandateChange } from '../agents.service';
 import type { ReturnOutcome } from '../recovery/return-funds.service';
+import type { PerplOnboardingStatus } from '../venues/perpl-onboarding';
 import type { CommitTimes, ConsensusState } from '../../chain/consensus.service';
 import type { AgentEvent, AgentEventKind } from '../events/agent-event-log';
 import { AGENT_EVENT_KINDS } from '../events/agent-event-log';
@@ -635,6 +636,35 @@ export function toReturnFundsResponse(outcome: ReturnOutcome): ReturnFundsRespon
     assets: outcome.assets.map((asset) => ({ ...asset })),
     monSpent: outcome.monSpent,
   };
+}
+
+/**
+ * `GET /agents/:id/perpl` (SEN-187): where the agent's own Perpl account
+ * stands, for the agent page's "Perps" line. Atoms (AUSD, 6 dp) and wei as
+ * decimal strings; only the fields of `state` are present.
+ */
+export interface PerplOnboardingDto {
+  state: PerplOnboardingStatus['state'];
+  minimumAtoms?: string;
+  capAtoms?: string;
+  walletAtoms?: string;
+  needWei?: string;
+  haveWei?: string;
+  accountId?: string;
+  collateralAtoms?: string;
+  message?: string;
+  /** Epoch ms: when a failed opening is tried again. */
+  retryAt?: number;
+}
+
+export function toPerplOnboardingResponse(status: PerplOnboardingStatus): PerplOnboardingDto {
+  const out: PerplOnboardingDto = { state: status.state };
+  for (const [key, value] of Object.entries(status)) {
+    if (key === 'state') continue;
+    (out as unknown as Record<string, unknown>)[key] =
+      typeof value === 'bigint' ? value.toString() : value;
+  }
+  return out;
 }
 
 /**

@@ -40,6 +40,7 @@ import {
   RunAgentDto,
   toAgentEventResponse,
   toAgentResponse,
+  toPerplOnboardingResponse,
   toPreparedMandateChangeResponse,
   toReturnFundsResponse,
   type AgentActivityResponseDto,
@@ -49,6 +50,7 @@ import {
   type AgentListResponseDto,
   type AgentResponseDto,
   type HireAgentResponseDto,
+  type PerplOnboardingDto,
   type PreparedMandateChangeDto,
   type ReturnFundsResponseDto,
   type AgentSummariesResponseDto,
@@ -58,6 +60,7 @@ import { AGENT_EVENTS, type AgentEventLog } from './events/agent-event-log';
 import { marketFills } from './events/market-fills';
 import { latestEvents, summariseEvents } from './events/summary';
 import { AgentPortfolioService } from './portfolio/portfolio.service';
+import { AgentPerplOnboarder } from './venues/perpl-onboarding';
 import { ReturnFundsService } from './recovery/return-funds.service';
 import { AgentRunScheduler, type AgentScheduleStatusDto } from './runner/agent-run.scheduler';
 import { AgentRunnerService, type RunResult } from './runner/agent-runner.service';
@@ -95,6 +98,8 @@ export class AgentsController {
     @Optional() private readonly scheduler?: AgentRunScheduler,
     /** SEN-80: `GET /agents/:id/portfolio`. Optional for the same reason. */
     @Optional() private readonly portfolios?: AgentPortfolioService,
+    /** SEN-187: `GET /agents/:id/perpl` and `POST /agents/:id/perpl/onboard`. Optional likewise. */
+    @Optional() private readonly perplOnboarding?: AgentPerplOnboarder,
   ) {}
 
   /** Hire: the response is the ONLY time the MCP token is ever returned. */
@@ -397,6 +402,40 @@ export class AgentsController {
       const agent = await this.agents.get(this.auth.principal(), params.id);
       if (!this.portfolios) throw new Error('AgentPortfolioService is not provided');
       return this.portfolios.portfolio(agent);
+    });
+  }
+
+  /**
+   * Where the agent's own Perpl account stands (SEN-187): `not_in_mandate`,
+   * `cap_below_minimum`, `needs_funds`, `opening`, `needs_gas`, `failed`,
+   * `ready`, `revoked` or `unavailable`. A read that finds the agent funded and
+   * not yet onboarded STARTS the opening in the background and answers
+   * `opening` — the balance poll that catches funds sent from anywhere.
+   */
+  @Get(':id/perpl')
+  async perplStatus(@Param() params: AgentIdParamDto): Promise<PerplOnboardingDto> {
+    return this.guard(async () => {
+      const agent = await this.agents.get(this.auth.principal(), params.id);
+      if (!this.perplOnboarding) throw new Error('AgentPerplOnboarder is not provided');
+      return toPerplOnboardingResponse(await this.perplOnboarding.status(agent));
+    });
+  }
+
+  /**
+   * The phone just funded the agent (SEN-187): open its Perpl account as soon
+   * as the AUSD lands — looked for over the next ~45 s, since the transfer may
+   * still be settling — and enroll its key. Answers at once with the status;
+   * poll `GET /agents/:id/perpl` for the outcome. Never sends more than the
+   * mandate allows, and nothing at all for an agent without Perpl.
+   */
+  @Post(':id/perpl/onboard')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async perplOnboard(@Param() params: AgentIdParamDto): Promise<PerplOnboardingDto> {
+    return this.guard(async () => {
+      const agent = await this.agents.get(this.auth.principal(), params.id);
+      if (!this.perplOnboarding) throw new Error('AgentPerplOnboarder is not provided');
+      this.perplOnboarding.kick(agent, 'fund', { awaitFunds: true });
+      return toPerplOnboardingResponse(await this.perplOnboarding.status(agent));
     });
   }
 

@@ -101,6 +101,38 @@ key, and the next use enrolls a new one; an account holds at most 16 active
 keys. A durable store must encrypt at rest. Rebind `AGENT_SECRETS` and nothing
 else changes.
 
+### Sente opens the agent's Perpl account (SEN-187)
+
+Until SEN-187 only the scripts called `onboard`, so an agent hired with a Perpl
+mandate and funded with AUSD could never trade a perp. Now
+`AgentPerplOnboarder` (`venues/perpl-onboarding.ts`) does it from the API:
+
+- **When.** An active agent with `perpl` in its mandate, no Perpl account and at
+  least Perpl's live `min_account_open_amount` (100 AUSD on testnet) in its
+  wallet. Triggers: `POST /agents/:id/perpl/onboard` after the Fund sheet sends
+  (it keeps looking for the AUSD for ~45 s), the Alchemy deposit webhook,
+  `GET /agents/:id/perpl` (the agent page's poll, so funds sent from anywhere
+  count), and the start of every run, before the model is asked anything.
+- **How much.** What the wallet holds, up to the mandate's per-transaction
+  collateral cap (and an AUSD rolling cap, if lower). The rest stays in the
+  wallet. The approve is for exactly that amount.
+- **Then enrolls** the agent's key at once (`credentials`, SEN-148), not at the
+  first order.
+- **Resumes.** An approve that already covers the amount is not sent again; an
+  account with no recorded forwarding grant gets only `allowOrderForwarding`;
+  a stored key is reused. One flight per agent, inside the runner's
+  `WriteSpacer` around the tools' write lock, so it never interleaves with the
+  agent's own writes.
+- **Never silent.** Each outcome is an `onboarding` event on the agent's log
+  (the Ledger shows it): "Opened Perpl account 505 with 100 AUSD" with the
+  hashes, the enrollment, or why not yet: a gas shortfall (the three legs are
+  355,000 gas, 0.0355 MON at 100 gwei; the 0.15 MON hire drip covers it), an
+  enclave refusal (a stale policy) or a revert, naming the step and hash.
+  Failures are held as the status for 60 s, then retried.
+- **Hire refuses a cap that could never open** (`mandate_invalid`, at hire,
+  fork and amend): a Perpl collateral cap under the opening minimum would make
+  the enclave refuse the approve forever. The app's mandate form says so first.
+
 ### Gas and collateral for the agent EOA
 
 Collateral comes from the user in production. **Gas on hire is not wired

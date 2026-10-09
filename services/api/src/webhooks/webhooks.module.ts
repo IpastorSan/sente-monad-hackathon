@@ -2,9 +2,16 @@ import { Module, type Provider } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { AGENT_STORE, type AgentStore } from '../agents/store/agent-store';
+import { AgentPerplOnboarder } from '../agents/venues/perpl-onboarding';
 import { AlchemyModule } from './alchemy.module';
 import { WebhooksController } from './webhooks.controller';
-import { AGENT_ADDRESSES, WebhooksService, type AgentAddresses } from './webhooks.service';
+import {
+  AGENT_ADDRESSES,
+  AGENT_DEPOSITED,
+  WebhooksService,
+  type AgentAddresses,
+  type AgentDeposited,
+} from './webhooks.service';
 
 /**
  * `AgentAddresses` over the agent store's own indexed lookup.
@@ -33,6 +40,22 @@ const agentAddressesProvider: Provider = {
 };
 
 /**
+ * A deposit to an agent may be the AUSD its Perpl account waits for (SEN-187):
+ * kick the opening, which looks for the funds and does nothing for an agent
+ * without Perpl in its mandate.
+ */
+const agentDepositedProvider: Provider = {
+  provide: AGENT_DEPOSITED,
+  inject: [AGENT_STORE, AgentPerplOnboarder],
+  useFactory:
+    (store: AgentStore, onboarding: AgentPerplOnboarder): AgentDeposited =>
+    async (agentId: string) => {
+      const agent = await store.get(agentId);
+      if (agent) onboarding.kick(agent, 'deposit', { awaitFunds: true });
+    },
+};
+
+/**
  * Inbound webhooks — today exactly one, Alchemy Notify's Address Activity, which
  * appends a `deposit` to the Agent Ledger when funds reach a hired agent's wallet
  * (SEN-30). Everything about the payload and the signature is cited in
@@ -48,6 +71,6 @@ const agentAddressesProvider: Provider = {
 @Module({
   imports: [AgentsModule, AlchemyModule],
   controllers: [WebhooksController],
-  providers: [agentAddressesProvider, WebhooksService],
+  providers: [agentAddressesProvider, agentDepositedProvider, WebhooksService],
 })
 export class WebhooksModule {}
