@@ -21,6 +21,8 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # /.well-known/* only — the passkey association files.
       - ./site:/srv/site:ro
+      # The release APK, uploaded by hand, never by deploy.sh (SEN-51).
+      - ./download:/srv/download:ro
       # Everything else on the apex: the Expo web export, built locally by
       # deploy.sh into infra/web (SEN-168). Caddyfile has the ordering.
       - ./web:/srv/web:ro
