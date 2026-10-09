@@ -165,9 +165,20 @@ export interface CompileOptions {
    * so the agent can only fund its OWN Kuru account. Without it the rule cannot
    * pin the owner and a deposit could credit any account — a widening over Set
    * C's `deposit(token, amount)`, which always credited the caller (SEN-185).
-   * The first amend closes it.
+   * The pinning amend that follows every hire closes it (SEN-188).
    */
   readonly agentAddress?: Address | null;
+}
+
+/**
+ * Whether `compileMandate` emits any Kuru deposit rule for this mandate — that
+ * is, whether a policy compiled WITHOUT `agentAddress` (every hire) lets the
+ * agent credit an arbitrary Kuru account until it is re-PATCHed with the pin
+ * (SEN-188). `false` means there is nothing to pin: no Kuru, or no token the
+ * mandate lets it deposit.
+ */
+export function compilesKuruDeposit(mandate: Mandate): boolean {
+  return mandate.venues.includes('kuru') && Object.keys(mandate.kuru.maxDepositAtoms).length > 0;
 }
 
 /** The approve-the-fee rule's name, so `readBackCaps` and a reader can find it. */

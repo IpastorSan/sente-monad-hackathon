@@ -40,6 +40,8 @@ import {
   needsApproval,
 } from '@/agents/approval';
 import { readBalance } from '@/agents/balances';
+import { DepositPinStatus } from '@/agents/DepositPin';
+import { secureDeposits, type DepositPinState } from '@/agents/depositPin';
 import { FundingStatus, FundNow } from '@/agents/FundNow';
 import {
   checkFunding,
@@ -195,6 +197,13 @@ export default function HireAgentScreen() {
   const [fundAmount, setFundAmount] = useState('');
   const [fundBalance, setFundBalance] = useState<bigint | null>(null);
   const [funding, setFunding] = useState<FundingState | null>(null);
+  /**
+   * SEN-188: the pinning amend that follows every hire, and the mandate it
+   * keeps — the one sent at hire, not a recomputed form (its expiry is
+   * resolved against the clock).
+   */
+  const [pin, setPin] = useState<DepositPinState | null>(null);
+  const [hiredMandate, setHiredMandate] = useState<AgentMandate | null>(null);
   /** SEN-177: the risk tick that gates Hire and Fork (not an amend). */
   const [risksAccepted, setRisksAccepted] = useState(false);
   /**
@@ -395,6 +404,9 @@ export default function HireAgentScreen() {
               });
         // SEN-177: hire, then fund through the Fund sheet's own path. The
         // hired screen shows at once; a funding failure never undoes the hire.
+        // SEN-188: between the two, the amend that pins the agent's Kuru
+        // deposits to its own wallet, with the mandate just sent.
+        setHiredMandate(result.mandate);
         await hireThenFund({
           hire,
           funding:
@@ -410,6 +422,8 @@ export default function HireAgentScreen() {
                 ),
           onHired: setHired,
           onFunding: setFunding,
+          secure: (agent) => secure(agent, result.mandate),
+          onSecure: setPin,
         });
       }
     } catch (error) {
@@ -417,6 +431,28 @@ export default function HireAgentScreen() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const secure = (agent: Agent, mandate: AgentMandate) =>
+    api
+      ? secureDeposits({
+          api,
+          agent,
+          mandate,
+          ownWallet: returnTo,
+          sign: auth.signPrivyAuthorization,
+        })
+      : Promise.resolve<DepositPinState>({
+          kind: 'failed',
+          title: 'Sign in first',
+          detail: 'Agents belong to your passkey account.',
+        });
+
+  /** "Secure deposits" on the hired screen: the same amend again. */
+  const retrySecure = async () => {
+    if (!hired || !hiredMandate || pin?.kind === 'securing') return;
+    setPin({ kind: 'securing' });
+    setPin(await secure(hired.agent, hiredMandate));
   };
 
   const approve = async () => {
@@ -451,6 +487,8 @@ export default function HireAgentScreen() {
     return (
       <Hired
         result={hired}
+        pin={pin}
+        onSecure={() => void retrySecure()}
         funding={funding}
         request={
           funding && chosenToken ? { token: chosenToken.symbol, amount: fundAmount.trim() } : null
@@ -749,10 +787,15 @@ export default function HireAgentScreen() {
  */
 function Hired({
   result,
+  pin,
+  onSecure,
   funding,
   request,
 }: {
   result: HireAgentResult;
+  /** SEN-188: the pinning amend after the hire; `null` when there was nothing to pin. */
+  pin: DepositPinState | null;
+  onSecure: () => void;
   /** The funding that followed the hire; `null` when none was asked for. */
   funding: FundingState | null;
   /** What was asked, so a retry opens the Fund sheet prefilled. */
@@ -796,6 +839,7 @@ function Hired({
     >
       <TopBar />
       <Text style={text.display}>{agent.name} is hired</Text>
+      {pin ? <DepositPinStatus state={pin} onRetry={onSecure} /> : null}
       {funding ? (
         <FundingStatus state={funding} onRetry={() => open('fund')} />
       ) : (

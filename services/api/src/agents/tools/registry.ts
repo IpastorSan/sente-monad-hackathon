@@ -37,7 +37,7 @@ import {
   MarketNotFoundError,
 } from '../../venues/market-data.service';
 import { toMandateDto } from '../dto/agent.dto';
-import type { AgentRecord } from '../store/agent-store';
+import { isKuruDepositPinned, type AgentRecord } from '../store/agent-store';
 import type { KuruToolVenue, ToolContext, ToolVenues } from './context';
 import { decimalsOf, isPositiveDecimal, maxDecimal, mulDecimal } from './decimal';
 import { checkSpec, indicatorSpec, KLINE_INTERVALS } from './indicator-schema';
@@ -331,6 +331,8 @@ export function describeMandate(agent: AgentRecord, now: number) {
     kuru: { markets: kuruMarkets, deposits: kuruDeposits },
     // SEN-185: a mandate still naming Kuru's retired books cannot trade Kuru at all.
     ...(retired.length > 0 ? { kuruRetired: retiredKuruMessage(retired) } : {}),
+    // SEN-188: say so up front rather than let the model find out by refusal.
+    ...(isKuruDepositPinned(agent) ? {} : { kuruDepositsBlocked: KURU_DEPOSIT_UNPINNED_MESSAGE }),
     perpl: {
       markets: mandate.perpl.markets,
       maxLeverage: mandate.perpl.maxLeverage,
@@ -1078,6 +1080,13 @@ const placeMarket = defineTool({
   },
 });
 
+/** Model-facing: why a Kuru deposit is refused before the pinning amend (SEN-188). */
+export const KURU_DEPOSIT_UNPINNED_MESSAGE =
+  'Kuru deposits are not secured yet: your signing policy does not pin deposits to your own ' +
+  'Kuru account until your owner approves a one-time update (the app runs it right after ' +
+  'hiring; the agent page offers "Secure deposits"). Nothing was signed. Perpl, withdrawals and ' +
+  'reads are unaffected, and Kuru orders can use what AccountCore already holds.';
+
 const deposit = defineTool({
   name: 'deposit',
   kind: 'write',
@@ -1105,6 +1114,13 @@ const deposit = defineTool({
     };
   },
   async handler(ctx, args) {
+    // SEN-188: whatever AGENT_PRECHECK says. A hire's policy cannot name the
+    // account a deposit credits, so nothing deposits until the pinning amend
+    // has landed — the unpinned rule is never exercised.
+    const { agent } = await currentMandate(ctx);
+    if (!isKuruDepositPinned(agent)) {
+      throw new SenteRefusal('kuru_deposit_unpinned', KURU_DEPOSIT_UNPINNED_MESSAGE);
+    }
     const { kuru } = await ctx.venues();
     const token = depositToken(kuru, args);
     atoms(args.amount, token); // precision, before anything is signed

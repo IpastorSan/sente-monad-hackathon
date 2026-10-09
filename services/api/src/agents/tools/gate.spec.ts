@@ -901,6 +901,77 @@ describe('gate', () => {
     expect(h.kuru.writes()).toHaveLength(1);
   });
 
+  describe('a Kuru deposit before the pinning amend (SEN-188)', () => {
+    it.each([true, false])(
+      'is refused as kuru_deposit_unpinned, precheck %s, and signs nothing',
+      async (precheck) => {
+        const h = await harness({ precheck, agent: { kuruDepositPinned: false } });
+        await h.thesis();
+
+        const outcome = refused(
+          await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '25' }),
+        );
+        expect(outcome.refusal).toEqual({ layer: 'sente', code: 'kuru_deposit_unpinned' });
+        expect(outcome.message).toContain('Secure deposits');
+        expect(h.kuru.writes()).toEqual([]);
+        expect((await h.refusals()).map((e) => e.detail['code'])).toEqual([
+          'kuru_deposit_unpinned',
+        ]);
+      },
+    );
+
+    it('leaves Kuru orders, withdrawals, Perpl and reads alone', async () => {
+      const h = await harness({ agent: { kuruDepositPinned: false } });
+      await h.thesis();
+      expect((await h.call('place_limit', limit())).ok).toBe(true);
+      expect((await h.call('get_balances', { venue: 'kuru' })).ok).toBe(true);
+      await h.thesis(BTC_PERP);
+      expect(
+        (
+          await h.call('place_limit', {
+            venue: 'perpl',
+            market: BTC_PERP,
+            side: 'buy',
+            size: '0.001',
+            price: '60000',
+            leverage: 2,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(h.kuru.writes().map((w) => w.method)).toEqual(['placeLimit']);
+    });
+
+    it('reads the agent as it is now, so the pin landing mid-run unblocks it', async () => {
+      const h = await harness({ agent: { kuruDepositPinned: false } });
+      await h.thesis();
+      await h.store.update(h.agent.id, { kuruDepositPinned: true });
+      expect((await h.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '25' })).ok).toBe(
+        true,
+      );
+    });
+
+    it('get_mandate says deposits are blocked, and stops saying so once pinned', async () => {
+      const h = await harness({ agent: { kuruDepositPinned: false } });
+      const read = async () => {
+        const outcome = await h.call('get_mandate', {});
+        if (!outcome.ok) throw new Error(outcome.message);
+        return JSON.parse(toResultText(outcome.result)) as { kuruDepositsBlocked?: string };
+      };
+      expect((await read()).kuruDepositsBlocked).toContain('not secured');
+      await h.store.update(h.agent.id, { kuruDepositPinned: true });
+      expect((await read()).kuruDepositsBlocked).toBeUndefined();
+    });
+
+    it('an agent stored before SEN-188 (no flag) is unpinned unless it has no Kuru deposit', async () => {
+      const legacy = await harness({ agent: { kuruDepositPinned: undefined } });
+      await legacy.thesis();
+      expect(
+        refused(await legacy.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '1' }))
+          .refusal?.code,
+      ).toBe('kuru_deposit_unpinned');
+    });
+  });
+
   it('get_mandate gives the model symbols and human amounts, as JSON', async () => {
     const h = await harness();
     const outcome = await h.call('get_mandate', {});

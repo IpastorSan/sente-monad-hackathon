@@ -33,7 +33,12 @@ export type SenteRefusalCode =
    * Its floor is the agent's own number, so valuing at it would let the agent
    * dump a balance past the notional cap at a near-zero floor.
    */
-  | 'unpriced_sell';
+  | 'unpriced_sell'
+  /**
+   * SEN-188: a Kuru deposit while the live policy does not yet pin the
+   * credited account to the agent's own wallet (`kuruDepositPinned` false).
+   */
+  | 'kuru_deposit_unpinned';
 
 /** A refusal by Sente's own gate. The message is model-facing. */
 export class SenteRefusal extends Error {

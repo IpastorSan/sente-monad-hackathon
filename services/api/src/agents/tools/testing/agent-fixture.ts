@@ -49,6 +49,8 @@ export function testAgent(patch: Partial<AgentRecord> = {}): AgentRecord {
     policyId: 'policy-1',
     // Server-owned: the mode these specs run in (SEN-43).
     ownerKind: 'server',
+    // Past the pinning amend that follows every hire (SEN-188).
+    kuruDepositPinned: true,
     mcpTokenHash: 'a'.repeat(64),
     status: 'active',
     policyCleared: false,

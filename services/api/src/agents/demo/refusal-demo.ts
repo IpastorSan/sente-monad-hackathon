@@ -37,7 +37,7 @@ import {
   KURU_TESTNET_TOKENS,
   toUnits,
 } from '@sente/venues/kuru';
-import { encodeFunctionData, erc20Abi, keccak256, type Hex } from 'viem';
+import { encodeFunctionData, erc20Abi, keccak256, type Address, type Hex } from 'viem';
 
 import type { AgentWalletProvider } from '../agent-wallet.provider';
 import { AgentRefusedError, EnclaveRefusedError } from '../agents.errors';
@@ -95,8 +95,15 @@ export function demoMandateInput(plan: Pick<DemoPlan, 'expiresAt'>, capUsdc: str
   };
 }
 
-export const demoRules = (plan: DemoPlan, capUsdc: string): PolicyRule[] =>
-  compileMandate(parseMandate(demoMandateInput(plan, capUsdc)));
+/**
+ * `agentAddress`, when the wallet is known, pins the deposit's credited account
+ * to it (SEN-188) — the shape every live agent policy takes after its pinning
+ * amend, and the one the deposit tool requires (`kuruDepositPinned`).
+ */
+export const demoRules = (plan: DemoPlan, capUsdc: string, agentAddress?: Address): PolicyRule[] =>
+  compileMandate(parseMandate(demoMandateInput(plan, capUsdc)), {
+    agentAddress: agentAddress ?? null,
+  });
 
 // ---------------------------------------------------------------------------
 // Counting Privy
@@ -726,7 +733,7 @@ export async function runRefusalDemo(
       `the agent's write tools: ${writeTools.join(', ')}`,
     );
 
-    const raised = demoRules(plan, plan.raisedCapUsdc);
+    const raised = demoRules(plan, plan.raisedCapUsdc, agent.address);
     const byAgent = await deps.patchWithAgentKey(agent.policyId, raised);
     check(
       4,
