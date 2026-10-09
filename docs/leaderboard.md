@@ -12,7 +12,8 @@ services/api/src/agents/leaderboard/
   leaderboard.controller.ts GET /leaderboard
   leaderboard.module.ts    wiring (AgentsModule + the indexer)
 apps/mobile/src/agents/leaderboard.ts   row formatting, pure
-apps/mobile/src/app/leaderboard.tsx     the screen
+apps/mobile/src/agents/TopBoard.tsx     the board, rendered as the Top segment of
+                                        app/(tabs)/agents.tsx (/agents?segment=top)
 ```
 
 ---
