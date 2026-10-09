@@ -26,7 +26,7 @@ import {
 const USDC = KURU_TESTNET_TOKENS.USDC.address.toLowerCase();
 const AUSD = PERPL_TESTNET_CONTRACTS.collateral.toLowerCase();
 /** Tokenised gold on Kuru — 6 decimals, and not a dollar. */
-const XAUT = KURU_TESTNET_TOKENS.XAUt.address.toLowerCase();
+const XAUT = KURU_TESTNET_TOKENS.XAUT.address.toLowerCase();
 const MON = '0x0000000000000000000000000000000000000000';
 
 /** One whole USDC or AUSD, in atoms. */
@@ -172,9 +172,9 @@ describe('metricsOf', () => {
     expect(metrics).toMatchObject({ capitalDeployedUsd: '0', roi: null });
   });
 
-  it('does not count a 6-decimal non-stable as USD capital: XAUt is gold, not a dollar', () => {
+  it('does not count a 6-decimal non-stable as USD capital: XAUT is gold, not a dollar', () => {
     // The decimals alone cannot tell a dollar from an ounce, so the test is the
-    // token's address (`CAPITAL_TOKENS`). Counting XAUt would deflate this
+    // token's address (`CAPITAL_TOKENS`). Counting XAUT would deflate this
     // agent's ROI by whatever gold happens to trade at.
     const metrics = metricsOf([
       account({ realizedPnlUsd: '7', balances: [stable(usdc(3), { token: XAUT })] }),

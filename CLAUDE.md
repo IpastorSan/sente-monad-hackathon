@@ -483,7 +483,10 @@ correctly against a stale constant. Consequences:
   it with its own mandate; a device-owned one only when its owner approves an amend on an app build
   whose `expectedPolicyRules` mirror matches (an older build refuses the new rules, amends and
   revokes alike); an already-revoked one only by hand with the owner key. There is no bulk path —
-  see "Value is pinned" in `docs/privy-policy-enforcement.md`.
+  see "Value is pinned" in `docs/privy-policy-enforcement.md`. SEN-185 is the second: Kuru
+  redeployed testnet (new books, tokens and AccountCore), so every agent hired before 2026-10-09
+  pins dead contracts until amended; `GET /agents/:id` says so in `kuruRetired`, and the steps are
+  in "Kuru's account-id AccountCore" in the same doc.
 - The phone pins that descriptor too, by hash (`BLOB` in `apps/mobile/src/agents/approval.ts`,
   SEN-142), along with every ABI a policy rule carries. Changing the constant fails
   `approval.test.ts` until the hash follows it, and an app build without the new hash refuses to

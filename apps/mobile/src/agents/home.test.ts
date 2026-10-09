@@ -484,7 +484,7 @@ function ticker(
 const MON = market('kuru', 'MON-USDC', 'MON');
 const MON_PERP = market('perpl', 'MON-PERP', 'MON', { venueSymbol: 'MON' });
 const BTC_PERP = market('perpl', 'BTC-PERP', 'BTC', { venueSymbol: 'BTC' });
-const XAUT = market('kuru', 'XAUt-USDC', 'XAUt');
+const XAUT = market('kuru', 'XAUT-USDC', 'XAUT');
 const MARKETS = [MON, MON_PERP, BTC_PERP, XAUT];
 const TICKERS = indexTickers([
   ticker(MON, '0.9812', '0.0241', '100'),

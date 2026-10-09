@@ -259,6 +259,15 @@ where its wallet could not reach it.
 | `Kuru: withdraw to its own wallet`, whenever Kuru is a venue   | `chain_id`; `to` = AccountCore; `function_name` = `withdraw`, with a one-function ABI | `withdraw(token, amount)` has no recipient parameter: AccountCore debits the caller's account and pays the caller. A `debug_traceCall` from the agent showed `Withdrawal.recipient` = the agent before any code was written. `withdrawFromAccount(account, …)` also pays the caller (`account` is the source), and `transferBetweenAccounts(from, to, …)` names a destination inside Kuru. Neither decodes against the one-function ABI, so both are refused. |
 | `Return <TOKEN> to the owner`, when the mandate has `returnTo` | `chain_id`; `to` = the token; `transfer.to` = `returnTo`                              | One rule per ERC-20 the wallet can hold (USDC, WETH, cbBTC, XAUt, AUSD), whatever the venues, so funds an earlier mandate allowed can still go home.                                                                                                                                                                                                                                                                                                          |
 
+**SEN-185 changed the first row.** Kuru's current AccountCore takes
+`withdraw(rootAccountId, token, amount, recipient)` and pays whoever it names, so
+the rule is now `Kuru: withdraw to the owner` with `withdraw.recipient` pinned
+to `returnTo`, collateral goes straight home, and a mandate without `returnTo`
+has no withdraw rule. Deposits name a `rootOwner`, pinned to the agent on every
+amend. The table and the first bullet below describe Set C, and the live runs
+in this section all landed on Set C (`docs/privy-policy-enforcement.md`,
+"Kuru's account-id AccountCore").
+
 The choices, and why:
 
 - **The contract pins the withdraw recipient; no address condition does.** No
@@ -521,7 +530,9 @@ pnpm --filter @sente/api run creator:payout -- --state-dir services/api/.state \
 
 The first lists what each creator is owed; the second refuses a payout above what
 is owed or a transaction hash already recorded. The treasury claims its accrued
-builder fees from AccountCore with `claimBuilderFees(asset)` (by hand, not wired).
+builder fees from AccountCore with `claimBuilderFees(asset)` (by hand, not wired) on Set C;
+on Set D (SEN-185) they credit the treasury's own root and leave by an ordinary
+`withdraw(rootId, asset, amount, recipient)`.
 
 ### Live probe: PENDING
 

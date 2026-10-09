@@ -402,7 +402,7 @@ describe('AgentsService', () => {
 
         const prepared = await service.prepareMandateAmend(ALICE, agent.id, next);
 
-        const rules = compileMandate(asCompiled(next));
+        const rules = compileMandate(asCompiled(next), { agentAddress: agent.address });
         expect(prepared.payload).toMatchObject({
           version: 1,
           method: 'PATCH',
@@ -438,7 +438,10 @@ describe('AgentsService', () => {
         });
 
         expect(wallets.policyUpdates).toEqual([
-          { policyId: agent.policyId, rules: compileMandate(asCompiled(next)) },
+          {
+            policyId: agent.policyId,
+            rules: compileMandate(asCompiled(next), { agentAddress: agent.address }),
+          },
         ]);
         expect(amended.mandate).toEqual(asCompiled(next));
         // The enclave holds exactly the rules that were on screen, not a rebuild.
@@ -1032,7 +1035,10 @@ describe('AgentsService', () => {
       const amended = await service.amendMandate(ALICE, agent.id, next);
 
       expect(wallets.policyUpdates).toEqual([
-        { policyId: agent.policyId, rules: compileMandate(parseMandate(next)) },
+        {
+          policyId: agent.policyId,
+          rules: compileMandate(parseMandate(next), { agentAddress: agent.address }),
+        },
       ]);
       expect(amended.mandate).toEqual(parseMandate(next));
       expect(amended.updatedAt.getTime()).toBeGreaterThanOrEqual(agent.updatedAt.getTime());
@@ -1388,7 +1394,10 @@ describe('AgentsService with the Sente builder fee (SEN-184)', () => {
     const amended = await after.amendMandate(ALICE, agent.id, mandateInput());
     expect(amended.kuruBuilder).toEqual(GRANT);
     expect(before.wallets.policies.get(agent.policyId)).toEqual(
-      compileMandate(parseMandate(mandateInput()), { kuruBuilder: GRANT }),
+      compileMandate(parseMandate(mandateInput()), {
+        kuruBuilder: GRANT,
+        agentAddress: agent.address,
+      }),
     );
 
     // Amending to a mandate without Kuru drops the grant with the rules.
@@ -1426,6 +1435,7 @@ describe('AgentsService with the Sente builder fee (SEN-184)', () => {
     const prepared = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
     const onScreen = compileMandate(parseMandate({ ...mandateInput(), returnTo: wallet }), {
       kuruBuilder: GRANT,
+      agentAddress: agent.address,
     });
     expect((prepared.payload.body as { rules: unknown }).rules).toEqual(onScreen);
     const amended = await service.commitMandateAmend(ALICE, agent.id, {

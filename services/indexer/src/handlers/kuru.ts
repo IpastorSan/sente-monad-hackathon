@@ -11,7 +11,7 @@
  *
  * AccountCore supplies the rest:
  *   Deposit/Withdrawal  cumulative wallet↔venue flow — the ROI denominator
- *   AccountRegistered   account id → account address, and the owner
+ *   AccountRegistered   account id → its root owner, the address an agent is matched on
  *
  * `BookUpdatesPacked` and `SpotReserveUpdated` are deliberately not handled:
  * together they are ~47k events a day, the leaderboard reads neither, and Envio
@@ -199,10 +199,11 @@ indexer.onEvent(
       event.block.number,
       event.block.timestamp,
     );
-    // `account` is the address that holds the id and trades — the address a
-    // Sente user is matched on. `owner` is a separate field on the same event.
-    // Both are stored; neither is inferred from the other.
-    await setAccountAddress(context, accountId, event.params.account);
-    await setAccountOwner(context, accountId, event.params.owner);
+    // Kuru's account-id AccountCore (SEN-185) gives an id no address of its
+    // own: a root and its children all belong to `rootOwner`, the wallet that
+    // signs and the one a Sente user is matched on — the same answer
+    // `getAccountOwner(id)` gives (lib/accountAddress.ts).
+    await setAccountAddress(context, accountId, event.params.rootOwner);
+    await setAccountOwner(context, accountId, event.params.rootOwner);
   },
 );

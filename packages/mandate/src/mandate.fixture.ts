@@ -12,7 +12,7 @@ function market(symbol: string): Address {
 
 export const MON_USDC = market('MON-USDC');
 export const WETH_USDC = market('WETH-USDC');
-export const CBBTC_USDC = market('cbBTC-USDC');
+export const WBTC_USDC = market('WBTC-USDC');
 export const USDC = KURU_TESTNET_TOKENS.USDC.address;
 export const WETH = KURU_TESTNET_TOKENS.WETH.address;
 export const MON = KURU_TESTNET_TOKENS.MON.address;

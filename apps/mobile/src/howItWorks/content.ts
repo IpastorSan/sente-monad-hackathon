@@ -153,7 +153,7 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'kuru',
         question: 'How does a spot trade on Kuru work?',
         body: [
-          'Kuru is an order book on chain, with four markets on testnet: MON, WETH, cbBTC and XAUt, each against USDC (for example [MON-USDC](/markets/kuru/MON-USDC)). Your wallet first moves USDC or the token you sell into your Kuru account (an approve, then a deposit), then places the order. If the account already holds some, only the shortfall is deposited.',
+          'Kuru is an order book on chain, with five markets on testnet: MON, WETH, WBTC, XAUT and USDT, each against USDC (for example [MON-USDC](/markets/kuru/MON-USDC)). Your wallet first moves USDC or the token you sell into your Kuru account (an approve, then a deposit), then places the order. If the account already holds some, only the shortfall is deposited.',
           'A limit order rests on the book until it fills or you cancel it. A market order carries a worst price from your slippage setting and fills immediately or not at all, so part of it can fill and the rest is cancelled. Money in your Kuru account can be withdrawn back to your wallet. Every step is a sponsored send from your wallet.',
           'Trading by hand can be switched off on a deployment. When it is, a market points you to an agent instead.',
         ],

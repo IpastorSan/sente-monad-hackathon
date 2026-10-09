@@ -111,7 +111,7 @@ dollars. Summing a raw `net` straight into the dollar total is the SEN-32 bug:
 What counts as a dollar is an **allowlist of token addresses**, not a decimals
 test: Kuru's own USDC, and Perpl's AUSD collateral should Perpl ever be
 indexed again, taken from `packages/venues` (`CAPITAL_TOKENS` in `metrics.ts`). The decimals alone cannot
-tell a dollar from an ounce — Kuru also lists **XAUt, tokenised gold with the
+tell a dollar from an ounce — Kuru also lists **XAUT (XAUt on Set C), tokenised gold with the
 same 6 decimals**, and counting a gold balance as USD capital would deflate
 that agent's ROI by whatever gold trades at. A venue that adds a new stable
 quote has to be added to that map, and until it is, its capital reads as zero

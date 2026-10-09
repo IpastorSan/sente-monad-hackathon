@@ -77,9 +77,9 @@ function extremes(def: PresetDefinition): Record<string, unknown>[] {
         // The longest Kuru symbol stretches the text the most; a market param
         // open to both venues also renders its other branch.
         return {
-          kuru: [spec.default, 'cbBTC-USDC'],
+          kuru: [spec.default, 'WBTC-USDC'],
           perpl: [spec.default, 'ETH-PERP'],
-          any: [spec.default, 'cbBTC-USDC', 'BTC-PERP'],
+          any: [spec.default, 'WBTC-USDC', 'BTC-PERP'],
         }[spec.venue];
     }
   });
@@ -325,7 +325,7 @@ describe('resolveParams', () => {
 
   // SEN-116 found fine steps refusing plain prices: with a 0.000001 step, 4000
   // is 4e9 steps and float division drifts past any fixed tolerance.
-  it('keeps fine steps exact at large magnitudes (Guardian on WETH / cbBTC)', () => {
+  it('keeps fine steps exact at large magnitudes (Guardian on WETH / WBTC)', () => {
     const guardian = getPreset('guardian');
     assert.ok(guardian);
     const fine = guardian.params.find((p) => p.type === 'number' && p.step < 0.001);
@@ -418,7 +418,7 @@ describe('SEN-72 presets', () => {
     const def = getPreset('funding-harvester');
     assert.ok(def);
     for (const [market, spot] of [
-      ['BTC-PERP', 'cbBTC-USDC'],
+      ['BTC-PERP', 'WBTC-USDC'],
       ['ETH-PERP', 'WETH-USDC'],
       ['MON-PERP', 'MON-USDC'],
     ] as const) {
@@ -577,7 +577,7 @@ describe('render snapshots', () => {
     assert.deepEqual(mandate('funding-harvester'), {
       tier: 'cautious',
       venues: ['perpl', 'kuru'],
-      kuruMarkets: ['cbBTC-USDC'],
+      kuruMarkets: ['WBTC-USDC'],
       perplMarkets: ['BTC-PERP'],
       maxOrderNotional: '51',
       maxLeverage: 2,
@@ -673,14 +673,14 @@ const TREND_RIDER_STRATEGY = [
   'The trailing stop is checked every run, not a venue order: between runs price can pass through it, and the close fills at the price when it is seen. The position is isolated margin: it can lose at most its margin, and a fast move can liquidate it before a run sees the stop.',
 ].join('\n');
 const FUNDING_HARVESTER_STRATEGY = [
-  'Earn funding on BTC-PERP, Perpl perps, hedged with cbBTC held on cbBTC-USDC, Kuru spot. You only ever short the perp; never go long it.',
+  'Earn funding on BTC-PERP, Perpl perps, hedged with WBTC held on WBTC-USDC, Kuru spot. You only ever short the perp; never go long it.',
   '',
   'Every run:',
   '1. Read the funding rate of BTC-PERP with get_funding: ratePctPer8h is the rate as a % per 8 hours, positive when longs pay shorts (shorts are paid). If the read fails or has no funding, open nothing this run and say why; keep any position you hold.',
-  '2. If you have no BTC-PERP short and funding is at or above +0.01% / 8h (shorts are paid): record a thesis, then short at market with 50% of your AUSD collateral as margin at 2x leverage, size = margin x leverage / price, slippage limit 0.5% below the best bid. Then buy the same size of cbBTC on cbBTC-USDC at market with USDC, slippage limit 0.5% above the best ask.',
-  '3. If you hold the short and funding is below zero (shorts now pay): close it with close_position and sell the cbBTC you hold on cbBTC-USDC at market, slippage limit 0.5% below the best bid.',
-  '4. If you hold the short and the mark price is within 10% of its liquidation price: close it with close_position and sell the cbBTC you hold on cbBTC-USDC at market, slippage limit 0.5% below the best bid.',
-  '5. If the cbBTC you hold on Kuru and the short differ in size by more than 5%, buy or sell cbBTC on cbBTC-USDC until they match.',
+  '2. If you have no BTC-PERP short and funding is at or above +0.01% / 8h (shorts are paid): record a thesis, then short at market with 50% of your AUSD collateral as margin at 2x leverage, size = margin x leverage / price, slippage limit 0.5% below the best bid. Then buy the same size of WBTC on WBTC-USDC at market with USDC, slippage limit 0.5% above the best ask.',
+  '3. If you hold the short and funding is below zero (shorts now pay): close it with close_position and sell the WBTC you hold on WBTC-USDC at market, slippage limit 0.5% below the best bid.',
+  '4. If you hold the short and the mark price is within 10% of its liquidation price: close it with close_position and sell the WBTC you hold on WBTC-USDC at market, slippage limit 0.5% below the best bid.',
+  '5. If the WBTC you hold on Kuru and the short differ in size by more than 5%, buy or sell WBTC on WBTC-USDC until they match.',
   '6. Otherwise do nothing.',
   '',
   'The liquidation guard is checked every run, not a venue order: a fast move between runs can liquidate the short first, and it is isolated margin, so that loses its margin. Funding can flip at any time. The hedge is your rule, not the mandate’s: nothing ties the two legs together, so check both every run.',

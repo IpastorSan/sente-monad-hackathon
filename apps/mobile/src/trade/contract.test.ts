@@ -224,7 +224,7 @@ function fakeChain(w: World): PublicClient {
         return Promise.resolve([w.bid, w.ask]);
       case 'getBalance':
         return Promise.resolve(w.kuruFree[(args![1] as Address).toLowerCase()] ?? 0n);
-      case 'userRegistry':
+      case 'rootAccountIdOf':
         return Promise.resolve(w.accountId);
       case 'getOrderId':
         return Promise.resolve(w.liveOrderId);
@@ -575,7 +575,7 @@ const editPlace =
 const refund =
   (token: KuruToken, amount: (ctx: TamperCtx) => bigint): LegTamper =>
   (legs, ctx) => {
-    const funding = depositCalls(ACCOUNT_CORE, token, amount(ctx));
+    const funding = depositCalls(ACCOUNT_CORE, token, amount(ctx), WALLET);
     const kinds = funding.length === 2 ? (['approve', 'deposit'] as const) : (['deposit'] as const);
     return [
       ...funding.map((call, i) => ({ kind: kinds[i]!, call })),
@@ -681,7 +681,7 @@ function phoneCapOf({ intent }: TamperCtx): bigint {
 function depositCallsApprove(token: KuruToken, amount: bigint): KuruCall {
   // `depositCalls` refuses nothing about the amount, so its approve leg is the
   // honest encoder at an amount the planner would never choose.
-  return depositCalls(ACCOUNT_CORE, token, amount)[0]!;
+  return depositCalls(ACCOUNT_CORE, token, amount, WALLET)[0]!;
 }
 
 /** `[name, tamper, reason, needsSeparateSteps]`. */
@@ -823,7 +823,7 @@ for (const atomic of [false, true]) {
   for (const [name, tamper, reason] of [
     [
       'more than was chosen',
-      () => [{ kind: 'withdraw', call: withdrawCall(ACCOUNT_CORE, USDC, 5_000_001n) }],
+      () => [{ kind: 'withdraw', call: withdrawCall(ACCOUNT_CORE, USDC, 5_000_001n, 63n, WALLET) }],
       /not the amount you chose/,
     ],
     [
@@ -831,7 +831,7 @@ for (const atomic of [false, true]) {
       () => [
         {
           kind: 'withdraw',
-          call: withdrawCall(ACCOUNT_CORE, KURU_TESTNET_TOKENS.WETH, 5_000_000n),
+          call: withdrawCall(ACCOUNT_CORE, KURU_TESTNET_TOKENS.WETH, 5_000_000n, 63n, WALLET),
         },
       ],
       /the withdrawal is 0x[0-9a-fA-F]{40}, not the token you chose/,

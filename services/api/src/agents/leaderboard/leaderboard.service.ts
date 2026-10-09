@@ -72,7 +72,7 @@ export const LEADERBOARD_NOTES: readonly string[] = [
     'agent needs at least 3 of them to be ranked; below that a win rate is noise, so the row is ' +
     'shown under “too few trades” instead of ordered.',
   'ROI is realised PnL ÷ capital deployed, where capital deployed is the USDC net-deposited ' +
-    'into Kuru, converted from raw token units to dollars. MON is gas, never capital, and XAUt — ' +
+    'into Kuru, converted from raw token units to dollars. MON is gas, never capital, and XAUT — ' +
     'a 6dp token that is gold, not a dollar — is not capital either. Fees are not netted out of ' +
     'realised PnL.',
   'Theses held is a separate reading, from the agent’s own trail: a thesis settles only when its ' +

@@ -610,6 +610,10 @@ open an account and Kuru's minimum notional is 10 USDC, so a judge can hire an
 agent straight away. `GET /wallet` reports it as
 `starterKit: { status: 'none' | 'pending' | 'sent' | 'failed' | 'disabled', ausdTx?, usdcTx? }`.
 
+- **Kuru USDC changed (SEN-185).** The kit sends Kuru's CURRENT USDC
+  (`0xA402…fEF1`), which has no public faucet: the starter wallet holds none until
+  Kuru sends some, and a wallet short of either token sends nothing. Until it is
+  funded, set `STARTER_DRIP_USDC=0` to send the AUSD alone.
 - **Its own key.** Boot refuses a `STARTER_DRIP_PRIVATE_KEY` that is also in
   `GAS_DRIP_PRIVATE_KEYS` or is an `ERC8004_*` key: two senders on one key share
   a nonce sequence neither tracks. Unset, the kit is off (`disabled`) and

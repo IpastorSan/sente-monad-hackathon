@@ -132,6 +132,9 @@ const TOKEN_TINTS: Record<string, string> = {
   AVAX: '#FFC2CC',
   SOL: '#C9F2E4',
   XAU: '#F5E3A3',
+  // Kuru's gold since SEN-185 spells it in capitals; the same gold as XAU.
+  XAUT: '#F5E3A3',
+  USDT: '#D4F2D0',
 };
 const FALLBACK_TINT = '#DDD7FE';
 

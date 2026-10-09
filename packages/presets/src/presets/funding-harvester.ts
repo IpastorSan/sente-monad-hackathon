@@ -8,10 +8,10 @@ import type { ParamError, Params, PresetDefinition } from '../types.ts';
 
 /**
  * The Kuru spot market that holds the same coin as each perp. Only these
- * perps can be hedged; the tokenised names (cbBTC, WETH) are what Kuru lists.
+ * perps can be hedged; the tokenised names (WBTC, WETH) are what Kuru lists.
  */
 const HEDGE_MARKETS: Readonly<Record<string, string>> = {
-  BTC: 'cbBTC-USDC',
+  BTC: 'WBTC-USDC',
   ETH: 'WETH-USDC',
   MON: 'MON-USDC',
 };
@@ -45,7 +45,7 @@ function render(p: Params): { strategy: string; systemPrompt: string } {
   const market = str(p, 'market');
   const base = perpBase(market);
   const hedge = hedgeMarket(p);
-  // Kuru lists the tokenised coin (cbBTC, WETH), so the spot leg names it.
+  // Kuru lists the tokenised coin (WBTC, WETH), so the spot leg names it.
   const coin = hedge ? marketAssets(hedge).base : base;
   const min = formatNumber(num(p, 'minFunding'));
   const leverage = formatNumber(num(p, 'leverage'));

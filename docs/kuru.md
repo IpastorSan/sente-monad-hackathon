@@ -9,6 +9,83 @@ The adapter itself lives in `packages/venues/src/kuru/` and is exported as
 end is what it was built on; everything above it is the research that led
 there.
 
+## Set D: the account-id deployment Kuru moved testnet to (SEN-185)
+
+**Current since 2026-09-25; found by Sente on 2026-10-09.** Kuru redeployed its
+testnet exchange with a new account model. The Data Source
+(`/api/v1/markets?status=all`) lists only these five books, and every address
+below was read back from the chain on 2026-10-09. Everything in the sections
+further down that names `0x6384…`, `0xfdbE…`, `0xEe07…` or the faucet is
+**Set C, the previous market set**: still on chain, no longer listed, kept as
+history.
+
+| Contract                  | Address                                      | Read from                                         |
+| ------------------------- | -------------------------------------------- | ------------------------------------------------- |
+| AccountCore (proxy)       | `0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038` | each book's `accountCore()`; impl `0x980719BF…`   |
+| SpotRouter (proxy)        | `0xf75A7529b83941e001d7D9bc113A73C92112947E` | `AccountCore.spotRouterAddress()`; books' owner   |
+| OrderBook implementation  | `0xa4171E141A3Cf7801d7f06C126284aC0a509e6a9` | every book's ERC-1967 slot; router's default      |
+| WithdrawalLimiter (proxy) | `0x6d9599d6B9A5Cf601C2cdBc43fF170462B256fe0` | deployment page; every `withdraw` is checked here |
+| KuruTradingWallet (impl)  | `0x43F4BCA50dE3bbcB0A297227fA61Cf3bf2dE0dE1` | deployment page; unused by Sente                  |
+| ProtocolAuthority         | `0xE3dea12b5141e42626A59d538E0e8A49620d657f` | every book's `authority()`                        |
+
+| Market    | OrderBook                                    | Base token                                             | price / size precision | Book on 2026-10-09            |
+| --------- | -------------------------------------------- | ------------------------------------------------------ | ---------------------- | ----------------------------- |
+| MON-USDC  | `0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9` | native MON (18)                                        | 10^6 / **10^6**        | **empty both sides**          |
+| WETH-USDC | `0x9d187971B64505Ac81f12c5FD2ac9c5247Ec62F3` | WETH `0x63c84e18184021c6CcE5ea57d0c3Ec0E65f3b303` (18) | 10^2 / 10^10           | ~$15 a level, 2678.20/2680.89 |
+| WBTC-USDC | `0x8661cB7c5f4f8ae3ee116B63Aa5a23c69110e357` | WBTC `0x7cDC77B348a2E101C766aD290367f3c5F287af18` (8)  | 10^2 / 10^8            | ~$15 a level                  |
+| XAUT-USDC | `0x0E2A5D9378fB61B8eC100Bd770c449F6fdD3e4d6` | XAUT `0x7553b18A8c8400a1b7746C1F5b4f453D57555838` (6)  | 10^2 / 10^6            | one bid, three asks           |
+| USDT-USDC | `0x4A0888C502e64AEAE11115508Ec0955c70293dba` | USDT `0xF7d4179FC134D7Cb6BA3D26B2fb556Ff8903B666` (6)  | 10^6 / 10^6            | 8 + 15 USDT a level           |
+
+All five are quoted in **a new USDC, `0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1`**
+(6 decimals) — not Set C's `0xEe07…`. Common to every book (`getMarketParams()`):
+tick 1, `minQuoteNotional` 10 USDC, `maxQuoteNotional` 5,000,000 USDC, **taker
+7,000 pps (0.07%), maker 4,000 pps (0.04%)**. Those are the same rates Set C
+charged, and the planner already reserves them: `quoteReserveAtoms` adds the
+maker rate to a resting buy and the taker rate to an IOC, and `simulateQuote`
+reports the taker fee on every quote.
+
+What changed beyond the addresses, and what Sente changed with it:
+
+- **cbBTC-USDC is gone; WBTC-USDC replaces it.** XAUt is now spelled **XAUT**
+  (the token's own `symbol()`), and USDT-USDC is new.
+- **Custody is keyed by numeric account id.** The 0.0.x SDK's
+  `deposit(token, amount)`, `withdraw(token, amount)`, `getBalance(user, token)`
+  and `userRegistry(user)` do not exist on this AccountCore (their selectors
+  are absent from the implementation's bytecode). It needs
+  **`@toxicflow-labs/ts-sdk` 0.3.0**: `deposit(rootOwner, token, amount)`
+  (registers the root on first use), `withdraw(rootAccountId, token, amount,
+recipient)`, `getBalance(accountId, token)`, `rootAccountIdOf(owner)`,
+  `getAccountOwner(accountId)`. The OrderBook's `batch` overloads,
+  `TradesPacked` and the builder surface are unchanged; `batch(0, …)` still
+  means the caller's own root.
+- **Both custody calls now name a third party, so the policy pins them.**
+  `deposit` credits whichever `rootOwner` it names and `withdraw` pays whichever
+  `recipient` it names; Set C always credited and paid the caller. An agent's
+  withdraw rule pins `withdraw.recipient` to the owner's `returnTo`, and an
+  amend pins `deposit.rootOwner` to the agent's own wallet (a hire cannot: Privy
+  creates the policy before the wallet). The phone verifier holds both to the
+  user's own wallet.
+- **Withdrawals can be refused for capacity.** A protocol-wide USD budget
+  (24 h deposit credit, then a capped drip) gates every `withdraw`; a refused
+  one reverts whole.
+- **No public faucet.** The deployment page: _"No public faucet was deployed;
+  request test assets from your Kuru integration contact."_ Set C's faucet
+  still pays, but only Set C tokens.
+- **Builder fees** credit the builder's root free balance directly;
+  `claimBuilderFees`/`getClaimableBuilderFees` are gone. A builder withdraws
+  like any root.
+- **`AccountRegistered`** is now `(uint40 indexed accountId, uint40 indexed
+rootAccountId, address indexed rootOwner, uint16 subaccountSeq)`.
+
+The Set-C markets map to these as `KURU_RETIRED_DEPLOYMENT` in
+`constants.ts` records: MON-USDC, WETH-USDC → same names; cbBTC-USDC →
+WBTC-USDC; XAUt-USDC → XAUT-USDC; Set-C USDC → USDC. An agent's stored mandate
+and live Privy policy still name the Set-C books until its owner amends it
+(CLAUDE.md gotcha 13): `GET /agents/:id` then carries `kuruRetired` with the
+sentence to show and the moved mandate, the app's Amend form loads the moved
+markets, and every Kuru order or deposit is refused with `kuru_market_retired`
+instead of a bare `policy_violation`.
+
 ## `@toxicflow-labs/ts-sdk` exists, and it is the SDK we want
 
 `https://registry.npmjs.org/@toxicflow-labs%2Fts-sdk` → **200**.
@@ -96,7 +173,7 @@ _"Authentication works with allowlisted and `allow-all` Relay deployments… the
 SDK does not infer it from configuration."_ Nothing was signed, so admission is
 untested — and MOV-254 does not need it.
 
-## Addresses: there are THREE sets, and the obvious one is wrong
+## Addresses: there were THREE sets, and the obvious one was wrong (Set C was current until 2026-09-25)
 
 | Set   | Source                                                    | Status                            |
 | ----- | --------------------------------------------------------- | --------------------------------- |
@@ -141,7 +218,9 @@ Two copying traps in the deployment page itself:
 - The page calls the gold token **XAUt0**; its own `symbol()` and the Data
   Source catalog both say **`XAUt`**. The adapter uses `XAUt`.
 
-### The spot leg needs Kuru Testnet USDC, not AUSD — and its faucet is generous
+### The spot leg needs Kuru Testnet USDC, not AUSD — and its faucet is generous (Set C only)
+
+_Set D (above) has a different USDC and no public faucet; this faucet pays only the Set-C tokens._
 
 `TestnetTokenFaucet` `0x25B1416FcD3400bE2D8F50bbe7Cf1101b8B891E9` is **not a
 proxy** (EIP-1967 impl slot is zero), so its 30-selector dispatch table is the
@@ -313,7 +392,7 @@ expiry)` grants a bitmap — `TRADE` 1, `INTERNAL_TRANSFER` 4, `WITHDRAW` 8,
   Privy wallet is an EOA, so it needs gas for `batch` unless it goes through
   the Relay, which brings back 7702.
 
-### Verified live on Monad testnet (2026-09-10)
+### Verified live on Monad testnet (2026-09-10, Set C — the previous market set)
 
 From a throwaway EOA (`0x15BBC549326dd8D053233c3A546Aa7fDAbB57256`, AccountCore
 id 62), via `pnpm --filter @sente/venues run kuru:live`:
@@ -335,7 +414,7 @@ above the bound, so the remainder was discarded and the order reads
 `cancelled` with a partial fill. The USDC debit matched notional + 0.07% taker
 fee to the atom. These receipts are `receipts.fixture.ts`.
 
-### Gas, measured (Monad charges on the limit)
+### Gas, measured (Monad charges on the limit) — on Set C; re-measure on Set D
 
 | Call                                             | Gas                                         |
 | ------------------------------------------------ | ------------------------------------------- |
@@ -363,20 +442,20 @@ by hand), so Perpl trades carry no Sente fee.
 
 ### The contract surface
 
-Read from the SDK's ABIs (`@toxicflow-labs/ts-sdk` 0.0.4) and, where marked, from
+Read from the SDK's ABIs (`@toxicflow-labs/ts-sdk` 0.0.4, Set C) and, where marked, from
 testnet AccountCore `0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22` on 2026-10-09.
 
-| Piece                                                                                       | What it does                                                                         |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `AccountCore.approveBuilder(builder, uint32 maxFeePps, uint64 expiry)`                      | The root account lets `builder` charge up to `maxFeePps` until `expiry` (Unix s).    |
-| `AccountCore.getBuilderApproval(root, builder)`                                             | `(maxFeePps, expiry, active)`; all zero when never granted.                          |
-| `AccountCore.revokeBuilder(builder)`                                                        | Withdraws the approval.                                                              |
-| `PPS_MULTIPLIER()` / `MAX_FEE_PPS()`                                                        | `10,000,000` / `100,000` (1%), read on testnet.                                      |
-| `OrderBook.batch(…, (address builder, uint32 feePps))`                                      | `0xed7dc4d7`; the plain `batch(uint40,tuple[],uint8[])` plus `builderConfig`.        |
-| `OrderBook.batch(…, bytes32 clientOrderId, (address, uint32))`                              | `0x2975ed7e`; the client-order-id overload plus `builderConfig`.                     |
-| `BuilderApprovalNotFound()` / `BuilderFeeTooHigh()`                                         | `0xd595f3a2` / `0x89c89cba`: an order naming an unapproved builder or a higher rate. |
-| `event BuilderFeeAccrued(builder, asset, takerAccountId, orderBook, builderFeePps, amount)` | One per fee-paying execution; `builder`, `asset` and `takerAccountId` indexed.       |
-| `AccountCore.getClaimableBuilderFees(builder, asset)` / `claimBuilderFees(asset)`           | Fees accrue inside AccountCore; the builder claims them per asset.                   |
+| Piece                                                                                       | What it does                                                                                             |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `AccountCore.approveBuilder(builder, uint32 maxFeePps, uint64 expiry)`                      | The root account lets `builder` charge up to `maxFeePps` until `expiry` (Unix s).                        |
+| `AccountCore.getBuilderApproval(root, builder)`                                             | `(maxFeePps, expiry, active)`; all zero when never granted.                                              |
+| `AccountCore.revokeBuilder(builder)`                                                        | Withdraws the approval.                                                                                  |
+| `PPS_MULTIPLIER()` / `MAX_FEE_PPS()`                                                        | `10,000,000` / `100,000` (1%), read on testnet.                                                          |
+| `OrderBook.batch(…, (address builder, uint32 feePps))`                                      | `0xed7dc4d7`; the plain `batch(uint40,tuple[],uint8[])` plus `builderConfig`.                            |
+| `OrderBook.batch(…, bytes32 clientOrderId, (address, uint32))`                              | `0x2975ed7e`; the client-order-id overload plus `builderConfig`.                                         |
+| `BuilderApprovalNotFound()` / `BuilderFeeTooHigh()`                                         | `0xd595f3a2` / `0x89c89cba`: an order naming an unapproved builder or a higher rate.                     |
+| `event BuilderFeeAccrued(builder, asset, takerAccountId, orderBook, builderFeePps, amount)` | One per fee-paying execution; `builder`, `asset` and `takerAccountId` indexed.                           |
+| `AccountCore.getClaimableBuilderFees(builder, asset)` / `claimBuilderFees(asset)`           | Set C only: fees accrued inside AccountCore, claimed per asset. Set D credits the builder root directly. |
 
 `approveBuilder` is called by the root account itself, so it needs no account
 id. `eth_estimateGas` on testnet (2026-10-09): **104,858** from a registered

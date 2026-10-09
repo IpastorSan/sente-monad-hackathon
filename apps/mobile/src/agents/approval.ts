@@ -27,7 +27,7 @@
  *    a non-empty string, not merely something truthy (SEN-142).
  * 4. `body` has exactly one key, `rules`.
  * 5. For a revoke, `rules` is exactly the mandate's RECOVERY rules and nothing
- *    else (SEN-17): the Kuru withdraw, which pays the agent's own wallet, and one
+ *    else (SEN-17): the Kuru withdraw, its recipient pinned to `returnTo` (SEN-185), and one
  *    ERC-20 transfer per token pinned to `returnTo`, which is the owner's wallet.
  *    A revoke used to be checked as `rules: []`, and the policy it leaves is no
  *    longer empty — because an empty policy also strands whatever the agent is
@@ -154,8 +154,10 @@ const RETURNABLE = [
 const BLOB = {
   erc20Approve: 'abi:0x490c886ad5215051b719391097d15dd8f2fdfe72ded3158a8de693237aea96bc',
   erc20Transfer: 'abi:0x59cc12fde94ff40f94cd755f0c06e5724ec762b3ae71e9f62f0c370b60661569',
-  kuruDeposit: 'abi:0x4c3ae6c5cb499c7e14be5485e4c866d5a0cf9fd376d6d417b87b8bee09882c0a',
-  kuruWithdraw: 'abi:0x1f8d34385430b9e8700a82ce0363bf308d2b912ba7d83c2157eaa25ec0b79245',
+  /** SEN-185: `deposit(rootOwner, token, amount)`, the account-id AccountCore's owner overload. */
+  kuruDeposit: 'abi:0xe7e98a08bee4703cc0ddc9d1e9a074ca018b8910f67c07911b547abb761a1d27',
+  /** SEN-185: `withdraw(rootAccountId, token, amount, recipient)`. */
+  kuruWithdraw: 'abi:0xba146337ad1e4cf35b63bb50eb6606e341ad0d69f42081123b50c411253ea4cb',
   kuruBatch: 'abi:0x52a7f0313269da737b4e09ca73c491c3cdf7b0e95e255446f74c8d6d95e4b3a4',
   /** SEN-184: the two builder-config `batch` overloads. */
   kuruBuilderBatch: 'abi:0xf254685b9f76f6a037d4cceeb29a12c77e907d0b430795452cf159d1e80e929c',
@@ -218,6 +220,12 @@ const calldataLte = (abi: Blob, field: string, cap: bigint) =>
  * sign an approve with the wallet's MON riding along — fails the equality check.
  */
 const valueLte = (max: bigint) => condition('ethereum_transaction', 'value', 'lte', hexUint(max));
+/**
+ * Kuru's withdraw, paying `owner` and no one else (SEN-185): AccountCore pays
+ * the recipient the call names, so the pin is the whole guarantee.
+ */
+const withdrawTo = (owner: Address) =>
+  calldataEq(BLOB.kuruWithdraw, 'withdraw.recipient', getAddress(owner));
 
 /** One rule as this module compares it: a method and an unordered set of conditions. */
 export type ExpectedRule = { method: string; conditions: string[] };
@@ -231,10 +239,13 @@ export type ExpectedRule = { method: string; conditions: string[] };
  *
  * `builder` is the Sente fee the compiler was given (`compileMandate`'s
  * `kuruBuilder`, SEN-184): `null` for a policy without the builder rules.
+ * `agentAddress` is its `agentAddress` (SEN-185): with it, every Kuru deposit
+ * rule pins `deposit.rootOwner`; a hire compiles without it.
  */
 export function expectedPolicyRules(
   mandate: AgentMandate,
   builder: KuruBuilderPin | null = null,
+  agentAddress: Address | null = null,
 ): ExpectedRule[] {
   const chain = condition('ethereum_transaction', 'chain_id', 'eq', hexUint(mandate.chainId));
   const expiry = condition('system', 'current_unix_timestamp', 'lte', String(mandate.expiresAt));
@@ -255,6 +266,9 @@ export function expectedPolicyRules(
       const token = getAddress(key);
       const deposit = [
         txTo(ACCOUNT_CORE),
+        ...(agentAddress
+          ? [calldataEq(BLOB.kuruDeposit, 'deposit.rootOwner', getAddress(agentAddress))]
+          : []),
         calldataEq(BLOB.kuruDeposit, 'deposit.token', token),
         calldataLte(BLOB.kuruDeposit, 'deposit.amount', cap),
       ];
@@ -289,9 +303,11 @@ export function expectedPolicyRules(
         rules.push(tx([txTo(market), calldataEq(BLOB.kuruBuilderBatch, 'function_name', 'batch')]));
       }
     }
-    rules.push(
-      recovery([txTo(ACCOUNT_CORE), calldataEq(BLOB.kuruWithdraw, 'function_name', 'withdraw')]),
-    );
+    // SEN-185: the withdraw names its recipient, pinned to the owner; with no
+    // `returnTo` there is nowhere it may pay, and no rule.
+    if (mandate.returnTo) {
+      rules.push(recovery([txTo(ACCOUNT_CORE), withdrawTo(mandate.returnTo)]));
+    }
   }
 
   if (mandate.venues.includes('perpl')) {
@@ -343,7 +359,7 @@ export function expectedPolicyRules(
 
 /**
  * The rules that can only move money TOWARD the owner, with the chain pinned and
- * no expiry: `AccountCore.withdraw`, which pays the agent's own wallet, and one
+ * no expiry: `AccountCore.withdraw` paying `returnTo` (SEN-185), and one
  * ERC-20 transfer per token pinned to `returnTo`.
  *
  * `withdraw` is a flag rather than always on because `expectedPolicyRules` emits
@@ -359,12 +375,10 @@ function expectedRecoveryRules(
     conditions: [chain, ...conditions, valueLte(0n)],
   });
   const rules: ExpectedRule[] = [];
-  if (options.withdraw && mandate.venues.includes('kuru')) {
-    rules.push(
-      recovery([txTo(ACCOUNT_CORE), calldataEq(BLOB.kuruWithdraw, 'function_name', 'withdraw')]),
-    );
-  }
   if (!mandate.returnTo) return rules;
+  if (options.withdraw && mandate.venues.includes('kuru')) {
+    rules.push(recovery([txTo(ACCOUNT_CORE), withdrawTo(mandate.returnTo)]));
+  }
   const owner = getAddress(mandate.returnTo);
   for (const token of RETURNABLE) {
     rules.push(recovery([txTo(token), calldataEq(BLOB.erc20Transfer, 'transfer.to', owner)]));
@@ -405,6 +419,14 @@ export type MandateChangeIntent = {
   ownWallet: Address | null;
   /** The Sente builder this build accepts (SEN-184); defaults to `KURU_BUILDER_PIN`. */
   builder?: KuruBuilderPin | null;
+  /**
+   * The agent's own wallet, for an amend (SEN-185): the server compiles every
+   * amend with Kuru's `deposit.rootOwner` pinned to it, so the agent can fund
+   * only its own Kuru account. It is the API's copy of `agent.address` — the
+   * phone has no other — so the pin it checks is as good as that copy; a policy
+   * with no pin at all would let a deposit credit anyone, which is worse.
+   */
+  agentAddress?: Address;
 };
 
 /**
@@ -500,10 +522,11 @@ export function verifyPolicyPatch(
   // SEN-184: with the build's builder pin, the policy may also carry the Sente
   // fee rules for exactly that builder; without them it is narrower, and fine.
   const builder = intent.builder === undefined ? KURU_BUILDER_PIN : intent.builder;
-  const plain = expectedPolicyRules(mandate);
+  const agent = intent.agentAddress ?? null;
+  const plain = expectedPolicyRules(mandate, null, agent);
   const verdict = compareRules(rules, plain);
   if (verdict.ok || builder === null) return verdict;
-  const withFee = expectedPolicyRules(mandate, builder);
+  const withFee = expectedPolicyRules(mandate, builder, agent);
   if (withFee.length === plain.length) return verdict;
   const feeVerdict = compareRules(rules, withFee);
   // Word the refusal against the shape the payload is trying to be.
@@ -654,7 +677,7 @@ export function amendMandateWithApproval(
   return approveChange(
     api,
     agent,
-    { kind: 'amend', policyId: agent.policyId, mandate, ownWallet },
+    { kind: 'amend', policyId: agent.policyId, mandate, ownWallet, agentAddress: agent.address },
     sign,
     prepared,
   );

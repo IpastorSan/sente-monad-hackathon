@@ -367,6 +367,15 @@ export default function AgentScreen() {
 
       {notice ? <Notice tone={notice.tone} title={notice.title} detail={notice.detail} /> : null}
 
+      {active && agent.kuruRetired ? (
+        // SEN-185: its policy pins Kuru's retired books; only an amend moves it.
+        <Notice
+          tone="error"
+          title="Kuru moved to new markets"
+          detail={`${agent.kuruRetired.message} Tap Amend: the form already has the new markets.`}
+        />
+      ) : null}
+
       {active ? null : (
         <Notice
           title={`Revoked${agent.revokedAt ? ` on ${shortDate(Date.parse(agent.revokedAt))}` : ''}`}

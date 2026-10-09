@@ -84,13 +84,13 @@ export async function ensureAccount(
   });
 }
 
-/** The account address (`AccountRegistered.account`). */
+/** The account's address: its root owner (`AccountRegistered.rootOwner`, SEN-185). */
 export async function setAccountAddress(context: Ctx, id: string, address: string): Promise<void> {
   const account = await context.Account.getOrThrow(id);
   context.Account.set({ ...account, address: address.toLowerCase() });
 }
 
-/** The owner the venue names separately (`AccountRegistered.owner`). */
+/** The owner AccountCore names (`AccountRegistered.rootOwner`; Set C's separate `owner`). */
 export async function setAccountOwner(context: Ctx, id: string, owner: string): Promise<void> {
   const account = await context.Account.getOrThrow(id);
   context.Account.set({ ...account, owner: owner.toLowerCase() });

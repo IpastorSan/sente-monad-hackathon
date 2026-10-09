@@ -78,7 +78,7 @@ function ticker(
 const MON = market('kuru', 'MON-USDC', 'MON');
 const MON_PERP = market('perpl', 'MON-PERP', 'MON');
 const BTC_PERP = market('perpl', 'BTC-PERP', 'BTC');
-const CBBTC = market('kuru', 'cbBTC-USDC', 'cbBTC');
+const WBTC = market('kuru', 'WBTC-USDC', 'WBTC');
 const ETH_PERP = market('perpl', 'ETH-PERP', 'ETH');
 
 test('the venue line always names the quote currency', () => {
@@ -95,7 +95,7 @@ test('a row prices from last, then mark, then mid, and says nothing without a ti
   assert.equal(priceOf(MON, tickers), '0.9812');
   assert.equal(priceOf(MON_PERP, tickers), '0.9809');
   assert.equal(priceOf(BTC_PERP, tickers), '64188.5');
-  assert.equal(priceOf(CBBTC, tickers), null);
+  assert.equal(priceOf(WBTC, tickers), null);
 });
 
 test('fractions become the percent the kit prints', () => {
@@ -140,7 +140,7 @@ test('a partial /markets answer names the venue that is missing', () => {
 
 test('a theme card shows one stone per asset, wrappers included, at most three', () => {
   assert.deepEqual(themeSymbols([MON, MON_PERP]), ['MON']);
-  assert.deepEqual(themeSymbols([BTC_PERP, CBBTC, ETH_PERP]), ['BTC', 'ETH']);
+  assert.deepEqual(themeSymbols([BTC_PERP, WBTC, ETH_PERP]), ['BTC', 'ETH']);
   const many = ['BTC', 'ETH', 'SOL', 'DOGE'].map((b) => market('perpl', `${b}-PERP`, b));
   assert.equal(themeSymbols(many).length, 3);
 });
@@ -148,14 +148,14 @@ test('a theme card shows one stone per asset, wrappers included, at most three',
 test('recents: newest first, no duplicates, capped', () => {
   const eth: Recent = { kind: 'market', venue: 'perpl', symbol: 'ETH-PERP', label: 'ETH-PERP' };
   const tengen: Recent = { kind: 'agent', id: 'a1', own: false, label: 'Tengen' };
-  const xaut: Recent = { kind: 'market', venue: 'kuru', symbol: 'XAUt-USDC', label: 'XAUt' };
+  const xaut: Recent = { kind: 'market', venue: 'kuru', symbol: 'XAUT-USDC', label: 'XAUT' };
   let list = pushRecent([], eth);
   list = pushRecent(list, tengen);
   list = pushRecent(list, xaut);
   list = pushRecent(list, eth);
   assert.deepEqual(
     list.map((r) => r.label),
-    ['ETH-PERP', 'XAUt', 'Tengen'],
+    ['ETH-PERP', 'XAUT', 'Tengen'],
   );
   assert.equal(pushRecent(list, { ...tengen, id: 'a2' }, 2).length, 2);
 });
@@ -188,9 +188,9 @@ test('favourites toggle by market key and ignore junk', () => {
 });
 
 test('board mandate lines give up their markets and keep the prose out', () => {
-  assert.deepEqual(boardMarkets('Kuru MON-USDC, cbBTC-USDC +2 · Perpl BTC · max 50 per order'), [
+  assert.deepEqual(boardMarkets('Kuru MON-USDC, WBTC-USDC +2 · Perpl BTC · max 50 per order'), [
     'MON-USDC',
-    'cbBTC-USDC',
+    'WBTC-USDC',
     'BTC',
   ]);
   assert.deepEqual(boardMarkets('Kuru no markets · max 10 per order'), []);
@@ -245,7 +245,7 @@ function boardOf(rows: LeaderboardRow[]): Leaderboard {
   };
 }
 
-const MON_BOOK = '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61';
+const MON_BOOK = '0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9';
 
 test('your agents trade symbols, not OrderBook addresses', () => {
   const [mine] = searchAgents([agent('a1', 'Range Hunter', [MON_BOOK])], new Map(), null);

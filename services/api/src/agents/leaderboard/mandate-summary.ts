@@ -8,7 +8,7 @@
  * reading, with each limit labelled by who enforces it.
  */
 import type { Mandate } from '@sente/mandate';
-import { KURU_TESTNET_MARKETS } from '@sente/venues/kuru';
+import { kuruMarketLabel } from '@sente/venues/kuru';
 
 /** Markets named per venue before the list is elided. A row is one line. */
 export const SUMMARY_MARKETS = 2;
@@ -16,21 +16,13 @@ export const SUMMARY_MARKETS = 2;
 export function summariseMandate(mandate: Mandate): string {
   const parts: string[] = [];
   if (mandate.venues.includes('kuru')) {
-    parts.push(`Kuru ${list(mandate.kuru.markets.map(kuruSymbol))}`);
+    parts.push(`Kuru ${list(mandate.kuru.markets.map(kuruMarketLabel))}`);
   }
   if (mandate.venues.includes('perpl')) {
     parts.push(`Perpl ${list([...mandate.perpl.markets])}`);
   }
   parts.push(`max ${mandate.maxOrderNotional} per order`);
   return parts.join(' · ');
-}
-
-/** Kuru's mandate holds OrderBook addresses; the table names their markets. */
-function kuruSymbol(address: string): string {
-  const market = KURU_TESTNET_MARKETS.find(
-    (candidate) => candidate.address.toLowerCase() === address.toLowerCase(),
-  );
-  return market?.symbol ?? address;
 }
 
 function list(markets: readonly string[]): string {

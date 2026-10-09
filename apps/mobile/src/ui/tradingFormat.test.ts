@@ -108,6 +108,9 @@ test('glyphFor finds the base asset under wrappers', () => {
   assert.equal(glyphFor('WETH').letter, 'E');
   assert.equal(glyphFor('ETH-PERP').tint, glyphFor('ETH').tint);
   assert.equal(glyphFor('XAUt').letter, 'X');
+  // Kuru's current symbols (SEN-185): WBTC is BTC's stone, XAUT is gold's.
+  assert.equal(glyphFor('WBTC').tint, glyphFor('BTC').tint);
+  assert.equal(glyphFor('XAUT').tint, glyphFor('XAU').tint);
   assert.equal(glyphFor('ZZZ').tint, '#DDD7FE');
 });
 

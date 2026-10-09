@@ -161,8 +161,10 @@ function placeAsUser(userId: number): Erc7579Call {
   };
 }
 
-const usdcFunding = (amount = BUY_CAP): Erc7579Call[] => depositCalls(ACCOUNT_CORE, USDC, amount);
-const monFunding = (amount = SELL_CAP): Erc7579Call[] => depositCalls(ACCOUNT_CORE, MON, amount);
+const usdcFunding = (amount = BUY_CAP): Erc7579Call[] =>
+  depositCalls(ACCOUNT_CORE, USDC, amount, WALLET);
+const monFunding = (amount = SELL_CAP): Erc7579Call[] =>
+  depositCalls(ACCOUNT_CORE, MON, amount, WALLET);
 
 /**
  * What the server signs for one step: `sponsoredSendBody(sponsoredCallTransaction(...))`
@@ -271,7 +273,10 @@ test('a cancel of the confirmed slot is signable', () => {
 });
 
 test('a withdraw of the confirmed token and amount is signable', () => {
-  const steps = unbatched([withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n)], ['withdraw']);
+  const steps = unbatched(
+    [withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n, 7n, WALLET)],
+    ['withdraw'],
+  );
   accepted(verifyKuruTrade(steps, ctx(WITHDRAW)));
 });
 
@@ -426,7 +431,7 @@ test('deposit > cap: over the intent’s tighter cap is refused', () => {
 
 test('extra leg: a withdrawal after the order is refused', () => {
   const steps = unbatched(
-    [...usdcFunding(), place(), withdrawCall(ACCOUNT_CORE, USDC, 1n)],
+    [...usdcFunding(), place(), withdrawCall(ACCOUNT_CORE, USDC, 1n, 7n, WALLET)],
     ['approve', 'deposit', 'place', 'withdraw'],
   );
   refused(verifyKuruTrade(steps, ctx(BUY_LIMIT)), /withdraw leg after the order/);
@@ -486,7 +491,7 @@ test('a place without the phone’s market facts is refused', () => {
 
 test('approve on another token: a WETH approval funding a USDC deposit is refused', () => {
   // Money-bearing: it would leave a standing WETH allowance to AccountCore.
-  const [approve] = depositCalls(ACCOUNT_CORE, WETH, BUY_CAP);
+  const [approve] = depositCalls(ACCOUNT_CORE, WETH, BUY_CAP, WALLET);
   const [, deposit] = usdcFunding();
   const steps = buyLimitSteps(place(), [approve!, deposit!]);
   refused(verifyKuruTrade(steps, ctx(BUY_LIMIT)), /approval is for 0x[0-9a-fA-F]{40}, not USDC/);
@@ -612,25 +617,48 @@ test('cancel: a cancel for another Kuru account is refused', () => {
 // Withdraw.
 
 test('withdraw: another token is refused', () => {
-  const steps = unbatched([withdrawCall(ACCOUNT_CORE, MON, 25_000_000n)], ['withdraw']);
+  const steps = unbatched([withdrawCall(ACCOUNT_CORE, MON, 25_000_000n, 7n, WALLET)], ['withdraw']);
   refused(verifyKuruTrade(steps, ctx(WITHDRAW)), /not the token you chose/);
 });
 
+// SEN-185: the account-id AccountCore pays and credits whoever the call names.
+test('withdraw: paying anyone but your wallet is refused', () => {
+  const steps = unbatched(
+    [withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n, 7n, STRANGER)],
+    ['withdraw'],
+  );
+  refused(verifyKuruTrade(steps, ctx(WITHDRAW)), /withdrawal pays 0x1111.*, not your wallet/);
+});
+
+test('deposit: crediting anyone but your Kuru account is refused', () => {
+  const steps = buyLimitSteps(place(), depositCalls(ACCOUNT_CORE, USDC, BUY_CAP, STRANGER));
+  refused(
+    verifyKuruTrade(steps, ctx(BUY_LIMIT)),
+    /deposit credits 0x1111.*, not your Kuru account/,
+  );
+});
+
 test('withdraw: another amount is refused', () => {
-  const steps = unbatched([withdrawCall(ACCOUNT_CORE, USDC, 25_000_001n)], ['withdraw']);
+  const steps = unbatched(
+    [withdrawCall(ACCOUNT_CORE, USDC, 25_000_001n, 7n, WALLET)],
+    ['withdraw'],
+  );
   refused(verifyKuruTrade(steps, ctx(WITHDRAW)), /not the amount you chose/);
 });
 
 test('withdraw: an extra leg is refused', () => {
   const steps = atomic([
-    withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n),
-    withdrawCall(ACCOUNT_CORE, MON, 1n),
+    withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n, 7n, WALLET),
+    withdrawCall(ACCOUNT_CORE, MON, 1n, 7n, WALLET),
   ]);
   refused(verifyKuruTrade(steps, ctx(WITHDRAW)), /extra withdraw leg/);
 });
 
 test('withdraw: a zero amount in the intent is refused', () => {
-  const steps = unbatched([withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n)], ['withdraw']);
+  const steps = unbatched(
+    [withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n, 7n, WALLET)],
+    ['withdraw'],
+  );
   refused(
     verifyKuruTrade(steps, ctx({ ...WITHDRAW, amountAtoms: '0' })),
     /withdrawal amount is not an amount/,

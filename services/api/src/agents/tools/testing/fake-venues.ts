@@ -208,8 +208,8 @@ export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
     };
   }
 
-  async withdraw(asset: string, amount: string): Promise<KuruExecution> {
-    await this.write('withdraw', { asset, amount });
+  async withdraw(asset: string, amount: string, recipient?: string): Promise<KuruExecution> {
+    await this.write('withdraw', { asset, amount, ...(recipient ? { recipient } : {}) });
     return {
       hash: `0x${'e'.repeat(64)}`,
       transactionHash: `0x${'e'.repeat(64)}`,

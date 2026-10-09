@@ -300,8 +300,9 @@ async function kuru(): Promise<void> {
   const steps = new Set((option('steps') ?? 'gtc,cancel,buy,sell,withdraw,p2').split(','));
   const usdc = KURU_TESTNET_TOKENS.USDC.address;
   const mon = market('MON-USDC');
-  // MON-USDC's book was empty on 2026-10-09, so the IOC legs trade cbBTC-USDC.
-  const ioc = market(option('ioc-market') ?? 'cbBTC-USDC');
+  // MON-USDC's book was empty on 2026-10-09, on Set C and again on Set D (SEN-185);
+  // WETH-USDC held ~15 USDC a level on Set D, past the 10 USDC minimum.
+  const ioc = market(option('ioc-market') ?? 'WETH-USDC');
   let orderId = option('order-id');
 
   if (steps.has('gtc')) {

@@ -10,7 +10,13 @@
  *   gated.
  * - `intent`: what `checkIntent` (layer 1) judges.
  */
-import { compareDecimal, type Intent, type Mandate } from '@sente/mandate';
+import {
+  compareDecimal,
+  retiredKuruMessage,
+  retiredKuruReferences,
+  type Intent,
+  type Mandate,
+} from '@sente/mandate';
 import type { Decimal, Kline, Side } from '@sente/venues';
 import {
   fromUnits,
@@ -303,6 +309,7 @@ const KURU_TOKENS = Object.values(KURU_TESTNET_TOKENS);
  */
 export function describeMandate(agent: AgentRecord, now: number) {
   const { mandate } = agent;
+  const retired = retiredKuruReferences(mandate);
   const kuruMarkets = mandate.kuru.markets.map((address) => ({
     symbol: KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, address))?.symbol,
     address,
@@ -322,6 +329,8 @@ export function describeMandate(agent: AgentRecord, now: number) {
     venues: mandate.venues,
     maxOrderNotional: mandate.maxOrderNotional,
     kuru: { markets: kuruMarkets, deposits: kuruDeposits },
+    // SEN-185: a mandate still naming Kuru's retired books cannot trade Kuru at all.
+    ...(retired.length > 0 ? { kuruRetired: retiredKuruMessage(retired) } : {}),
     perpl: {
       markets: mandate.perpl.markets,
       maxLeverage: mandate.perpl.maxLeverage,
@@ -332,7 +341,7 @@ export function describeMandate(agent: AgentRecord, now: number) {
       'maxOrderNotional caps every single order in quote units: size x price (a market order ' +
         'at its slippage bound; a sell at no less than the book price).',
       'cancel_order and close_position are always allowed on a venue you may use.',
-      'withdraw (Kuru collateral back to your own wallet) is always allowed on Kuru, even ' +
+      'withdraw (Kuru collateral straight back to your owner) is always allowed on Kuru, even ' +
         'after the mandate expires.',
       'The Privy enclave independently refuses to sign anything outside the mandate.',
     ],
@@ -1133,10 +1142,10 @@ const withdraw = defineTool({
   name: 'withdraw',
   kind: 'write',
   description:
-    'Move free funds out of your Kuru AccountCore balance, back to your own wallet. Always ' +
-    'allowed on Kuru, even after your mandate expires, with no thesis needed: taking ' +
-    'collateral off the venue reduces risk. Funds reserved by resting orders stay until you ' +
-    'cancel them. The money can only ever come back to your own wallet.',
+    'Move free funds out of your Kuru AccountCore balance, straight back to your owner’s ' +
+    'wallet. Always allowed on Kuru, even after your mandate expires, with no thesis needed: ' +
+    'taking collateral off the venue reduces risk. Funds reserved by resting orders stay until ' +
+    'you cancel them. The money can only ever go to your owner — it leaves your capital.',
   input: z.strictObject({
     asset: z.string().min(1).max(16).describe('The token, e.g. "USDC".'),
     amount: positive.describe('Human units, e.g. "14" for 14 USDC.'),
@@ -1153,8 +1162,18 @@ const withdraw = defineTool({
   async handler(ctx, args) {
     const token = kuruToken(args.asset);
     atoms(args.amount, token); // precision, before anything is signed
+    // The policy pins `withdraw.recipient` to the owner's `returnTo` (SEN-185):
+    // AccountCore pays whoever the call names, so no other address is signable.
+    const agent = (await ctx.currentAgent()) ?? ctx.agent;
+    const returnTo = agent.mandate.returnTo;
+    if (!returnTo) {
+      throw invalidInput(
+        'your mandate names no owner wallet to return funds to, so Kuru has nowhere it may pay; ' +
+          'your owner must amend the mandate first',
+      );
+    }
     const { kuru } = await ctx.venues();
-    const execution = await kuru.withdraw(token.symbol, args.amount);
+    const execution = await kuru.withdraw(token.symbol, args.amount, returnTo);
     return {
       withdrawn: args.amount,
       asset: token.symbol,

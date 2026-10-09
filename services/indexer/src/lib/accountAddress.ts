@@ -27,14 +27,18 @@
  *
  * So the id is resolved against AccountCore, once per account, through an
  * Envio effect (deduplicated and cached, so a re-sync does not re-read):
- * `AccountCore.userAddressById(uint40)` → `address`.
+ * `AccountCore.getAccountOwner(uint40)` → `address`.
  *
- * That call was verified against Monad testnet rather than taken from an ABI —
- * `userAddressById(62)` answers `0x15bbc549…7256` and `userAddressById(47)`
- * answers `0x74443181…5c9e`, which are the two accounts in the live Kuru fill
- * in docs/indexer.md §proven. `accountAddress.test.ts` pins the exact calldata
- * and those exact responses, so a drift in the ABI fails loudly instead of
- * writing a wrong address.
+ * Kuru's account-id AccountCore (SEN-185) has no per-account address: an id is
+ * a root or a child of one, and both resolve to the ROOT OWNER — the wallet
+ * that deposits, signs and is matched to a Sente agent. Set C's
+ * `userAddressById` is gone from it (it reverts), so this is the getter.
+ *
+ * That call was verified against Monad testnet rather than taken from an ABI,
+ * on 2026-10-09: `getAccountOwner(1)` answers `0xc64346f7…8143` (AccountCore's
+ * own fee collector) and `getAccountOwner(5)` answers `0xd26aCBf9…C883`.
+ * `accountAddress.test.ts` pins the exact calldata and those exact responses,
+ * so a drift in the ABI fails loudly instead of writing a wrong address.
  *
  * AccountCore answers an **unknown id with the zero address**, not a revert; a
  * revert is read the same way. Both mean "no address", and both are stored as
@@ -45,13 +49,13 @@ import { createEffect, S } from 'envio';
 import { decodeFunctionResult, encodeFunctionData } from 'viem';
 import { KURU_ACCOUNT_CORE } from './seeds.ts';
 
-/** `AccountCore.userAddressById`, from @toxicflow-labs/ts-sdk's accountCoreAbi. */
+/** `AccountCore.getAccountOwner`, from @toxicflow-labs/ts-sdk 0.3's accountCoreAbi. */
 export const KURU_ACCOUNT_CORE_READ_ABI = [
   {
     type: 'function',
-    name: 'userAddressById',
+    name: 'getAccountOwner',
     stateMutability: 'view',
-    inputs: [{ name: 'userId', type: 'uint40' }],
+    inputs: [{ name: 'accountId', type: 'uint40' }],
     outputs: [{ name: '', type: 'address' }],
   },
 ] as const;
@@ -70,7 +74,7 @@ export function accountAddressCall(accountId: bigint): {
     to: KURU_ACCOUNT_CORE,
     data: encodeFunctionData({
       abi: KURU_ACCOUNT_CORE_READ_ABI,
-      functionName: 'userAddressById',
+      functionName: 'getAccountOwner',
       args: [Number(accountId)],
     }),
   };
@@ -84,7 +88,7 @@ export function decodeAccountAddress(result: string): string | undefined {
   if (result === '0x' || result === '') return undefined;
   const address = decodeFunctionResult({
     abi: KURU_ACCOUNT_CORE_READ_ABI,
-    functionName: 'userAddressById',
+    functionName: 'getAccountOwner',
     data: result as `0x${string}`,
   });
   const lower = address.toLowerCase();

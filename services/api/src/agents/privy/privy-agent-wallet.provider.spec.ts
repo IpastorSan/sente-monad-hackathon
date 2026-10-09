@@ -37,7 +37,7 @@ const RULES: PolicyRule[] = compileMandate(
 );
 
 const TX = privyTransaction({
-  to: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22',
+  to: '0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038',
   data: '0x47e7ef24',
   chainId: 10143,
   nonce: 0,

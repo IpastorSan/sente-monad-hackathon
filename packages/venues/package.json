@@ -47,7 +47,7 @@
   "dependencies": {
     "@noble/ed25519": "^3.2.0",
     "@noble/hashes": "^2.4.0",
-    "@toxicflow-labs/ts-sdk": "0.0.4",
+    "@toxicflow-labs/ts-sdk": "0.3.0",
     "viem": "^2.56.3"
   }
 }

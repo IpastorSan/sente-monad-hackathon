@@ -121,6 +121,24 @@ type AgentFields = {
    * second `register` would mint a second agent). Show it when it is there.
    */
   erc8004AgentId?: string;
+  /**
+   * Only when the mandate names the Kuru books Kuru retired on 2026-09-25
+   * (SEN-185): its policy still pins them, so the agent cannot trade Kuru until
+   * it is amended. `message` is what to show. The API also sends the moved
+   * mandate; the app does not read it, because Amend opens the form through
+   * `formFromMandate`, which moves every retired book and token itself.
+   * Absent from an older API, and for every current mandate.
+   */
+  kuruRetired?: {
+    message: string;
+    moves: {
+      kind: 'market' | 'token';
+      from: string;
+      fromSymbol: string;
+      to: string;
+      toSymbol: string;
+    }[];
+  };
   status: AgentStatus;
   /**
    * WHO OWNS THIS AGENT'S MANDATE, and so whether changing it needs this

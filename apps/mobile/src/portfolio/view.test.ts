@@ -108,7 +108,7 @@ function portfolio(overrides: Partial<Portfolio> = {}): Portfolio {
         { symbol: 'MON', address: '0x0', decimals: 18, raw: '0', amount: '412.42' },
         { symbol: 'USDC', address: '0x1', decimals: 6, raw: '0', amount: '500' },
         { symbol: 'AUSD', address: '0x2', decimals: 6, raw: '0', amount: '1284.5' },
-        { symbol: 'XAUt', address: '0x3', decimals: 6, raw: '0', amount: '0' },
+        { symbol: 'XAUT', address: '0x3', decimals: 6, raw: '0', amount: '0' },
       ],
     },
     kuru: {

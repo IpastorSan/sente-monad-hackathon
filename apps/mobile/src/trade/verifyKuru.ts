@@ -131,7 +131,7 @@ export function verifyKuruTrade(
     case 'kuru.cancel':
       return verifyCancel(legs, intent);
     case 'kuru.withdraw':
-      return verifyWithdraw(legs, intent);
+      return verifyWithdraw(legs, intent, ctx.wallet);
     default:
       return refuse('the trade is not a Kuru trade this phone verifies');
   }
@@ -232,6 +232,7 @@ function verifyPlace(
     expected.order,
     maxDeposit,
     builder.feePps,
+    ctx.wallet,
   );
 }
 
@@ -405,6 +406,7 @@ function checkFunding(
   order: ExpectedOrder,
   maxDeposit: bigint,
   builderFeePps: number,
+  wallet: Address,
 ): KuruVerifyResult {
   const funding = intent.side === 'buy' ? market.quote : market.base;
   const native = isAddressEqual(funding.address, NATIVE_TOKEN);
@@ -416,6 +418,10 @@ function checkFunding(
     return PASS;
   }
   const at = deposit.stepIndex;
+  // AccountCore credits the root the deposit NAMES (SEN-185): only your own.
+  if (!isAddressEqual(deposit.rootOwner, wallet)) {
+    return refuse(`the deposit credits ${deposit.rootOwner}, not your Kuru account`, at);
+  }
   if (!isAddressEqual(deposit.token, funding.address)) {
     return refuse(`the deposit is ${deposit.token}, not ${funding.symbol}`, at);
   }
@@ -493,7 +499,11 @@ function verifyCancel(legs: readonly Leg[], intent: KuruCancelIntent): KuruVerif
   return PASS;
 }
 
-function verifyWithdraw(legs: readonly Leg[], intent: KuruWithdrawIntent): KuruVerifyResult {
+function verifyWithdraw(
+  legs: readonly Leg[],
+  intent: KuruWithdrawIntent,
+  wallet: Address,
+): KuruVerifyResult {
   const amount = parseAtoms(intent.amountAtoms);
   if (amount === undefined || amount === 0n)
     return refuse('the withdrawal amount is not an amount');
@@ -506,6 +516,10 @@ function verifyWithdraw(legs: readonly Leg[], intent: KuruWithdrawIntent): KuruV
   }
   if (leg.amount !== amount) {
     return refuse('the withdrawal is not the amount you chose', leg.stepIndex);
+  }
+  // AccountCore pays whoever the call names (SEN-185): only your own wallet.
+  if (!isAddressEqual(leg.recipient, wallet)) {
+    return refuse(`the withdrawal pays ${leg.recipient}, not your wallet`, leg.stepIndex);
   }
   return PASS;
 }

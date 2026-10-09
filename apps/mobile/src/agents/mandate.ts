@@ -22,6 +22,11 @@
 import {
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
+  kuruMarketLabel,
+  kuruMarketSuccessor,
+  kuruTokenSuccessor,
+  retiredKuruMarket,
+  retiredKuruToken,
   type KuruMarketConfig,
 } from '@sente/venues/kuru';
 import { getAddress, isAddressEqual, type Address } from 'viem';
@@ -76,6 +81,21 @@ export function tokenFor(address: string): Token | undefined {
 
 export function marketFor(address: string): KuruMarketConfig | undefined {
   return KURU_MARKETS.find((market) => isAddressEqual(market.address, address as Address));
+}
+
+/**
+ * The current OrderBook for a market address: itself, or its successor when it
+ * is one of the books Kuru retired on 2026-09-25 (SEN-185), so editing an
+ * agent hired before then moves it to the new books instead of dropping its
+ * markets.
+ */
+function currentMarket(address: Address): Address {
+  return retiredKuruMarket(address) ? kuruMarketSuccessor(address).address : address;
+}
+
+/** The token a deposit cap is for, carried to its successor when Kuru retired it. */
+function currentToken(address: string): Token | undefined {
+  return tokenFor(address) ?? (retiredKuruToken(address) ? kuruTokenSuccessor(address) : undefined);
 }
 
 const DAY_SECONDS = 86_400;
@@ -261,15 +281,25 @@ export function buildMandate(form: MandateForm, now: number): BuildResult {
  */
 export function formFromMandate(mandate: AgentMandate): MandateForm {
   const depositCaps: Record<string, string> = {};
-  for (const [address, atoms] of Object.entries(mandate.kuru.maxDepositAtoms)) {
-    const token = tokenFor(address);
-    if (token) depositCaps[token.symbol] = formatAtoms(atoms, token.decimals, { group: false });
+  // Current tokens first, so a successor's own cap wins over a retired one's.
+  const entries = Object.entries(mandate.kuru.maxDepositAtoms).sort(
+    ([a], [b]) => Number(tokenFor(a) === undefined) - Number(tokenFor(b) === undefined),
+  );
+  for (const [address, atoms] of entries) {
+    const token = currentToken(address);
+    if (token && depositCaps[token.symbol] === undefined) {
+      depositCaps[token.symbol] = formatAtoms(atoms, token.decimals, { group: false });
+    }
+  }
+  const kuruMarkets: Address[] = [];
+  for (const market of mandate.kuru.markets.map(currentMarket)) {
+    if (!kuruMarkets.some((m) => isAddressEqual(m, market))) kuruMarkets.push(market);
   }
   const perpl = mandate.venues.includes('perpl');
   return {
     kuru: mandate.venues.includes('kuru'),
     perpl,
-    kuruMarkets: [...mandate.kuru.markets],
+    kuruMarkets,
     depositCaps,
     perplCollateral: perpl
       ? formatAtoms(mandate.perpl.maxCollateralAtoms, AUSD.decimals, { group: false })
@@ -345,9 +375,7 @@ export function describeMandate(mandate: AgentMandate): MandateLimit[] {
     limits.push({
       id: 'kuru.markets',
       label: 'Kuru markets',
-      value:
-        mandate.kuru.markets.map((address) => marketFor(address)?.symbol ?? address).join(', ') ||
-        'None',
+      value: mandate.kuru.markets.map(kuruMarketLabel).join(', ') || 'None',
       enforcer: 'enclave',
     });
     for (const [address, atoms] of Object.entries(mandate.kuru.maxDepositAtoms)) {

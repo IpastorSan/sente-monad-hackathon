@@ -20,10 +20,13 @@
  * The two RECOVERY rules deliberately carry no expiry (SEN-15), because each
  * can only move money toward the owner:
  *
- * - **Kuru withdraw**: `AccountCore.withdraw(token, amount)` and nothing else.
- *   It has no recipient parameter; AccountCore pays `msg.sender`, the agent's
- *   own wallet. `withdrawFromAccount` and `transferBetweenAccounts` do not
- *   decode against the one-function ABI, so they are refused.
+ * - **Kuru withdraw**: `AccountCore.withdraw(rootAccountId, token, amount,
+ *   recipient)` with `withdraw.recipient` pinned to `mandate.returnTo` — the
+ *   owner. Kuru's account-id AccountCore (SEN-185) pays whatever recipient the
+ *   call names, so the pin is the whole guarantee; Set C's `withdraw(token,
+ *   amount)` paid `msg.sender` and needed none. Without a `returnTo` there is
+ *   no withdraw rule at all (fail closed). `transferBetweenAccounts` does not
+ *   decode against the one-function ABI, so it is refused.
  * - **Return to owner**: ERC-20 `transfer` with `transfer.to` pinned to
  *   `mandate.returnTo`, one rule per token the wallet can hold.
  *
@@ -155,6 +158,16 @@ export interface KuruBuilderGrant {
 export interface CompileOptions {
   /** Sente's builder fee; absent or `null`, no builder rule is compiled. */
   readonly kuruBuilder?: KuruBuilderGrant | null;
+  /**
+   * The agent wallet the policy will govern, when it already exists (an amend
+   * or a revoke, never a hire: Privy creates the policy before the wallet).
+   * With it, every Kuru deposit rule pins `deposit.rootOwner` to this address,
+   * so the agent can only fund its OWN Kuru account. Without it the rule cannot
+   * pin the owner and a deposit could credit any account — a widening over Set
+   * C's `deposit(token, amount)`, which always credited the caller (SEN-185).
+   * The first amend closes it.
+   */
+  readonly agentAddress?: Address | null;
 }
 
 /** The approve-the-fee rule's name, so `readBackCaps` and a reader can find it. */
@@ -182,7 +195,7 @@ function kuruBuilderRules(mandate: Mandate, tx: TxRule, builder: KuruBuilderGran
   return rules;
 }
 
-function kuruRules(mandate: Mandate, tx: TxRule): AllowRule[] {
+function kuruRules(mandate: Mandate, tx: TxRule, agentAddress: Address | null): AllowRule[] {
   const accountCore = KURU_TESTNET_CONTRACTS.accountCore;
   const rules: AllowRule[] = [];
 
@@ -191,6 +204,9 @@ function kuruRules(mandate: Mandate, tx: TxRule): AllowRule[] {
     const symbol = kuruTokenSymbol(token);
     const deposit = [
       txToEq(accountCore),
+      ...(agentAddress
+        ? [calldataAddressEq(KURU_ACCOUNT_CORE_DEPOSIT_ABI, 'deposit.rootOwner', agentAddress)]
+        : []),
       calldataAddressEq(KURU_ACCOUNT_CORE_DEPOSIT_ABI, 'deposit.token', token),
       calldataUintLte(KURU_ACCOUNT_CORE_DEPOSIT_ABI, 'deposit.amount', cap),
     ];
@@ -250,8 +266,13 @@ function perplRules(mandate: Mandate, tx: TxRule, expiry: PolicyCondition): Allo
   ];
 }
 
-/** The recovery rule's name, so a reader can tell it from the risk-taking Kuru rules. */
-export const KURU_WITHDRAW_RULE = 'Kuru: withdraw to its own wallet';
+/**
+ * The recovery rule's name, so a reader can tell it from the risk-taking Kuru
+ * rules. It was 'Kuru: withdraw to its own wallet' while AccountCore paid the
+ * caller (Set C); a live policy still carrying that name predates SEN-185 and
+ * names the retired AccountCore.
+ */
+export const KURU_WITHDRAW_RULE = 'Kuru: withdraw to the owner';
 
 /**
  * Every ERC-20 an agent's wallet can come to hold on testnet: Kuru's tokens and
@@ -283,11 +304,11 @@ function returnRules(returnTo: Address, recovery: TxRule): AllowRule[] {
   );
 }
 
-/** `AccountCore.withdraw` and nothing else; the contract pins the recipient. */
-function kuruWithdrawRule(recovery: TxRule): AllowRule {
+/** `AccountCore.withdraw` and nothing else, paying `returnTo` and no one else. */
+function kuruWithdrawRule(recovery: TxRule, returnTo: Address): AllowRule {
   return recovery(KURU_WITHDRAW_RULE, [
     txToEq(KURU_TESTNET_CONTRACTS.accountCore),
-    calldataFunctionEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw'),
+    calldataAddressEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw.recipient', returnTo),
   ]);
 }
 
@@ -312,11 +333,11 @@ export function compileMandate(mandate: Mandate, options: CompileOptions = {}): 
 
   const rules: AllowRule[] = [];
   if (mandate.venues.includes('kuru')) {
-    rules.push(...kuruRules(mandate, tx));
+    rules.push(...kuruRules(mandate, tx, options.agentAddress ?? null));
     if (options.kuruBuilder && mandate.kuru.markets.length > 0) {
       rules.push(...kuruBuilderRules(mandate, tx, options.kuruBuilder));
     }
-    rules.push(kuruWithdrawRule(recovery));
+    if (mandate.returnTo) rules.push(kuruWithdrawRule(recovery, mandate.returnTo));
   }
   if (mandate.venues.includes('perpl')) rules.push(...perplRules(mandate, tx, expiry));
   if (mandate.returnTo) rules.push(...returnRules(mandate.returnTo, recovery));
@@ -336,7 +357,7 @@ export function compileMandate(mandate: Mandate, options: CompileOptions = {}): 
  * a phone ceremony and in the worst case a lost key.
  *
  * So a revoke leaves the exit open. What survives can only move money toward
- * the owner — `AccountCore.withdraw`, which pays the caller, and an ERC-20
+ * the owner — `AccountCore.withdraw` with its recipient pinned to `returnTo`, and an ERC-20
  * `transfer` pinned to `mandate.returnTo` — and every rule that lets the agent
  * take risk is gone, so a revoked agent still cannot approve, deposit, trade or
  * enroll anything. It is also why these rules carry no expiry: see the module
@@ -350,8 +371,10 @@ export function compileMandate(mandate: Mandate, options: CompileOptions = {}): 
 export function compileRevocationRules(mandate: Mandate): AllowRule[] {
   const recovery = recoveryRuleBuilder(mandate);
   const rules: AllowRule[] = [];
-  if (mandate.venues.includes('kuru')) rules.push(kuruWithdrawRule(recovery));
-  if (mandate.returnTo) rules.push(...returnRules(mandate.returnTo, recovery));
+  if (mandate.returnTo) {
+    if (mandate.venues.includes('kuru')) rules.push(kuruWithdrawRule(recovery, mandate.returnTo));
+    rules.push(...returnRules(mandate.returnTo, recovery));
+  }
   return rules;
 }
 
@@ -365,7 +388,7 @@ export interface PolicyCaps {
   readonly perplCollateralAtoms: bigint | null;
   /** Earliest expiry across the rules; `null` if none carries one. Recovery rules carry none. */
   readonly expiresAt: number | null;
-  /** Whether a rule lets the wallet call `AccountCore.withdraw`. */
+  /** Whether a rule lets the wallet call `AccountCore.withdraw` (to the pinned recipient). */
   readonly kuruWithdraw: boolean;
   /** The one address an ERC-20 `transfer` may pay; `null` if no rule allows a transfer. */
   readonly returnTo: Address | null;
@@ -446,7 +469,8 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
       const market = getAddress(to);
       if (!kuruMarkets.includes(market)) kuruMarkets.push(market);
     }
-    if (fn === 'withdraw' && isAddressEqual(to as Address, accountCore)) kuruWithdraw = true;
+    const withdrawTo = find('ethereum_calldata', 'withdraw.recipient', 'eq');
+    if (withdrawTo && isAddressEqual(to as Address, accountCore)) kuruWithdraw = true;
 
     const builder = find('ethereum_calldata', 'approveBuilder.builder', 'eq');
     const builderFee = find('ethereum_calldata', 'approveBuilder.maxFeePps', 'lte');

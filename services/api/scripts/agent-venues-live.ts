@@ -14,7 +14,7 @@
 // What it does, in order, with every hash printed:
 //   1. Reuses the probe agent wallet recorded in .env as PRIVY_AGENT_VENUES_*,
 //      or provisions one (`sente-agent-venues-live`) under a compiled mandate:
-//      Kuru MON-USDC with deposits ≤ 20 USDC per tx, Perpl BTC-PERP with
+//      Kuru WETH-USDC (or --kuru-market) with deposits ≤ 20 USDC per tx, Perpl BTC-PERP with
 //      collateral ≤ 100 AUSD. The wallet is only CREATED, in the shared Privy
 //      app, and only its own policy is ever PATCHed (to renew its expiry).
 //   2. Checks the agent's balances and, if it is short, prints the exact
@@ -76,9 +76,16 @@ import {
 } from '../src/agents/venues/privy-kuru-submitter.ts';
 import { envFileFromArgs, upsertEnv } from './env-file.ts';
 
-const KURU_SYMBOL = 'MON-USDC';
+// MON-USDC's book was empty on both sides on 2026-10-09 (SEN-185), and this run
+// prices its bid off the touch; WETH-USDC was quoted. `--kuru-market <symbol>` overrides.
+const marketFlag = process.argv.indexOf('--kuru-market');
+const KURU_SYMBOL = marketFlag > 0 ? process.argv[marketFlag + 1]! : 'WETH-USDC';
 const PERPL_SYMBOL = 'BTC-PERP';
-const MON_USDC = KURU_TESTNET_MARKETS.find((m) => m.symbol === KURU_SYMBOL)!;
+const KURU_MARKET = ((symbol: string) => {
+  const market = KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol);
+  if (!market) throw new Error(`--kuru-market ${symbol} is not a pinned Kuru market`);
+  return market;
+})(KURU_SYMBOL);
 const USDC = KURU_TESTNET_TOKENS.USDC;
 const KURU_DEPOSIT = '12';
 const KURU_ORDER_NOTIONAL = 10.5;
@@ -105,7 +112,7 @@ function mandateInput(expiresAt: number) {
     expiresAt,
     venues: ['kuru', 'perpl'],
     kuru: {
-      markets: [MON_USDC.address.toLowerCase()],
+      markets: [KURU_MARKET.address.toLowerCase()],
       maxDepositAtoms: { [USDC.address.toLowerCase()]: '20000000' }, // 20 USDC per tx
     },
     perpl: {
@@ -336,7 +343,7 @@ async function main(): Promise<number> {
     const size = (Math.ceil(KURU_ORDER_NOTIONAL / priceNum / step_) * step_).toFixed(
       decimalsOf(market.stepSize),
     );
-    show('kuru bid', `${size} MON at ${price} (best bid ${bestBid})`);
+    show('kuru bid', `${size} ${KURU_MARKET.base.symbol} at ${price} (best bid ${bestBid})`);
 
     const placed = await kuru.placeLimit({
       symbol: KURU_SYMBOL,

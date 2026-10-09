@@ -711,7 +711,7 @@ async function enclaveRefusal(run: RunContext, agent: Agent): Promise<void> {
   const farNonce = nonceBefore + 1_000_000;
   /** One thunk per leg (approve, deposit), so each is signed only when asked for. */
   const legs = (amount: bigint) =>
-    depositCalls(KURU_TESTNET_CONTRACTS.accountCore, USDC, amount).map(
+    depositCalls(KURU_TESTNET_CONTRACTS.accountCore, USDC, amount, address).map(
       (call, i) => () =>
         provider.signTransaction(
           run.agent.walletId,

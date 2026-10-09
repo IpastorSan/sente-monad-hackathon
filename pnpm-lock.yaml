@@ -319,8 +319,8 @@ importers:
         specifier: ^2.4.0
         version: 2.4.0
       '@toxicflow-labs/ts-sdk':
-        specifier: 0.0.4
-        version: 0.0.4(typescript@6.0.3)(zod@3.25.76)
+        specifier: 0.3.0
+        version: 0.3.0(typescript@6.0.3)(zod@3.25.76)
       viem:
         specifier: ^2.56.3
         version: 2.56.3(typescript@6.0.3)(zod@3.25.76)
@@ -2119,8 +2119,8 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
-  '@toxicflow-labs/ts-sdk@0.0.4':
-    resolution: {integrity: sha512-yG0Y78/e+sDyxEYzgqL8bamzEZVUtgKWjDf+FKRRWRa8AlpW9vaCe44TGVRdRsj8xvH1LyS3dXvfH/iiAcwDpw==}
+  '@toxicflow-labs/ts-sdk@0.3.0':
+    resolution: {integrity: sha512-k+9EZr4gbDHA+O5Oz1Kxd1tVsiPTXLJVxwJZtU3zGS7jSA9fHjcieKm2mnXzaOsJFeTeBMmwkvIEEtKIrzCGSQ==}
     engines: {node: '>=20'}
 
   '@tsconfig/node10@1.0.13':
@@ -7731,7 +7731,7 @@ snapshots:
 
   '@tokenizer/token@0.3.0': {}
 
-  '@toxicflow-labs/ts-sdk@0.0.4(typescript@6.0.3)(zod@3.25.76)':
+  '@toxicflow-labs/ts-sdk@0.3.0(typescript@6.0.3)(zod@3.25.76)':
     dependencies:
       viem: 2.56.3(typescript@6.0.3)(zod@3.25.76)
     transitivePeerDependencies:

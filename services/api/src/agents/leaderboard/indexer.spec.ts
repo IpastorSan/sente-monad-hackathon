@@ -30,7 +30,7 @@ const ACCOUNT_ROW = {
   losingTradeCount: 7,
   balances: [
     {
-      token: '0xee0722ead54f1b4fe97be399be43bc0226a6f97e',
+      token: '0xa402b424f392eaa05dbc8779e4502a1f6a96fef1',
       decimals: 6,
       deposited: '150000000',
       withdrawn: '30000000',
@@ -101,7 +101,7 @@ describe('EnvioIndexerStats', () => {
       losingTradeCount: 7,
       balances: [
         {
-          token: '0xee0722ead54f1b4fe97be399be43bc0226a6f97e',
+          token: '0xa402b424f392eaa05dbc8779e4502a1f6a96fef1',
           decimals: 6,
           deposited: '150000000',
           withdrawn: '30000000',

@@ -76,13 +76,19 @@ const OTHER_SENDER_KEYS = [
   'ERC8004_REVIEWER_KEY',
 ];
 
-function parseAmount(raw: string | undefined, fallback: string, decimals: number, name: string) {
+function parseAmount(
+  raw: string | undefined,
+  fallback: string,
+  decimals: number,
+  name: string,
+  { allowZero = false }: { allowZero?: boolean } = {},
+) {
   const value = raw?.trim() ? raw.trim() : fallback;
   if (!/^\d+(\.\d+)?$/.test(value)) {
     throw new Error(`${name} must be a positive decimal amount, got ${JSON.stringify(value)}`);
   }
   const atoms = parseUnits(value, decimals);
-  if (atoms <= 0n) {
+  if (atoms < 0n || (atoms === 0n && !allowZero)) {
     throw new Error(`${name} must be greater than zero, got ${value}`);
   }
   return atoms;
@@ -132,11 +138,15 @@ export function loadStarterKitConfig(env: Env = process.env): StarterKitConfig {
     PERPL_COLLATERAL_DECIMALS,
     'STARTER_DRIP_AUSD',
   );
+  // `0` leaves the Kuru leg out (SEN-185): Kuru's current USDC has no public
+  // faucet, and a kit whose sender lacks a token sends nothing at all — not
+  // even the AUSD Perpl needs.
   const usdc = parseAmount(
     env.STARTER_DRIP_USDC,
     STARTER_KIT_DEFAULTS.usdc,
     KURU_TESTNET_TOKENS.USDC.decimals,
     'STARTER_DRIP_USDC',
+    { allowZero: true },
   );
 
   return {
@@ -150,13 +160,17 @@ export function loadStarterKitConfig(env: Env = process.env): StarterKitConfig {
         atoms: ausd,
         gasLimit: STARTER_KIT_GAS.AUSD,
       },
-      {
-        symbol: 'USDC',
-        address: KURU_TESTNET_TOKENS.USDC.address,
-        decimals: KURU_TESTNET_TOKENS.USDC.decimals,
-        atoms: usdc,
-        gasLimit: STARTER_KIT_GAS.USDC,
-      },
+      ...(usdc > 0n
+        ? [
+            {
+              symbol: 'USDC' as const,
+              address: KURU_TESTNET_TOKENS.USDC.address,
+              decimals: KURU_TESTNET_TOKENS.USDC.decimals,
+              atoms: usdc,
+              gasLimit: STARTER_KIT_GAS.USDC,
+            },
+          ]
+        : []),
     ],
     dailyCapUsers: parsePositiveInt(
       env.STARTER_DRIP_DAILY_CAP_USERS,

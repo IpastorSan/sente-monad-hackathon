@@ -32,8 +32,6 @@ import {
   buildApproveBuilderRequest,
   buildApproveErc20Request,
   buildBatchRequest,
-  buildDepositRequest,
-  buildWithdrawRequest,
   decodeBookUpdatesPacked,
   decodeTradesPacked,
   type NativeOrderInput,
@@ -250,7 +248,7 @@ function abiFunctions(abi: Abi, keep: (fn: AbiFunction) => boolean): Abi {
  * so the selectors cannot drift from what this module signs.
  */
 export const KURU_ORDERBOOK_BATCH_ABI: Abi = abiFunctions(
-  kuruAbi.spotOrderBookAbi as Abi,
+  kuruAbi.orderBookAbi as Abi,
   (fn) => fn.name === 'batch' && BATCH_SIGNATURES.has(fn.inputs.map((i) => i.type).join(',')),
 );
 
@@ -262,7 +260,7 @@ export const KURU_ORDERBOOK_BATCH_ABI: Abi = abiFunctions(
  * `approveBuilder` rule is what pins who is paid and how much.
  */
 export const KURU_ORDERBOOK_BUILDER_BATCH_ABI: Abi = abiFunctions(
-  kuruAbi.spotOrderBookAbi as Abi,
+  kuruAbi.orderBookAbi as Abi,
   (fn) =>
     fn.name === 'batch' && BUILDER_BATCH_SIGNATURES.has(fn.inputs.map((i) => i.type).join(',')),
 );
@@ -279,22 +277,38 @@ export const KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI: Abi = abiFunctions(
   (fn) => fn.name === 'getBuilderApproval',
 );
 
-/** `AccountCore.deposit(token, amount)`, cut from the SDK's ABI for the same reason. */
+/**
+ * `AccountCore.deposit(rootOwner, token, amount)` ONLY — the owner-address
+ * overload, which registers the owner's root on first use. Not the
+ * `deposit(rootAccountId, …)` overload: a policy decodes calldata with ONE
+ * function per name, and `deposit.rootOwner` is the field it pins.
+ *
+ * Unlike Set C's `deposit(token, amount)`, this credits whatever root it names,
+ * not the caller's. Anyone may fund anyone (SEN-185), so a signer that does not
+ * pin `rootOwner` to its own address can be made to pay a stranger's account.
+ */
 export const KURU_ACCOUNT_CORE_DEPOSIT_ABI: Abi = abiFunctions(
   kuruAbi.accountCoreAbi as Abi,
-  (fn) => fn.name === 'deposit',
+  (fn) => fn.name === 'deposit' && fn.inputs[0]?.type === 'address',
 );
 
 /**
- * `AccountCore.withdraw(token, amount)` ONLY — not `withdrawFromAccount`, not
- * `transferBetweenAccounts`. `withdraw` names no recipient: AccountCore debits
- * the caller's own account and pays the caller (`Withdrawal.recipient` =
- * `msg.sender`, traced on testnet in SEN-15). So a policy that allows this one
- * function pins the recipient to the signing wallet itself.
+ * `AccountCore.withdraw(rootAccountId, token, amount, recipient)` ONLY — not
+ * `transferBetweenAccounts`, not `fulfillApprovedWithdrawal`. Unlike Set C's
+ * `withdraw(token, amount)`, which paid `msg.sender`, it pays the `recipient`
+ * it names (SEN-185), so a policy that allows it must pin `withdraw.recipient`.
+ * Only the root's owner (or a WITHDRAW/ADMIN signer of it) may call it, and
+ * the WithdrawalLimiter can refuse it when protocol-wide capacity is spent.
  */
 export const KURU_ACCOUNT_CORE_WITHDRAW_ABI: Abi = abiFunctions(
   kuruAbi.accountCoreAbi as Abi,
   (fn) => fn.name === 'withdraw',
+);
+
+/** `AccountCore.rootAccountIdOf(owner)`: the owner's root id, `0` before its first deposit. */
+export const KURU_ACCOUNT_CORE_ROOT_ID_ABI: Abi = abiFunctions(
+  kuruAbi.accountCoreAbi as Abi,
+  (fn) => fn.name === 'rootAccountIdOf',
 );
 
 /**
@@ -311,6 +325,70 @@ export const KURU_ACCOUNT_CORE_BALANCE_ABI: Abi = abiFunctions(
   kuruAbi.accountCoreAbi as Abi,
   (fn) => fn.name === 'getBalance',
 );
+
+/** The one read a caller of {@link readKuruFreeAtoms} needs to make. */
+export type KuruContractReader = {
+  readContract(request: {
+    address: Address;
+    abi: Abi;
+    functionName: string;
+    args: readonly unknown[];
+  }): Promise<unknown>;
+};
+
+/**
+ * `owner`'s AccountCore root id, `0n` before its first deposit registers it.
+ * An assigned id never changes, so a caller may keep a nonzero one.
+ */
+export async function readKuruRootId(
+  client: KuruContractReader,
+  accountCore: Address,
+  owner: Address,
+): Promise<bigint> {
+  return BigInt(
+    (await client.readContract({
+      address: accountCore,
+      abi: KURU_ACCOUNT_CORE_ROOT_ID_ABI,
+      functionName: 'rootAccountIdOf',
+      args: [owner],
+    })) as number | bigint,
+  );
+}
+
+/** Root `rootId`'s FREE balance of `token`, in atoms; `0n` for no root. */
+export async function readKuruFreeById(
+  client: KuruContractReader,
+  accountCore: Address,
+  rootId: bigint,
+  token: Address,
+): Promise<bigint> {
+  if (rootId === 0n) return 0n;
+  return BigInt(
+    (await client.readContract({
+      address: accountCore,
+      abi: KURU_ACCOUNT_CORE_BALANCE_ABI,
+      functionName: 'getBalance',
+      args: [Number(rootId), token],
+    })) as bigint,
+  );
+}
+
+/**
+ * `owner`'s FREE AccountCore balance of `token`, in atoms: its root id, then
+ * `getBalance(rootId, token)`. Custody is keyed by account id since SEN-185, so
+ * an owner that has never deposited has no id and holds `0`. A caller reading
+ * several tokens, or also needing the id, reads it once with
+ * {@link readKuruRootId} and uses {@link readKuruFreeById}.
+ */
+export async function readKuruFreeAtoms(
+  client: KuruContractReader,
+  accountCore: Address,
+  owner: Address,
+  token: Address,
+): Promise<bigint> {
+  const id = await readKuruRootId(client, accountCore, owner);
+  return readKuruFreeById(client, accountCore, id, token);
+}
 
 /**
  * ERC-20 `transfer(to, amount)`. `@sente/mandate` pins `transfer.to` to the
@@ -435,34 +513,61 @@ export function cancelOrderCall(market: Address, slotIdx: number): KuruCall {
 }
 
 /**
- * Fund the calling account's AccountCore balance: `approve` + `deposit` for an
- * ERC-20, one payable `deposit` for native MON. The approval is for the exact
- * amount, never unlimited — an agent-held account must not leave a standing
- * allowance behind.
+ * Fund `rootOwner`'s AccountCore root: `approve` + `deposit` for an ERC-20, one
+ * payable `deposit` for native MON. `rootOwner` is the calling account itself
+ * in every caller Sente has — the deposit registers its root if it has none.
+ * The approval is for the exact amount, never unlimited — an agent-held
+ * account must not leave a standing allowance behind.
  */
-export function depositCalls(accountCore: Address, token: KuruToken, amount: bigint): KuruCall[] {
+export function depositCalls(
+  accountCore: Address,
+  token: KuruToken,
+  amount: bigint,
+  rootOwner: Address,
+): KuruCall[] {
   if (amount <= 0n) {
     throw new KuruOrderError('deposit amount must be positive');
   }
-  if (isAddressEqual(token.address, NATIVE_TOKEN)) {
-    return [toCall(buildDepositRequest({ token: NATIVE_TOKEN, amount, accountCore }))];
-  }
+  const deposit = toCall({
+    address: accountCore,
+    abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+    functionName: 'deposit',
+    args: [rootOwner, token.address, amount],
+    value: isAddressEqual(token.address, NATIVE_TOKEN) ? amount : 0n,
+  });
+  if (isAddressEqual(token.address, NATIVE_TOKEN)) return [deposit];
   return [
     toCall(buildApproveErc20Request({ token: token.address, spender: accountCore, amount })),
-    toCall(buildDepositRequest({ token: token.address, amount, accountCore })),
+    deposit,
   ];
 }
 
 /**
- * Take `amount` of `token` out of the calling account's AccountCore balance,
- * back to the calling address. Only free balance can leave; what resting
- * orders reserve stays until they are cancelled.
+ * Take `amount` of `token` out of root `rootAccountId`'s free AccountCore
+ * balance and pay it to `recipient`. Only free balance can leave; what resting
+ * orders reserve stays until they are cancelled. The recipient is explicit —
+ * AccountCore no longer pays the caller by default — and is the account's own
+ * address or its owner's in every caller Sente has.
  */
-export function withdrawCall(accountCore: Address, token: KuruToken, amount: bigint): KuruCall {
+export function withdrawCall(
+  accountCore: Address,
+  token: KuruToken,
+  amount: bigint,
+  rootAccountId: bigint,
+  recipient: Address,
+): KuruCall {
   if (amount <= 0n) {
     throw new KuruOrderError('withdraw amount must be positive');
   }
-  return toCall(buildWithdrawRequest({ token: token.address, amount, accountCore }));
+  if (rootAccountId <= 0n) {
+    throw new KuruOrderError('this account has no Kuru account to withdraw from');
+  }
+  return toCall({
+    address: accountCore,
+    abi: KURU_ACCOUNT_CORE_WITHDRAW_ABI,
+    functionName: 'withdraw',
+    args: [rootAccountId, token.address, amount, recipient],
+  });
 }
 
 /** ERC-20 `transfer(to, amount)` from the calling address: how an agent returns funds to its owner. */
@@ -630,7 +735,7 @@ export function decodeOrderOutcome(
     let event;
     try {
       event = decodeEventLog({
-        abi: kuruAbi.spotOrderBookAbi,
+        abi: kuruAbi.orderBookAbi,
         data: log.data,
         topics: log.topics as [Hex, ...Hex[]],
       });
@@ -721,7 +826,7 @@ export function decodeMakerFills(logs: readonly KuruChainLog[], market: Address)
     let event;
     try {
       event = decodeEventLog({
-        abi: kuruAbi.spotOrderBookAbi,
+        abi: kuruAbi.orderBookAbi,
         data: log.data,
         topics: log.topics as [Hex, ...Hex[]],
       });

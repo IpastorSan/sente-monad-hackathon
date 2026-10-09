@@ -124,6 +124,7 @@ function prepareSell(intent: TradeIntent, tamper: Tamper = {}): PreparedTrade {
       KURU_TESTNET_CONTRACTS.accountCore,
       KURU_TESTNET_TOKENS.MON,
       BigInt(place.maxDepositAtoms),
+      WALLET,
     ),
     placeOrderCall(
       place.market as Address,

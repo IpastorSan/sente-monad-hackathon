@@ -43,10 +43,10 @@ test('two venues name both, with leverage and either quote token', () => {
 });
 
 test('three markets are listed with a final "and"', () => {
-  const kuruMarkets = [market('MON-USDC'), market('WETH-USDC'), market('cbBTC-USDC')];
+  const kuruMarkets = [market('MON-USDC'), market('WETH-USDC'), market('WBTC-USDC')];
   assert.match(
     readBack(form({ kuruMarkets }), NOW),
-    /^May trade MON-USDC, WETH-USDC and cbBTC-USDC on Kuru,/,
+    /^May trade MON-USDC, WETH-USDC and WBTC-USDC on Kuru,/,
   );
 });
 

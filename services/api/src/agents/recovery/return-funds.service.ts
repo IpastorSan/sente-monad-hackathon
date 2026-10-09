@@ -6,10 +6,13 @@
  * its funds home. Two legs per asset, in this order and never the other way
  * round:
  *
- * 1. `AccountCore.withdraw`, which pays the caller, so Kuru collateral lands in
- *    the agent's own wallet. There is no recipient parameter to get wrong.
- * 2. An ERC-20 `transfer` to `mandate.returnTo` — the owner's Privy wallet,
- *    resolved server-side at hire (`return-address.ts`).
+ * 1. `AccountCore.withdraw` with `recipient` = `mandate.returnTo`, so Kuru
+ *    collateral goes straight home. Since SEN-185 the call names its recipient
+ *    and the policy pins that field to `returnTo`; Set C paid the caller, and
+ *    the collateral then rode the transfer below.
+ * 2. An ERC-20 `transfer` of what the agent's own WALLET holds to
+ *    `mandate.returnTo` — the owner's Privy wallet, resolved server-side at hire
+ *    (`return-address.ts`).
  *
  * Both are the RECOVERY rules of the compiled mandate (SEN-15), so both are
  * signed by the agent's own enclave key and neither needs the owner's signature:
@@ -33,11 +36,13 @@ import type { Decimal } from '@sente/venues';
 import {
   erc20TransferCall,
   fromUnits,
-  KURU_ACCOUNT_CORE_BALANCE_ABI,
+  readKuruFreeById,
+  readKuruRootId,
   KURU_MEASURED_GAS,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_TOKENS,
   toUnits,
+  type KuruContractReader,
 } from '@sente/venues/kuru';
 import { PERPL_COLLATERAL_DECIMALS } from '@sente/venues/perpl';
 import {
@@ -109,6 +114,17 @@ export interface ReturnChainReader {
 }
 
 export function returnChainReader(client: PublicClient): ReturnChainReader {
+  const reader = client as KuruContractReader;
+  // Custody is keyed by root id (SEN-185). An assigned id never changes, so a
+  // nonzero one is read once per holder, not once per asset of every return.
+  const rootIds = new Map<Address, bigint>();
+  const rootIdOf = async (holder: Address): Promise<bigint> => {
+    const known = rootIds.get(holder);
+    if (known !== undefined) return known;
+    const id = await readKuruRootId(reader, KURU_TESTNET_CONTRACTS.accountCore, holder);
+    if (id !== 0n) rootIds.set(holder, id);
+    return id;
+  };
   return {
     monBalance: (address) => client.getBalance({ address }),
     tokenBalance: (token, holder) =>
@@ -118,13 +134,10 @@ export function returnChainReader(client: PublicClient): ReturnChainReader {
         functionName: 'balanceOf',
         args: [holder],
       }),
-    collateral: (token, holder) =>
-      client.readContract({
-        address: KURU_TESTNET_CONTRACTS.accountCore,
-        abi: KURU_ACCOUNT_CORE_BALANCE_ABI,
-        functionName: 'getBalance',
-        args: [holder, token],
-      }) as Promise<bigint>,
+    collateral: async (token, holder) => {
+      const id = await rootIdOf(holder);
+      return readKuruFreeById(reader, KURU_TESTNET_CONTRACTS.accountCore, id, token);
+    },
     maxFeePerGas: async () => {
       const fees = await client.estimateFeesPerGas();
       if (fees.maxFeePerGas === undefined) throw new Error('the RPC returned no EIP-1559 fees');
@@ -138,7 +151,11 @@ export const RETURN_CHAIN = Symbol('RETURN_CHAIN');
 
 /** The slice of the agent's Kuru venue this needs: taking its collateral back. */
 export interface ReturnKuruVenue {
-  withdraw(asset: string, amount: Decimal): Promise<{ transactionHash: Hex; success: boolean }>;
+  withdraw(
+    asset: string,
+    amount: Decimal,
+    recipient: Address,
+  ): Promise<{ transactionHash: Hex; success: boolean }>;
 }
 
 /** The slice of {@link AgentVenues} this needs. */
@@ -179,7 +196,10 @@ export function returnableAssets(): ReturnableAsset[] {
   });
 }
 
-/** One asset's plan: how much to pull off Kuru, and how much to send home. */
+/**
+ * One asset's plan: how much to withdraw off Kuru straight to the owner, and
+ * how much of the agent's wallet balance to transfer home.
+ */
 interface AssetPlan {
   asset: ReturnableAsset;
   withdrawAtoms: bigint;
@@ -339,7 +359,8 @@ export class ReturnFundsService {
   ): Promise<AssetPlan[]> {
     const plans: AssetPlan[] = [];
     for (const asset of assets) {
-      // Sequential, not `Promise.all`: two reads per asset for five assets is a
+      // Sequential, not `Promise.all`: about two reads per asset (the Kuru root id
+      // is read once per agent, SEN-185) for six assets is a
       // dozen requests, and the public RPC's 15-a-second ceiling is not far off.
       const free = asset.kuru ? await this.chain.collateral(asset.address, agent.address) : 0n;
       const held = await this.chain.tokenBalance(asset.address, agent.address);
@@ -349,7 +370,7 @@ export class ReturnFundsService {
       // at its limit (gotcha 4). With no `amount` the budget is everything, so
       // this is the entire free collateral, as it should be.
       const withdrawAtoms = min(free, budget > held ? budget - held : 0n);
-      plans.push({ asset, withdrawAtoms, transferAtoms: min(held + withdrawAtoms, budget) });
+      plans.push({ asset, withdrawAtoms, transferAtoms: min(held, budget) });
     }
     return plans;
   }
@@ -383,7 +404,7 @@ export class ReturnFundsService {
     );
   }
 
-  /** One asset: withdraw, re-read, transfer. */
+  /** One asset: withdraw straight home, then send what the wallet itself holds. */
   private async move(
     agent: AgentRecord,
     identity: AgentIdentity,
@@ -399,7 +420,8 @@ export class ReturnFundsService {
 
     if (plan.withdrawAtoms > 0n && kuru) {
       const amount = fromUnits(plan.withdrawAtoms, asset.decimals);
-      const execution = await kuru.withdraw(asset.symbol, amount);
+      // Paid to the owner directly: the policy pins `withdraw.recipient` to it.
+      const execution = await kuru.withdraw(asset.symbol, amount, returnTo);
       result.withdrawn = {
         amount,
         transactionHash: execution.transactionHash,
@@ -407,17 +429,14 @@ export class ReturnFundsService {
       };
     }
 
-    // Re-read rather than add: a withdraw that reverted is still a transaction,
-    // and transferring what it did not deliver would revert too, at full price.
+    // Re-read rather than trust the plan: the wallet is what the transfer
+    // spends, and sending more than it holds would revert at full price.
     const held = await this.chain.tokenBalance(asset.address, agent.address);
     const send = min(held, plan.transferAtoms);
     if (send === 0n) {
-      return {
-        ...result,
-        skipped: `the agent's wallet holds no ${asset.symbol} to send${
-          result.withdrawn ? ' after the withdraw' : ''
-        }`,
-      };
+      // Collateral withdrawn straight home is not a skip.
+      if (result.withdrawn) return result;
+      return { ...result, skipped: `the agent's wallet holds no ${asset.symbol} to send` };
     }
     const [receipt] = await this.sender.sendAll(identity, [
       { ...erc20TransferCall(asset.address, returnTo, send), gas: KURU_MEASURED_GAS.erc20Transfer },

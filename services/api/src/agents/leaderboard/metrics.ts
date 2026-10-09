@@ -68,7 +68,7 @@ export const FORMULA =
  * its raw atoms are denominated in. Lowercase, because the indexer keys token
  * addresses lowercase (`schema.graphql`).
  *
- * An allowlist rather than "any 6-decimal token" (SEN-32): Kuru lists XAUt, a
+ * An allowlist rather than "any 6-decimal token" (SEN-32): Kuru lists XAUT, a
  * 6-decimal token that is tokenised gold, not a dollar. Counting a gold balance
  * as USD capital would silently deflate that agent's ROI by whatever gold
  * trades at. MON (18) is gas an agent spends, not collateral it risks, and is

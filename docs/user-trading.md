@@ -46,6 +46,9 @@ is test harness, not phone code. No key is ever printed.
 
 ## The run
 
+On Kuru's **Set C, the previous market set** (`docs/kuru.md`): every Kuru hash below is on
+books and a USDC that Kuru stopped listing on 2026-09-25 (SEN-185).
+
 - User wallet `0x0d46fB9bD65FF35604cD654Cf98C5bb6ac75cdaF` (Privy
   `bb4xa8cfoxozqyf8p40j8dky`), owned by a throwaway device key; it held 0 MON
   throughout. Every step below is a Privy-sponsored send.

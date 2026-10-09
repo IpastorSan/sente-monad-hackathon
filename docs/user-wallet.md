@@ -36,7 +36,7 @@ Both answer with the same object:
     { "symbol": "MON", "address": "0x0000…0000", "decimals": 18, "raw": "0", "amount": "0" },
     {
       "symbol": "USDC",
-      "address": "0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E",
+      "address": "0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1",
       "decimals": 6,
       "raw": "0",
       "amount": "0"

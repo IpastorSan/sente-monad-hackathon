@@ -5,7 +5,14 @@ import 'reflect-metadata';
 
 import { BadRequestException } from '@nestjs/common';
 
-import { MANDATE_CHAIN_ID, type AuthorizationPayload, type Mandate } from '@sente/mandate';
+import {
+  MANDATE_CHAIN_ID,
+  retiredKuruMessage,
+  retiredKuruReferences,
+  withCurrentKuru,
+  type AuthorizationPayload,
+  type Mandate,
+} from '@sente/mandate';
 import { getPreset, type ParamValue } from '@sente/presets';
 import { Type } from 'class-transformer';
 import {
@@ -461,6 +468,25 @@ export interface AgentResponseDto {
    * when there is one and says nothing when there is not.
    */
   erc8004AgentId?: string;
+  /**
+   * PRESENT ONLY WHEN THE MANDATE NAMES KURU'S RETIRED DEPLOYMENT (SEN-185).
+   * Kuru moved testnet to new books, tokens and AccountCore on 2026-09-25; this
+   * agent's live policy still pins the old ones, so it cannot trade Kuru until
+   * its owner amends it. `message` is the sentence to show the owner;
+   * `mandate` is the stored mandate with every retired book and token carried
+   * to its successor (cbBTC-USDC → WBTC-USDC, …) — send it as the amend.
+   */
+  kuruRetired?: {
+    message: string;
+    moves: {
+      kind: 'market' | 'token';
+      from: string;
+      fromSymbol: string;
+      to: string;
+      toSymbol: string;
+    }[];
+    mandate: MandateDto;
+  };
   status: AgentStatus;
   /**
    * WHO CAN CHANGE THIS AGENT'S MANDATE (SEN-43), and therefore whether
@@ -775,6 +801,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     walletId: agent.walletId,
     policyId: agent.policyId,
     ...(agent.erc8004AgentId !== undefined ? { erc8004AgentId: agent.erc8004AgentId } : {}),
+    ...toKuruRetiredField(agent),
     status: agent.status,
     ownerKind: agent.ownerKind,
     ...(agent.status === 'revoked' ? { policyCleared: agent.policyCleared } : {}),
@@ -795,6 +822,21 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
         }
       : null,
     ...toGasFundingFields(agent),
+  };
+}
+
+/** `kuruRetired` for an agent whose mandate names Kuru's retired books; nothing otherwise. */
+function toKuruRetiredField(agent: AgentRecord): Pick<AgentResponseDto, 'kuruRetired'> {
+  // A revoked agent has nothing left to amend.
+  if (agent.status === 'revoked') return {};
+  const moves = retiredKuruReferences(agent.mandate);
+  if (moves.length === 0) return {};
+  return {
+    kuruRetired: {
+      message: retiredKuruMessage(moves),
+      moves: moves.map((m) => ({ ...m })),
+      mandate: toMandateDto(withCurrentKuru(agent.mandate)),
+    },
   };
 }
 

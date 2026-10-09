@@ -331,8 +331,15 @@ export class AgentsService {
    * `compileMandate` with the Sente fee rules when the fee is on and the
    * mandate trades on Kuru, and the grant to record beside the mandate: the
    * agent's orders pay the fee only while its live policy carries them.
+   *
+   * `agentAddress` is the agent's own wallet once it exists (every amend): it
+   * pins Kuru's `deposit.rootOwner` so the agent can fund only its own account
+   * (SEN-185). A hire compiles before Privy creates the wallet, so it has none.
    */
-  private compile(mandate: Mandate): {
+  private compile(
+    mandate: Mandate,
+    agentAddress?: Address,
+  ): {
     rules: PolicyRule[];
     kuruBuilder: AgentRecord['kuruBuilder'];
   } {
@@ -341,7 +348,11 @@ export class AgentsService {
       fee && mandate.venues.includes('kuru') && mandate.kuru.markets.length > 0
         ? { address: fee.address, maxFeePps: fee.feePps }
         : undefined;
-    return { rules: compileMandate(mandate, { kuruBuilder: kuruBuilder ?? null }), kuruBuilder };
+    const rules = compileMandate(mandate, {
+      kuruBuilder: kuruBuilder ?? null,
+      agentAddress: agentAddress ?? null,
+    });
+    return { rules, kuruBuilder };
   }
 
   /**
@@ -722,7 +733,7 @@ export class AgentsService {
         );
       }
       const mandate = await this.parseFor(principal, rawMandate);
-      const { rules, kuruBuilder } = this.compile(mandate);
+      const { rules, kuruBuilder } = this.compile(mandate, agent.address);
       try {
         await this.wallets.updatePolicy(agent.policyId, rules);
       } catch (error) {
@@ -834,7 +845,7 @@ export class AgentsService {
     const mandate = await this.parseFor(principal, rawMandate);
     // The SAME compiler the one-step path and the hire use: what the owner
     // approves has to be what the enclave would have been given anyway.
-    const { rules, kuruBuilder } = this.compile(mandate);
+    const { rules, kuruBuilder } = this.compile(mandate, agent.address);
     return this.prepare(principal, agent, 'mandate_amend', rules, { mandate, kuruBuilder });
   }
 

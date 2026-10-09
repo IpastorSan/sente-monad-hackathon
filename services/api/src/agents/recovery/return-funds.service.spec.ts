@@ -153,16 +153,16 @@ function transferOf(tx: AgentTransaction): { to: Address; amount: bigint } {
 }
 
 describe('ReturnFundsService', () => {
-  it('withdraws Kuru collateral first, then transfers the wallet balance to the owner', async () => {
+  it('withdraws Kuru collateral straight to the owner, then transfers the wallet balance', async () => {
     const { service, kuru, chain, sender, agent } = await setup();
     // 4 USDC free in Kuru; a fifth is reserved by a resting order, and
     // `AccountCore.getBalance` does not report that at all.
     chain.free = { [USDC.address]: 4_000_000n };
-    // Before the withdraw the wallet holds 1.5; after it, the 4 have landed too.
+    // The wallet holds 1.5. SEN-185: the withdraw pays the owner directly, so
+    // the wallet's balance is the same after it.
     chain.held = { [USDC.address]: 1_500_000n };
     kuru.onWrite = (method) => {
       sender.order.push(method);
-      chain.held = { [USDC.address]: 5_500_000n };
       return Promise.resolve();
     };
 
@@ -170,20 +170,36 @@ describe('ReturnFundsService', () => {
 
     // The withdraw ran before the transfer, and only those two writes ran.
     expect(sender.order).toEqual(['withdraw', 'transfer']);
-    expect(kuru.writes()).toEqual([{ method: 'withdraw', args: { asset: 'USDC', amount: '4' } }]);
+    expect(kuru.writes()).toEqual([
+      { method: 'withdraw', args: { asset: 'USDC', amount: '4', recipient: OWNER } },
+    ]);
     expect(outcome.returnTo).toBe(OWNER);
     expect(outcome.assets).toEqual([
       {
         asset: 'USDC',
-        withdrawn: { amount: '4', transactionHash: expect.any(String), success: true },
-        // 5.5: the 1.5 it held plus the 4 the withdraw delivered. The reserved
+        // The 4 off the venue went home in the withdraw itself. The reserved
         // fifth stays on the venue until the order that holds it is cancelled.
-        returned: { amount: '5.5', transactionHash: expect.any(String), success: true },
+        withdrawn: { amount: '4', transactionHash: expect.any(String), success: true },
+        returned: { amount: '1.5', transactionHash: expect.any(String), success: true },
       },
     ]);
     expect(sender.sent).toHaveLength(1);
-    expect(transferOf(sender.sent[0]!)).toEqual({ to: OWNER, amount: 5_500_000n });
+    expect(transferOf(sender.sent[0]!)).toEqual({ to: OWNER, amount: 1_500_000n });
     expect(sender.sent[0]!.to).toBe(USDC.address);
+  });
+
+  it('a Kuru-only return is the withdraw alone, not a skip', async () => {
+    const { service, chain, sender, agent } = await setup();
+    chain.free = { [USDC.address]: 4_000_000n };
+    chain.held = {};
+    const outcome = await service.returnFunds(ALICE, agent.id, { asset: 'USDC' });
+    expect(outcome.assets).toEqual([
+      {
+        asset: 'USDC',
+        withdrawn: { amount: '4', transactionHash: expect.any(String), success: true },
+      },
+    ]);
+    expect(sender.sent).toHaveLength(0);
   });
 
   it('sends every asset home when none is named, and says why each was skipped', async () => {
