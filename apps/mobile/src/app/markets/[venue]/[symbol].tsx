@@ -19,7 +19,8 @@
  *
  * A wide web window (SEN-167) splits the page: the same sections in the same
  * order on the left, with a taller chart, and on the right the order ticket
- * itself (`TicketPanel`) for a Kuru market with trading on, else the Sell/Buy
+ * itself (`TicketPanel`) for a Kuru market with trading on or a Perpl market
+ * with perps on (SEN-120), else the Sell/Buy
  * pair that is pinned to the bottom on a phone. Narrow keeps the phone tree.
  */
 import * as Haptics from '@/platform/haptics';
@@ -78,7 +79,7 @@ import { usePolling } from '@/markets/usePolling';
 import { useSession } from '@/session';
 import { isUnavailable, TradeApiError } from '@/trade/api';
 import { canEmbedTicket, TicketPanel } from '@/trade/TicketScreen';
-import { useTradingEnabled } from '@/trade/useTradingEnabled';
+import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { Sigil, Stone } from '@/ui/goban';
 import { Button, Card, Loading, Notice, Section, Sheet, TopBar, useWide, WIDE_MAX } from '@/ui/kit';
@@ -180,7 +181,7 @@ function Asset({
   const [starred, toggleStar] = useFavourite(marketKey(market));
   const agents = useAgentsTrading(market);
   const position = useYourPositionUntilPortfolio(market);
-  const trading = useTradingEnabled();
+  const { trading, perps } = useTradingCapabilities();
   const fills = useMarketFills(market, trading);
   const chartHeight = wide ? CHART_HEIGHT_WIDE : CHART_HEIGHT;
 
@@ -452,7 +453,7 @@ function Asset({
             {sections}
           </ScrollView>
           <View style={styles.deskSide}>
-            {trading && canEmbedTicket(market) ? (
+            {trading && canEmbedTicket(market, perps) ? (
               <TicketPanel market={market} />
             ) : (
               <View style={styles.deskActions}>

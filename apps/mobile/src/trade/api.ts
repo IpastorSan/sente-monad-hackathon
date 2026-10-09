@@ -79,6 +79,15 @@ export function isTradingEnabled(input: {
   );
 }
 
+/**
+ * Whether the app may offer perps from the user's own wallet (SEN-120):
+ * trading is on and the API trades Perpl for users. Off, a perp market keeps
+ * pointing at an agent.
+ */
+export function isPerpsEnabled(input: Parameters<typeof isTradingEnabled>[0]): boolean {
+  return isTradingEnabled(input) && input.capabilities?.venues.perpl === true;
+}
+
 export type TradeApiOptions = {
   /** The same session token source `AgentsApi`, `MarketsApi` and `WalletApi` send. */
   auth: SessionAuth;

@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { isTradingEnabled, isUnavailable, TradeApi, TradeApiError } from './api.ts';
+import { isPerpsEnabled, isTradingEnabled, isUnavailable, TradeApi, TradeApiError } from './api.ts';
 import type { TradeCapabilities, TradeIntent, TradeRefusalReason } from './types.ts';
 
 const BASE = 'http://api.test';
@@ -184,4 +184,22 @@ test('trading is on only with the build flag, the server flag and testnet', () =
   assert.equal(isTradingEnabled({ ...ok, capabilities: null }), false);
   assert.equal(isTradingEnabled({ ...ok, capabilities: { ...on, enabled: false } }), false);
   assert.equal(isTradingEnabled({ ...ok, network: 'mainnet' }), false);
+});
+
+test('perps are on only with trading on and the Perpl venue on', () => {
+  const on: TradeCapabilities = {
+    enabled: true,
+    atomicBatch: false,
+    chainId: 10143,
+    venues: { kuru: true, perpl: true },
+  };
+  const ok = { buildFlag: '1', capabilities: on, network: 'testnet' } as const;
+  assert.equal(isPerpsEnabled(ok), true);
+  assert.equal(
+    isPerpsEnabled({ ...ok, capabilities: { ...on, venues: { kuru: true, perpl: false } } }),
+    false,
+  );
+  assert.equal(isPerpsEnabled({ ...ok, capabilities: { ...on, enabled: false } }), false);
+  assert.equal(isPerpsEnabled({ ...ok, buildFlag: undefined }), false);
+  assert.equal(isPerpsEnabled({ ...ok, network: 'mainnet' }), false);
 });

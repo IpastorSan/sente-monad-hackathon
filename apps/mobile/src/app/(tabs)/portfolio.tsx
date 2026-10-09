@@ -58,6 +58,8 @@ import {
 } from '@/portfolio/view';
 import { useSession } from '@/session';
 import { describeTradeError, kuruCancelDraft, runTrade, type TradeFlowState } from '@/trade/flow';
+import { usePerplSetup } from '@/trade/usePerplSetup';
+import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Button, Card, Loading, Notice, Row, Screen, Segmented, Sheet } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { AsOf } from '@/ui/trading';
@@ -82,6 +84,10 @@ export default function PortfolioScreen() {
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [kuruWithdrawOpen, setKuruWithdrawOpen] = useState(false);
   const [cancelling, setCancelling] = useState<OrderRow | null>(null);
+  // SEN-120: a wallet with no Perpl account (or no trading key here) is
+  // offered the setup where its perps would be listed.
+  const { perps } = useTradingCapabilities();
+  const perplSetup = usePerplSetup(perps);
 
   // With trading off the cash comes from the wallet session; re-read it on
   // focus the way Home does, since balances move while you are elsewhere.
@@ -221,6 +227,12 @@ export default function PortfolioScreen() {
               ) : (
                 <>
                   <Unread sections={held.unread} />
+                  {perplSetup.kind === 'needed' ? (
+                    <PerpsSetupCard
+                      open={perplSetup.needs.open}
+                      onSetup={() => router.push('/trade/perpl-setup')}
+                    />
+                  ) : null}
                   {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
                     <Text style={[text.dim, styles.empty]}>
                       {user.portfolio
@@ -337,6 +349,30 @@ function totalNote(held: Holdings, agentsLoading: boolean) {
 }
 
 const VENUE_NAME = { kuru: 'Kuru', perpl: 'Perpl' } as const;
+
+/** Perps are on but this wallet can't trade them from here yet: say what setting up does. */
+function PerpsSetupCard({ open, onSetup }: { open: boolean; onSetup: () => void }) {
+  return (
+    <Card style={styles.perpsCard}>
+      <Text style={text.label}>Perps on Perpl</Text>
+      <Text style={text.title}>
+        {open ? 'Trade perps from your wallet' : 'Finish setting up perps'}
+      </Text>
+      <Text style={text.dim}>
+        {open
+          ? 'Open a Perpl account with 100 AUSD or more, and this device gets a key that can trade it, never withdraw. About 20–40 s.'
+          : 'Your Perpl account is open. This device still needs its trading key.'}
+      </Text>
+      <Button
+        label={open ? 'Set up perps' : 'Finish setup'}
+        kind="soft"
+        size="sm"
+        icon="key"
+        onPress={onSetup}
+      />
+    </Card>
+  );
+}
 
 /** One notice per `/portfolio` section that failed: unknown, never drawn as empty (SEN-123). */
 function Unread({ sections }: { sections: readonly PortfolioSection[] }) {
@@ -626,6 +662,7 @@ function phaseLabel(phase: TradeFlowState['phase'] | null): string {
 }
 
 const styles = StyleSheet.create({
+  perpsCard: { marginBottom: 12, gap: 8 },
   head: {
     height: 48,
     marginTop: 24,
