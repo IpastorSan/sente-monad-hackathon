@@ -70,10 +70,28 @@ Published verbatim as `formula` in the response:
 | `roi`             | `realisedPnl / capitalDeployed`, rounded half up at 4dp. `null` when there is no capital to divide by.                                                                                                                                                                                                        |
 
 Everything is summed with `BigInt` and a scale — a float only ever appears
-after the digit has been decided (`metrics.ts`). The one mixed-unit caveat, and
-it is in the response's `notes` too: Kuru's PnL is USDC and Perpl's is AUSD.
-Both are 6-decimal stables on Monad testnet and the indexer's own `*Usd` field
-names treat them as one unit; this sums them the same way.
+after the digit has been decided (`metrics.ts`).
+
+### Kuru only: Perpl is not indexed (SEN-171)
+
+The indexer covers **Kuru alone**, so every number in the table above is a
+Kuru number. Perpl was dropped from it on 2026-10-09: its exchange emits about
+216,000 events an hour, and the Envio plan the indexer runs on stops at 100,000
+events in total (`docs/indexer.md` §budget). A Perpl agent's empty indexer row
+is therefore not "zero trades", and the response says so twice:
+
+- `coverage: { indexed: ['kuru'], notIndexed: [{ venue: 'perpl', reason }] }`
+  on every answer, the failures included;
+- the same `reason` sentence in `notes`, which the app prints under the table.
+
+What the board does show for Perpl comes from the agent's **own event log**:
+each row carries `perpl: { source: 'agent-event-log', settled, held, open,
+realisedPnl, partial? }`, cut from the same verdicts as `theses` (SEN-22) and
+restricted to Perpl. `realisedPnl` is the summed AUSD PnL of the settled Perpl
+theses, net of fees and funding, exact. It is `null` only when the agent's
+mandate does not allow Perpl and its log holds no Perpl thesis. It is never
+added to the Kuru USDC figure and never enters the ranking: it is the agent's
+own record, not the chain's, and a log that has dropped events says `partial`.
 
 ### Units: two domains arrive, one leaves (SEN-32)
 
@@ -91,8 +109,8 @@ dollars. Summing a raw `net` straight into the dollar total is the SEN-32 bug:
 25 USDC deployed printed as `25,000,000.00` and pushed every ROI to `0%`.
 
 What counts as a dollar is an **allowlist of token addresses**, not a decimals
-test: Kuru's own USDC and Perpl's AUSD collateral, taken from
-`packages/venues` (`CAPITAL_TOKENS` in `metrics.ts`). The decimals alone cannot
+test: Kuru's own USDC, and Perpl's AUSD collateral should Perpl ever be
+indexed again, taken from `packages/venues` (`CAPITAL_TOKENS` in `metrics.ts`). The decimals alone cannot
 tell a dollar from an ounce — Kuru also lists **XAUt, tokenised gold with the
 same 6 decimals**, and counting a gold balance as USD capital would deflate
 that agent's ROI by whatever gold trades at. A venue that adds a new stable
@@ -113,11 +131,11 @@ every row that has one.
 
 ### Three sources, two denominators
 
-| Source                 | What it contributes                                                                |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| the indexer (SEN-25)   | `n`, wins, losses, fills, realised PnL, capital deployed — the **ranked** numbers  |
-| the event log (SEN-22) | `theses: { settled, held, open }` — a per-**thesis** reading, shown beside the row |
-| the agent store        | name, model, mandate summary                                                       |
+| Source                 | What it contributes                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the indexer (SEN-25)   | `n`, wins, losses, fills, realised PnL, capital deployed — the **ranked** numbers, Kuru only                                                        |
+| the event log (SEN-22) | `theses: { settled, held, open }` — a per-**thesis** reading, shown beside the row; and `perpl`, the same reading for Perpl alone with its AUSD PnL |
+| the agent store        | name, model, mandate summary                                                                                                                        |
 
 The two readings are deliberately **not** blended: a thesis settles only when
 its own fills close it (`held` is a boolean), while `n` counts reducing fills,
@@ -141,6 +159,9 @@ again. `AgentStore` is read through `listActive()` for the same reason.
 - **The URL is never echoed** in a response: an Envio endpoint may carry a
   token in its query, and `fetch`'s own failure message is the bare
   `fetch failed`.
+- **A venue the indexer does not cover is named, not zeroed.** `coverage` and a
+  note say Perpl is not indexed and why; its figures come from the agent's own
+  trail, labelled as such.
 - **Testnet samples are thin.** The last note in every response says so. A win
   rate over four trades is a fact about four trades.
 
@@ -148,19 +169,18 @@ again. `AgentStore` is read through `listActive()` for the same reason.
 
 ## Verification
 
-| Check                                              | Command                                               | State                                                                                                                    |
-| -------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| API typecheck                                      | `mise exec -- pnpm --filter @sente/api run typecheck` | pass                                                                                                                     |
-| API specs (metrics, n < 3, client, service, route) | `mise exec -- pnpm --filter @sente/api run test`      | pass (43 leaderboard, 513 total)                                                                                         |
-| Mobile specs (row formatting)                      | `mise exec -- pnpm --filter @sente/mobile run test`   | pass                                                                                                                     |
-| Root typecheck / lint                              | `mise exec -- pnpm run typecheck`, `… run lint`       | pass                                                                                                                     |
-| Live query against a running indexer               | `envio dev` + `curl localhost:3000/leaderboard`       | **not run** — no Envio deployment and no `ENVIO_API_TOKEN` (SEN-25 §hypersync), so there is no endpoint to point this at |
+| Check                                              | Command                                               | State                                                                                                                       |
+| -------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| API typecheck                                      | `mise exec -- pnpm --filter @sente/api run typecheck` | pass                                                                                                                        |
+| API specs (metrics, n < 3, client, service, route) | `mise exec -- pnpm --filter @sente/api run test`      | pass (54 leaderboard, 1450 total, 2026-10-09)                                                                               |
+| Mobile specs (row formatting)                      | `mise exec -- pnpm --filter @sente/mobile run test`   | pass                                                                                                                        |
+| Root typecheck / lint                              | `mise exec -- pnpm run typecheck`, `… run lint`       | pass                                                                                                                        |
+| Live query against a running indexer               | `envio dev` + `curl localhost:3000/leaderboard`       | **not run** — the first Envio deployment hit its event cap before this was tried, and the Kuru-only one is not deployed yet |
 
 **What is not proven:** the GraphQL document has been executed only against the
-recording `fetch` in `indexer.spec.ts`. `docs/indexer.md` records the same
-caveat for its own queries — **no Envio deployment exists**, so the query is
-written against the generated schema (`Account`, `balances`, `_in`, `limit`)
-but has never been answered by Hasura. The first thing to do once the indexer
+recording `fetch` in `indexer.spec.ts`. It is written against the generated
+schema (`Account`, `balances`, `_in`, `limit`) — none of which SEN-171 removed —
+but has never been answered by a live Hasura. The first thing to do once the indexer
 is deployed is run it and compare one agent's `n` against the Ledger's own
 fills.
 
