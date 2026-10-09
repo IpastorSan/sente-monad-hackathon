@@ -21,10 +21,14 @@ import type { Address } from 'viem';
 import {
   buildMandate,
   defaultMandateForm,
+  formatNotional,
   KURU_MARKETS,
+  marketFor,
+  parsePerplMarkets,
   type BuildResult,
   type MandateForm,
 } from './mandate.ts';
+import { orderUnit } from './readback.ts';
 
 const DAY_SECONDS = 86_400;
 
@@ -84,6 +88,40 @@ export function presetValues(id: PresetId, now: number, returnTo?: Address): Pre
         expiryDays: 30,
       };
   }
+}
+
+/** What each preset is for, in a line: the explainer's preset list. */
+export const PRESET_PURPOSE: Record<PresetId, string> = {
+  cautious: 'The smallest limits, for a first run.',
+  standard: 'Where a new hire starts.',
+  wide: 'Both venues, more markets, larger limits.',
+};
+
+/**
+ * A preset's values as short facts, read off {@link presetValues} so the
+ * explainer can never drift from what picking the chip actually fills.
+ */
+export function describePreset(id: PresetId): string[] {
+  const { form, expiryDays } = presetValues(id, 0);
+  const facts: string[] = [];
+  if (form.kuru) {
+    const markets = form.kuruMarkets.map((address) => marketFor(address)?.symbol ?? address);
+    facts.push(`Kuru: ${markets.join(', ')}`);
+    for (const [symbol, cap] of Object.entries(form.depositCaps)) {
+      if (cap.trim() !== '') facts.push(`${formatNotional(cap)} ${symbol} per Kuru deposit`);
+    }
+  }
+  if (form.perpl) {
+    facts.push(
+      `Perpl: ${parsePerplMarkets(form.perplMarkets).join(', ')}, up to ${form.maxLeverage}×`,
+    );
+    facts.push(`${formatNotional(form.perplCollateral)} AUSD per transfer into Perpl`);
+  }
+  facts.push(
+    `Orders up to ${formatNotional(form.maxOrderNotional)} ${orderUnit(form) ?? ''}`.trim(),
+  );
+  facts.push(expiryDays === 1 ? 'Ends after 1 day' : `Ends after ${expiryDays} days`);
+  return facts;
 }
 
 /**

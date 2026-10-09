@@ -40,6 +40,7 @@ import {
   needsApproval,
 } from '@/agents/approval';
 import { MandateChanges, RulesChange } from '@/agents/MandateChanges';
+import { MandateExplainer } from '@/agents/MandateExplainer';
 import { MandateStep } from '@/agents/MandateStep';
 import { MandateSummary } from '@/agents/MandateSummary';
 import {
@@ -61,6 +62,7 @@ import {
   Row,
   Screen,
   Section,
+  SectionLink,
   SelectRow,
   Sheet,
   ToggleRow,
@@ -105,7 +107,8 @@ function stepCopy(
         };
       return {
         title: 'Draw the lines',
-        subtitle: 'Outside them its orders are refused, however the agent is prompted.',
+        subtitle:
+          'Whatever it’s told, the agent can’t trade outside these limits. A secure enclave enforces some; Sente checks the rest before each order.',
       };
     case 'review':
       return {
@@ -162,6 +165,8 @@ export default function HireAgentScreen() {
    */
   const [preset, setPreset] = useState<PresetChoice>(amend ? 'custom' : 'standard');
   const [showErrors, setShowErrors] = useState(false);
+  /** SEN-177: "How the limits work", opened from the mandate step. */
+  const [explaining, setExplaining] = useState(false);
 
   const [target, setTarget] = useState<Agent | null>(null);
   const [loadError, setLoadError] = useState<ErrorCopy | null>(null);
@@ -434,6 +439,12 @@ export default function HireAgentScreen() {
       </View>
       <Text style={[text.display, styles.title]}>{copy.title}</Text>
       <Text style={[text.dim, styles.subtitle]}>{copy.subtitle}</Text>
+      {step === 'mandate' ? (
+        <View style={styles.explain}>
+          <SectionLink label="How the limits work" onPress={() => setExplaining(true)} />
+          <MandateExplainer visible={explaining} onClose={() => setExplaining(false)} />
+        </View>
+      ) : null}
 
       {step === 'identity' ? (
         <>
@@ -658,6 +669,7 @@ const styles = StyleSheet.create({
   railOn: { backgroundColor: color.purple },
   title: { marginTop: 22 },
   subtitle: { marginTop: 8 },
+  explain: { marginTop: 10, alignSelf: 'flex-start' },
   readBack: { fontSize: 15, lineHeight: 22, color: color.textDim },
   token: { color: color.text },
   sheetLead: { marginTop: 6, marginBottom: 8 },
