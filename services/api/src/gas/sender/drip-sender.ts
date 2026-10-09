@@ -1,4 +1,4 @@
-import type { Address, Hash } from 'viem';
+import type { Address, Hash, Hex } from 'viem';
 
 /** DI token for the rotating pool of faucet senders. */
 export const SENDER_POOL = Symbol('SENDER_POOL');
@@ -28,7 +28,17 @@ export interface NonceSource {
   getTransactionCount(args: { address: Address; blockTag: 'pending' }): Promise<number>;
 }
 
-/** The slice of a viem wallet client the nonce manager needs. */
+/**
+ * The slice of a viem wallet client the nonce manager needs. `data` is absent
+ * for a MON drip and set for a contract call, e.g. the starter kit's ERC-20
+ * `transfer` (SEN-170).
+ */
 export interface TransactionBroadcaster {
-  sendTransaction(args: { to: Address; value: bigint; gas: bigint; nonce: number }): Promise<Hash>;
+  sendTransaction(args: {
+    to: Address;
+    value: bigint;
+    gas: bigint;
+    nonce: number;
+    data?: Hex;
+  }): Promise<Hash>;
 }

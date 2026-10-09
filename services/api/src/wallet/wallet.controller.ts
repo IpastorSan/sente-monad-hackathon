@@ -241,7 +241,8 @@ export class WalletController {
   }
 }
 
-function toUserWalletResponse(view: UserWalletView): UserWalletResponseDto {
+/** Exported for its spec: the wire shape of `GET /wallet`. */
+export function toUserWalletResponse(view: UserWalletView): UserWalletResponseDto {
   return {
     userId: view.userId,
     walletId: view.walletId,
@@ -260,6 +261,7 @@ function toUserWalletResponse(view: UserWalletView): UserWalletResponseDto {
       raw: balance.raw.toString(),
       amount: balance.amount,
     })),
+    starterKit: { ...view.starterKit },
   };
 }
 

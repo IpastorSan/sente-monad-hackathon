@@ -36,6 +36,9 @@ import {
   type SendRecipientAgents,
 } from './user-wallet.service';
 import { WalletRefusedError } from './wallet.errors';
+import { loadStarterKitConfig } from '../starter-kit/starter-kit.config';
+import { StarterKitService, type StarterKit } from '../starter-kit/starter-kit.service';
+import { StarterKitStore } from '../starter-kit/starter-kit.store';
 
 const USER: Principal = { userId: '0x70997970c51812dc3a010c7d01b50e0d17dc79c8' };
 const OTHER: Principal = { userId: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266' };
@@ -94,6 +97,7 @@ function setup(
     balances?: TokenBalanceReader;
     agents?: readonly AgentRecord[];
     spacingMs?: number;
+    starterKit?: StarterKit;
   } = {},
 ) {
   const fake = fakePrivy(options.handle);
@@ -123,6 +127,7 @@ function setup(
     agentDirectory(options.agents),
     tracker,
     spacer,
+    options.starterKit,
   );
   return { fake, service, registry, tracked, slept };
 }
@@ -719,5 +724,120 @@ describe('UserWalletService.executeSend', () => {
     const error = await refusal(service.prepareSend(USER, sendCommand()));
 
     expect(error.reason).toBe('user_wallets_unconfigured');
+  });
+});
+
+describe('UserWalletService and the starter kit (SEN-170)', () => {
+  /** A starter kit that records grants and answers a fixed status. */
+  function recordingKit(overrides: Partial<StarterKit> = {}) {
+    const granted: [string, Address][] = [];
+    const kit: StarterKit = {
+      grant: (userId, address) => {
+        granted.push([userId, address]);
+        return Promise.resolve();
+      },
+      status: () => ({ status: 'pending' }),
+      ...overrides,
+    };
+    return { kit, granted };
+  }
+
+  it('kicks the kit off for the registered wallet, and reports it on the register', async () => {
+    const { kit, granted } = recordingKit();
+    const { service } = setup({ starterKit: kit });
+
+    const view = await service.register(USER, { devicePublicKey: deviceKey.publicKey });
+
+    expect(granted).toEqual([[USER.userId, WALLET_ADDRESS]]);
+    expect(view.starterKit).toEqual({ status: 'pending' });
+  });
+
+  it('still registers when the kit throws', async () => {
+    const { kit } = recordingKit({
+      grant: () => {
+        throw new Error('boom');
+      },
+    });
+    const { service } = setup({ starterKit: kit });
+
+    const view = await service.register(USER, { devicePublicKey: deviceKey.publicKey });
+
+    expect(view.address).toBe(WALLET_ADDRESS);
+  });
+
+  it('still registers when the kit rejects, and does not wait for it', async () => {
+    const { kit } = recordingKit({
+      grant: () =>
+        new Promise((_resolve, reject) => setTimeout(() => reject(new Error('late')), 5)),
+    });
+    const { service } = setup({ starterKit: kit });
+
+    const view = await service.register(USER, { devicePublicKey: deviceKey.publicKey });
+    expect(view.address).toBe(WALLET_ADDRESS);
+    // Let the rejection land: it must be handled, not an unhandled rejection.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+
+  it('still answers GET /wallet when the kit status throws', async () => {
+    const { kit } = recordingKit({
+      status: () => {
+        throw new Error('boom');
+      },
+    });
+    const { service } = setup({ starterKit: kit });
+    await service.register(USER, { devicePublicKey: deviceKey.publicKey });
+
+    expect((await service.account(USER)).starterKit).toEqual({ status: 'none' });
+  });
+
+  it('does not kick the kit off for a refused register', async () => {
+    const { kit, granted } = recordingKit();
+    const { service } = setup({ starterKit: kit });
+    await service.register(USER, { devicePublicKey: deviceKey.publicKey });
+
+    await refusal(service.register(USER, { devicePublicKey: otherDeviceKey.publicKey }));
+
+    expect(granted).toHaveLength(1);
+  });
+
+  it('sends ONE kit when two registers race, through the real service', async () => {
+    const sent: Address[] = [];
+    const starterKit = new StarterKitService({
+      config: loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: `0x${'33'.repeat(32)}` }),
+      store: new StarterKitStore(),
+      sender: {
+        address: getAddress('0x00000000000000000000000000000000000057a7'),
+        send: (token) => {
+          sent.push(token);
+          return Promise.resolve({ hash: `0x${String(sent.length).padStart(64, '0')}` as Hash });
+        },
+      },
+      chain: {
+        balanceOf: () => Promise.resolve(10n ** 12n),
+        waitForReceipt: () => Promise.resolve('success'),
+      },
+      log: { log: () => undefined, warn: () => undefined, error: () => undefined },
+    });
+    const { service } = setup({ starterKit });
+
+    await Promise.all([
+      service.register(USER, { devicePublicKey: deviceKey.publicKey }),
+      service.register(USER, { devicePublicKey: deviceKey.publicKey }),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sent).toEqual([PERPL_TESTNET_CONTRACTS.collateral, KURU_TESTNET_TOKENS.USDC.address]);
+    expect((await service.account(USER)).starterKit).toEqual({
+      status: 'sent',
+      ausdTx: `0x${'1'.padStart(64, '0')}`,
+      usdcTx: `0x${'2'.padStart(64, '0')}`,
+    });
+  });
+
+  it('reports disabled when no kit is wired', async () => {
+    const { service } = setup();
+    await service.register(USER, { devicePublicKey: deviceKey.publicKey });
+
+    expect((await service.account(USER)).starterKit).toEqual({ status: 'disabled' });
   });
 });

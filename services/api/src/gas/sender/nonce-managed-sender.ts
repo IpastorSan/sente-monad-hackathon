@@ -1,4 +1,4 @@
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 
 import type {
   DripSendResult,
@@ -48,9 +48,12 @@ export class NonceManagedSender implements DripSender {
    * `gasLimit` is explicit and per send. Monad charges
    * `value + gas_bid * gas_limit`, so an over-estimate is money spent, not
    * reserved — never pass an estimateGas result here. See CLAUDE.md gotcha 4.
+   *
+   * `data` turns the send into a contract call (the starter kit's ERC-20
+   * `transfer`, SEN-170); a MON drip leaves it out.
    */
-  send(to: Address, valueWei: bigint, gasLimit: bigint): Promise<DripSendResult> {
-    return this.enqueue(() => this.sendSerialised(to, valueWei, gasLimit));
+  send(to: Address, valueWei: bigint, gasLimit: bigint, data?: Hex): Promise<DripSendResult> {
+    return this.enqueue(() => this.sendSerialised(to, valueWei, gasLimit, data));
   }
 
   /** Appends `task` to this key's single-writer chain. */
@@ -68,6 +71,7 @@ export class NonceManagedSender implements DripSender {
     to: Address,
     valueWei: bigint,
     gasLimit: bigint,
+    data: Hex | undefined,
   ): Promise<DripSendResult> {
     if (this.nextNonce === null) {
       this.nextNonce = await this.nonces.getTransactionCount({
@@ -83,6 +87,7 @@ export class NonceManagedSender implements DripSender {
         value: valueWei,
         gas: gasLimit,
         nonce,
+        data,
       });
       this.nextNonce = nonce + 1;
       return { hash, nonce, sender: this.address };
