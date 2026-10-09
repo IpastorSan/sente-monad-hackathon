@@ -62,7 +62,8 @@ describe('Sente MCP server', () => {
     expect(market.annotations?.readOnlyHint).toBe(false);
     expect(tools.find((t) => t.name === 'get_mandate')!.annotations?.readOnlyHint).toBe(true);
     // SEN-79: the market-data reads, listed read-only like every other read.
-    expect(tools).toHaveLength(18);
+    // SEN-182: list_watchers, set_watchers and clear_watchers.
+    expect(tools).toHaveLength(21);
     for (const name of ['get_klines', 'get_indicators', 'get_funding', 'quote']) {
       expect(tools.find((t) => t.name === name)!.annotations?.readOnlyHint).toBe(true);
     }

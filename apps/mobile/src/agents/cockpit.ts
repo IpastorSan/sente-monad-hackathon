@@ -671,5 +671,15 @@ export function scheduleLine(
       ? ' Next check is due now.'
       : ` Next check in ${formatDuration(next - now)}.`
     : '';
+  // SEN-182: with watchers, a check costs no model call and wakes the agent only when needed.
+  const watchers = status.watchers;
+  if (watchers && watchers.count > 0) {
+    const them = watchers.count === 1 ? 'its watcher' : `its ${watchers.count} watchers`;
+    return (
+      `Checks ${them} ${cadenceLabel(status.everySeconds)}${whose} without the model, and ` +
+      `wakes it when one fires or after ${formatDuration(watchers.heartbeatSeconds * 1000)} ` +
+      `quiet.${when}`
+    );
+  }
   return `Checks the markets ${cadenceLabel(status.everySeconds)}${whose}.${when}`;
 }

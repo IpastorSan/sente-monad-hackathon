@@ -6,6 +6,7 @@ import type { KuruVenue } from '@sente/venues/kuru';
 import type { MarketDataService } from '../../venues/market-data.service';
 import type { AgentEventLog } from '../events/agent-event-log';
 import type { AgentRecord, AgentStore } from '../store/agent-store';
+import type { WatcherService } from '../watchers/watcher.service';
 import { KeyedMutex } from './keyed-mutex';
 
 /** The Kuru surface the tools use: the shared `Venue` plus market lookup, deposits and withdrawals. */
@@ -68,7 +69,12 @@ export interface ToolContext {
   readonly now: () => number;
   /** Absent in specs that only fake the venues; reads then go to the agent's own venues. */
   readonly marketData?: ToolMarketData;
+  /** The agent's watchers (SEN-182). Absent: the watcher tools answer that they are unavailable. */
+  readonly watchers?: ToolWatchers;
 }
+
+/** What the watcher tools reach (SEN-182). */
+export type ToolWatchers = Pick<WatcherService, 'replace' | 'view' | 'clear'>;
 
 export interface AgentToolsOptions {
   readonly store: Pick<AgentStore, 'get'>;
@@ -77,6 +83,7 @@ export interface AgentToolsOptions {
   readonly precheck: boolean;
   readonly now?: () => number;
   readonly marketData?: ToolMarketData;
+  readonly watchers?: ToolWatchers;
 }
 
 /**
@@ -105,7 +112,7 @@ export class AgentTools {
   }
 
   context(agent: AgentRecord, options: { runId?: string } = {}): ToolContext {
-    const { store, venuesFor, events, precheck, marketData } = this.#options;
+    const { store, venuesFor, events, precheck, marketData, watchers } = this.#options;
     return {
       agent,
       runId: options.runId ?? `run-${randomUUID()}`,
@@ -117,6 +124,7 @@ export class AgentTools {
       currentAgent: () => store.get(agent.id),
       now: this.#options.now ?? (() => Math.floor(Date.now() / 1000)),
       ...(marketData ? { marketData } : {}),
+      ...(watchers ? { watchers } : {}),
     };
   }
 }

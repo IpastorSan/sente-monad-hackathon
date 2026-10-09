@@ -588,6 +588,95 @@ export type AgentScheduleStatusDto = {
   lastRunAt: string | null;
   nextRunAt: string | null;
   paused: { reason: SchedulePauseReason; until: string | null } | null;
+  /**
+   * SEN-182: set when the agent has watchers. Each check then runs without
+   * the model, and `nextRunAt` is the next CHECK, not the next run. Absent on
+   * an older API.
+   */
+  watchers?: { count: number; heartbeatSeconds: number } | null;
+};
+
+// Watchers (SEN-182). Copied from `services/api/src/agents/watchers/`.
+
+export type WatcherComparison = 'above' | 'below' | 'crosses_above' | 'crosses_below';
+
+/** A `get_indicators` spec: `{type, ...params}`, defaults filled in by the API. */
+export type IndicatorSpecDto = { type: string } & Record<string, number | string>;
+
+export type WatcherClauseDto =
+  | {
+      type: 'price';
+      venue: VenueId;
+      market: string;
+      source?: 'last' | 'mark';
+      op: WatcherComparison;
+      value: number;
+    }
+  | {
+      type: 'price_band';
+      venue: VenueId;
+      market: string;
+      source?: 'last' | 'mark';
+      op: 'inside' | 'outside' | 'enters' | 'leaves';
+      low: number;
+      high: number;
+    }
+  | {
+      type: 'indicator';
+      venue: VenueId;
+      market: string;
+      timeframe: string;
+      indicator: IndicatorSpecDto;
+      output?: string;
+      op: WatcherComparison;
+      value?: number;
+      compareTo?: { indicator?: IndicatorSpecDto; output?: string };
+    }
+  | {
+      type: 'position';
+      market: string;
+      op: 'pnl_above' | 'pnl_below' | 'opened' | 'closed';
+      value?: number;
+    }
+  | { type: 'funding'; market: string; op: 'above' | 'below'; value: number };
+
+/** What `PUT /agents/:id/watchers/:wid` takes. */
+export type WatcherBody = {
+  label: string;
+  match?: 'all' | 'any';
+  clauses: WatcherClauseDto[];
+  cooldownMinutes?: number;
+};
+
+export type WatcherDto = {
+  id: string;
+  label: string;
+  match: 'all' | 'any';
+  clauses: WatcherClauseDto[];
+  /** The API's own wording of the condition. */
+  reads: string;
+  cooldownMinutes: number;
+  setBy: 'agent' | 'owner';
+  /** ISO 8601. */
+  lastEvaluatedAt: string | null;
+  lastFiredAt: string | null;
+  fireCount: number;
+  lastObserved: string | null;
+  lastError: string | null;
+};
+
+/** `GET /agents/:id/watchers`. */
+export type AgentWatchersDto = {
+  /** How often they are checked; null when the agent runs only by hand. */
+  everySeconds: number | null;
+  heartbeatSeconds: number;
+  checks: number;
+  wakes: number;
+  heartbeats: number;
+  modelCallsSaved: number;
+  lastCheckAt: string | null;
+  lastWakeAt: string | null;
+  watchers: WatcherDto[];
 };
 
 /** A non-2xx response, carrying the API's stable `reason` when it sent one. */
@@ -917,6 +1006,33 @@ export class AgentsApi {
         (after !== undefined && after > 0 ? `?after=${after}` : ''),
     );
     return { run: page.run, entries: page.entries ?? [], nextSeq: page.nextSeq ?? after ?? 0 };
+  }
+
+  /** `GET /agents/:id/watchers` (SEN-182) — `null` while the route is not deployed. */
+  watchers(id: string): Promise<AgentWatchersDto | null> {
+    return this.optional(
+      this.request<AgentWatchersDto>('GET', `/agents/${encodeURIComponent(id)}/watchers`),
+    );
+  }
+
+  /**
+   * `PUT /agents/:id/watchers/:wid` (SEN-182): adds the watcher, or replaces
+   * the one with that id. A 400 names `invalid_input` or `market_not_allowed`.
+   */
+  saveWatcher(id: string, wid: string, body: WatcherBody): Promise<AgentWatchersDto> {
+    return this.request<AgentWatchersDto>(
+      'PUT',
+      `/agents/${encodeURIComponent(id)}/watchers/${encodeURIComponent(wid)}`,
+      body,
+    );
+  }
+
+  /** `DELETE /agents/:id/watchers/:wid` (SEN-182). */
+  deleteWatcher(id: string, wid: string): Promise<AgentWatchersDto> {
+    return this.request<AgentWatchersDto>(
+      'DELETE',
+      `/agents/${encodeURIComponent(id)}/watchers/${encodeURIComponent(wid)}`,
+    );
   }
 
   /**

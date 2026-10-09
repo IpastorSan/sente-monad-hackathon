@@ -2,6 +2,9 @@ import { Test } from '@nestjs/testing';
 
 import { AgentsModule } from '../agents.module';
 import { AGENT_EVENTS } from '../events/agent-event-log';
+import { AgentRunScheduler } from '../runner/agent-run.scheduler';
+import { WatcherService } from '../watchers/watcher.service';
+import { WatchersController } from '../watchers/watchers.controller';
 import { AgentTools } from './context';
 import { McpHttp } from './mcp-http';
 import { loadAgentToolsConfig } from './tools.config';
@@ -55,6 +58,14 @@ describe('AgentsModule boot', () => {
     expect(moduleRef.get(AgentTools).precheck).toBe(true);
     expect(moduleRef.get(AGENT_EVENTS)).toBeDefined();
     expect(moduleRef.get(McpHttp)).toBeInstanceOf(McpHttp);
+    // SEN-182: one WatcherService, shared by the tools, the scheduler and the owner routes.
+    const watchers = moduleRef.get(WatcherService);
+    expect(watchers).toBeInstanceOf(WatcherService);
+    expect((moduleRef.get(AgentRunScheduler) as unknown as { watchers: unknown }).watchers).toBe(
+      watchers,
+    );
+    // Request-scoped through Auth, like every agent controller.
+    expect(await moduleRef.resolve(WatchersController)).toBeInstanceOf(WatchersController);
     await moduleRef.close();
   });
 });

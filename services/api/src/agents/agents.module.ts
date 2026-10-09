@@ -51,6 +51,7 @@ import {
   agentToolsProviders,
 } from './tools/agent-tools.providers';
 import { agentVenuesExports, agentVenuesProviders } from './venues/agent-venues.providers';
+import { watcherControllers, watcherProviders } from './watchers/watchers.providers';
 
 const configProvider: Provider = {
   provide: AGENTS_CONFIG,
@@ -168,7 +169,13 @@ const authProvider: Provider = {
   ],
   // AgentsController, plus the MCP controller serving the gated tools (SEN-7).
   // The run transcripts' routes (SEN-178) come with the runner.
-  controllers: [AgentsController, ...agentToolsControllers, ...agentRunnerControllers],
+  controllers: [
+    AgentsController,
+    ...agentToolsControllers,
+    ...agentRunnerControllers,
+    // SEN-182: GET/PUT/DELETE /agents/:id/watchers.
+    ...watcherControllers,
+  ],
   providers: [
     configProvider,
     agentWalletsProvider,
@@ -181,6 +188,8 @@ const authProvider: Provider = {
     // POST /agents/:id/return (SEN-17): after the venue providers, whose
     // AgentVenues and AgentTransactionSender it borrows.
     ...returnFundsProviders,
+    // SEN-182: the watchers, before the tools that set them and the scheduler that checks them.
+    ...watcherProviders,
     ...agentToolsProviders,
     // The Tool Runner loop, POST /agents/:id/run and AGENT_TICK_SECONDS (SEN-8).
     ...agentRunnerProviders,

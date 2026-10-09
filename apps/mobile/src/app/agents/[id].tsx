@@ -91,6 +91,7 @@ import {
 import { describeMandate, type Enforcer, type Token } from '@/agents/mandate';
 import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usage';
 import { LiveRunSection, RunHistorySection, useAgentRuns } from '@/agents/AgentRuns';
+import { AgentWatchers } from '@/agents/AgentWatchers';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
 import { CreditsLink } from '@/credits/CreditsLink';
@@ -663,6 +664,7 @@ function Overview({
         </Section>
       )}
 
+      <AgentWatchers agent={agent} />
       {active ? (
         <Cadence
           agent={agent}

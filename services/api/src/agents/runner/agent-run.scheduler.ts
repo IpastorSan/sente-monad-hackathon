@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -18,6 +19,8 @@ import {
   type AgentScheduleConfig,
 } from './runner.config';
 import { ScheduleGuard, type SchedulePause } from './schedule-guard';
+import type { RunWake } from '../watchers/wake';
+import { WatcherService } from '../watchers/watcher.service';
 
 export type TickOutcome =
   | { readonly agentId: string; readonly ran: true; readonly stopReason: RunStopReason }
@@ -33,6 +36,12 @@ export interface AgentScheduleStatusDto {
   lastRunAt: string | null;
   nextRunAt: string | null;
   paused: { reason: SchedulePause['reason']; until: string | null } | null;
+  /**
+   * SEN-182: set when the agent has watchers. Each tick then checks them
+   * without the model, and `nextRunAt` is the next CHECK: a run starts only
+   * when a watcher fires, or at `nextHeartbeatAt` if none does.
+   */
+  watchers: { count: number; heartbeatSeconds: number } | null;
 }
 
 /**
@@ -54,6 +63,13 @@ export interface AgentScheduleStatusDto {
  * - An agent whose previous run is still open is skipped
  *   (`run_in_progress`), so a slow run never stacks up behind itself.
  *
+ * - An agent with WATCHERS (SEN-182) is not run when due: its watchers are
+ *   checked, with no model call, and a run starts only when one fires or
+ *   its heartbeat comes due (no run of any trigger for `heartbeatSeconds`).
+ *   That run carries a `wake` naming what fired. A wake the guard holds back
+ *   stays pending and is retried on the next poll, so an edge that fired is
+ *   not lost to a credits blip; it is dropped after a heartbeat's length.
+ *
  * In-process only, like the rest of the agent state. Chainlink CRE replaces
  * this timer in Phase 5.
  */
@@ -65,6 +81,10 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
   private readonly lastStart = new Map<string, number>();
   /** Agents this scheduler has queued or is running, so two polls never take one twice. */
   private readonly claimed = new Set<string>();
+  /** Epoch ms of each watching agent's last run of any trigger, for its heartbeat. */
+  private readonly lastRun = new Map<string, number>();
+  /** Wakes decided but not yet started (the guard held them back). */
+  private readonly pending = new Map<string, RunWake>();
   private active = 0;
   private readonly waiting: (() => void)[] = [];
 
@@ -76,6 +96,8 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     private readonly runner: Pick<AgentRunnerService, 'run' | 'isRunning'>,
     @Inject(AGENT_EVENTS) private readonly events: Pick<AgentEventLog, 'list'>,
     private readonly guard: ScheduleGuard,
+    /** SEN-182. Optional and last, so the specs that build the scheduler by hand need not know it. */
+    @Optional() @Inject(WatcherService) private readonly watchers?: WatcherService,
   ) {}
 
   get enabled(): boolean {
@@ -119,22 +141,33 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     }
     this.prune(new Set(agents.map((agent) => agent.id)));
 
-    const due: { agent: AgentRecord; at: number }[] = [];
+    const due: { agent: AgentRecord; at: number; start: () => Promise<TickOutcome> }[] = [];
     const skipped: TickOutcome[] = [];
     for (const agent of agents) {
       const cadence = this.cadenceOf(agent);
       if (!cadence) continue;
       const at = (await this.seed(agent, cadence.everySeconds, now)) + cadence.everySeconds * 1000;
-      if (now < at) continue;
+      let wake = this.pending.get(agent.id);
+      if (wake && (!this.watching(agent.id) || now - wake.at > this.heartbeatMs(agent.id))) {
+        this.pending.delete(agent.id);
+        wake = undefined;
+      }
+      if (!wake && now < at) continue;
       if (this.claimed.has(agent.id) || this.runner.isRunning(agent.id)) {
         skipped.push({ agentId: agent.id, ran: false, reason: 'run_in_progress' });
         continue;
       }
-      due.push({ agent, at });
+      const pending = wake;
+      const start = pending
+        ? () => this.runDue(agent, pending)
+        : this.watching(agent.id)
+          ? () => this.watchDue(agent, now)
+          : () => this.runDue(agent);
+      due.push({ agent, at, start });
     }
     // Most overdue first, so a full limiter serves the longest wait first.
     due.sort((a, b) => a.at - b.at);
-    return [...skipped, ...(await Promise.all(due.map(({ agent }) => this.runDue(agent))))];
+    return [...skipped, ...(await Promise.all(due.map(({ start }) => start())))];
   }
 
   /** What `GET /agents/:id/schedule` returns. */
@@ -164,15 +197,77 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
       lastRunAt: iso(lastRunAt),
       nextRunAt: iso(nextRunAt),
       paused: paused ? { reason: paused.reason, until: iso(paused.until) } : null,
+      watchers: this.watchers?.summary(agent.id) ?? null,
     };
   }
 
-  private async runDue(agent: AgentRecord): Promise<TickOutcome> {
+  private watching(agentId: string): boolean {
+    return this.watchers?.has(agentId) ?? false;
+  }
+
+  private heartbeatMs(agentId: string): number {
+    return (this.watchers?.heartbeatSeconds(agentId) ?? Infinity) * 1000;
+  }
+
+  /**
+   * A due agent with watchers: check them without the model, and start a run
+   * only when one fires or the heartbeat is due. The check itself moves the
+   * agent's next due time a cadence on, like a run would.
+   */
+  private async watchDue(agent: AgentRecord, now: number): Promise<TickOutcome> {
+    const watchers = this.watchers!;
+    this.claimed.add(agent.id);
+    let wake: RunWake;
+    try {
+      const idle = now - (await this.lastRunOf(agent.id, now));
+      const heartbeat = idle >= this.heartbeatMs(agent.id);
+      // One store write: the check also counts the model call it saved, unless a run follows.
+      const fired = await watchers.check(agent, now, { waking: heartbeat });
+      this.lastStart.set(agent.id, now);
+      if (fired.length > 0) {
+        wake = { reason: 'watchers', at: now, fired };
+      } else if (heartbeat) {
+        wake = { reason: 'heartbeat', at: now, fired: [], idleSeconds: Math.round(idle / 1000) };
+      } else {
+        return { agentId: agent.id, ran: false, reason: 'watching' };
+      }
+    } catch (error) {
+      this.logger.warn(`poll: could not check ${agent.id}'s watchers: ${errorText(error)}`);
+      return { agentId: agent.id, ran: false, reason: 'watchers_unavailable' };
+    } finally {
+      this.claimed.delete(agent.id);
+    }
+    this.pending.set(agent.id, wake);
+    return this.runDue(agent, wake);
+  }
+
+  /**
+   * When the agent last ran, any trigger: the cached value, refreshed from
+   * the log once it looks like a heartbeat is due, so a manual run in
+   * between counts.
+   */
+  private async lastRunOf(agentId: string, now: number): Promise<number> {
+    const known = this.lastRun.get(agentId) ?? now;
+    if (now - known < this.heartbeatMs(agentId)) return known;
+    try {
+      const [last] = await this.events.list(agentId, { kind: 'run', limit: 1 });
+      if (last) {
+        const at = Math.max(known, startedAtOf(last));
+        this.lastRun.set(agentId, at);
+        return at;
+      }
+    } catch (error) {
+      this.logger.warn(`heartbeat: could not read ${agentId}'s log: ${errorText(error)}`);
+    }
+    return known;
+  }
+
+  private async runDue(agent: AgentRecord, wake?: RunWake): Promise<TickOutcome> {
     this.claimed.add(agent.id);
     try {
       await this.acquire();
       try {
-        return await this.runGuarded(agent);
+        return await this.runGuarded(agent, wake);
       } finally {
         this.release();
       }
@@ -181,7 +276,7 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     }
   }
 
-  private async runGuarded(agent: AgentRecord): Promise<TickOutcome> {
+  private async runGuarded(agent: AgentRecord, wake?: RunWake): Promise<TickOutcome> {
     const now = Date.now();
     const verdict = await this.guard.check(agent, now);
     if (!verdict.ok) return { agentId: agent.id, ran: false, reason: verdict.reason };
@@ -190,10 +285,16 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
       return { agentId: agent.id, ran: false, reason: 'run_in_progress' };
     }
     this.lastStart.set(agent.id, now);
+    this.lastRun.set(agent.id, now);
     this.guard.recordStart(agent.id, now);
+    if (wake) {
+      this.pending.delete(agent.id);
+      this.watchers?.record(agent.id, wake.reason === 'heartbeat' ? 'heartbeat' : 'wake', now);
+    }
     try {
       const result = await this.runner.run({ userId: agent.userId }, agent.id, {
         trigger: 'schedule',
+        ...(wake ? { wake } : {}),
       });
       await this.guard.onRunEnded(agent, result.stopReason, Date.now());
       return { agentId: agent.id, ran: true, stopReason: result.stopReason };
@@ -231,6 +332,7 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
       ? startedAtOf(last)
       : unrunStart(agent.createdAt.getTime(), everySeconds, now);
     this.lastStart.set(agent.id, start);
+    this.lastRun.set(agent.id, last ? start : agent.createdAt.getTime());
     this.guard.seedStarts(
       agent.id,
       runs.filter((event) => event.detail['trigger'] === 'schedule').map(startedAtOf),
@@ -244,6 +346,8 @@ export class AgentRunScheduler implements OnApplicationBootstrap, OnModuleDestro
     for (const id of this.lastStart.keys()) {
       if (!active.has(id) && !this.claimed.has(id)) {
         this.lastStart.delete(id);
+        this.lastRun.delete(id);
+        this.pending.delete(id);
         this.guard.forget(id);
       }
     }

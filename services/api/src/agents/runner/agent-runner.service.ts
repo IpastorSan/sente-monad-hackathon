@@ -36,11 +36,13 @@ import { AGENT_RUNNER_CONFIG, type AgentRunnerConfig } from './runner.config';
 import { RUN_TRANSCRIPTS, type RunTranscriptStore } from './transcript/run-transcript-store';
 import {
   entriesOfTurn,
+  redact,
   startInstruction,
   summariseOutcome,
   type TranscriptEntryBody,
 } from './transcript/run-transcript';
 import { spaceWrites, WriteSpacer } from './write-spacing';
+import { wakeNote, type RunWake } from '../watchers/wake';
 
 /**
  * How a run ended.
@@ -75,6 +77,8 @@ export interface RunOptions {
   /** Untrusted, per-run guidance from the user, fenced in the first message. */
   readonly instruction?: string | undefined;
   readonly trigger?: RunTrigger;
+  /** Why the scheduler woke an agent that has watchers (SEN-182). Written by Sente. */
+  readonly wake?: RunWake;
 }
 
 export interface RunResult {
@@ -191,6 +195,7 @@ export class AgentRunnerService {
       ...(shownInstruction ? { instruction: shownInstruction } : {}),
       thinkingRequested: this.config.thinking,
     });
+    if (options.wake) record({ kind: 'note', text: redact(wakeNote(options.wake), [key]) });
     let thinkingTurns = 0;
     const observe: ToolObserver = ({ tool, toolUseId, outcome }) =>
       record({
@@ -247,6 +252,7 @@ export class AgentRunnerService {
                 nowMs: Date.now(),
                 snapshot,
                 instruction: options.instruction,
+                wake: options.wake,
               }),
             },
           ],
@@ -324,6 +330,7 @@ export class AgentRunnerService {
       durationMs: endedAt - startedAt,
       precheck: this.tools.precheck,
       ...(options.instruction ? { instruction: options.instruction } : {}),
+      ...(options.wake ? { wake: options.wake } : {}),
       ...(finalText ? { finalText } : {}),
       ...(error ? { error } : {}),
       ...(costUsd !== undefined ? { costUsd } : {}),
