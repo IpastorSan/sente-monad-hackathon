@@ -1201,8 +1201,14 @@ const PHONE_TRADE_KEY = perplTradeKey(new Uint8Array(32).fill(7), WALLET).public
 const SERVER_READ_KEY: Hex = `0x${'ab'.repeat(32)}`;
 const PHONE_LABEL = 'sente-phone';
 
-/** Perpl's `/payload` answer to our request, as `perpl-enroll.service.spec.ts` serves it. */
+/**
+ * Perpl's `/payload` answer to our request, in the live spellings probe P5
+ * recorded (`docs/user-trading.md` §P5), as `perpl-enroll.service.spec.ts`
+ * serves it: the effective scope (trade implies read), the key as unpadded
+ * base64url, `'0'` for the numeric "not set" fields and `''` for the text ones.
+ */
 function perplServes(body: Record<string, unknown>): PerplTypedData {
+  const mask = Number(body['scope_mask']);
   return {
     types: {
       EIP712Domain: [
@@ -1227,14 +1233,14 @@ function perplServes(body: Record<string, unknown>): PerplTypedData {
     message: {
       signer: String(body['address']).toLowerCase(),
       statement: PERPL_API_KEY_TYPED_DATA.statement,
-      publicKey: String(body['public_key']),
-      scope: String(body['scope_mask']),
+      publicKey: Buffer.from(String(body['public_key']).slice(2), 'hex').toString('base64url'),
+      scope: mask === 2 ? '3' : String(mask),
       label: String(body['label']),
-      expiresAt: '',
+      expiresAt: '0',
       ipCidrs: '',
       origin: '',
-      builderId: '',
-      maxBuilderFeePer100K: '',
+      builderId: '0',
+      maxBuilderFeePer100K: '0',
       time: `0x${ENROLL_NOW.getTime().toString(16)}`,
     },
   };
@@ -1344,34 +1350,6 @@ test('Perpl enrollment: the phone signs what the server prepares, with the serve
   assert.equal(verdict.digest, hashTypedData(toViemTypedData(trade.typedData as never) as never));
 });
 
-/** Variants of Perpl's payload the server's format accepts; the phone must too. */
-const ENROLL_ACCEPTED: Record<string, EnrollTamper> = {
-  'zero expiry and zero builder fee': (t) => ({
-    ...t,
-    message: { ...t.message, expiresAt: '0', maxBuilderFeePer100K: '0' },
-  }),
-  'a public key without 0x': (t) => ({
-    ...t,
-    message: { ...t.message, publicKey: t.message['publicKey']!.slice(2) },
-  }),
-  'a base64 public key': (t) => ({
-    ...t,
-    message: {
-      ...t.message,
-      publicKey: Buffer.from(t.message['publicKey']!.slice(2), 'hex').toString('base64'),
-    },
-  }),
-};
-
-for (const [name, tamper] of Object.entries(ENROLL_ACCEPTED)) {
-  test(`Perpl enrollment: both sides accept ${name}`, async () => {
-    const { prepared, problems } = await serverEnrollPrepare(tamper);
-    assert.deepEqual(problems, []);
-    const verdict = verifyEnrollmentPrepare(prepared, ENROLL_CTX);
-    assert.ok(verdict.ok, JSON.stringify(verdict));
-  });
-}
-
 const withFields =
   (fields: Record<string, string>, only?: EnrollRole): EnrollTamper =>
   (t, role) =>
@@ -1398,17 +1376,39 @@ const ENROLL_REFUSED: Record<string, { tamper: EnrollTamper; phone: RegExp }> = 
     phone: /builder charge a fee/,
   },
   'a builder id': { tamper: withFields({ builderId: 'skim' }), phone: /builder charge a fee/ },
+  'an empty builder id (the pre-P5 guess)': {
+    tamper: withFields({ builderId: '' }),
+    phone: /builder charge a fee/,
+  },
+  'an empty expiry (the pre-P5 guess)': {
+    tamper: withFields({ expiresAt: '' }),
+    phone: /its expiresAt is/,
+  },
   'a trade key that is not the phone’s': {
-    tamper: withFields({ publicKey: `0x${'cd'.repeat(32)}` }, 'trade'),
+    tamper: withFields(
+      { publicKey: Buffer.from('cd'.repeat(32), 'hex').toString('base64url') },
+      'trade',
+    ),
     phone: /not this phone’s/,
   },
-  'a trade scope on the server’s read key': {
-    tamper: withFields({ scope: String(PERPL_ENROLL_FIELDS.scopeMask.trade) }, 'read'),
-    phone: /scope is 2, not read/,
+  'the phone’s key spelled as hex': {
+    tamper: withFields({ publicKey: PHONE_TRADE_KEY }, 'trade'),
+    phone: /not a 32-byte key/,
   },
-  'every scope on the trade key': {
-    tamper: withFields({ scope: '3' }, 'trade'),
-    phone: /scope is 3/,
+  'the phone’s key spelled as padded base64': {
+    tamper: withFields(
+      { publicKey: Buffer.from(PHONE_TRADE_KEY.slice(2), 'hex').toString('base64') },
+      'trade',
+    ),
+    phone: /not a 32-byte key/,
+  },
+  'a trade scope on the server’s read key': {
+    tamper: withFields({ scope: '3' }, 'read'),
+    phone: /scope is 3, not read/,
+  },
+  'the requested mask instead of the effective scope on the trade key': {
+    tamper: withFields({ scope: String(PERPL_ENROLL_FIELDS.scopeMask.trade) }, 'trade'),
+    phone: /scope is 2, not trade/,
   },
   'a stale time': {
     tamper: withFields({

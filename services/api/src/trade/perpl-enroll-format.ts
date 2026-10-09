@@ -11,20 +11,19 @@
  * this does not expect refuses the whole enrollment.
  *
  * ──────────────────────────────────────────────────────────────────────────
- * PENDING PROBE P5. {@link PERPL_ENROLL_FIELDS} holds every value whose live
- * format nobody has recorded yet (`scope`, `publicKey`'s encoding,
- * `expiresAt`, `ipCidrs`, `origin`, `builderId`, `maxBuilderFeePer100K`).
- * Until P5 records Perpl's live payload for a trade- and a read-scoped key,
- * these are the best reading of the 2026-09-10/11 observations and accept a
- * small set of spellings for "empty". When P5 lands, pin each to the exact
- * value it recorded — HERE and nowhere else — and mirror it in the phone's
- * `verifyPerpl.ts`.
+ * PINNED BY PROBE P5 (SEN-82, 2026-10-09). {@link PERPL_ENROLL_FIELDS} and
+ * the `publicKey` encoding are what Perpl's live `/v1/api-key/payload` served
+ * for a trade- and a read-scoped key, recorded verbatim in
+ * `docs/user-trading.md` §P5 and pinned in `perpl-enroll-format.spec.ts`.
+ * Each is the ONE spelling Perpl used; any other is drift and refuses (D4).
+ * If Perpl changes one, re-record it, change it HERE, and mirror it in the
+ * phone's `verifyPerpl.ts`.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * Erasable syntax only (gotcha 10), so a live probe can load it.
  */
 import { PERPL_API_KEY_TYPED_DATA, SCOPE, type PerplTypedData } from '@sente/venues/perpl';
-import { hexToBytes, isAddressEqual, isHex, type Address, type Hex } from 'viem';
+import { hexToBytes, isAddressEqual, type Address, type Hex } from 'viem';
 
 export type EnrollRole = 'trade' | 'read';
 
@@ -35,30 +34,27 @@ export type EnrollRole = 'trade' | 'read';
 export const READ_KEY_LABEL = 'sente-portfolio-read';
 
 /**
- * The P5-dependent values, in one place (see the header).
+ * The values P5 recorded (see the header).
  *
- * - `scopeMask`: what we ASK for. Trade implies read at Perpl; no mask can
- *   withdraw (`enroll.ts`).
- * - `scopeField`: what the message must then say. The only recorded payload
- *   (6-field struct, 2026-09-10) carried `scope: '3'` for mask 3, so the mask
- *   as a decimal string. P5 confirms.
- * - `empty`: accepted spellings of "not set" for fields we never ask Perpl to
- *   fill. A builder id or a non-zero builder fee would let a third party skim
- *   every order placed with the key (threat model, "Builder-fee skim").
+ * - `scopeMask`: what we ASK for. No mask can withdraw (`enroll.ts`).
+ * - `scopeField`: what the message then says. Perpl writes the EFFECTIVE
+ *   scope: trade implies read, so a request for mask 2 comes back `'3'`; read
+ *   alone (mask 1) comes back `'1'`.
+ * - `empty`: how Perpl spells "not set" for the fields we never ask it to
+ *   fill. Not uniform: the numeric ones are `'0'`, the text ones `''`. A
+ *   builder id or a non-zero builder fee would let a third party skim every
+ *   order placed with the key (threat model, "Builder-fee skim").
  */
 export const PERPL_ENROLL_FIELDS = {
   scopeMask: { trade: SCOPE.trade, read: SCOPE.read } satisfies Record<EnrollRole, number>,
-  scopeField: { trade: String(SCOPE.trade), read: String(SCOPE.read) } satisfies Record<
-    EnrollRole,
-    string
-  >,
+  scopeField: { trade: '3', read: '1' } satisfies Record<EnrollRole, string>,
   empty: {
-    expiresAt: ['', '0'],
-    ipCidrs: [''],
-    origin: [''],
-    builderId: [''],
-    maxBuilderFeePer100K: ['', '0'],
-  } satisfies Record<string, readonly string[]>,
+    expiresAt: '0',
+    ipCidrs: '',
+    origin: '',
+    builderId: '0',
+    maxBuilderFeePer100K: '0',
+  } satisfies Record<string, string>,
 } as const;
 
 /** How far Perpl's `time` may sit from our clock. Plan §3: ±5 minutes. */
@@ -116,10 +112,8 @@ export function enrollPayloadProblem(
   }
   if (message['scope'] !== fields.scopeField[expected.role]) return `scope ${message['scope']}`;
   if (message['label'] !== expected.label) return `label ${message['label']}`;
-  for (const [name, allowed] of Object.entries(fields.empty)) {
-    if (!(allowed as readonly string[]).includes(message[name] ?? '')) {
-      return `${name} ${message[name]}`;
-    }
+  for (const [name, empty] of Object.entries(fields.empty)) {
+    if (message[name] !== empty) return `${name} ${message[name]}`;
   }
   const time = uintMs(message['time']);
   if (time === undefined || Math.abs(time - expected.now.getTime()) > ENROLL_TIME_SKEW_MS) {
@@ -154,21 +148,16 @@ function sameTypes(types: PerplTypedData['types']): boolean {
 }
 
 /**
- * The message's `publicKey` against the key we enrolled. PENDING P5: the
- * 2026-09-10 recording shows a key-shaped string without saying how it is
- * encoded, so every lossless encoding of the SAME 32 bytes is accepted — hex
- * with or without `0x`, base64 and base64url. A different key never matches.
+ * The message's `publicKey` against the key we enrolled. Perpl echoes the
+ * `0x` hex we send as `public_key` back as the same 32 bytes in unpadded
+ * base64url, 43 characters (P5); that is the only spelling accepted.
  */
+export function perplPublicKeyField(publicKeyHex: Hex): string {
+  return Buffer.from(hexToBytes(publicKeyHex)).toString('base64url');
+}
+
 function publicKeyMatches(field: string | undefined, publicKeyHex: Hex): boolean {
-  if (!field) return false;
-  const want = Buffer.from(hexToBytes(publicKeyHex));
-  const candidates: Buffer[] = [];
-  const hex = field.startsWith('0x') ? field : `0x${field}`;
-  if (isHex(hex) && hex.length === 66) candidates.push(Buffer.from(hexToBytes(hex)));
-  if (/^[A-Za-z0-9+/_-]{43}=?$/.test(field)) {
-    candidates.push(Buffer.from(field.replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
-  }
-  return candidates.some((got) => got.equals(want));
+  return field !== undefined && field === perplPublicKeyField(publicKeyHex);
 }
 
 function isAddress(value: string | undefined): value is Address {
