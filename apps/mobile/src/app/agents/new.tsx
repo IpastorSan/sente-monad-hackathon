@@ -39,6 +39,16 @@ import {
   expectedPolicyRules,
   needsApproval,
 } from '@/agents/approval';
+import { readBalance } from '@/agents/balances';
+import { FundingStatus, FundNow } from '@/agents/FundNow';
+import {
+  checkFunding,
+  fundAgent,
+  fundingTokensFor,
+  hireThenFund,
+  type FundingCheck,
+  type FundingState,
+} from '@/agents/initialFunding';
 import { MandateChanges, RulesChange } from '@/agents/MandateChanges';
 import { MandateExplainer } from '@/agents/MandateExplainer';
 import { MandateStep } from '@/agents/MandateStep';
@@ -49,11 +59,13 @@ import {
   quoteUnit,
   type MandateErrors,
   type MandateForm,
+  type Token,
 } from '@/agents/mandate';
 import { mandateToSend, presetValues, resolveExpiry, type PresetChoice } from '@/agents/presets';
 import { readBack } from '@/agents/readback';
 import { useSession } from '@/session';
 import { API_URL } from '@/wallet/api';
+import { sendSponsored } from '@/wallet/send';
 import {
   Button,
   Card,
@@ -142,7 +154,7 @@ export default function HireAgentScreen() {
     fork?: string;
     from?: string;
   }>();
-  const { agents: api, auth, wallet } = useSession();
+  const { agents: api, auth, wallet, walletApi } = useSession();
 
   /** The agent being forked, named for the copy. Falls back to the raw id. */
   const source = fork ? from?.trim() || fork : undefined;
@@ -177,6 +189,11 @@ export default function HireAgentScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<ErrorCopy | null>(null);
   const [hired, setHired] = useState<HireAgentResult | null>(null);
+  /** SEN-177: "Fund it now" on the review step, and how it went once hired. */
+  const [fundToken, setFundToken] = useState<Token | null>(null);
+  const [fundAmount, setFundAmount] = useState('');
+  const [fundBalance, setFundBalance] = useState<bigint | null>(null);
+  const [funding, setFunding] = useState<FundingState | null>(null);
   /**
    * SEN-44: on a device-owned agent the amend is not sent from here. The API
    * prepares the enclave PATCH, this holds it, and the sheet below shows what
@@ -262,6 +279,34 @@ export default function HireAgentScreen() {
   const expiresAt = resolveExpiry(form, expiryDays, nowSeconds());
   const mandateResult = currentMandate();
   const mandateErrors: MandateErrors = showErrors && !mandateResult.ok ? mandateResult.errors : {};
+
+  // Funding at hire: a new agent (hire or fork) whose mandate can use a token,
+  // from a wallet that is ready to send. Never on an amend.
+  const walletId = wallet.wallet?.walletId;
+  const fundTokens = !amend && mandateResult.ok ? fundingTokensFor(mandateResult.mandate) : [];
+  const canFund = fundTokens.length > 0 && wallet.address !== null && walletId !== undefined;
+  const chosenToken =
+    fundTokens.find((token) => token.symbol === fundToken?.symbol) ?? fundTokens[0] ?? null;
+  const fundCheck: FundingCheck =
+    canFund && chosenToken ? checkFunding(fundAmount, chosenToken, fundBalance) : { kind: 'skip' };
+  const startsEmpty = canFund
+    ? 'The wallet starts empty unless you fund it here; you can also fund it later from the agent’s page.'
+    : 'The wallet starts empty: fund it from the agent’s page.';
+  const fundFrom = wallet.address;
+  useEffect(() => {
+    if (step !== 'review' || !canFund || !chosenToken || !fundFrom) return;
+    let cancelled = false;
+    setFundBalance(null);
+    readBalance(chosenToken, fundFrom).then(
+      (balance) => {
+        if (!cancelled) setFundBalance(balance);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [step, canFund, chosenToken, fundFrom]);
   /**
    * The name the copy will be stored under: what the user typed, or the same
    * default the API applies to an unnamed fork (`forkName`). Blank is sent as
@@ -325,26 +370,42 @@ export default function HireAgentScreen() {
       } else if (amend) {
         await api.amendMandate(amend, result.mandate);
         router.back();
-      } else if (fork) {
-        // No strategy, prompt or model in this body: the API takes them from the
-        // source agent, under the name sent here.
-        setHired(
-          await api.fork(fork, {
-            mandate: result.mandate,
-            ...(name.trim() !== '' ? { name: name.trim() } : {}),
-          }),
-        );
       } else {
-        setHired(
-          await api.hire({
-            name: name.trim(),
-            systemPrompt,
-            strategy,
-            model,
-            mandate: result.mandate,
-            public: isPublic,
-          }),
-        );
+        // No strategy, prompt or model in a fork's body: the API takes them
+        // from the source agent, under the name sent here.
+        const hire = fork
+          ? () =>
+              api.fork(fork, {
+                mandate: result.mandate,
+                ...(name.trim() !== '' ? { name: name.trim() } : {}),
+              })
+          : () =>
+              api.hire({
+                name: name.trim(),
+                systemPrompt,
+                strategy,
+                model,
+                mandate: result.mandate,
+                public: isPublic,
+              });
+        // SEN-177: hire, then fund through the Fund sheet's own path. The
+        // hired screen shows at once; a funding failure never undoes the hire.
+        await hireThenFund({
+          hire,
+          funding:
+            fundCheck.kind === 'ok' && chosenToken
+              ? { token: chosenToken, atoms: fundCheck.atoms }
+              : null,
+          fund: (to, token, atoms) =>
+            walletId === undefined
+              ? Promise.reject(new Error('Your wallet isn’t ready.'))
+              : fundAgent(
+                  (intent) => sendSponsored(walletApi, intent, auth.signPrivyAuthorization),
+                  { walletId, token, to, atoms },
+                ),
+          onHired: setHired,
+          onFunding: setFunding,
+        });
       }
     } catch (error) {
       setSubmitError(describeAgentsError(error));
@@ -381,7 +442,17 @@ export default function HireAgentScreen() {
     }
   };
 
-  if (hired) return <Hired result={hired} />;
+  if (hired) {
+    return (
+      <Hired
+        result={hired}
+        funding={funding}
+        request={
+          funding && chosenToken ? { token: chosenToken.symbol, amount: fundAmount.trim() } : null
+        }
+      />
+    );
+  }
 
   if (!api || (amend && !target)) {
     const title = amend
@@ -416,7 +487,7 @@ export default function HireAgentScreen() {
       label={SUBMIT_LABEL[mode]}
       kind="primary"
       busy={submitting}
-      disabled={!mandateResult.ok}
+      disabled={!mandateResult.ok || fundCheck.kind === 'invalid'}
       onPress={() => void submit()}
     />
   ) : (
@@ -582,12 +653,23 @@ export default function HireAgentScreen() {
           <Section label="Mandate">
             {mandateResult.ok ? <MandateSummary mandate={mandateResult.mandate} /> : null}
           </Section>
+          {canFund && chosenToken ? (
+            <FundNow
+              tokens={fundTokens}
+              token={chosenToken}
+              setToken={setFundToken}
+              amount={fundAmount}
+              setAmount={setFundAmount}
+              balance={fundBalance}
+              check={fundCheck}
+            />
+          ) : null}
           <Text style={[text.dim, styles.after]}>
             {amend
               ? 'Saving replaces the wallet’s signing policy. Until that succeeds, the current mandate stands.'
               : fork
-                ? 'Forking creates your own agent with this policy attached. The strategy carries over; the source’s wallet, prompt and mandate do not. The new wallet starts empty: fund it from the agent’s page.'
-                : 'Hiring creates the agent’s wallet with this policy attached. The wallet starts empty: fund it from the agent’s page.'}
+                ? `Forking creates your own agent with this policy attached. The strategy carries over; the source’s wallet, prompt and mandate do not. ${startsEmpty}`
+                : `Hiring creates the agent’s wallet with this policy attached. ${startsEmpty}`}
           </Text>
           {submitError ? (
             <Notice tone="error" title={submitError.title} detail={submitError.detail} />
@@ -650,14 +732,28 @@ export default function HireAgentScreen() {
  * because a new agent's wallet is empty and can trade nothing; the MCP token is
  * an optional, advanced extra, so it sits below, explained before it is shown.
  */
-function Hired({ result }: { result: HireAgentResult }) {
+function Hired({
+  result,
+  funding,
+  request,
+}: {
+  result: HireAgentResult;
+  /** The funding that followed the hire; `null` when none was asked for. */
+  funding: FundingState | null;
+  /** What was asked, so a retry opens the Fund sheet prefilled. */
+  request: { token: string; amount: string } | null;
+}) {
   const router = useRouter();
   const { agent, mcpToken } = result;
   const open = (sheet?: 'fund') =>
     router.replace({
       pathname: '/agents/[id]',
-      params: sheet ? { id: agent.id, sheet } : { id: agent.id },
+      params: sheet
+        ? { id: agent.id, sheet, ...(funding?.kind === 'failed' && request ? request : {}) }
+        : { id: agent.id },
     });
+  // Funded, or on its way: going to the agent is what is left to do.
+  const funded = funding !== null && funding.kind !== 'failed';
   const endpoint = `${API_URL.replace(/\/+$/, '')}/mcp`;
   const config = JSON.stringify(
     {
@@ -672,17 +768,27 @@ function Hired({ result }: { result: HireAgentResult }) {
     <Screen
       footer={
         <View style={styles.hiredActions}>
-          <Button label={`Fund ${agent.name}`} kind="primary" onPress={() => open('fund')} />
-          <Button label={`Go to ${agent.name}`} kind="secondary" onPress={() => open()} />
+          {funded ? (
+            <Button label={`Go to ${agent.name}`} kind="primary" onPress={() => open()} />
+          ) : (
+            <>
+              <Button label={`Fund ${agent.name}`} kind="primary" onPress={() => open('fund')} />
+              <Button label={`Go to ${agent.name}`} kind="secondary" onPress={() => open()} />
+            </>
+          )}
         </View>
       }
     >
       <TopBar />
       <Text style={text.display}>{agent.name} is hired</Text>
-      <Text style={[text.dim, styles.subtitle]}>
-        Its wallet starts empty. Fund it with what it trades, {quoteUnit(agent.mandate)}, so it has
-        something to work with.
-      </Text>
+      {funding ? (
+        <FundingStatus state={funding} onRetry={() => open('fund')} />
+      ) : (
+        <Text style={[text.dim, styles.subtitle]}>
+          Its wallet starts empty. Fund it with what it trades, {quoteUnit(agent.mandate)}, so it
+          has something to work with.
+        </Text>
+      )}
       <Section label="Its wallet" aside={<CopyButton value={agent.address} />}>
         <Text style={text.mono} selectable>
           {agent.address}

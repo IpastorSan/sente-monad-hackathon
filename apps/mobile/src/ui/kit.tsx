@@ -690,10 +690,13 @@ export function Notice({
   tone = 'info',
   title,
   detail,
+  children,
 }: {
   tone?: NoticeTone;
   title: string;
   detail?: string | undefined;
+  /** An action under the text, e.g. a retry link. */
+  children?: ReactNode;
 }) {
   return (
     <View
@@ -710,6 +713,7 @@ export function Notice({
           {detail}
         </Text>
       ) : null}
+      {children}
     </View>
   );
 }

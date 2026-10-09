@@ -67,6 +67,7 @@ import {
   type PositionRow,
 } from '@/agents/cockpit';
 import { FUNDING_TOKENS } from '@/agents/fund';
+import { fundAgent } from '@/agents/initialFunding';
 import { clockTime, type LedgerEntry } from '@/agents/ledger';
 import {
   depositHeadline,
@@ -87,7 +88,7 @@ import { LiveRunSection, RunHistorySection } from '@/agents/AgentRuns';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
 import { useSession } from '@/session';
-import { describeSendError, sendSponsored } from '@/wallet/send';
+import { sendSponsored } from '@/wallet/send';
 import { Chart } from '@/ui/chart/Chart';
 import { shortAddress } from '@/ui/format';
 import { EnforcerTag, Gauge, Pill, Sigil, Stat, Stone } from '@/ui/goban';
@@ -137,7 +138,16 @@ export default function AgentScreen() {
     id,
     sheet: askedSheet,
     tab: askedTab,
-  } = useLocalSearchParams<{ id: string; sheet?: string; tab?: string }>();
+    token: askedToken,
+    amount: askedAmount,
+  } = useLocalSearchParams<{
+    id: string;
+    sheet?: string;
+    tab?: string;
+    /** SEN-177: a retried funding from the hire screen, prefilled. */
+    token?: string;
+    amount?: string;
+  }>();
   const { agents: api } = useSession();
 
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -332,7 +342,13 @@ export default function AgentScreen() {
       )}
 
       <DetailsSheet agent={agent} visible={sheet === 'details'} onClose={close} />
-      <FundSheet agent={agent} visible={sheet === 'fund'} onClose={close} onSent={finish} />
+      <FundSheet
+        agent={agent}
+        visible={sheet === 'fund'}
+        onClose={close}
+        onSent={finish}
+        initial={{ token: askedToken, amount: askedAmount }}
+      />
       <RunSheet agent={agent} visible={sheet === 'run'} onClose={close} />
       <ReturnSheet agent={agent} visible={sheet === 'return'} onClose={close} onDone={finish} />
       <RevokeSheet agent={agent} visible={sheet === 'revoke'} onClose={close} onDone={finish} />
@@ -1104,15 +1120,22 @@ function FundSheet({
   visible,
   onClose,
   onSent,
+  initial,
 }: {
   agent: Agent;
   visible: boolean;
   onClose: () => void;
   onSent: (notice: NoticeState) => void;
+  /** Prefill, e.g. a funding retried from the hire screen. */
+  initial?: { token?: string | undefined; amount?: string | undefined };
 }) {
   const { wallet, walletApi, auth } = useSession();
-  const [token, setToken] = useState<Token>(FUNDING_TOKENS[0] as Token);
-  const [amount, setAmount] = useState('');
+  const [token, setToken] = useState<Token>(
+    () =>
+      FUNDING_TOKENS.find((option) => option.symbol === initial?.token) ??
+      (FUNDING_TOKENS[0] as Token),
+  );
+  const [amount, setAmount] = useState(initial?.amount ?? '');
   const [available, setAvailable] = useState<bigint | null>(null);
   const [error, setError] = useState<NoticeState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1145,37 +1168,25 @@ function FundSheet({
     if (atoms === null || atoms === 0n || walletId === undefined) return;
     setError(null);
     setBusy(true);
-    const label = `${formatAtoms(atoms, token.decimals)} ${token.symbol}`;
-    try {
-      const sent = await sendSponsored(
-        walletApi,
-        { walletId, token, to: agent.address, atoms },
-        auth.signPrivyAuthorization,
-      );
-      const status = sent.confirmation?.status ?? sent.status;
-      if (status === 'included') {
-        setAmount('');
-        onSent({ tone: 'ok', title: `Sent ${label} to ${agent.name}` });
-      } else if (status === 'reverted') {
-        // Gotcha 8: the operation reverted inside a transaction that may well
-        // have succeeded. Nothing moved, and saying otherwise would be a lie.
-        setError({
-          tone: 'error',
-          title: 'The transfer reverted',
-          detail: 'It was included on chain but didn’t execute, so nothing moved.',
-        });
-      } else {
-        setAmount('');
-        onSent({
-          tone: 'info',
-          title: `Sending ${label}`,
-          detail: `Submitted, not confirmed yet (${status}). The balance updates once it lands.`,
-        });
-      }
-    } catch (caught) {
-      setError({ tone: 'error', ...describeSendError(caught) });
-    } finally {
-      setBusy(false);
+    // The one funding path, shared with funding at hire (SEN-177). Gotcha 8
+    // lives in `fundingOutcome`: a reverted operation moved nothing.
+    const outcome = await fundAgent(
+      (intent) => sendSponsored(walletApi, intent, auth.signPrivyAuthorization),
+      { walletId, token, to: agent.address, atoms },
+    );
+    setBusy(false);
+    if (outcome.kind === 'sent') {
+      setAmount('');
+      onSent({ tone: 'ok', title: `Sent ${outcome.label} to ${agent.name}` });
+    } else if (outcome.kind === 'submitted') {
+      setAmount('');
+      onSent({
+        tone: 'info',
+        title: `Sending ${outcome.label}`,
+        detail: `Submitted, not confirmed yet (${outcome.status}). The balance updates once it lands.`,
+      });
+    } else {
+      setError({ tone: 'error', title: outcome.title, detail: outcome.detail });
     }
   };
 
