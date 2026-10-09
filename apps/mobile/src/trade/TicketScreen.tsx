@@ -93,11 +93,14 @@ import {
 } from '@/trade/ticket';
 import type { PreparedTrade, TradeFunds, TradeView } from '@/trade/types';
 import {
+  AdvancedPanel,
+  AdvancedToggle,
   Frame,
   HoldToConfirm,
   Keypad,
   Note,
   SIDE_TONE,
+  ProtectionRow,
   StepStone,
   TxLink,
   useLitKey,
@@ -324,6 +327,7 @@ function Ticket({
   const [focus, setFocus] = useState<'amount' | 'price'>('amount');
   const [slippageBps, setSlippageBps] = useState(DEFAULT_SLIPPAGE_BPS);
   const [gear, setGear] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
   const [stage, setStage] = useState<Stage>({ kind: 'ticket' });
   const [sent, setSent] = useState<Sent | null>(null);
 
@@ -633,17 +637,45 @@ function Ticket({
           <>
             <View style={styles.segs}>
               <SideSegment side={side} onChange={switchSide} />
-              <View style={styles.grow}>
-                <Segmented
-                  options={[
-                    { value: 'market', label: 'Market' },
-                    { value: 'limit', label: 'Limit' },
-                  ]}
-                  value={orderType}
-                  onChange={switchType}
-                />
-              </View>
+              <View style={styles.grow} />
+              <AdvancedToggle
+                open={advanced}
+                summary={orderType === 'limit' ? 'Limit' : null}
+                onToggle={() => setAdvanced((open) => !open)}
+              />
             </View>
+            {advanced ? (
+              <AdvancedPanel>
+                <View style={styles.advRow}>
+                  <Text style={text.label}>Order type</Text>
+                  <Segmented
+                    options={[
+                      { value: 'market', label: 'Market' },
+                      { value: 'limit', label: 'Limit' },
+                    ]}
+                    value={orderType}
+                    onChange={switchType}
+                  />
+                </View>
+                <ProtectionRow
+                  onGuardian={() => {
+                    // Guardian guards base you hand it, so it gets this order's size.
+                    const amount =
+                      ticket.sizeUnits !== null && ticket.sizeUnits > 0n
+                        ? unitsToDecimal(ticket.sizeUnits, tm.sizePrecision)
+                        : undefined;
+                    router.push({
+                      pathname: '/presets/[id]/configure',
+                      params: {
+                        id: 'guardian',
+                        market: config.symbol,
+                        ...(amount ? { amount } : {}),
+                      },
+                    });
+                  }}
+                />
+              </AdvancedPanel>
+            ) : null}
 
             {orderType === 'market' ? (
               <View style={styles.amount}>
@@ -1477,7 +1509,8 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   identity: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
   panelHead: { marginTop: 18 },
-  segs: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  segs: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18 },
+  advRow: { gap: 8 },
   sideSeg: {
     flexDirection: 'row',
     padding: 3,

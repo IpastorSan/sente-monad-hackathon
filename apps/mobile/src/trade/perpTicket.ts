@@ -1,8 +1,10 @@
 /**
  * The rules of the perp ticket (SEN-120), pure so they run under test.
  *
- * Market orders only, bounded at {@link PERP_MAX_SLIPPAGE} of Perpl's fresh
- * mark: `perplTrader.placeMarket` never takes a price from the screen. The
+ * A market order is bounded at {@link PERP_MAX_SLIPPAGE} of Perpl's fresh
+ * mark: `perplTrader.placeMarket` never takes a price from the screen. A
+ * limit order (SEN-179, under "Advanced options") carries the user's price,
+ * checked by {@link checkPerpLimit}, and is sized at that price. The
  * user types what the position is worth in AUSD; the size sent is that value
  * at the mark the screen showed, rounded DOWN to the market's step, so the
  * order is never bigger than what was typed (Perpl fills at its own mark,
@@ -21,6 +23,8 @@ export const PERP_MAX_SLIPPAGE = '0.01';
 const LEVERAGE_STEPS = [1, 2, 3, 5, 10, 20, 25, 50, 100] as const;
 
 export type PerpSide = 'long' | 'short';
+
+export type PerpOrderType = 'market' | 'limit';
 
 /** What the ticket needs to know about one Perpl market. */
 export type PerpMarket = {
@@ -63,6 +67,9 @@ export type PerpTicketInput = {
   readonly mark: string | null;
   /** AUSD free in the Perpl account, if known. */
   readonly available: string | null;
+  /** `limit` sizes at `limitPrice` instead of the mark. Market when omitted. */
+  readonly orderType?: PerpOrderType;
+  readonly limitPrice?: string;
 };
 
 export type PerpTicket = {
@@ -98,10 +105,15 @@ export function evaluatePerpTicket(input: PerpTicketInput): PerpTicket {
     short: false,
   });
 
+  const limit = input.orderType === 'limit';
   const scale = scaleOf(market.stepSize);
   const markScale = 10n ** 8n;
-  const markUnits = mark === null ? null : toUnits(mark, markScale);
-  if (markUnits === null || markUnits <= 0n) return none('Waiting for the price');
+  // The price the size is counted at: the mark, or the user's limit.
+  const at = limit ? (input.limitPrice ?? '') : mark;
+  const markUnits = at === null || at === '' ? null : toUnits(at, markScale);
+  if (markUnits === null || markUnits <= 0n) {
+    return none(limit ? 'Enter a limit price' : 'Waiting for the price');
+  }
   const valueCents = value === '' ? null : toUnits(value, CENTS);
   if (valueCents === null || valueCents === 0n)
     return none(`Enter an amount to ${verb.toLowerCase()}`);
@@ -137,9 +149,85 @@ export function evaluatePerpTicket(input: PerpTicketInput): PerpTicket {
     notional,
     margin,
     sub,
-    cta: { label: `Review ${verb.toLowerCase()}`, enabled: true },
+    cta: { label: `Review ${verb.toLowerCase()}${limit ? ' limit' : ''}`, enabled: true },
     short: false,
   };
+}
+
+// ─── Limit orders ───────────────────────────────────────────────────────────
+
+export type PerpLimitCheck = {
+  /** Blocks the review: the order could not be sent as typed. */
+  readonly problem: string | null;
+  /** Said under the price; never blocks. */
+  readonly warning: string | null;
+};
+
+const PLAIN = /^(?:\d+\.?\d*|\.\d+)$/;
+
+function decimalsOf(value: string): number {
+  return value.split('.')[1]?.length ?? 0;
+}
+
+/** `value` as integer units of `10^-places`; `places` must cover its decimals. */
+function unitsAt(value: string, places: number): bigint {
+  const [whole = '0', fraction = ''] = value.split('.');
+  return BigInt((whole || '0') + fraction.padEnd(places, '0'));
+}
+
+/**
+ * A perp limit price (SEN-179): above zero and on the market's tick, or it is
+ * a problem; on the far side of the mark it is only a warning, because the
+ * mark is not the book's best price and the order may still rest. Post-only
+ * says what Perpl does then: refuse it rather than let it take.
+ */
+export function checkPerpLimit(input: {
+  readonly price: string;
+  readonly side: PerpSide;
+  readonly mark: string | null;
+  readonly tickSize: string;
+  readonly postOnly: boolean;
+}): PerpLimitCheck {
+  const { price, side, mark, tickSize, postOnly } = input;
+  if (price === '') return { problem: 'Enter a limit price', warning: null };
+  if (!PLAIN.test(price)) return { problem: 'That isn’t a price', warning: null };
+  const places = Math.max(
+    decimalsOf(price),
+    decimalsOf(tickSize),
+    mark !== null && PLAIN.test(mark) ? decimalsOf(mark) : 0,
+  );
+  const p = unitsAt(price, places);
+  if (p <= 0n) return { problem: 'The price must be above zero', warning: null };
+  const tick = PLAIN.test(tickSize) ? unitsAt(tickSize, places) : 0n;
+  if (tick > 0n && p % tick !== 0n) {
+    return { problem: `Perpl prices move in steps of ${tickSize}`, warning: null };
+  }
+  if (mark === null || !PLAIN.test(mark)) return { problem: null, warning: null };
+  const m = unitsAt(mark, places);
+  const crosses = side === 'long' ? p > m : p < m;
+  if (!crosses) return { problem: null, warning: null };
+  const where = side === 'long' ? 'Above' : 'Below';
+  return {
+    problem: null,
+    warning: postOnly
+      ? `${where} the mark, so it may trade at once: post-only refuses that, and the order is cancelled.`
+      : `${where} the mark, so it may fill at once, at up to this price, like a market order.`,
+  };
+}
+
+/** The mark floored to the tick: where a new limit price starts. */
+export function limitFromMark(mark: string | null, tickSize: string): string {
+  if (mark === null || !PLAIN.test(mark) || !PLAIN.test(tickSize)) return '';
+  const places = Math.max(decimalsOf(mark), decimalsOf(tickSize));
+  const m = unitsAt(mark, places);
+  const tick = unitsAt(tickSize, places);
+  if (tick <= 0n) return mark;
+  const floored = m - (m % tick);
+  const tickPlaces = decimalsOf(tickSize);
+  const text = floored.toString().padStart(places + 1, '0');
+  const whole = text.slice(0, text.length - places);
+  const fraction = text.slice(text.length - places, text.length - places + tickPlaces);
+  return tickPlaces > 0 ? `${whole}.${fraction}` : whole;
 }
 
 // ─── Setup ──────────────────────────────────────────────────────────────────

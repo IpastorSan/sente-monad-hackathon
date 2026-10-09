@@ -1,7 +1,8 @@
 /**
  * The pieces both order tickets share (SEN-119 spot, SEN-120 perps): the
  * frame a stage sits in, the keypad and the web's hardware keys (SEN-167),
- * the hold-to-confirm, and the stones a running step list draws.
+ * the hold-to-confirm, the stones a running step list draws, and the
+ * "Advanced options" disclosure with its honest stop-loss row (SEN-179).
  */
 import * as Haptics from '@/platform/haptics';
 import { useFocusEffect } from 'expo-router';
@@ -23,7 +24,7 @@ import { txUrl } from '@/chain';
 import type { Key, StepState } from '@/trade/ticket';
 import { Stone } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
-import { IconButton, isHovered, TopBar } from '@/ui/kit';
+import { Button, IconButton, isHovered, TopBar } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 
 /** How long the confirm must be held. Long enough to be deliberate, short enough not to annoy. */
@@ -167,6 +168,83 @@ export function Note({ icon, children }: { icon: 'stop' | 'shield'; children: Re
     <View style={styles.note}>
       <Icon name={icon} size={14} color={color.textDim} />
       <Text style={[text.dim, styles.grow]}>{children}</Text>
+    </View>
+  );
+}
+
+/**
+ * The toggle for "Advanced options" (SEN-179): closed by default, so the
+ * ticket's first screen stays an amount and a button. `summary` names what is
+ * set inside while it is closed (`Limit`), so a closed panel never hides a
+ * choice that changes the order.
+ */
+export function AdvancedToggle({
+  open,
+  summary,
+  onToggle,
+}: {
+  open: boolean;
+  summary: string | null;
+  onToggle: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open }}
+      accessibilityLabel={`Advanced options${summary ? `: ${summary}` : ''}`}
+      onPress={onToggle}
+      style={(state) => [
+        styles.advToggle,
+        isHovered(state) && styles.advHover,
+        state.pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.advText}>
+        Advanced{summary ? <Text style={styles.advSummary}> · {summary}</Text> : null}
+      </Text>
+      <View style={open ? styles.chevOpen : styles.chevClosed}>
+        <Icon name="chevron" size={14} color={color.textDim} />
+      </View>
+    </Pressable>
+  );
+}
+
+/** The open panel under the toggle: a ruled-off well the options sit in. */
+export function AdvancedPanel({ children }: { children: ReactNode }) {
+  return <View style={styles.advPanel}>{children}</View>;
+}
+
+/**
+ * Stop-loss / take-profit on your own trade (SEN-179; brief: "SL/TP are never
+ * venue orders"). Neither venue offers one on testnet, and Sente cannot watch
+ * a level for you either, because only this device holds the key that trades
+ * your account. The honest alternative for spot is Guardian, an agent that
+ * holds what you hand it and sells at a checked level; for perps there is none
+ * yet.
+ */
+export function ProtectionRow({ onGuardian }: { onGuardian: (() => void) | null }) {
+  const holder = Platform.OS === 'web' ? 'your browser' : 'this device';
+  return (
+    <View style={styles.protect}>
+      <Text style={text.strong}>Stop-loss / take-profit</Text>
+      <Text style={text.caption}>
+        Not offered by Kuru or Perpl on testnet. Sente can’t place one for you either, because only{' '}
+        {holder} holds your trading keys.
+      </Text>
+      {onGuardian ? (
+        <Button
+          kind="soft"
+          size="sm"
+          icon="shield"
+          label="Protect it with a Guardian agent"
+          onPress={onGuardian}
+          style={styles.protectButton}
+        />
+      ) : (
+        <Text style={[text.caption, styles.protectNext]}>
+          Coming next for perps: Guardian guards spot only today.
+        </Text>
+      )}
     </View>
   );
 }
@@ -344,4 +422,29 @@ const styles = StyleSheet.create({
   holdFill: { position: 'absolute', left: 0, top: 0, bottom: 0 },
   holdText: { fontFamily: font.semibold, fontSize: 15, color: color.ink },
   ring: { width: 18, height: 18, borderRadius: 9, borderWidth: 2.5, marginTop: 2 },
+  advToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: RADIUS.stone,
+  },
+  advHover: { backgroundColor: color.board },
+  advText: { fontFamily: font.medium, fontSize: 13, color: color.textDim },
+  advSummary: { color: color.purpleHi },
+  chevClosed: { transform: [{ rotate: '90deg' }] },
+  chevOpen: { transform: [{ rotate: '-90deg' }] },
+  advPanel: {
+    marginTop: 12,
+    padding: 14,
+    gap: 14,
+    borderRadius: RADIUS.well,
+    borderWidth: 1,
+    borderColor: color.line,
+    backgroundColor: color.board,
+  },
+  protect: { gap: 4 },
+  protectButton: { marginTop: 8, alignSelf: 'flex-start' },
+  protectNext: { marginTop: 4, color: color.textDim },
 });
