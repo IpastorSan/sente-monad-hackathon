@@ -572,6 +572,50 @@ allowed.
 | 503    | `credits_unconfigured`             | `OPENROUTER_MANAGEMENT_KEY` unset.                                |
 | 401    | —                                  | No session token, or one that is expired or forged.               |
 
+### Run transcripts (SEN-178)
+
+Each run records a transcript as it goes, so the agent page can show it in a
+terminal, live and afterwards (`runner/transcript/`). Entries, each with a
+per-run `seq` and `at`:
+
+- `start` (trigger, model, the instruction, whether `thinking` was asked for),
+  then a `note` naming the markets whose book the tick snapshot carried;
+- per model turn, in content order: `thinking` (`visible` with its text,
+  `omitted` when only a signature came back, `redacted` for an encrypted
+  `redacted_thinking` block; a loose `reasoning` field or block is captured as
+  `source: 'reasoning'`), `text`, `tool_call` (tool, `market` when the input
+  names one, a one-line input summary), then `usage` (tokens, `usage.cost`);
+- `tool_result` per call: `ok`, `refused` with the layer (`sente`: our gate or
+  precheck, `enclave`: Privy) and code, or `error`. Input the zod schema rejects
+  before the gate is recorded as `refused`/`invalid_input` without a
+  `toolUseId`;
+- `end`: stop reason, totals, duration, the redacted error, and how many turns
+  carried any thinking (`0` reads "the model returned no reasoning").
+
+Bounds: text 2,000 chars, thinking 4,000, summaries 240, 400 entries per run
+(then one "transcript full" note; the `end` is always kept), last 10 runs per
+agent. Every string is redacted on the way in: the run's own OpenRouter key,
+`sk-or-`/`sk-ant-` shapes, `Bearer …`, `sente_mcp_…`, and any value under a key
+named like a secret. With `STATE_DIR` it is journalled to `agent-runs.jsonl`
+(not fsynced, unreadable lines skipped, compacted at boot); a run left open by
+a restart reads `interrupted`. It is a view, not a record of account: orders
+and fills stay in the event log.
+
+- `GET /agents/:id/runs` → `{runs}`: summaries, newest first (`status`
+  `running` | `ended` | `interrupted`, iterations, tool calls, tokens, cost,
+  `lastSeq`).
+- `GET /agents/:id/runs/:runId?after=<seq>` → `{run, entries, nextSeq}`. Poll
+  with `nextSeq` while `run.status` is `running`.
+
+Both are owner-only (404 `agent_not_found` for someone else's agent); a run the
+server does not hold for this agent is 404 `run_not_found`.
+
+What the two models send (as of the 2026-09-13 probe in `docs/openrouter.md`;
+not re-measured for SEN-178): Kimi K2.6 returned thinking blocks over
+OpenRouter's `/messages` even without the `thinking` parameter; Claude Sonnet 5
+returned none, even with `thinking: adaptive`, and `AGENT_RUNNER_THINKING` is
+off by default, so a Sonnet run normally ends with "no reasoning".
+
 ### Write spacing
 
 Privy enforces its rolling-cap aggregation late (SEN-3 checks 5 and 5d):

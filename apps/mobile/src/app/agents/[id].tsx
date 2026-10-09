@@ -83,6 +83,7 @@ import {
 } from '@/agents/ledgerView';
 import { describeMandate, type Enforcer, type Token } from '@/agents/mandate';
 import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usage';
+import { LiveRunSection, RunHistorySection } from '@/agents/AgentRuns';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
 import { useSession } from '@/session';
@@ -296,6 +297,9 @@ export default function AgentScreen() {
         <Segmented options={COCKPIT_TABS} value={tab} onChange={setTab} />
       </View>
 
+      {/* SEN-178: the run terminal — live on Overview, every kept run on History. */}
+      {tab === 'overview' ? <LiveRunSection agentId={agent.id} /> : null}
+
       {tab === 'overview' ? (
         <Overview
           agent={agent}
@@ -312,7 +316,10 @@ export default function AgentScreen() {
           }}
         />
       ) : tab === 'history' ? (
-        <History agent={agent} events={events} now={now} />
+        <>
+          <History agent={agent} events={events} now={now} />
+          <RunHistorySection agentId={agent.id} />
+        </>
       ) : (
         <MandateCard
           agent={agent}

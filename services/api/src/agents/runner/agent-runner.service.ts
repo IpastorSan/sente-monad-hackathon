@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { BetaMessage, BetaToolRunnerParams } from '@anthropic-ai/sdk/resources/beta/messages';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { KURU_TESTNET_MARKETS } from '@sente/venues/kuru';
 import { isAddressEqual } from 'viem';
 
@@ -22,7 +22,7 @@ import { AgentRefusedError } from '../agents.errors';
 import { AgentsService } from '../agents.service';
 import { AGENT_EVENTS, type AgentEvent, type AgentEventLog } from '../events/agent-event-log';
 import { AGENT_STORE, type AgentRecord, type AgentStore } from '../store/agent-store';
-import { toRunnerTools } from '../tools/anthropic';
+import { toRunnerTools, type ToolObserver } from '../tools/anthropic';
 import { AgentTools, type ToolContext } from '../tools/context';
 import { GATED_TOOLS } from '../tools/gate';
 import {
@@ -33,6 +33,13 @@ import {
 } from './openrouter-client';
 import { renderSystemPrompt, renderTickMessage } from './prompt';
 import { AGENT_RUNNER_CONFIG, type AgentRunnerConfig } from './runner.config';
+import { RUN_TRANSCRIPTS, type RunTranscriptStore } from './transcript/run-transcript-store';
+import {
+  entriesOfTurn,
+  startInstruction,
+  summariseOutcome,
+  type TranscriptEntryBody,
+} from './transcript/run-transcript';
 import { spaceWrites, WriteSpacer } from './write-spacing';
 
 /**
@@ -119,6 +126,12 @@ export class AgentRunnerService {
     @Inject(AGENT_RUNNER_CONFIG) private readonly config: AgentRunnerConfig,
     @Inject(ANTHROPIC_CLIENT_FACTORY) private readonly clientFor: AnthropicClientFactory,
     private readonly spacer: WriteSpacer,
+    /**
+     * SEN-178: each run's transcript, for the live terminal on the agent page.
+     * Optional and last so the specs and scripts that build the runner by
+     * hand need not know it; without it nothing is recorded.
+     */
+    @Optional() @Inject(RUN_TRANSCRIPTS) private readonly transcripts?: RunTranscriptStore,
   ) {}
 
   /** Whether `agentId` has a run open right now. */
@@ -163,12 +176,34 @@ export class AgentRunnerService {
     const startedAt = Date.now();
     // Throws the credits refusals; nothing has been spent yet.
     const key = await this.userKey(principal);
+    const record = this.transcriptFor(
+      { runId, agentId: agent.id, trigger, model: agent.model, startedAt },
+      key,
+    );
+    const shownInstruction = startInstruction(options.instruction, [key]);
+    record({
+      kind: 'start',
+      trigger,
+      model: agent.model,
+      ...(shownInstruction ? { instruction: shownInstruction } : {}),
+      thinkingRequested: this.config.thinking,
+    });
+    let thinkingTurns = 0;
+    const observe: ToolObserver = ({ tool, toolUseId, outcome }) =>
+      record({
+        kind: 'tool_result',
+        tool,
+        ...(toolUseId ? { toolUseId } : {}),
+        ...summariseOutcome(outcome, [key]),
+      });
+
     const before = await this.creditsView(principal);
 
     let stopReason: RunStopReason;
     let iterations = 0;
     let toolCalls = 0;
     let reportedCostUsd = 0;
+    const totals = { inputTokens: 0, outputTokens: 0 };
     let last: BetaMessage | undefined;
     let error: string | undefined;
 
@@ -192,6 +227,7 @@ export class AgentRunnerService {
       try {
         const ctx = this.tools.context(agent, { runId });
         const snapshot = await this.snapshot(ctx);
+        record({ kind: 'note', text: snapshotNote(snapshot) });
         const client = this.clientFor(key, { timeoutMs: this.config.timeoutMs });
         // The intersection carries OpenRouter's `provider` through the SDK,
         // which serialises the whole params object (docs/openrouter.md).
@@ -200,7 +236,7 @@ export class AgentRunnerService {
           model: agent.model,
           max_tokens: this.config.maxTokens,
           system: renderSystemPrompt(agent, Math.floor(Date.now() / 1000)),
-          tools: toRunnerTools(ctx, spaceWrites(GATED_TOOLS, this.spacer, abort.signal)),
+          tools: toRunnerTools(ctx, spaceWrites(GATED_TOOLS, this.spacer, abort.signal), observe),
           messages: [
             {
               role: 'user',
@@ -221,6 +257,11 @@ export class AgentRunnerService {
           iterations += 1;
           last = message;
           reportedCostUsd += reportedCost(message);
+          totals.inputTokens += message.usage?.input_tokens ?? 0;
+          totals.outputTokens += message.usage?.output_tokens ?? 0;
+          const turn = entriesOfTurn(message, iterations, [key]);
+          if (turn.some((entry) => entry.kind === 'thinking')) thinkingTurns += 1;
+          turn.forEach(record);
           for (const block of message.content) {
             if (block.type !== 'tool_use') continue;
             toolCalls += 1;
@@ -286,6 +327,18 @@ export class AgentRunnerService {
       ...(reportedCostUsd > 0 ? { reportedCostUsd: round(reportedCostUsd) } : {}),
       ...(keyUsageDeltaUsd !== undefined ? { keyUsageDeltaUsd } : {}),
     };
+    record({
+      kind: 'end',
+      stopReason,
+      iterations,
+      toolCalls,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      ...(costUsd !== undefined ? { costUsd } : {}),
+      durationMs: summary.durationMs,
+      thinkingTurns,
+      ...(error ? { error } : {}),
+    });
     try {
       await this.events.append({ agentId: agent.id, runId, kind: 'run', detail: summary });
     } catch (appendError) {
@@ -315,6 +368,31 @@ export class AgentRunnerService {
       ...(error ? { error } : {}),
       ...(costUsd !== undefined ? { costUsd } : {}),
       events: await this.events.list(agent.id, { runId }),
+    };
+  }
+
+  /**
+   * Opens this run's transcript and returns its recorder: a no-op without a
+   * store, and one that can never throw into the run.
+   */
+  private transcriptFor(
+    run: { runId: string; agentId: string; trigger: RunTrigger; model: string; startedAt: number },
+    key: string,
+  ): (entry: TranscriptEntryBody) => void {
+    const store = this.transcripts;
+    if (!store) return () => {};
+    try {
+      store.start(run);
+    } catch (error) {
+      this.logger.warn(`run ${run.runId}: no transcript: ${errorText(error, key)}`);
+      return () => {};
+    }
+    return (entry) => {
+      try {
+        store.append(run.runId, entry);
+      } catch (error) {
+        this.logger.warn(`run ${run.runId}: transcript entry lost: ${errorText(error, key)}`);
+      }
     };
   }
 
@@ -435,6 +513,18 @@ export function stopReasonOf(message: BetaMessage | undefined): RunStopReason {
       // `end_turn`, and a provider that sends no stop reason on a normal finish.
       return 'end_turn';
   }
+}
+
+/** The tick snapshot as one transcript line: which markets the model was shown. */
+function snapshotNote(snapshot: Record<string, unknown>): string {
+  const depth = snapshot['depth'];
+  const markets =
+    typeof depth === 'object' && depth !== null
+      ? Object.keys(depth as Record<string, unknown>)
+      : [];
+  return markets.length > 0
+    ? `Snapshot sent: balances, open orders and the book of ${markets.join(', ')}`
+    : 'Snapshot sent: balances and open orders (no market books)';
 }
 
 /** OpenRouter adds `usage.cost` (USD) to each response; the SDK does not type it. */
