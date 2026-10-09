@@ -579,7 +579,12 @@ describe('the trading flag', () => {
   });
 
   it('answers 404 trading_disabled with the flag off', () => {
-    const guard = new TradingEnabledGuard({ enabled: false, atomicBatch: false, chainId: 10143 });
+    const guard = new TradingEnabledGuard({
+      enabled: false,
+      atomicBatch: false,
+      perpl: false,
+      chainId: 10143,
+    });
     expect(() => guard.canActivate()).toThrow(
       expect.objectContaining({
         status: 404,

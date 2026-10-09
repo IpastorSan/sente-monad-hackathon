@@ -101,6 +101,7 @@ import { fundsAfter, TradeOutcomes } from './outcome';
 import { StepExecutor } from './step-executor';
 import { TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeStore, type StepStatus, type Trade, type TradeStep } from './trade-store';
+import { USER_VENUE_SECRETS, type UserVenueSecretStore } from './user-venue-secrets';
 
 export type { PerplOnboardIntent };
 export type TradeIntent = KuruIntent | PerplOnboardIntent;
@@ -215,14 +216,15 @@ export class TradeService {
     @Inject(MONAD_PUBLIC_CLIENT) private readonly client: PublicClient,
     private readonly outcomes: TradeOutcomes,
     @Inject(PERPL_CONTEXT) private readonly perplContext: PerplContextSource,
+    @Inject(USER_VENUE_SECRETS)
+    private readonly secrets: Pick<UserVenueSecretStore, 'getPerplRead' | 'getPerplTradeToken'>,
   ) {}
 
   capabilities(): TradeCapabilitiesDto {
-    const { enabled, atomicBatch, chainId } = this.config;
-    // Stays false although onboarding plans since SEN-99: the phone cannot
-    // verify its steps yet (M-T16), there is no enrollment (M-T18), and orders
-    // come with M-T23. Offering Perpl before all three would strand users.
-    return { enabled, atomicBatch, chainId, venues: { kuru: enabled, perpl: false } };
+    const { enabled, atomicBatch, chainId, perpl } = this.config;
+    // Perpl behind its own flag (SEN-174): a deployment turns it on only once
+    // the app can onboard, enroll and order, or users would be stranded.
+    return { enabled, atomicBatch, chainId, venues: { kuru: enabled, perpl } };
   }
 
   async prepare(principal: Principal, dto: TradeIntentDto): Promise<PreparedTradeDto> {
@@ -325,19 +327,26 @@ export class TradeService {
 
   /**
    * `GET /trade/perpl/account`: the wallet's Perpl account as the Exchange
-   * holds it, and what onboarding would still need. The read key and `apiKey`
-   * come with enrollment (M-T18); until then always `'unlinked'`.
+   * holds it, and what onboarding would still need. `apiKey` (the phone's
+   * trade-key token) and `readKey: 'linked'` come from enrollment (M-T18).
    */
   async perplAccount(principal: Principal): Promise<PerplAccountDto> {
     this.assertEnabled();
     const binding = await this.bound(principal);
     const params = perplParams(await this.perplContext());
-    const account = await perplAccountInfo(this.client, binding.address, params.exchange);
+    const [account, read, apiKey] = await Promise.all([
+      perplAccountInfo(this.client, binding.address, params.exchange),
+      this.secrets.getPerplRead(principal.userId),
+      this.secrets.getPerplTradeToken(principal.userId),
+    ]);
+    // Only whether a read key is held: its secret never leaves the server.
+    read?.secretKey.fill(0);
     return {
       accountId: account ? account.accountId.toString() : null,
       forwarding: account !== null && this.knownForwarding(principal.userId, binding, this.now()),
       minOpenAtoms: params.minAccountOpenAmount.toString(),
-      readKey: 'unlinked',
+      ...(apiKey === undefined ? {} : { apiKey }),
+      readKey: read ? 'linked' : 'unlinked',
     };
   }
 

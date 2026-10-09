@@ -4,10 +4,13 @@ import { PERPL_NETWORKS } from '@sente/venues/perpl';
 import type { PublicClient } from 'viem';
 
 import { PrivyClient } from '../agents/privy/privy.client';
+import { agentSecretsKey } from '../agents/venues/file-agent-secret-store';
 import { perplAccountReader } from '../agents/venues/perpl-agent';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import type { WriteSpacer } from '../spacing/write-spacer';
+import { statePath } from '../state/json-file';
+import { StateDirLease, StateModule } from '../state/state.module';
 import { BUNDLER, type Bundler } from '../wallet/bundler/bundler';
 import { USER_WALLETS, type UserWalletProvider } from '../wallet/user-wallet.provider';
 import { SEND_SPACER } from '../wallet/user-wallet.service';
@@ -28,7 +31,12 @@ import { loadTradeConfig, TRADE_CONFIG, type TradeConfig } from './trade.config'
 import { TradeController, TradingEnabledGuard } from './trade.controller';
 import { TradeService } from './trade.service';
 import { TradeStore } from './trade-store';
-import { InMemoryUserVenueSecretStore, USER_VENUE_SECRETS } from './user-venue-secrets';
+import { FileUserVenueSecretStore, USER_VENUE_SECRETS_FILE } from './file-user-venue-secrets';
+import {
+  InMemoryUserVenueSecretStore,
+  USER_VENUE_SECRETS,
+  type UserVenueSecretStore,
+} from './user-venue-secrets';
 
 const configProvider: Provider = {
   provide: TRADE_CONFIG,
@@ -37,7 +45,9 @@ const configProvider: Provider = {
     // Said once at boot so "why is /trade 404?" is answered by the log.
     new Logger('TradeConfig').log(
       `manual trading ${config.enabled ? 'on' : 'off'}` +
-        (config.enabled ? `, atomic batch ${config.atomicBatch ? 'on' : 'off'}` : ''),
+        (config.enabled
+          ? `, atomic batch ${config.atomicBatch ? 'on' : 'off'}, perps ${config.perpl ? 'on' : 'off'}`
+          : ''),
     );
     return config;
   },
@@ -107,6 +117,22 @@ const enrollPerplProvider: Provider = {
 };
 
 /**
+ * In memory unless `STATE_DIR` is set; then sealed on disk under
+ * `AGENT_SECRETS_KEY` (SEN-174), so a restart keeps every user's Perpl read key
+ * and trade token instead of unlinking them. `agentSecretsKey()` throws without
+ * the key, and a wrong key fails the load: both stop the boot.
+ */
+export function userVenueSecretStore(
+  env: Record<string, string | undefined> = process.env,
+): UserVenueSecretStore {
+  const path = statePath(USER_VENUE_SECRETS_FILE, env);
+  if (!path) return new InMemoryUserVenueSecretStore();
+  const store = new FileUserVenueSecretStore(path, agentSecretsKey(env));
+  new Logger('UserVenueSecrets').log(`${store.size} user(s)' Perpl keys loaded from ${store.path}`);
+  return store;
+}
+
+/**
  * AUTH: the same seam `wallet/` and `agents/` use — `Auth` reads back the
  * principal `SessionAuthGuard` verified for this request.
  */
@@ -121,7 +147,8 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
  * executor is: prepare and commit must see the same trades.
  */
 @Module({
-  imports: [WalletModule],
+  // StateModule: the STATE_DIR lock the user venue secrets file opens under (SEN-161).
+  imports: [WalletModule, StateModule],
   controllers: [TradeController, PerplEnrollController],
   providers: [
     configProvider,
@@ -137,7 +164,12 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
     enrollPrivyProvider,
     enrollPerplProvider,
     // One store per process: enrollment writes the read key Portfolio reads (M-T19).
-    { provide: USER_VENUE_SECRETS, useFactory: () => new InMemoryUserVenueSecretStore() },
+    {
+      provide: USER_VENUE_SECRETS,
+      // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
+      inject: [StateDirLease],
+      useFactory: (_lease: StateDirLease) => userVenueSecretStore(),
+    },
     PerplEnrollService,
   ],
   exports: [TRADE_CONFIG, TradeStore, StepExecutor, TradeService, USER_VENUE_SECRETS],

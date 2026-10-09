@@ -10,6 +10,10 @@
  * only with `USER_TRADING` on, so turning trading off can never leave a
  * half-enabled mode behind it.
  *
+ * `USER_TRADING_PERPL` offers Perpl perps to the app (`venues.perpl` in
+ * `GET /trade/capabilities`, SEN-174). Honoured only with `USER_TRADING` on,
+ * for the same reason as atomic batching.
+ *
  * `chainId` is pinned rather than read: every address table and the phone's
  * verifier assume Monad testnet, and mainnet is out of scope (threat model,
  * "Mainnet").
@@ -23,6 +27,7 @@ export const TRADE_CHAIN_ID = 10143;
 export interface TradeConfig {
   readonly enabled: boolean;
   readonly atomicBatch: boolean;
+  readonly perpl: boolean;
   readonly chainId: typeof TRADE_CHAIN_ID;
 }
 
@@ -31,6 +36,7 @@ export function loadTradeConfig(env: NodeJS.ProcessEnv = process.env): TradeConf
   return {
     enabled,
     atomicBatch: enabled && isOn(env.USER_TRADE_ATOMIC_BATCH),
+    perpl: enabled && isOn(env.USER_TRADING_PERPL),
     chainId: TRADE_CHAIN_ID,
   };
 }

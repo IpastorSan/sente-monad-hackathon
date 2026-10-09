@@ -171,13 +171,14 @@ export interface TradeCapabilitiesDto {
   enabled: boolean;
   atomicBatch: boolean;
   chainId: number;
+  /** `perpl` is `USER_TRADING_PERPL`, and false whenever `enabled` is. */
   venues: { kuru: boolean; perpl: boolean };
 }
 
 /**
  * `GET /trade/perpl/account` (SEN-99): what onboarding still needs. Amounts
- * are AUSD atoms. `apiKey` and `readKey: 'linked'` arrive with enrollment
- * (M-T18); until then the key is always `'unlinked'`.
+ * are AUSD atoms. `apiKey` (the phone's trade-key token, absent until
+ * enrollment) and `readKey: 'linked'` come from enrollment (M-T18, SEN-174).
  */
 export interface PerplAccountDto {
   accountId: string | null;
