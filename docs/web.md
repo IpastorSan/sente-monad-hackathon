@@ -212,19 +212,19 @@ cross-device "same address" question cannot be simulated this way.
 
 ## Measured: one prompt and a reload on the web export (SEN-176)
 
-`apps/mobile/scripts/web-reload-e2e.ts` (`pnpm --filter @sente/mobile run e2e:web-reload`,
-after `export:web`) serves `dist-web` at `https://sente.lol` by request interception in
-headless Google Chrome with a `hasPrf: true` virtual authenticator, stubs the API's
-`/auth/challenge` and `/auth/session` (every other route answers 503), and counts
+`apps/mobile/scripts/web-reload-e2e.ts` (`pnpm --filter @sente/mobile run e2e:web-reload`)
+serves `dist-web` at `https://sente.lol` by request interception in headless Google Chrome
+with a `hasPrf: true` virtual authenticator, stubs the API's `/auth/challenge` and
+`/auth/session` (every other route answers 503), aborts every other request, and counts
 `navigator.credentials` calls across page loads. Run on 2026-10-09:
 
 ```text
-create: ceremonies ["create"], /auth/session calls 1, address 0xe86305e99F8a5eF356Df26db4594b47B6E562FA1, challenge for ["0xe86305e99F8a5eF356Df26db4594b47B6E562FA1"]
+create: ceremonies ["create"], /auth/session calls 1, address 0xdCfd044202Dfc8f9b018724b8a138C0e46d9df0f, challenge for ["0xdCfd044202Dfc8f9b018724b8a138C0e46d9df0f"]
 ok    the sealed address is the one that signed in
 ok    create + sign-in took exactly one WebAuthn ceremony
 ok    session sealed in sessionStorage
 ok    no plaintext token in sessionStorage
-reload x2: ceremonies [], address 0xe86305e99F8a5eF356Df26db4594b47B6E562FA1, /auth/session calls 0, Authorization seen ["Bearer stub-token-1"]
+reload x2: ceremonies [], address 0xdCfd044202Dfc8f9b018724b8a138C0e46d9df0f, /auth/session calls 0, Authorization seen ["Bearer stub-token-1"]
 ok    two reloads ran no WebAuthn ceremony
 ok    still signed in (Account rendered) after each reload
 ok    same address after reload
@@ -233,16 +233,23 @@ sign out + reload: at /welcome, sealed keys left []
 ok    signed out + reload lands on /welcome
 ok    sign-out cleared the sealed session and token
 ok    no ceremony after sign-out reload
-sign in: ceremonies ["get"], address 0xe86305e99F8a5eF356Df26db4594b47B6E562FA1
+sign in: ceremonies ["get"], address 0xdCfd044202Dfc8f9b018724b8a138C0e46d9df0f
 ok    sign-in took exactly one WebAuthn ceremony
 ok    sign-in reached the same address
 forget + reload: at /welcome, sealed keys left []
 ok    forget + reload lands on /welcome
 ok    forget cleared the sealed session
 ok    no wrapping key left in IndexedDB (0)
-
+aborted (never sent): ["https://testnet-rpc.monad.xyz"]
+ok    the bundle talks to the stub API, not a real one
 PASS
 ```
+
+**Build the export with `--clear`** (`expo export --platform web --output-dir dist-web
+--clear`). Metro's transform cache is shared between checkouts and can inline the
+`EXPO_PUBLIC_API_URL` of an earlier build: one run on this branch got a bundle aimed at
+`https://api.sente.lol` and signed throwaway virtual-authenticator wallets in to production.
+The script now fails when the bundle talks to any Sente host instead of the stub.
 
 What it does not cover: a real provider (below), and the stub API means Home shows no
 wallet; being signed in is judged by the Account screen rendering and the sealed address.

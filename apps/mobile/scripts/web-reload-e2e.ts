@@ -2,13 +2,21 @@
  * End-to-end check for SEN-176 on the web export: one passkey prompt to sign
  * in, none after a reload, and back to /welcome after signing out.
  *
- * Serves `dist-web` (build it first: `pnpm --filter @sente/mobile run
- * export:web`) at a real `https://sente.lol` origin through request
+ * Serves `dist-web` at a real `https://sente.lol` origin through request
  * interception, in headless Google Chrome (or `CHROME_PATH`) with a CDP
  * virtual authenticator that has PRF. The API is a stub on the export's
  * `API_URL` (default `http://localhost:3000`, or `API_URL`): `/auth/challenge`
  * and `/auth/session` answer, everything else is a 503, which the app shows as
- * an unreachable API and which has no bearing on being signed in.
+ * an unreachable API and which has no bearing on being signed in. Every other
+ * request (the Monad RPC, for one) is aborted and listed, so nothing this
+ * harness does reaches a real API or chain; one aimed at a Sente host fails
+ * the run, because it means the bundle is not using the stub.
+ *
+ * Build the export with `--clear` (or `EXPO_PUBLIC_API_URL` unset): Metro's
+ * transform cache is shared between checkouts and can inline the API URL of
+ * an earlier build, which is how a run once reached `https://api.sente.lol`.
+ *
+ *   mise exec -- pnpm exec expo export --platform web --output-dir dist-web --clear
  *
  * Counts `navigator.credentials` calls in the page and `/auth/session` calls on
  * the stub, and exits non-zero unless: create = 1 ceremony, reload = 0
@@ -54,6 +62,8 @@ async function file(pathname: string): Promise<string> {
 }
 
 const api = { sessions: 0, challenges: [] as string[], tokensSeen: new Set<string>() };
+/** Requests to anything but the page origin and the stub, aborted. */
+const escaped = new Set<string>();
 /** Every `navigator.credentials` call, across page loads. */
 const ceremonies: string[] = [];
 
@@ -66,6 +76,13 @@ const expect = (ok: boolean, what: string) => {
 
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  // Registered first, so the two routes below (matched last-registered first)
+  // take precedence: anything they do not claim is aborted here.
+  await context.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.protocol !== 'data:' && url.protocol !== 'blob:') escaped.add(url.origin);
+    await route.abort();
+  });
   await context.route('https://sente.lol/**', async (route) => {
     const { pathname } = new URL(route.request().url());
     const path = await file(decodeURIComponent(pathname));
@@ -247,6 +264,13 @@ try {
       }),
   );
   expect(keysLeft === 0, `no wrapping key left in IndexedDB (${keysLeft})`);
+  // Aborted, so nothing left the machine; a Sente host here means the bundle
+  // targets a real API instead of the stub, and the counts above mean nothing.
+  console.log(`aborted (never sent): ${JSON.stringify([...escaped])}`);
+  expect(
+    ![...escaped].some((origin) => origin.includes('sente.lol')),
+    'the bundle talks to the stub API, not a real one',
+  );
 } finally {
   await browser.close();
 }
