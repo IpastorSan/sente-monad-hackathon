@@ -90,22 +90,96 @@ www.sente.lol {
 # is deployed, or Caddy burns a Let's Encrypt failed-authorisation against the
 # account (five per hostname per hour). `deploy.sh` checks it and refuses.
 api.sente.lol {
+	# Perpl testnet for the WEB build only (SEN-175). Perpl refuses browser
+	# origins: its trading WebSocket answers a handshake carrying
+	# `Origin: https://sente.lol` with 403, and its REST sends no CORS headers
+	# (OPTIONS is a 405). The web app therefore talks to Perpl through here:
+	#
+	#   https://api.sente.lol/perpl/api/…  ->  https://testnet.perpl.xyz/api/…
+	#   wss://api.sente.lol/perpl/ws/…     ->  wss://testnet.perpl.xyz/ws/…
+	#
+	# The Android app connects to Perpl directly and never comes through here.
+	#
+	# TRUST, stated plainly (README "Status and limits"): Perpl authenticates a
+	# trading socket once, with a signed sign-in frame, and every later order
+	# frame on it is unsigned. A socket relayed through this proxy could
+	# therefore have orders injected into it by whoever controls this box. It
+	# can never withdraw: that is an on-chain transaction the user's wallet signs.
+	#
+	# Tight on purpose: one upstream, two path prefixes, one browser origin.
+	handle_path /perpl/* {
+		header Access-Control-Allow-Origin https://sente.lol
+		# The trader syncs its clock from Perpl's Date header; a browser hides it
+		# from the page unless it is exposed.
+		header Access-Control-Expose-Headers Date
+		header Vary Origin
+
+		# The `handle` blocks below are mutually exclusive and, having no path
+		# matchers to be sorted by, are tried in the order written; the bare one
+		# is the fallback.
+
+		# A browser on any other site is refused outright. A request with no
+		# Origin at all (curl, verify.sh) passes: Perpl itself accepts those, so
+		# refusing them here would protect nothing.
+		@foreign {
+			header Origin *
+			not header Origin https://sente.lol
+		}
+		handle @foreign {
+			respond 403
+		}
+
+		# Only the REST API and the WebSockets; nothing else of Perpl's site.
+		@notPerplApi not path /api/* /ws/*
+		handle @notPerplApi {
+			respond 404
+		}
+
+		# Preflight is answered here: Perpl answers OPTIONS with a 405.
+		@preflight method OPTIONS
+		handle @preflight {
+			header Access-Control-Allow-Methods "GET, POST"
+			# What packages/venues/src/perpl/rest.ts sends: JSON bodies and the
+			# signed-request headers from signing.ts.
+			header Access-Control-Allow-Headers "Content-Type, X-API-Key, X-API-Timestamp, X-API-Nonce, X-API-Signature"
+			header Access-Control-Max-Age 600
+			respond 204
+		}
+
+		handle {
+			reverse_proxy https://testnet.perpl.xyz {
+				header_up Host testnet.perpl.xyz
+				# Perpl's WebSocket accepts no Origin or its own; ours is a 403.
+				header_up Origin https://testnet.perpl.xyz
+				# Its CORS headers, if it ever sends any, must not stack on ours.
+				header_down -Access-Control-Allow-Origin
+				header_down -Access-Control-Allow-Credentials
+				header_down -Access-Control-Expose-Headers
+				header_down -Vary
+			}
+		}
+	}
+
+	# Everything else is services/api.
+	#
 	# Compose puts both containers on the same network, so `api` is the service
 	# name from docker-compose.yml. Nothing publishes port 3000 on the host: the
 	# API is reachable only through this proxy, over TLS.
-	reverse_proxy api:3000 {
-		# Caddy already sends X-Forwarded-For/-Proto/-Host. NOTE, and it is a
-		# real behaviour change on deploy: Express only believes those with
-		# `trust proxy` set, which `services/api/src/main.ts` does not set, so
-		# `@Ip()` sees this proxy's container address. The per-IP backstop on
-		# POST /gas/drip therefore becomes one shared bucket
-		# (GAS_DRIP_RATE_LIMIT_MAX per window for everyone). It fails closed,
-		# not open — the per-address and per-user caps in the drip ledger are
-		# untouched — but it can refuse a judge mid-demo. See docs/deploy.md,
-		# "Decisions still open".
-		health_uri /health
-		health_interval 30s
-		health_timeout 5s
+	handle {
+		reverse_proxy api:3000 {
+			# Caddy already sends X-Forwarded-For/-Proto/-Host. NOTE, and it is a
+			# real behaviour change on deploy: Express only believes those with
+			# `trust proxy` set, which `services/api/src/main.ts` does not set, so
+			# `@Ip()` sees this proxy's container address. The per-IP backstop on
+			# POST /gas/drip therefore becomes one shared bucket
+			# (GAS_DRIP_RATE_LIMIT_MAX per window for everyone). It fails closed,
+			# not open — the per-address and per-user caps in the drip ledger are
+			# untouched — but it can refuse a judge mid-demo. See docs/deploy.md,
+			# "Decisions still open".
+			health_uri /health
+			health_interval 30s
+			health_timeout 5s
+		}
 	}
 
 	# Responses only; the request body Caddy forwards is byte-for-byte what it

@@ -8,7 +8,10 @@
 #              itself not loading (SEN-168);
 #   the API    session auth not enforced, placeholder auth left on, or the public
 #              webhook accepting an unsigned body. Each of those looks like a
-#              working deployment from the outside.
+#              working deployment from the outside;
+#   the Perpl proxy  the web build's only way to Perpl (SEN-175): a WebSocket
+#              that stops upgrading for sente.lol, or CORS headers gone, and
+#              web perps fail with a bare network error.
 #
 # Run against the live host once DNS points at the box:  ./verify.sh
 #
@@ -81,6 +84,36 @@ body_has () {
     echo "  ✓ $label — body contains $want"
   else
     echo "  ✗ $label — body does not contain $want; got: ${out:0:160}"; fail=1
+  fi
+}
+
+# $1=label  $2=url  $3=header line the response must carry (case-insensitive
+# name, exact value)  [$4=curl extra args…]
+header_has () {
+  local label="$1" url="$2" want="$3"; shift 3
+  local out
+  out=$(curl -sS -m 15 -o /dev/null -D - "$@" "$url" 2>/dev/null | tr -d '\r') \
+    || { echo "  ✗ $label — unreachable ($url)"; fail=1; return; }
+  if grep -qix "$want" <<<"$out"; then
+    echo "  ✓ $label — $want"
+  else
+    echo "  ✗ $label — no '$want' header   $url"; fail=1
+  fi
+}
+
+# $1=label  $2=wss url  $3=Origin. A WebSocket handshake must be a 101. curl
+# holds the upgraded connection open until -m expires, so its exit code is not
+# the verdict: the status line it printed is.
+ws_upgrade () {
+  local label="$1" url="$2" origin="$3" code
+  code=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' --http1.1 \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: $origin" \
+    "${url/#wss:/https:}" 2>/dev/null)
+  if [ "$code" = "101" ]; then
+    echo "  ✓ $label — 101 Switching Protocols"
+  else
+    echo "  ✗ $label — HTTP ${code:-none} (want 101)   $url"; fail=1
   fi
 }
 
@@ -182,7 +215,28 @@ else
   #    sync, for no benefit — a passkey scoped to sente.lol already works here.
   status "api host serves no assetlinks.json" "$API/.well-known/assetlinks.json" "404"
 
-  # 6. And the apex must still be the apex. A misplaced proxy directive that sent
+  # 6. The Perpl proxy (SEN-175). Perpl testnet refuses browser origins, so the
+  #    web build trades through /perpl/*. Each of these fails silently in the
+  #    app: a WebSocket 403 or a missing CORS header both surface as a vague
+  #    network error on the ticket, never as a deploy problem.
+  PERPL="$API/perpl"
+  ws_upgrade "Perpl trading socket through the proxy, Origin sente.lol" \
+    "${PERPL/#https:/wss:}/ws/v1/trading" "https://sente.lol"
+  status "Perpl context through the proxy" "$PERPL/api/v1/pub/context" "200" \
+    -H 'Origin: https://sente.lol'
+  header_has "Perpl context is readable from sente.lol" "$PERPL/api/v1/pub/context" \
+    'access-control-allow-origin: https://sente.lol' -H 'Origin: https://sente.lol'
+  # The trader's clock sync reads Date; unexposed, the browser hides it.
+  header_has "Perpl context exposes Date" "$PERPL/api/v1/pub/context" \
+    'access-control-expose-headers: Date' -H 'Origin: https://sente.lol'
+  status "Perpl preflight answered at the edge" "$PERPL/api/v1/pub/context" "204" \
+    -X OPTIONS -H 'Origin: https://sente.lol' -H 'Access-Control-Request-Method: POST'
+  # Tight: no other site may borrow the proxy, and nothing of Perpl's but its API.
+  status "Perpl proxy refuses another origin" "$PERPL/api/v1/pub/context" "403" \
+    -H 'Origin: https://example.com'
+  status "Perpl proxy serves only /api and /ws" "$PERPL/" "404"
+
+  # 7. And the apex must still be the apex. A misplaced proxy directive that sent
   #    /.well-known/* to Nest would show up as a 404 in the first check, but a
   #    whole-apex redirect would not — so assert the site root separately.
   status "apex still answers without a redirect" "$SITE/" "200"

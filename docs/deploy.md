@@ -34,7 +34,9 @@ certificate for `sente.lol` in a named Docker volume. Do not rebuild it: losing
   than a path under the apex so that a proxy directive can never end up in front
   of the association files. The rpId is unaffected: a passkey scoped to
   `sente.lol` works from every name below it, so this host needs no association
-  file of its own and must never be given one.
+  file of its own and must never be given one. One path is not the API:
+  `/perpl/{api,ws}/*` proxies Perpl testnet for the web build, which Perpl
+  refuses as a browser origin (SEN-175, [`web.md`](web.md#perpl-through-sentes-proxy-sen-175)).
 - **`/var/lib/sente/state`** — `STATE_DIR` (SEN-48). A host directory, bind
   mounted, owned by uid 1000. It holds the user-wallet registry and the agent
   store. Losing it is not "register again": the next `POST /wallet/register`
@@ -585,6 +587,19 @@ Added 2026-10-01 (SEN-168), the web half, also **local only**:
 | `deploy.sh` refuses a bundle without `https://api.sente.lol`             | `DRY_RUN=1` with a `mise` shim that dropped `EXPO_PUBLIC_API_URL`: exit 1 at the grep, nothing copied to `infra/web`                                                                                                                     |
 | `deploy.sh` refuses an export without `canvaskit.wasm`                   | `DRY_RUN=1` on this branch, where SEN-164's `public/canvaskit.wasm` has not landed: exit 1; with a temporary copy in `apps/mobile/public/` it passed and filled `infra/web` (15 MB)                                                      |
 | Metro's cache ignores `EXPO_PUBLIC_*`                                    | see "Building it" above — the reason for `--clear`                                                                                                                                                                                       |
+
+Added 2026-10-09 (SEN-175), the Perpl proxy, **local only**. The real Caddyfile
+with the global block swapped for `local_certs` (8175/8475), proxying to live
+Perpl testnet; `CURL_HOME` holding `insecure` and `resolve` lines for both hosts:
+
+| Verified                                                       | How                                                                                                                                                                                                                    |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the Caddyfile is valid                                         | `caddy validate` in `caddy:2-alpine` (v2.11.4) — "Valid configuration"; `caddy fmt` clean                                                                                                                              |
+| the trading socket upgrades for sente.lol through the proxy    | WebSocket handshake to `/perpl/ws/v1/trading`: no Origin 101, `Origin: https://sente.lol` 101, any other Origin 403 (Perpl direct: sente.lol 403, `https://testnet.perpl.xyz` 101). `/perpl/ws/v1/market-data` 101 too |
+| REST is readable from sente.lol and exposes `Date`             | `GET /perpl/api/v1/pub/context` with `Origin: https://sente.lol`: 200, Perpl's JSON, `access-control-allow-origin: https://sente.lol`, `access-control-expose-headers: Date`, `vary: Origin`                           |
+| preflight is answered at the edge                              | `OPTIONS` with `Access-Control-Request-Method: POST`: 204 with `Allow-Methods: GET, POST` and the five request headers `rest.ts` sends                                                                                 |
+| tight                                                          | `Origin: https://evil.example` 403; `/perpl/` and `/perpl/index.html` 404; `/health` still reaches the API block; apex `assetlinks.json` 200 JSON, `/.well-known/does-not-exist` 404                                   |
+| `verify.sh`'s seven Perpl checks pass, and fail on the mistake | all seven pass; a copy without `header_up Origin` and the `Expose-Headers` line fails exactly the socket check (403) and the `Date` check                                                                              |
 
 **NOT RUN. Nothing has been deployed, and nothing about the live box has
 changed:**

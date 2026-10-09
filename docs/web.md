@@ -105,6 +105,22 @@ cross-device "same address" question cannot be simulated this way.
 The app's web copy recommends only the two "expected" rows (GPM in Chrome, or a phone
 through the QR code). Do not add a provider to judge copy until it has a measured row.
 
+## Perpl through Sente's proxy (SEN-175)
+
+On the web, Perpl orders go through Sente's proxy, because Perpl testnet refuses browser
+origins: measured 2026-10-09, `wss://testnet.perpl.xyz/ws/v1/trading` answers a handshake
+carrying `Origin: https://sente.lol` with 403 (101 with no Origin or with
+`https://testnet.perpl.xyz`), and `GET /api/v1/pub/context` sends no
+`Access-Control-Allow-Origin` while `OPTIONS` is a 405. `infra/Caddyfile` therefore
+proxies `https://api.sente.lol/perpl/{api,ws}/*` to Perpl testnet with Perpl's own
+Origin, CORS for `https://sente.lol` only (`Date` exposed, for the trader's clock sync)
+and preflight answered at the edge; `infra/verify.sh` checks all of it. The web bundle
+picks this network in `apps/mobile/src/trade/perplNetwork.web.ts`, derived from
+`EXPO_PUBLIC_API_URL`; screens get it through `createAppPerplTrader`. The trade-off:
+Perpl authenticates the socket once and later order frames are unsigned, so the proxy
+could inject orders on an open socket. It can never withdraw. The Android app connects
+directly, and the proxy reaches testnet only.
+
 ## Left for a human
 
 On a machine with Chrome signed in to the Google account that holds the phone's passkey:
