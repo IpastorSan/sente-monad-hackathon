@@ -142,6 +142,14 @@ type AgentFields = {
   };
   status: AgentStatus;
   /**
+   * Whether the agent may deposit to Kuru (SEN-188): its policy pins the
+   * account a deposit credits to its own wallet. `false` right after a hire,
+   * until the pinning amend lands (`depositPin.ts`), and on agents hired before
+   * SEN-188 until their next amend; the API refuses every Kuru deposit until
+   * then. Absent from an older API, which reads as nothing to do.
+   */
+  kuruDepositPinned?: boolean;
+  /**
    * WHO OWNS THIS AGENT'S MANDATE, and so whether changing it needs this
    * phone's signature (SEN-43/SEN-44).
    *

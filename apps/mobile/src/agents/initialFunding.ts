@@ -18,7 +18,8 @@ import type { Address } from 'viem';
 
 import { describeSendError, type SendIntent, type SentTransfer } from '../wallet/send.ts';
 import { formatAtoms, parseAmount } from './amounts.ts';
-import type { AgentMandate, HireAgentResult } from './api.ts';
+import type { Agent, AgentMandate, HireAgentResult } from './api.ts';
+import { needsDepositPin, type DepositPinState } from './depositPin.ts';
 import { FUNDING_TOKENS, isNativeToken } from './fund.ts';
 import { AUSD, type Token } from './mandate.ts';
 
@@ -115,9 +116,13 @@ export async function fundAgent(
 }
 
 /**
- * Hire, then fund. A hire that fails throws, exactly as hiring did before; a
- * funding that fails is reported through `onFunding` and nothing else, after
- * `onHired` has already shown the agent.
+ * Hire, secure the deposits, then fund. A hire that fails throws, exactly as
+ * hiring did before; a pin or a funding that fails is reported through its own
+ * callback and nothing else, after `onHired` has already shown the agent.
+ *
+ * The pin (SEN-188) runs only when the API says the agent needs it, and before
+ * the funding: it is the step that finishes the hire's policy, and the funding
+ * goes to the agent's wallet, which it does not touch either way.
  */
 export async function hireThenFund(steps: {
   hire: () => Promise<HireAgentResult>;
@@ -126,9 +131,16 @@ export async function hireThenFund(steps: {
   fund: (to: Address, token: Token, atoms: bigint) => Promise<FundingOutcome>;
   onHired: (result: HireAgentResult) => void;
   onFunding: (state: FundingState) => void;
+  /** The pinning amend (`secureDeposits`); never throws. */
+  secure?: (agent: Agent) => Promise<DepositPinState>;
+  onSecure?: (state: DepositPinState) => void;
 }): Promise<void> {
   const result = await steps.hire();
   steps.onHired(result);
+  if (steps.secure && needsDepositPin(result.agent)) {
+    steps.onSecure?.({ kind: 'securing' });
+    steps.onSecure?.(await steps.secure(result.agent));
+  }
   if (!steps.funding) return;
   const { token, atoms } = steps.funding;
   const label = fundingLabel(atoms, token);

@@ -43,6 +43,8 @@ import {
 } from '@/agents/api';
 import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
+import { DepositPinWarning } from '@/agents/DepositPin';
+import { needsDepositPin, secureDeposits, type DepositPinState } from '@/agents/depositPin';
 import {
   bestTrades,
   CADENCES,
@@ -167,7 +169,7 @@ export default function AgentScreen() {
     token?: string;
     amount?: string;
   }>();
-  const { agents: api } = useSession();
+  const { agents: api, auth, wallet } = useSession();
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [summary, setSummary] = useState<AgentSummary | undefined>(undefined);
@@ -198,6 +200,8 @@ export default function AgentScreen() {
   const [perpsNudge, setPerpsNudge] = useState(0);
   /** The token the Perps line's "Fund" asked for; remounts the sheet on it. */
   const [fundToken, setFundToken] = useState<string | undefined>(undefined);
+  /** SEN-188: "Secure deposits" from this page, while the pin is missing. */
+  const [pin, setPin] = useState<DepositPinState | null>(null);
 
   const refreshBalances = useCallback((address: Agent['address']) => {
     readBalances(address).then(setBalances, () => setBalances(null));
@@ -313,6 +317,27 @@ export default function AgentScreen() {
     }
   };
   const amend = () => router.push({ pathname: '/agents/new', params: { amend: agent.id } });
+  /**
+   * SEN-188: the pinning amend with the stored mandate. The phone still checks
+   * its `returnTo` against this phone's own wallet, and the pin against this
+   * agent's address, before it signs.
+   */
+  const secure = async () => {
+    if (!api || pin?.kind === 'securing') return;
+    setPin({ kind: 'securing' });
+    const outcome = await secureDeposits({
+      api,
+      agent,
+      mandate: agent.mandate,
+      ownWallet: wallet.address,
+      sign: auth.signPrivyAuthorization,
+    });
+    setPin(outcome);
+    if (outcome.kind === 'secured') {
+      setAgent(outcome.agent);
+      setNotice({ tone: 'ok', title: 'Deposits secured' });
+    }
+  };
 
   return (
     <Screen
@@ -380,6 +405,12 @@ export default function AgentScreen() {
           title="Kuru moved to new markets"
           detail={`${agent.kuruRetired.message} Tap Amend: the form already has the new markets.`}
         />
+      ) : null}
+
+      {needsDepositPin(agent) && !agent.kuruRetired ? (
+        // SEN-188: the hire's pinning amend has not landed. With retired Kuru
+        // books, the Amend above does both, so it is the one thing to ask.
+        <DepositPinWarning state={pin} onSecure={() => void secure()} />
       ) : null}
 
       {active ? (

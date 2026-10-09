@@ -33,9 +33,12 @@ import {
   AGENT_MODELS,
   AgentsApiError,
   describeAgentsError,
+  type AgentMandate,
   type HireAgentResult,
 } from '@/agents/api';
 import { readBalance } from '@/agents/balances';
+import { DepositPinStatus } from '@/agents/DepositPin';
+import { needsDepositPin, secureDeposits, type DepositPinState } from '@/agents/depositPin';
 import { FUNDING_TOKENS } from '@/agents/fund';
 import { MandateStep } from '@/agents/MandateStep';
 import { defaultMandateForm, type MandateErrors, type MandateForm } from '@/agents/mandate';
@@ -306,6 +309,9 @@ function Configure({
   const [hired, setHired] = useState<{ result: HireAgentResult; fund: FundOutcome | null } | null>(
     null,
   );
+  /** SEN-188: the pinning amend after the hire, and the mandate it keeps. */
+  const [pin, setPin] = useState<DepositPinState | null>(null);
+  const [hiredMandate, setHiredMandate] = useState<AgentMandate | null>(null);
 
   const stepValid = (id: StepId): boolean => {
     switch (id) {
@@ -374,6 +380,27 @@ function Configure({
     }
   };
 
+  const secure = (agent: HireAgentResult['agent'], mandate: AgentMandate) =>
+    api
+      ? secureDeposits({
+          api,
+          agent,
+          mandate,
+          ownWallet: returnTo,
+          sign: auth.signPrivyAuthorization,
+        })
+      : Promise.resolve<DepositPinState>({
+          kind: 'failed',
+          title: 'Sign in first',
+          detail: 'Agents belong to your passkey account.',
+        });
+
+  const retrySecure = async () => {
+    if (!hired || !hiredMandate || pin?.kind === 'securing') return;
+    setPin({ kind: 'securing' });
+    setPin(await secure(hired.result.agent, hiredMandate));
+  };
+
   const submit = async () => {
     if (!api || !params || !mandateResult.ok || !stepValid('review')) {
       setShowErrors(true);
@@ -382,11 +409,19 @@ function Configure({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      const mandate = mandateResult.mandate;
       const result = await api.hire(
-        presetHireRequest(def, draft, params, { name, model, mandate: mandateResult.mandate }),
+        presetHireRequest(def, draft, params, { name, model, mandate }),
       );
-      // The agent exists from here on; a failed transfer is reported on the
-      // hired screen, never as a failed hire.
+      // The agent exists from here on; a failed pin or transfer is reported on
+      // the hired screen, never as a failed hire.
+      setHiredMandate(mandate);
+      if (needsDepositPin(result.agent)) {
+        // SEN-188: pin its Kuru deposits to its own wallet before anything else.
+        setHired({ result, fund: null });
+        setPin({ kind: 'securing' });
+        setPin(await secure(result.agent, mandate));
+      }
       const funded = funding ? await fund(result.agent.address) : null;
       setHired({ result, fund: funded });
     } catch (error) {
@@ -401,7 +436,16 @@ function Configure({
     }
   };
 
-  if (hired) return <Hired result={hired.result} fund={hired.fund} />;
+  if (hired) {
+    return (
+      <Hired
+        result={hired.result}
+        fund={hired.fund}
+        pin={pin}
+        onSecure={() => void retrySecure()}
+      />
+    );
+  }
 
   const primary =
     step === 'review' ? (
@@ -919,7 +963,18 @@ function SoftRules({ rules }: { rules: readonly string[] }) {
 
 // ─── Hired ──────────────────────────────────────────────────────────────────
 
-function Hired({ result, fund }: { result: HireAgentResult; fund: FundOutcome | null }) {
+function Hired({
+  result,
+  fund,
+  pin,
+  onSecure,
+}: {
+  result: HireAgentResult;
+  fund: FundOutcome | null;
+  /** SEN-188: the pinning amend after the hire; `null` when there was nothing to pin. */
+  pin: DepositPinState | null;
+  onSecure: () => void;
+}) {
   const router = useRouter();
   const { agent, mcpToken } = result;
   return (
@@ -934,6 +989,7 @@ function Hired({ result, fund }: { result: HireAgentResult; fund: FundOutcome | 
     >
       <TopBar />
       <Text style={text.display}>{agent.name} is hired</Text>
+      {pin ? <DepositPinStatus state={pin} onRetry={onSecure} /> : null}
       <Section label="Wallet">
         <Row label="Address" value={shortAddress(agent.address)} mono />
         {fund ? (
