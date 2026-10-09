@@ -78,6 +78,7 @@ import {
   encodeNativeOrder,
   formatOrderId,
   KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI,
+  readKuruRootId,
   KuruOrderError,
   parseOrderId,
   placeOrderCall,
@@ -85,6 +86,7 @@ import {
   withdrawCall,
   type KuruBuilderApproval,
   type KuruBuilderFee,
+  type KuruContractReader,
   type KuruCall,
   type KuruLog,
   type KuruMarketParams,
@@ -162,6 +164,20 @@ export type KuruVenueConfig = {
   readonly accountCore?: Address;
 };
 
+/**
+ * Kuru's Data Source does not list markets this build pins by address — the
+ * venue was redeployed and `constants.ts` is stale (SEN-185).
+ */
+export class KuruCatalogError extends Error {
+  readonly missing: readonly MarketSymbol[];
+
+  constructor(missing: readonly MarketSymbol[]) {
+    super(`${missing.join(', ')} not in Kuru catalog`);
+    this.name = 'KuruCatalogError';
+    this.missing = missing;
+  }
+}
+
 /** The call list was included on chain but reverted. Nothing it asked for happened. */
 export class KuruExecutionError extends Error {
   readonly hash: Hex;
@@ -187,7 +203,7 @@ export type KuruBookSnapshot = {
   readonly observedAt: number;
 };
 
-const TRADES_PACKED = getAbiItem({ abi: kuruAbi.spotOrderBookAbi, name: 'TradesPacked' });
+const TRADES_PACKED = getAbiItem({ abi: kuruAbi.orderBookAbi, name: 'TradesPacked' });
 
 /** Levels per side read for a quote or a book snapshot. */
 const QUOTE_LEVELS = 100n;
@@ -263,16 +279,13 @@ export class KuruVenue implements Venue {
     return params;
   }
 
-  /** This account's AccountCore id; `0n` until its first deposit registers it. */
+  /** This account's AccountCore root id; `0n` until its first deposit registers it. */
   async accountId(): Promise<bigint> {
     if (this.#accountId !== undefined) return this.#accountId;
-    const id = BigInt(
-      await this.#client.readContract({
-        address: this.#accountCore,
-        abi: kuruAbi.accountCoreAbi,
-        functionName: 'userRegistry',
-        args: [this.#requireAccount()],
-      }),
+    const id = await readKuruRootId(
+      this.#client as unknown as KuruContractReader,
+      this.#accountCore,
+      this.#requireAccount(),
     );
     // An assigned id never changes, so only a real one is worth caching.
     if (id !== 0n) this.#accountId = id;
@@ -286,7 +299,12 @@ export class KuruVenue implements Venue {
    */
   depositCalls(asset: string, amount: Decimal): KuruCall[] {
     const token = this.#token(asset);
-    return depositCalls(this.#accountCore, token, toUnits(amount, token.decimals, 'amount'));
+    return depositCalls(
+      this.#accountCore,
+      token,
+      toUnits(amount, token.decimals, 'amount'),
+      this.#requireAccount(),
+    );
   }
 
   /** A limit order as calls, validated and encoded but not submitted. */
@@ -348,27 +366,62 @@ export class KuruVenue implements Venue {
     return this.#submit(this.depositCalls(asset, amount));
   }
 
-  /** The call that moves `amount` of free `asset` from this account back to its own address. */
-  withdrawCalls(asset: string, amount: Decimal): KuruCall[] {
+  /**
+   * The call that moves `amount` of free `asset` out of this account's root to
+   * `recipient` — the account's own address unless told otherwise. Reads the
+   * root id first: AccountCore withdraws by id, and an account that has never
+   * deposited has none.
+   */
+  async withdrawCalls(asset: string, amount: Decimal, recipient?: Address): Promise<KuruCall[]> {
     const token = this.#token(asset);
-    return [withdrawCall(this.#accountCore, token, toUnits(amount, token.decimals, 'amount'))];
+    const rootId = await this.accountId();
+    if (rootId === 0n) throw new KuruOrderError('this account has never deposited on Kuru');
+    return [
+      withdrawCall(
+        this.#accountCore,
+        token,
+        toUnits(amount, token.decimals, 'amount'),
+        rootId,
+        recipient ?? this.#requireAccount(),
+      ),
+    ];
   }
 
-  withdraw(asset: string, amount: Decimal): Promise<KuruExecution> {
-    return this.#submit(this.withdrawCalls(asset, amount));
+  async withdraw(asset: string, amount: Decimal, recipient?: Address): Promise<KuruExecution> {
+    return this.#submit(await this.withdrawCalls(asset, amount, recipient));
   }
 
   // -------------------------------------------------------------------------
   // Venue — reads
 
-  async getMarkets(): Promise<Market[]> {
+  /**
+   * The pinned markets the Data Source still lists, and the pinned ones it does
+   * NOT. A catalog that stops listing a pinned book is a redeploy on Kuru's
+   * side (SEN-185: every pin missed for two weeks while this returned `[]` and
+   * nobody was told), so a caller reports `missing` rather than reading an
+   * empty list as "Kuru lists nothing today".
+   */
+  async listedMarkets(): Promise<{ markets: Market[]; missing: MarketSymbol[] }> {
     const listed = await this.#api.markets();
-    return listed.flatMap((api) => {
-      const market = this.#markets.find((m) =>
-        isAddressEqual(m.address, api.marketAddress as Address),
-      );
-      return market ? [toMarket(api, market)] : [];
-    });
+    const markets: Market[] = [];
+    const missing: MarketSymbol[] = [];
+    for (const market of this.#markets) {
+      const api = listed.find((m) => isAddressEqual(market.address, m.marketAddress as Address));
+      if (api) markets.push(toMarket(api, market));
+      else missing.push(market.symbol);
+    }
+    return { markets, missing };
+  }
+
+  /**
+   * The pinned markets the catalog lists. Throws when it lists none of them —
+   * the pins are stale, and an empty catalog would read as a quiet venue.
+   * {@link listedMarkets} also names a partial miss.
+   */
+  async getMarkets(): Promise<Market[]> {
+    const { markets, missing } = await this.listedMarkets();
+    if (markets.length === 0 && missing.length > 0) throw new KuruCatalogError(missing);
+    return markets;
   }
 
   async getDepth({ symbol, limit = 20 }: DepthQuery): Promise<Depth> {
@@ -410,7 +463,7 @@ export class KuruVenue implements Venue {
       this.marketParams(symbol),
       this.#client.readContract({
         address: market.address,
-        abi: kuruAbi.spotOrderBookAbi,
+        abi: kuruAbi.orderBookAbi,
         functionName: 'getL2Book',
         args: [QUOTE_LEVELS],
       }),
@@ -489,23 +542,27 @@ export class KuruVenue implements Venue {
    * here, and is not included.
    */
   async getBalances(): Promise<Balance[]> {
-    const user = this.#requireAccount();
+    // Custody is keyed by root id; an account with none has never deposited.
+    const id = await this.accountId();
     return Promise.all(
       this.#tokens().map(async (token) => {
-        const [free, reserved] = await Promise.all([
-          this.#client.readContract({
-            address: this.#accountCore,
-            abi: kuruAbi.accountCoreAbi,
-            functionName: 'getBalance',
-            args: [user, token.address],
-          }),
-          this.#client.readContract({
-            address: this.#accountCore,
-            abi: kuruAbi.accountCoreAbi,
-            functionName: 'getSpotReservedBalance',
-            args: [user, token.address],
-          }),
-        ]);
+        const [free, reserved] =
+          id === 0n
+            ? [0n, 0n]
+            : await Promise.all([
+                this.#client.readContract({
+                  address: this.#accountCore,
+                  abi: kuruAbi.accountCoreAbi,
+                  functionName: 'getBalance',
+                  args: [Number(id), token.address],
+                }),
+                this.#client.readContract({
+                  address: this.#accountCore,
+                  abi: kuruAbi.accountCoreAbi,
+                  functionName: 'getSpotReservedBalance',
+                  args: [Number(id), token.address],
+                }),
+              ]);
         return {
           asset: token.symbol,
           available: fromUnits(free, token.decimals),
@@ -574,7 +631,7 @@ export class KuruVenue implements Venue {
 
     const live = await this.#client.readContract({
       address: market.address,
-      abi: kuruAbi.spotOrderBookAbi,
+      abi: kuruAbi.orderBookAbi,
       functionName: 'getOrderId',
       args: [Number(accountId), ref.slotIdx],
     });
@@ -619,7 +676,7 @@ export class KuruVenue implements Venue {
     const [pricePrecision, sizePrecision, tickSize, minQuote, maxQuote, takerFeePps, makerFeePps] =
       await this.#client.readContract({
         address: market.address,
-        abi: kuruAbi.spotOrderBookAbi,
+        abi: kuruAbi.orderBookAbi,
         functionName: 'getMarketParams',
       });
     const params: KuruMarketParams = {
@@ -768,7 +825,7 @@ export class KuruVenue implements Venue {
   ): Promise<Decimal> {
     const [bid, ask] = await this.#client.readContract({
       address: market.address,
-      abi: kuruAbi.spotOrderBookAbi,
+      abi: kuruAbi.orderBookAbi,
       functionName: 'bestBidAsk',
     });
     // The empty-side sentinels are `bestBidAsk()`'s, so they are checked here;

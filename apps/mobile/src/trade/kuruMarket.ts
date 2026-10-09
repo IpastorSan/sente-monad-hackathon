@@ -156,13 +156,24 @@ export const KURU_MARKET_READ_ABI = [
   },
 ] as const;
 
+/**
+ * AccountCore keys custody by account id since SEN-185: the owner's root id
+ * first, then that id's balance.
+ */
 export const KURU_BALANCE_READ_ABI = [
+  {
+    type: 'function',
+    name: 'rootAccountIdOf',
+    stateMutability: 'view',
+    inputs: [{ name: '', type: 'address' }],
+    outputs: [{ name: '', type: 'uint40' }],
+  },
   {
     type: 'function',
     name: 'getBalance',
     stateMutability: 'view',
     inputs: [
-      { name: 'user', type: 'address' },
+      { name: 'accountId', type: 'uint40' },
       { name: 'token', type: 'address' },
     ],
     outputs: [{ name: '', type: 'uint256' }],
@@ -233,7 +244,8 @@ export async function readMarketFacts(
 /**
  * `wallet`'s FREE AccountCore balance of `token`, in atoms — what a deposit
  * shortfall is measured against. Reserved balance (resting orders) is not
- * included, because it cannot fund a new order.
+ * included, because it cannot fund a new order. A wallet that has never
+ * deposited has no root id and so holds nothing.
  */
 export async function readKuruFree(
   client: KuruReadClient,
@@ -241,10 +253,17 @@ export async function readKuruFree(
   token: Address,
   accountCore: Address = KURU_TESTNET_CONTRACTS.accountCore,
 ): Promise<bigint> {
+  const id = await client.readContract({
+    address: accountCore,
+    abi: KURU_BALANCE_READ_ABI,
+    functionName: 'rootAccountIdOf',
+    args: [wallet],
+  });
+  if (BigInt(id) === 0n) return 0n;
   return client.readContract({
     address: accountCore,
     abi: KURU_BALANCE_READ_ABI,
     functionName: 'getBalance',
-    args: [wallet, token],
+    args: [Number(id), token],
   });
 }

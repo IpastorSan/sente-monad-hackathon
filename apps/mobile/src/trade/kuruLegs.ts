@@ -9,8 +9,8 @@
  * Architecture §1 "Allowed functions" and "Kuru values".
  *
  * Why hand-written fragments rather than the SDK's ABI: decoding against the
- * SDK's whole `spotOrderBookAbi`/`accountCoreAbi` would make every function in
- * them decodable, including `withdrawFromAccount`, which names a recipient.
+ * SDK's whole `orderBookAbi`/`accountCoreAbi` would make every function in
+ * them decodable, including `transferBetweenAccounts`, which moves a balance between ids.
  *
  * The two `batch` overloads that take a `builderConfig(address builder, uint32
  * feePps)` and `AccountCore.approveBuilder` ARE decoded since SEN-184 — Sente's
@@ -96,6 +96,8 @@ export type KuruLeg =
   | {
       readonly ok: true;
       readonly kind: 'deposit';
+      /** The Kuru root the deposit credits; must be the user's own wallet. */
+      readonly rootOwner: Address;
       readonly token: Address;
       readonly amount: bigint;
       readonly value: bigint;
@@ -103,8 +105,12 @@ export type KuruLeg =
   | {
       readonly ok: true;
       readonly kind: 'withdraw';
+      /** The root it debits; AccountCore refuses one the caller does not own. */
+      readonly rootAccountId: bigint;
       readonly token: Address;
       readonly amount: bigint;
+      /** Who is paid; must be the user's own wallet. */
+      readonly recipient: Address;
     }
   | {
       readonly ok: true;
@@ -160,24 +166,32 @@ const APPROVE = {
   outputs: [{ name: '', type: 'bool' }],
 } as const satisfies AbiFunction;
 
+/**
+ * The owner-address overload only (SEN-185). It credits the root it NAMES, not
+ * the caller's, so the verifier holds `rootOwner` to the user's own wallet.
+ */
 const DEPOSIT = {
   type: 'function',
   name: 'deposit',
   stateMutability: 'payable',
   inputs: [
+    { name: 'rootOwner', type: 'address' },
     { name: 'token', type: 'address' },
     { name: 'amount', type: 'uint256' },
   ],
   outputs: [],
 } as const satisfies AbiFunction;
 
+/** Pays the recipient it names (SEN-185); the verifier holds it to the user's own wallet. */
 const WITHDRAW = {
   type: 'function',
   name: 'withdraw',
   stateMutability: 'nonpayable',
   inputs: [
+    { name: 'rootAccountId', type: 'uint40' },
     { name: 'token', type: 'address' },
     { name: 'amount', type: 'uint256' },
+    { name: 'recipient', type: 'address' },
   ],
   outputs: [],
 } as const satisfies AbiFunction;
@@ -313,7 +327,7 @@ const FRAGMENT_BY_SELECTOR: ReadonlyMap<Hex, AbiFunction> = new Map(
 /**
  * Classifies one call of a Kuru trade step, or says why it is refused.
  * Anything not in `KURU_LEG_ABI` — `transfer`, `transferFrom`, `permit`,
- * `withdrawFromAccount`, `revokeBuilder`, `claimBuilderFees` — lands on the
+ * `transferBetweenAccounts`, `revokeBuilder`, the `deposit(rootAccountId, …)` overload — lands on the
  * unknown-selector refusal.
  */
 export function classifyKuruCall(call: Erc7579Call): KuruLeg | KuruRefusal {
@@ -333,8 +347,12 @@ export function classifyKuruCall(call: Erc7579Call): KuruLeg | KuruRefusal {
     return refuse(`the ${fragment.name} call carries value`);
 
   if (fragment === APPROVE) return classifyApprove(call.to, args as [Address, bigint]);
-  if (fragment === DEPOSIT) return classifyDeposit(call.to, value, args as [Address, bigint]);
-  if (fragment === WITHDRAW) return classifyWithdraw(call.to, args as [Address, bigint]);
+  if (fragment === DEPOSIT) {
+    return classifyDeposit(call.to, value, args as [Address, Address, bigint]);
+  }
+  if (fragment === WITHDRAW) {
+    return classifyWithdraw(call.to, args as [number, Address, bigint, Address]);
+  }
   if (fragment === APPROVE_BUILDER) {
     return classifyApproveBuilder(call.to, args as [Address, number, bigint]);
   }
@@ -389,28 +407,44 @@ function classifyApprove(
 function classifyDeposit(
   target: Address,
   value: bigint,
-  [token, amount]: [Address, bigint],
+  [rootOwner, token, amount]: [Address, Address, bigint],
 ): KuruLeg | KuruRefusal {
   if (!isAddressEqual(target, ACCOUNT_CORE))
     return refuse(`the deposit goes to ${target}, not AccountCore`);
   if (amount === 0n) return refuse('the deposit is for nothing');
+  if (isAddressEqual(rootOwner, zeroAddress)) return refuse('the deposit credits no account');
   const native = isAddressEqual(token, NATIVE_TOKEN);
   // AccountCore takes native MON as msg.value; any other value is either an
   // underpaid native deposit or MON sent alongside an ERC-20 one.
   if (native && value !== amount)
     return refuse('the MON deposit sends a different value than it credits');
   if (!native && value !== 0n) return refuse('the token deposit also sends MON');
-  return { ok: true, kind: 'deposit', token: getAddress(token), amount, value };
+  return {
+    ok: true,
+    kind: 'deposit',
+    rootOwner: getAddress(rootOwner),
+    token: getAddress(token),
+    amount,
+    value,
+  };
 }
 
 function classifyWithdraw(
   target: Address,
-  [token, amount]: [Address, bigint],
+  [rootAccountId, token, amount, recipient]: [number, Address, bigint, Address],
 ): KuruLeg | KuruRefusal {
   if (!isAddressEqual(target, ACCOUNT_CORE))
     return refuse(`the withdrawal goes to ${target}, not AccountCore`);
   if (amount === 0n) return refuse('the withdrawal is for nothing');
-  return { ok: true, kind: 'withdraw', token: getAddress(token), amount };
+  if (rootAccountId === 0) return refuse('the withdrawal names no Kuru account');
+  return {
+    ok: true,
+    kind: 'withdraw',
+    rootAccountId: BigInt(rootAccountId),
+    token: getAddress(token),
+    amount,
+    recipient: getAddress(recipient),
+  };
 }
 
 type RawOrder = {

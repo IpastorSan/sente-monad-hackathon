@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { KURU_RETIRED_DEPLOYMENT } from '@sente/venues/kuru';
+
 import { checkIntent, REFUSAL_CODES, type Intent, type RefusalCode } from './enforce.ts';
 import {
-  CBBTC_USDC,
+  WBTC_USDC,
   demoMandate,
   EXPIRES_AT,
   MON_USDC,
@@ -76,7 +78,7 @@ test('venue_not_allowed: an unknown venue, or a known one the mandate leaves out
 });
 
 test('market_not_allowed: fails closed on anything the allowlist does not name', () => {
-  refused({ ...kuruOrder, market: CBBTC_USDC }, 'market_not_allowed');
+  refused({ ...kuruOrder, market: WBTC_USDC }, 'market_not_allowed');
   refused({ ...kuruOrder, market: 'MON-USDC' }, 'market_not_allowed', NOW); // a symbol, not an address
   refused({ ...perplOrder, market: 'SOL-PERP' }, 'market_not_allowed');
   refused({ ...perplOrder, market: 'btc-perp' }, 'market_not_allowed');
@@ -120,7 +122,7 @@ test('deposit_over_cap: over the cap, missing, or not positive', () => {
 test('cancel, close and withdraw are always allowed on an allowed venue — reducing risk is never blocked', () => {
   const late = EXPIRES_AT + 86_400;
   for (const kind of ['cancel', 'close', 'withdraw'] as const) {
-    assert.equal(checkIntent(mandate, { venue: 'kuru', kind, market: CBBTC_USDC }, late), null);
+    assert.equal(checkIntent(mandate, { venue: 'kuru', kind, market: WBTC_USDC }, late), null);
     assert.equal(checkIntent(mandate, { venue: 'perpl', kind, market: 'SOL-PERP' }, late), null);
     refused({ venue: 'hyperliquid', kind, market: 'X' }, 'venue_not_allowed');
   }
@@ -129,7 +131,26 @@ test('cancel, close and withdraw are always allowed on an allowed venue — redu
 test('an unknown intent kind gets the full order checks, not a pass', () => {
   const odd = { ...kuruOrder, kind: 'transfer' } as unknown as Intent;
   assert.equal(checkIntent(mandate, { ...odd, notional: '1' }, NOW), null);
-  refused({ ...odd, market: CBBTC_USDC }, 'market_not_allowed');
+  refused({ ...odd, market: WBTC_USDC }, 'market_not_allowed');
+});
+
+test('kuru_market_retired: a mandate naming Set-C books says to amend, not market_not_allowed', () => {
+  const setC = KURU_RETIRED_DEPLOYMENT.markets.find((m) => m.symbol === 'cbBTC-USDC')!.address;
+  const stale = { ...mandate, kuru: { ...mandate.kuru, markets: [...mandate.kuru.markets, setC] } };
+  // Even an order on a CURRENT book: the live policy pins the retired AccountCore.
+  refused(kuruOrder, 'kuru_market_retired', NOW, stale);
+  refused(
+    { venue: 'kuru', kind: 'deposit', market: USDC, amountAtoms: 1n },
+    'kuru_market_retired',
+    NOW,
+    stale,
+  );
+  const refusal = checkIntent(stale, kuruOrder, NOW)!;
+  assert.match(refusal.detail, /^This agent's mandate names markets Kuru retired — amend it/);
+  assert.match(refusal.detail, /cbBTC-USDC → WBTC-USDC/);
+  // Taking risk off is still never blocked, and Perpl is untouched.
+  assert.equal(checkIntent(stale, { venue: 'kuru', kind: 'withdraw', market: USDC }, NOW), null);
+  assert.equal(checkIntent(stale, perplOrder, NOW), null);
 });
 
 test('every refusal code is exercised', () => {

@@ -30,7 +30,8 @@ import {
  *
  * The first fixture is REAL: the packed trade record of tx 0x9d7fbce1… on
  * Monad testnet (block 61406913, docs/kuru.md), where account 62's IOC swept
- * account 47's resting ask `1:3679` — 317.73742494 MON at 0.030974, maker fee
+ * account 47's resting ask `1:3679` — 317.73742494 MON at 0.030974 on that Set-C book
+ * (31773.742494 MON read at today's MON-USDC size precision, SEN-185), maker fee
  * 4000 pps. Here account 47 is our agent, so that sweep is a later fill of an
  * order the agent rested earlier.
  */
@@ -67,7 +68,7 @@ function packTrade(t: Trade): string {
   return toHex(first, { size: 32 }).slice(2) + toHex(second, { size: 32 }).slice(2);
 }
 
-const TRADES_PACKED = getAbiItem({ abi: kuruAbi.spotOrderBookAbi, name: 'TradesPacked' });
+const TRADES_PACKED = getAbiItem({ abi: kuruAbi.orderBookAbi, name: 'TradesPacked' });
 const EXECUTOR: Address = `0x${'6'.repeat(40)}`;
 
 interface ChainLog {
@@ -149,7 +150,7 @@ const entryFill: Omit<AgentEvent, 'seq' | 'at'> = {
     side: 'buy',
     type: 'market',
     status: 'filled',
-    filledSize: '317.73742494',
+    filledSize: '31773.742494',
     averageFillPrice: '0.03',
     txHash: '0xabc',
     blockNumber: 61_406_000,
@@ -174,7 +175,7 @@ function restingAsk(
         venue: 'kuru',
         market: MON_USDC,
         side: 'sell',
-        size: '317.73742494',
+        size: '31773.742494',
         price: '0.030974',
       },
       intent: { venue: 'kuru', kind: 'order', market: MON_USDC_BOOK },
@@ -185,7 +186,7 @@ function restingAsk(
         type: 'limit',
         status: over.status ?? 'open',
         price: '0.030974',
-        size: over.size ?? '317.73742494',
+        size: over.size ?? '31773.742494',
         filledSize: over.filled ?? '0',
         txHash: '0xdef',
         blockNumber: over.block ?? 61_406_900,
@@ -249,10 +250,13 @@ describe('RestingFillWatcher (SEN-149)', () => {
         symbol: MON_USDC,
         side: 'sell',
         status: 'filled',
-        filledSize: '317.73742494',
+        // The REAL bytes are Set C's, where they meant 317.73742494 MON at a
+        // 10^8 size precision; on today's MON-USDC book (10^6, SEN-185) the
+        // same record reads 100× the size. The decode path is what is tested.
+        filledSize: '31773.742494',
         averageFillPrice: '0.030974',
-        // The record's own maker rate, 4000 pps of 9.841599 USDC, floored at the atom.
-        fee: '0.003936',
+        // The record's own maker rate, 4000 pps of 984.159998 USDC, floored at the atom.
+        fee: '0.393663',
         feeAsset: 'USDC',
         remainingSize: '0',
         txHash: REAL_TX,
@@ -329,9 +333,9 @@ describe('RestingFillWatcher (SEN-149)', () => {
         slotIdx: 2,
         isBuy: false,
         price: 31_000n,
-        size: size * 10n ** 8n,
+        size: size * 10n ** 6n,
         orderId: 4000n,
-        remaining: remaining * 10n ** 8n,
+        remaining: remaining * 10n ** 6n,
         makerFeePps: 4000n,
         tradeId,
       });
@@ -340,7 +344,7 @@ describe('RestingFillWatcher (SEN-149)', () => {
       slotIdx: 2,
       isBuy: false,
       price: 31_000n,
-      size: 10n ** 8n,
+      size: 10n ** 6n,
       orderId: 4000n,
       remaining: 0n,
       makerFeePps: 4000n,

@@ -132,7 +132,7 @@ function harness(options: { reverted?: number[]; refuseAt?: number; laggingNonce
   };
 }
 
-const usdcDeposit = () => depositCalls(ACCOUNT_CORE, USDC, 10_000_000n);
+const usdcDeposit = () => depositCalls(ACCOUNT_CORE, USDC, 10_000_000n, AGENT.address);
 const placeCall = (): KuruCall =>
   placeOrderCall(MARKET, {
     side: 'buy',
@@ -175,7 +175,9 @@ describe('PrivyKuruSubmitter', () => {
 
   it('sends fee, gas and value fields to Privy as 0x-hex strings', async () => {
     const h = harness();
-    await h.submitter().submit([...usdcDeposit(), ...depositCalls(ACCOUNT_CORE, MON, 10n ** 18n)]);
+    await h
+      .submitter()
+      .submit([...usdcDeposit(), ...depositCalls(ACCOUNT_CORE, MON, 10n ** 18n, AGENT.address)]);
 
     for (const { tx } of h.signed) {
       expect(tx.gas_limit).toMatch(HEX);
@@ -276,7 +278,7 @@ describe('kuruGasLimit', () => {
     expect(kuruGasLimit(deposit!)).toBe(KURU_MEASURED_GAS.firstDeposit);
     expect(kuruGasLimit(placeCall())).toBe(KURU_MEASURED_GAS.placeTakingOneLevel);
     expect(kuruGasLimit(cancelOrderCall(MARKET, 3))).toBe(KURU_MEASURED_GAS.cancelOne);
-    expect(kuruGasLimit(withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n))).toBe(
+    expect(kuruGasLimit(withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n, 7n, AGENT.address))).toBe(
       KURU_MEASURED_GAS.withdraw,
     );
   });

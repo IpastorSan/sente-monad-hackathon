@@ -25,10 +25,11 @@
  *
  * Money stays a decimal string end to end; arithmetic goes through bigint.
  */
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Decimal, Depth, DepthQuery, Kline, KlineQuery, Market, Side } from '@sente/venues';
 import {
   fromUnits,
+  KuruCatalogError,
   KuruUnitsError,
   kuruSlippageBound,
   precisionDecimals,
@@ -64,8 +65,8 @@ import { TtlCache, type CacheResult } from './ttl-cache';
 export interface KuruReader {
   /** Local config lookup; throws for a symbol Kuru does not list. No network. */
   market(symbol: string): KuruMarketConfig;
-  /** Data Source catalog. */
-  getMarkets(): Promise<Market[]>;
+  /** Data Source catalog: the pinned markets it lists, and the pinned ones it does not. */
+  listedMarkets(): Promise<{ markets: Market[]; missing: readonly string[] }>;
   /** Gateway aggregated book. */
   getDepth(query: DepthQuery): Promise<Depth>;
   /** Data Source candles. */
@@ -251,7 +252,8 @@ export type DayStats = {
 
 @Injectable()
 export class MarketDataService {
-  readonly #markets = new TtlCache<'kuru', Market[]>();
+  readonly #markets = new TtlCache<'kuru', { markets: Market[]; missing: string[] }>();
+  readonly #logger = new Logger(MarketDataService.name);
   readonly #depth = new TtlCache<string, Depth>();
   readonly #last = new TtlCache<string, Decimal | null>();
   readonly #day = new TtlCache<string, DayStats | null>();
@@ -263,21 +265,37 @@ export class MarketDataService {
     @Inject(PERPL_READER) private readonly perpl: PerplReader,
   ) {}
 
-  /** Both catalogs, merged. A venue that fails is reported in `venues`, not thrown. */
+  /**
+   * Both catalogs, merged. A venue that fails is reported in `venues`, not
+   * thrown. So is a Kuru market this build pins that Kuru's catalog no longer
+   * lists (SEN-185): `ok: false`, `missing` naming it, and whatever IS listed
+   * still served.
+   */
   async markets(): Promise<MarketsResponseDto> {
-    const [kuru, perpl] = await Promise.allSettled([this.#kuruMarkets(), this.perpl.markets()]);
+    const [kuru, perpl] = await Promise.allSettled([this.#kuruCatalog(), this.perpl.markets()]);
     const markets: MarketDto[] = [];
     const venues: MarketsResponseDto['venues'] = [];
-    for (const [venue, result] of [
-      ['kuru', kuru],
-      ['perpl', perpl],
-    ] as const) {
-      if (result.status === 'fulfilled') {
-        markets.push(...result.value);
-        venues.push({ venue, ok: true });
-      } else {
-        venues.push({ venue, ok: false, error: errorMessage(result.reason) });
-      }
+    if (kuru.status === 'fulfilled') {
+      const { markets: listed, missing } = kuru.value;
+      markets.push(...listed);
+      venues.push(
+        missing.length === 0
+          ? { venue: 'kuru', ok: true }
+          : {
+              venue: 'kuru',
+              ok: false,
+              error: new KuruCatalogError(missing).message,
+              missing,
+            },
+      );
+    } else {
+      venues.push({ venue: 'kuru', ok: false, error: errorMessage(kuru.reason) });
+    }
+    if (perpl.status === 'fulfilled') {
+      markets.push(...perpl.value);
+      venues.push({ venue: 'perpl', ok: true });
+    } else {
+      venues.push({ venue: 'perpl', ok: false, error: errorMessage(perpl.reason) });
     }
     return { markets, venues, asOf: Date.now() };
   }
@@ -414,11 +432,32 @@ export class MarketDataService {
   }
 
   #kuruMarkets(): Promise<MarketDto[]> {
+    return this.#kuruCatalog().then(({ markets }) => markets);
+  }
+
+  /**
+   * The pinned markets Kuru lists, and the pinned ones it does not. A pin the
+   * catalog dropped means Kuru redeployed (SEN-185); it is logged once per
+   * catalog read and reported by `markets()`, never swallowed as "lists nothing".
+   */
+  #kuruCatalog(): Promise<{ markets: MarketDto[]; missing: string[] }> {
     return this.#kuru(async () => {
-      const { value } = await this.#markets.get('kuru', TTL.markets, () => this.kuru.getMarkets(), {
-        staleIfErrorMs: STALE_IF_ERROR.markets,
-      });
-      return value.map(kuruMarketDto);
+      const { value } = await this.#markets.get(
+        'kuru',
+        TTL.markets,
+        async () => {
+          const listed = await this.kuru.listedMarkets();
+          if (listed.missing.length > 0) {
+            this.#logger.warn(
+              `${new KuruCatalogError(listed.missing).message}: the pinned Kuru deployment ` +
+                '(packages/venues/src/kuru/constants.ts) no longer matches what Kuru lists',
+            );
+          }
+          return { markets: listed.markets, missing: [...listed.missing] };
+        },
+        { staleIfErrorMs: STALE_IF_ERROR.markets },
+      );
+      return { markets: value.markets.map(kuruMarketDto), missing: value.missing };
     });
   }
 

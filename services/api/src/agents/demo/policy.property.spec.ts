@@ -63,14 +63,21 @@ const MARKETS = KURU_TESTNET_MARKETS.map((m) => getAddress(m.address));
  * borrow the compiler's own list. Every ERC-20 the wallet can hold; not MON.
  */
 const RETURNABLE = [...KURU_TOKENS.filter((t) => t !== NATIVE_TOKEN), AUSD];
+/**
+ * The agent's own wallet. An amend compiles with it (SEN-185), pinning every
+ * Kuru deposit's `rootOwner` to it, and the properties check that shape; one
+ * property below checks the hire's, which cannot pin it.
+ */
+const AGENT = getAddress(`0x${'5'.repeat(40)}`);
+const compiled = (m: Mandate) => compileMandate(m, { agentAddress: AGENT });
 
 // ─── The semantic oracle ────────────────────────────────────────────────────
 
 type Call =
   | { kind: 'approve'; token: Address; spender: Address; amount: bigint }
-  | { kind: 'deposit'; target: Address; token: Address; amount: bigint }
+  | { kind: 'deposit'; target: Address; owner: Address; token: Address; amount: bigint }
   | { kind: 'batch'; target: Address }
-  | { kind: 'withdraw'; target: Address; token: Address; amount: bigint }
+  | { kind: 'withdraw'; target: Address; token: Address; amount: bigint; recipient: Address }
   | { kind: 'transfer'; token: Address; to: Address; amount: bigint }
   | { kind: 'createAccount'; target: Address; amount: bigint }
   | { kind: 'depositCollateral'; target: Address; amount: bigint }
@@ -101,6 +108,8 @@ function mandatePermits(
   chainId: number,
   now: number,
   revoked = false,
+  /** Whose Kuru account a deposit may credit; `null` for a hire's policy, which cannot say. */
+  owner: Address | null = AGENT,
 ): boolean {
   if (chainId !== CHAIN) return false;
   // MON leaves the wallet only as a native deposit (SEN-146); on any other call
@@ -127,6 +136,8 @@ function mandatePermits(
     case 'deposit': {
       const cap = kuruCap(m, call.token);
       if (!live || !kuru || call.target !== ACCOUNT_CORE || cap === undefined) return false;
+      // SEN-185: a deposit credits the root it names; only the agent's own.
+      if (owner !== null && call.owner !== owner) return false;
       // Native MON moves as `value`; the declared amount and the money both count.
       if (call.token === NATIVE_TOKEN) return call.amount <= cap && value <= cap;
       return call.amount <= cap;
@@ -134,7 +145,13 @@ function mandatePermits(
     case 'batch':
       return live && kuru && m.kuru.markets.some((a) => getAddress(a) === call.target);
     case 'withdraw':
-      return kuru && call.target === ACCOUNT_CORE;
+      // SEN-185: it pays the recipient it names, and only the owner may be paid.
+      return (
+        kuru &&
+        call.target === ACCOUNT_CORE &&
+        m.returnTo !== undefined &&
+        call.recipient === getAddress(m.returnTo)
+      );
     case 'transfer':
       return (
         m.returnTo !== undefined &&
@@ -168,7 +185,7 @@ function encode(call: Call): { to: Address; data: Hex } {
         data: encodeFunctionData({
           abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
           functionName: 'deposit',
-          args: [call.token, call.amount],
+          args: [call.owner, call.token, call.amount],
         }),
       };
     case 'batch':
@@ -186,7 +203,7 @@ function encode(call: Call): { to: Address; data: Hex } {
         data: encodeFunctionData({
           abi: KURU_ACCOUNT_CORE_WITHDRAW_ABI,
           functionName: 'withdraw',
-          args: [call.token, call.amount],
+          args: [7, call.token, call.amount, call.recipient],
         }),
       };
     case 'transfer':
@@ -330,6 +347,10 @@ function callArb(m: Mandate, family: Family): fc.Arbitrary<Call> {
           fc.record({
             kind: fc.constant('deposit' as const),
             target: target(ACCOUNT_CORE),
+            owner: fc.oneof(
+              { weight: 4, arbitrary: fc.constant(AGENT) },
+              { weight: 1, arbitrary: randomAddress },
+            ),
             token: fc.constant(token),
             amount: near(cap),
           }),
@@ -365,6 +386,15 @@ function callArb(m: Mandate, family: Family): fc.Arbitrary<Call> {
           target: target(ACCOUNT_CORE),
           token: anyToken,
           amount: fc.bigInt({ min: 0n, max: 10n ** 31n }),
+          // The owner mostly; else a stranger, or the agent's own wallet, which
+          // the account-id AccountCore would pay just as readily (SEN-185).
+          recipient: m.returnTo
+            ? fc.oneof(
+                { weight: 3, arbitrary: fc.constant(getAddress(m.returnTo)) },
+                { weight: 1, arbitrary: randomAddress },
+                { weight: 1, arbitrary: fc.constant(AGENT) },
+              )
+            : fc.oneof(randomAddress, fc.constant(AGENT)),
         }),
         fc.record({
           kind: fc.constant('transfer' as const),
@@ -432,7 +462,7 @@ function compiledAgreesWithMandate(families: readonly Family[]): void {
   fc.assert(
     fc.property(caseArb(families), (c) => {
       const expected = mandatePermits(c.mandate, c.call, c.value, c.chainId, c.now);
-      expect(enclaveAllows(compileMandate(c.mandate), c)).toBe(expected);
+      expect(enclaveAllows(compiled(c.mandate), c)).toBe(expected);
     }),
     RUNS,
   );
@@ -456,6 +486,18 @@ describe('compileMandate, as the fake enclave applies it (SEN-134)', () => {
   // perplRules without `venues.includes('perpl')`.
   it('allows Perpl approve/createAccount/forwarding iff Perpl is a venue and within the collateral cap', () => {
     compiledAgreesWithMandate(['perpl']);
+  });
+
+  // SEN-185: a hire compiles before the wallet exists, so it cannot pin
+  // `deposit.rootOwner`; everything else about a deposit is still enforced.
+  it('a hire’s policy (no agent address yet) enforces every deposit limit but the owner', () => {
+    fc.assert(
+      fc.property(caseArb(['kuruFunding']), (c) => {
+        const expected = mandatePermits(c.mandate, c.call, c.value, c.chainId, c.now, false, null);
+        expect(enclaveAllows(compileMandate(c.mandate), c)).toBe(expected);
+      }),
+      RUNS,
+    );
   });
 
   // Planted: returnRules dropping the `transfer.to` condition.
@@ -494,12 +536,12 @@ describe('value off the native deposit (SEN-146)', () => {
       fc.property(
         caseArb(ALL, positive).filter((c) => !isNativeDeposit(c.call)),
         (c) => {
-          expect(enclaveAllows(compileMandate(c.mandate), c)).toBe(false);
+          expect(enclaveAllows(compiled(c.mandate), c)).toBe(false);
           expect(enclaveAllows(compileRevocationRules(c.mandate), c)).toBe(false);
           // The same call at value 0 is judged by the mandate alone, so the
           // refusal above is the value's doing, not a coincidence.
           const atZero = { ...c, value: 0n };
-          expect(enclaveAllows(compileMandate(c.mandate), atZero)).toBe(
+          expect(enclaveAllows(compiled(c.mandate), atZero)).toBe(
             mandatePermits(c.mandate, c.call, 0n, c.chainId, c.now),
           );
         },
@@ -533,8 +575,8 @@ describe('value off the native deposit (SEN-146)', () => {
   it('refuses an in-cap USDC approve with one wei on it, which signs at value 0', () => {
     const m = kuruOnly(1_000n, 1_000n);
     const call: Call = { kind: 'approve', token: USDC, spender: ACCOUNT_CORE, amount: 1_000n };
-    expect(enclaveAllows(compileMandate(m), at(m, call, 0n))).toBe(true);
-    expect(enclaveAllows(compileMandate(m), at(m, call, 1n))).toBe(false);
+    expect(enclaveAllows(compiled(m), at(m, call, 0n))).toBe(true);
+    expect(enclaveAllows(compiled(m), at(m, call, 1n))).toBe(false);
   });
 
   it('keeps the native deposit as it was: value up to the cap signs, one wei over does not', () => {
@@ -544,11 +586,12 @@ describe('value off the native deposit (SEN-146)', () => {
         const call: Call = {
           kind: 'deposit',
           target: ACCOUNT_CORE,
+          owner: AGENT,
           token: NATIVE_TOKEN,
           amount: cap,
         };
-        expect(enclaveAllows(compileMandate(m), at(m, call, cap))).toBe(true);
-        expect(enclaveAllows(compileMandate(m), at(m, call, cap + 1n))).toBe(false);
+        expect(enclaveAllows(compiled(m), at(m, call, cap))).toBe(true);
+        expect(enclaveAllows(compiled(m), at(m, call, cap + 1n))).toBe(false);
       }),
       { ...RUNS, numRuns: 100 },
     );

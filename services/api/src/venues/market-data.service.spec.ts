@@ -3,6 +3,7 @@
  * slippage-bounded fill, and how a venue being down surfaces. The Kuru reader
  * is faked — the adapter's own reads are covered in packages/venues.
  */
+import { Logger } from '@nestjs/common';
 import type { Depth, Kline, Market } from '@sente/venues';
 import {
   KURU_TESTNET_MARKETS,
@@ -116,7 +117,12 @@ function fakeKuru() {
       if (!market) throw new KuruOrderError(`Kuru does not list ${symbol}`);
       return market;
     }),
-    getMarkets: jest.fn(() => Promise.resolve(CATALOG)),
+    listedMarkets: jest.fn(() =>
+      Promise.resolve<{ markets: Market[]; missing: readonly string[] }>({
+        markets: CATALOG,
+        missing: [],
+      }),
+    ),
     getDepth: jest.fn(() => Promise.resolve(DEPTH)),
     getKlines: jest.fn(({ interval }: { interval: string }) =>
       Promise.resolve(
@@ -178,7 +184,7 @@ describe('MarketDataService (Kuru)', () => {
     });
 
     it('reports Kuru down too when both fail', async () => {
-      kuru.getMarkets.mockRejectedValue(new Error('data source 502'));
+      kuru.listedMarkets.mockRejectedValue(new Error('data source 502'));
       const response = await service.markets();
       expect(response.markets).toEqual([]);
       expect(response.venues[0]).toEqual({
@@ -188,10 +194,37 @@ describe('MarketDataService (Kuru)', () => {
       });
     });
 
+    it('reports a pinned market the Kuru catalog no longer lists, and still serves the rest', async () => {
+      // SEN-185: Kuru redeployed and every pin silently matched nothing.
+      kuru.listedMarkets.mockResolvedValue({ markets: CATALOG, missing: ['WETH-USDC'] });
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const response = await service.markets();
+      expect(response.markets.map((m) => m.symbol)).toEqual(['MON-USDC']);
+      expect(response.venues[0]).toEqual({
+        venue: 'kuru',
+        ok: false,
+        error: 'WETH-USDC not in Kuru catalog',
+        missing: ['WETH-USDC'],
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('WETH-USDC not in Kuru catalog'));
+    });
+
+    it('reports Kuru not ok when the catalog lists none of the pins', async () => {
+      kuru.listedMarkets.mockResolvedValue({ markets: [], missing: ['MON-USDC', 'WETH-USDC'] });
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const response = await service.markets();
+      expect(response.markets).toEqual([]);
+      expect(response.venues[0]).toMatchObject({
+        venue: 'kuru',
+        ok: false,
+        error: 'MON-USDC, WETH-USDC not in Kuru catalog',
+      });
+    });
+
     it('caches the catalog for its TTL', async () => {
       await service.markets();
       await service.market('kuru', 'MON-USDC');
-      expect(kuru.getMarkets).toHaveBeenCalledTimes(1);
+      expect(kuru.listedMarkets).toHaveBeenCalledTimes(1);
     });
 
     it('404s an unlisted market', async () => {
@@ -466,8 +499,8 @@ describe('MarketDataService (Kuru) cache lifetimes', () => {
       read: 'markets',
       ttl: MINUTE,
       staleIfError: 10 * MINUTE,
-      calls: () => kuru.getMarkets.mock.calls.length,
-      fail: () => kuru.getMarkets.mockRejectedValue(new Error('data source 502')),
+      calls: () => kuru.listedMarkets.mock.calls.length,
+      fail: () => kuru.listedMarkets.mockRejectedValue(new Error('data source 502')),
       probe: async () => void (await service.market('kuru', 'MON-USDC')),
     },
     {

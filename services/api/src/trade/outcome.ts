@@ -27,6 +27,7 @@ import {
   decodeOrderOutcome,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
+  KURU_TESTNET_TOKENS,
   formatOrderId,
   fromUnits,
   precisionDecimals,
@@ -53,7 +54,11 @@ function senteFeePaid(
   accountId: bigint,
   place: KuruPlaceContext,
 ): string {
-  const quote = KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, place.market))!.quote;
+  // A trade recorded on a book Kuru has since retired (SEN-185) is still read:
+  // every market, retired or current, is quoted in USDC.
+  const quote =
+    KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, place.market))?.quote ??
+    KURU_TESTNET_TOKENS.USDC;
   const paid = builderFeePaidAtoms(
     logs,
     KURU_TESTNET_CONTRACTS.accountCore,

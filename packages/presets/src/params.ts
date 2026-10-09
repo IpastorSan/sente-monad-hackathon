@@ -16,16 +16,17 @@ import type {
 } from './types.ts';
 
 /**
- * Kuru's four testnet spot markets, mirrored from `KURU_TESTNET_MARKETS` in
+ * Kuru's five testnet spot markets (SEN-185: Kuru's 2026-09-25 deployment), mirrored from `KURU_TESTNET_MARKETS` in
  * `@sente/venues/kuru`. Mirrored rather than imported so this package has no
  * dependencies: the phone loads it through Metro, and the venues entry would
- * bundle viem and the Kuru adapter just to read four strings.
+ * bundle viem and the Kuru adapter just to read five strings.
  */
 export const KURU_SPOT_MARKETS: readonly string[] = [
   'MON-USDC',
   'WETH-USDC',
-  'cbBTC-USDC',
-  'XAUt-USDC',
+  'WBTC-USDC',
+  'XAUT-USDC',
+  'USDT-USDC',
 ];
 
 /**
@@ -116,7 +117,7 @@ function checkOneMarket(spec: MarketParamSpec, value: unknown): string | undefin
  * Dividing floats (`(value - min) / step`) broke for fine steps: with a step of
  * 0.000001 a price like 4000 is four billion steps, where float error is far
  * above any fixed tolerance, so ordinary values (12.5, 4000, most whole numbers
- * near 2750) were refused and Guardian could not be hired on WETH or cbBTC.
+ * near 2750) were refused and Guardian could not be hired on WETH or WBTC.
  * Scaling everything by the step's own decimal places turns the question into
  * integer divisibility, exact at any magnitude. A value with more decimals than
  * the step is off the grid by construction.

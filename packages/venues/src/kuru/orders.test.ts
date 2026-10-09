@@ -21,7 +21,12 @@ import {
 } from 'viem';
 
 import { KuruVenue, type KuruSubmitter } from './adapter.ts';
-import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from './constants.ts';
+import {
+  KURU_RETIRED_DEPLOYMENT,
+  KURU_TESTNET_CONTRACTS,
+  KURU_TESTNET_MARKETS,
+  KURU_TESTNET_TOKENS,
+} from './constants.ts';
 import {
   cancelOrderCall,
   depositCalls,
@@ -33,6 +38,7 @@ import {
   placeOrderCall,
   quoteReserveAtoms,
   toClientOrderId,
+  withdrawCall,
   type KuruCall,
   type KuruMarketParams,
 } from './orders.ts';
@@ -118,7 +124,7 @@ test('a client order id selects the bytes32 overload and is echoed verbatim', ()
   const clientOrderId = toClientOrderId('agent-7/rebalance-42');
   const call = placeOrderCall(MON_USDC.address, order, clientOrderId);
   assert.ok(call.data!.startsWith(toFunctionSelector(BATCH_WITH_CLIENT_ID)));
-  const { args } = decodeFunctionData({ abi: kuruAbi.spotOrderBookAbi, data: call.data! });
+  const { args } = decodeFunctionData({ abi: kuruAbi.orderBookAbi, data: call.data! });
   assert.equal(args[3], clientOrderId);
 });
 
@@ -136,11 +142,15 @@ test('cancelOrderCall: batch(0, [], [slot]) word by word', () => {
   );
 });
 
-test('an ERC-20 deposit is an exact approve to AccountCore, then deposit', () => {
+/** Anvil #1's Kernel account (CLAUDE.md gotcha 11): a stand-in root owner, never funded. */
+const OWNER = '0xEC4b217240f0292c65Bf136b341e400e2D28cA6F';
+
+test('an ERC-20 deposit is an exact approve to AccountCore, then deposit(owner, token, amount)', () => {
   const calls = depositCalls(
     KURU_TESTNET_CONTRACTS.accountCore,
     KURU_TESTNET_TOKENS.USDC,
     20_000_000n,
+    OWNER,
   );
   assert.equal(calls.length, 2);
 
@@ -153,9 +163,11 @@ test('an ERC-20 deposit is an exact approve to AccountCore, then deposit', () =>
 
   assert.equal(deposit!.to, KURU_TESTNET_CONTRACTS.accountCore);
   assert.equal(deposit!.value, 0n);
-  assert.equal(deposit!.data!.slice(0, 10), toFunctionSelector('deposit(address,uint256)'));
+  // The owner-address overload, which registers the root on first use — and
+  // credits the root it NAMES, so the owner is the account itself (SEN-185).
+  assert.equal(deposit!.data!.slice(0, 10), toFunctionSelector('deposit(address,address,uint256)'));
   const decoded = decodeFunctionData({ abi: kuruAbi.accountCoreAbi, data: deposit!.data! });
-  assert.deepEqual(decoded.args, [KURU_TESTNET_TOKENS.USDC.address, 20_000_000n]);
+  assert.deepEqual(decoded.args, [OWNER, KURU_TESTNET_TOKENS.USDC.address, 20_000_000n]);
 });
 
 test('a native MON deposit is one payable call carrying the amount as value', () => {
@@ -163,22 +175,50 @@ test('a native MON deposit is one payable call carrying the amount as value', ()
     KURU_TESTNET_CONTRACTS.accountCore,
     KURU_TESTNET_TOKENS.MON,
     10n ** 18n,
+    OWNER,
   );
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.to, KURU_TESTNET_CONTRACTS.accountCore);
   assert.equal(calls[0]!.value, 10n ** 18n);
+  const decoded = decodeFunctionData({ abi: kuruAbi.accountCoreAbi, data: calls[0]!.data! });
+  assert.deepEqual(decoded.args, [OWNER, KURU_TESTNET_TOKENS.MON.address, 10n ** 18n]);
 });
 
 test('a zero deposit is refused', () => {
   assert.throws(
-    () => depositCalls(KURU_TESTNET_CONTRACTS.accountCore, KURU_TESTNET_TOKENS.USDC, 0n),
+    () => depositCalls(KURU_TESTNET_CONTRACTS.accountCore, KURU_TESTNET_TOKENS.USDC, 0n, OWNER),
     KuruOrderError,
   );
 });
 
-test('the faucet claim is a bare claim() to the faucet', () => {
+test('a withdrawal names the root id and an explicit recipient', () => {
+  const call = withdrawCall(
+    KURU_TESTNET_CONTRACTS.accountCore,
+    KURU_TESTNET_TOKENS.USDC,
+    5_000_000n,
+    42n,
+    OWNER,
+  );
+  assert.equal(call.to, KURU_TESTNET_CONTRACTS.accountCore);
+  assert.equal(call.value, 0n);
+  assert.equal(
+    call.data!.slice(0, 10),
+    toFunctionSelector('withdraw(uint40,address,uint256,address)'),
+  );
+  const decoded = decodeFunctionData({ abi: kuruAbi.accountCoreAbi, data: call.data! });
+  assert.deepEqual(decoded.args, [42, KURU_TESTNET_TOKENS.USDC.address, 5_000_000n, OWNER]);
+});
+
+test('a withdrawal from no root, or of nothing, is refused', () => {
+  const core = KURU_TESTNET_CONTRACTS.accountCore;
+  const usdc = KURU_TESTNET_TOKENS.USDC;
+  assert.throws(() => withdrawCall(core, usdc, 1n, 0n, OWNER), KuruOrderError);
+  assert.throws(() => withdrawCall(core, usdc, 0n, 42n, OWNER), KuruOrderError);
+});
+
+test('the faucet claim is a bare claim() to the RETIRED faucet', () => {
   assert.deepEqual(faucetClaimCall(), {
-    to: KURU_TESTNET_CONTRACTS.testnetTokenFaucet,
+    to: KURU_RETIRED_DEPLOYMENT.contracts.testnetTokenFaucet,
     value: 0n,
     data: toFunctionSelector('claim()'),
   });
@@ -243,7 +283,11 @@ function fakeVenue(
       return Promise.reject(new Error(`unexpected read ${functionName}`));
     },
   } as unknown as PublicClient;
-  return new KuruVenue({ publicClient, submitter, account: MON_USDC.address });
+  // The fake chain's precisions ARE the config's, or the venue refuses the market.
+  const markets = [
+    { ...MON_USDC, pricePrecision: params.pricePrecision, sizePrecision: params.sizePrecision },
+  ];
+  return new KuruVenue({ publicClient, submitter, account: MON_USDC.address, markets });
 }
 
 test('marketOrderCalls refuses an unbounded market order', async () => {

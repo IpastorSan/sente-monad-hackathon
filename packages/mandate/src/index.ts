@@ -8,3 +8,4 @@ export * from './mandate.ts';
 export * from './policy.ts';
 export * from './privy/canonicalize.ts';
 export * from './privy/policy-types.ts';
+export * from './retired.ts';

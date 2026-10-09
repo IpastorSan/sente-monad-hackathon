@@ -97,7 +97,13 @@ test('market options: Kuru is fixed, Perpl comes from /markets, the default is a
   const trend = preset('trend-rider').params.find((spec) => spec.type === 'market');
   const mean = preset('mean-reverter').params.find((spec) => spec.type === 'market');
   assert.ok(range?.type === 'market' && trend?.type === 'market' && mean?.type === 'market');
-  assert.deepEqual(marketOptions(range), ['MON-USDC', 'WETH-USDC', 'cbBTC-USDC', 'XAUt-USDC']);
+  assert.deepEqual(marketOptions(range), [
+    'MON-USDC',
+    'WETH-USDC',
+    'WBTC-USDC',
+    'XAUT-USDC',
+    'USDT-USDC',
+  ]);
   assert.deepEqual(marketOptions(trend), ['BTC-PERP', 'ETH-PERP']);
   assert.deepEqual(marketOptions(trend, ['SOL-PERP', 'MON-USDC']), ['SOL-PERP', 'BTC-PERP']);
   assert.ok(marketOptions(mean).includes('MON-USDC') && marketOptions(mean).includes('BTC-PERP'));

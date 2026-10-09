@@ -59,6 +59,7 @@ import {
 import {
   cancelOrderCall,
   depositCalls,
+  KURU_FAUCET,
   KURU_MEASURED_GAS,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
@@ -355,7 +356,8 @@ async function main(): Promise<number> {
   console.log(
     '\n0. ENCODING — which forms does Privy take for chain_id eq / current_unix_timestamp lte?',
   );
-  const target = getAddress(KURU_TESTNET_CONTRACTS.testnetTokenFaucet);
+  // Any contract will do for an encoding probe; the Set-C faucet is what it always used.
+  const target = getAddress(KURU_FAUCET.address);
   const encodingRule = (conditions: PolicyCondition[]): PolicyRule => ({
     name: `${run} encoding`,
     method: 'eth_signTransaction',
@@ -508,8 +510,8 @@ async function main(): Promise<number> {
   console.log(`app response keys: ${JSON.stringify(shapes['appKeys'])}`);
   console.log(`wallet view: ${JSON.stringify(shapes['walletView'])}`);
 
-  const [approve5, deposit5] = depositCalls(ACCOUNT_CORE, USDC, usdc(5));
-  const [, deposit11] = depositCalls(ACCOUNT_CORE, USDC, usdc(11));
+  const [approve5, deposit5] = depositCalls(ACCOUNT_CORE, USDC, usdc(5), main.address);
+  const [, deposit11] = depositCalls(ACCOUNT_CORE, USDC, usdc(11), main.address);
   const depositTx = await txFor(main.address, deposit5!, KURU_MEASURED_GAS.firstDeposit);
   const approveTx = await txFor(main.address, approve5!, KURU_MEASURED_GAS.erc20Approve);
 
@@ -770,7 +772,8 @@ async function probeAggregation(
   const { cap, ...draftBody } = draft;
   shapes['aggregationBody'] = compact(draftBody);
   const approveRule = rules.find((r) => r.name.startsWith('Kuru: approve USDC'))!;
-  const [approve8] = depositCalls(ACCOUNT_CORE, USDC, usdc(8));
+  // Only the approve leg is used; the deposit's root owner does not matter here.
+  const [approve8] = depositCalls(ACCOUNT_CORE, USDC, usdc(8), ACCOUNT_CORE);
 
   const variants: [string, string, string, (aggregationId: string) => PolicyCondition][] = [
     ['5', 'hex cap, aggregationLte', '', (a) => aggregationLte(a, BigInt(cap))],

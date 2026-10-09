@@ -191,6 +191,35 @@ test('the mirrored compiler still agrees with @sente/mandate, mandate by mandate
   }
 });
 
+test('with the agent’s address, the mirror pins deposit.rootOwner exactly as the compiler does (SEN-185)', () => {
+  const agent = getAddress('0x3333333333333333333333333333333333333333');
+  for (const m of [mandate(), noExit({ venues: ['kuru'] })]) {
+    const compiledWithAgent = compileMandate(parseMandate(toWireMandate(m)), {
+      agentAddress: agent,
+    });
+    assert.deepEqual(
+      normalise(expectedPolicyRules(m, null, agent)),
+      normalise(compiledWithAgent.map(toExpected)),
+      `drifted for ${JSON.stringify(toWireMandate(m))}`,
+    );
+  }
+  // An amend compiled with the pin is what the phone expects for that agent,
+  // and the same amend for another agent's wallet is refused.
+  const m = mandate();
+  const payload = {
+    ...payloadFor(m),
+    body: { rules: compileMandate(parseMandate(toWireMandate(m)), { agentAddress: agent }) },
+  };
+  assert.deepEqual(verifyPolicyPatch(payload, { ...amend(m), agentAddress: agent }), { ok: true });
+  assertRefused(
+    verifyPolicyPatch(payload, {
+      ...amend(m),
+      agentAddress: getAddress('0x4444444444444444444444444444444444444444'),
+    }),
+    /it contains a rule this mandate does not: Kuru: deposit/,
+  );
+});
+
 test('a payload that is exactly the mandate’s own rules is approved', () => {
   const m = mandate();
   assert.deepEqual(verifyPolicyPatch(payloadFor(m), amend(m)), { ok: true });
@@ -488,22 +517,23 @@ function rewriteCondition(
   return { ...payload, body: { rules } };
 }
 
-const isWithdraw = (r: PolicyRule) =>
-  r.conditions.some((c) => c.field === 'function_name' && c.value === 'withdraw');
-const isFunctionName = (c: PolicyCondition) => c.field === 'function_name';
+const isWithdraw = (r: PolicyRule) => r.conditions.some((c) => c.field === 'withdraw.recipient');
+/** The withdraw rule's one calldata condition (SEN-185: its recipient pin). */
+const isFunctionName = (c: PolicyCondition) => c.field === 'withdraw.recipient';
 
 test('a rule whose ABI is not the canonical one is refused, even when every value matches', () => {
   const m = mandate();
-  // Fails before SEN-142. The attack from the audit: `function_name eq withdraw`
-  // decoded with an ABI the server wrote, one that names `withdraw` over the
-  // selector of a function that takes a recipient. Every value still matches.
+  // Fails before SEN-142. The attack from the audit: `withdraw.recipient eq owner`
+  // decoded with an ABI the server wrote, one that names a `recipient` over the
+  // selector of another function, where that word is something else entirely.
+  // Every value still matches.
   const lookalike = [
     {
       type: 'function',
       name: 'withdraw',
       stateMutability: 'nonpayable',
       inputs: [
-        { name: 'to', type: 'address' },
+        { name: 'recipient', type: 'address' },
         { name: 'token', type: 'address' },
         { name: 'amount', type: 'uint256' },
       ],

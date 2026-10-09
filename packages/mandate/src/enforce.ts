@@ -13,7 +13,7 @@
  * **Cancel, close and withdraw are always allowed on an allowed venue** —
  * including after expiry and on markets no longer listed — because reducing
  * risk must never be blocked. Layer 2 agrees for withdraw: its rule carries no
- * expiry (the money can only go back to the agent's own wallet, see policy.ts).
+ * expiry (the money can only go to the owner's `returnTo`, see policy.ts).
  * It is stricter for a Kuru cancel: the `batch` rules expire with the mandate,
  * so after `expiresAt` a Kuru cancel passes this check and is still refused by
  * the enclave; the account owner cancels then.
@@ -23,6 +23,7 @@ import { isAddress, isAddressEqual, type Address } from 'viem';
 
 import { compareDecimal, isDecimal } from './decimal.ts';
 import type { Mandate, VenueId } from './mandate.ts';
+import { retiredKuruMessage, retiredKuruReferences } from './retired.ts';
 
 export const REFUSAL_CODES = [
   'mandate_expired',
@@ -31,6 +32,8 @@ export const REFUSAL_CODES = [
   'notional_over_cap',
   'leverage_over_cap',
   'deposit_over_cap',
+  /** The mandate names Kuru books or tokens Kuru retired (SEN-185); only an amend fixes it. */
+  'kuru_market_retired',
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -39,7 +42,7 @@ export interface Refusal {
   readonly detail: string;
 }
 
-/** `withdraw`: collateral from the venue back to the agent's own wallet. */
+/** `withdraw`: collateral off the venue — on Kuru, to the owner's `returnTo` (SEN-185). */
 export type IntentKind = 'deposit' | 'order' | 'cancel' | 'close' | 'withdraw';
 
 /** Kinds that only ever reduce risk: allowed on any allowed venue, even after expiry. */
@@ -104,6 +107,10 @@ function kuruAddress(market: string): Address | null {
 }
 
 function checkKuru(mandate: Mandate, intent: Intent): Refusal | null {
+  // Its live policy pins the retired books and AccountCore, so the enclave would
+  // refuse anything it funds or trades; say why instead of a bare policy_violation.
+  const retired = retiredKuruReferences(mandate);
+  if (retired.length > 0) return refuse('kuru_market_retired', retiredKuruMessage(retired));
   const address = kuruAddress(intent.market);
   if (intent.kind === 'deposit') {
     const entry = address

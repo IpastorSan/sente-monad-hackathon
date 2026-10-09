@@ -233,11 +233,12 @@ describe('the refusal demo, acts 1–5 (fake Privy that applies the compiled rul
     // After revoke the policy holds ONLY the way out (SEN-17): every rule that
     // let the agent take risk is gone — act 5's own check proves the enclave
     // refuses the approve it allowed at hire — and what is left can only move
-    // money toward the owner. This demo mandate names no `returnTo`, so that is
-    // the Kuru withdraw alone.
+    // money toward the owner. This demo mandate names no `returnTo`, and since
+    // SEN-185 a Kuru withdraw must name the owner it pays, so nothing is left.
     const left = w.enclave.policies.get(w.agent.policyId)?.rules ?? [];
     expect(left).toEqual(compileRevocationRules(w.agent.mandate));
-    expect(left.map((rule) => rule.name)).toEqual([KURU_WITHDRAW_RULE]);
+    expect(left.map((rule) => rule.name)).toEqual([]);
+    expect(left.some((rule) => rule.name === KURU_WITHDRAW_RULE)).toBe(false);
 
     // The output says, on every act, that no model is involved.
     const headings = w.lines.filter((l) => l.startsWith('=== ACT'));

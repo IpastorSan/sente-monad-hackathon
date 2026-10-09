@@ -75,7 +75,10 @@ function rulesFor(mandate: AgentMandate | null | { revoke: AgentMandate }) {
   if (mandate === null) return [];
   return 'revoke' in mandate
     ? compileRevocationRules(parseMandate(toWireMandate(mandate.revoke)))
-    : compileMandate(parseMandate(toWireMandate(mandate)));
+    : // An amend: the API compiles it with the agent's own wallet (SEN-185).
+      compileMandate(parseMandate(toWireMandate(mandate)), {
+        agentAddress: WIRE_AGENT.address as `0x${string}`,
+      });
 }
 
 /** What `/prepare` answers, built from the API's own compiler. */

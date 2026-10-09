@@ -49,6 +49,8 @@ const ACCOUNT_CORE = KURU_TESTNET_CONTRACTS.accountCore;
 const USDC = KURU_TESTNET_TOKENS.USDC;
 const MON_USDC = KURU_TESTNET_MARKETS[0]!;
 const STRANGER = '0x1111111111111111111111111111111111111111' as Address;
+/** The Kuru root owner a deposit credits and a withdraw pays: the user's wallet. */
+const OWNER = '0xEC4b217240f0292c65Bf136b341e400e2D28cA6F' as Address;
 
 const ORDER = {
   side: 0,
@@ -95,17 +97,17 @@ function refused(call: Erc7579Call, pattern: RegExp): void {
 test('each hand-written fragment has the selector of its SDK counterpart', () => {
   const sources: Record<string, readonly unknown[]> = {
     'approve(address,uint256)': erc20Abi,
-    'deposit(address,uint256)': kuruAbi.accountCoreAbi,
-    'withdraw(address,uint256)': kuruAbi.accountCoreAbi,
-    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[])': kuruAbi.spotOrderBookAbi,
+    'deposit(address,address,uint256)': kuruAbi.accountCoreAbi,
+    'withdraw(uint40,address,uint256,address)': kuruAbi.accountCoreAbi,
+    'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[])': kuruAbi.orderBookAbi,
     'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32)':
-      kuruAbi.spotOrderBookAbi,
+      kuruAbi.orderBookAbi,
     // SEN-184: Sente's own builder fee.
     'approveBuilder(address,uint32,uint64)': kuruAbi.accountCoreAbi,
     'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))':
-      kuruAbi.spotOrderBookAbi,
+      kuruAbi.orderBookAbi,
     'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32,(address,uint32))':
-      kuruAbi.spotOrderBookAbi,
+      kuruAbi.orderBookAbi,
   };
   const ours = KURU_LEG_ABI.map((fn) => toFunctionSignature(fn));
   assert.deepEqual(ours.toSorted(), Object.keys(sources).toSorted());
@@ -135,7 +137,7 @@ test('the fragments match what the server encodes with (@sente/venues cuts)', ()
 
 test('the SDK has exactly four batch overloads: ours plus the two builder-config ones', () => {
   // A new overload in an SDK bump should be looked at, not silently ignored.
-  const batches = functions(kuruAbi.spotOrderBookAbi)
+  const batches = functions(kuruAbi.orderBookAbi)
     .filter((fn) => fn.name === 'batch')
     .map((fn) => toFunctionSignature(fn))
     .toSorted();
@@ -152,7 +154,7 @@ test('the SDK has exactly four batch overloads: ours plus the two builder-config
 // ---------------------------------------------------------------------------
 
 test('an ERC-20 funding pair is an exact approve then a deposit', () => {
-  const [approve, deposit] = depositCalls(ACCOUNT_CORE, USDC, 20_000_000n);
+  const [approve, deposit] = depositCalls(ACCOUNT_CORE, USDC, 20_000_000n, OWNER);
   assert.deepEqual(accepted(approve!), {
     ok: true,
     kind: 'approve',
@@ -163,6 +165,7 @@ test('an ERC-20 funding pair is an exact approve then a deposit', () => {
   assert.deepEqual(accepted(deposit!), {
     ok: true,
     kind: 'deposit',
+    rootOwner: OWNER,
     token: USDC.address,
     amount: 20_000_000n,
     value: 0n,
@@ -170,23 +173,41 @@ test('an ERC-20 funding pair is an exact approve then a deposit', () => {
 });
 
 test('a native MON deposit carries its amount as value', () => {
-  const [deposit] = depositCalls(ACCOUNT_CORE, KURU_TESTNET_TOKENS.MON, 10n ** 18n);
+  const [deposit] = depositCalls(ACCOUNT_CORE, KURU_TESTNET_TOKENS.MON, 10n ** 18n, OWNER);
   assert.deepEqual(accepted(deposit!), {
     ok: true,
     kind: 'deposit',
+    rootOwner: OWNER,
     token: KURU_TESTNET_TOKENS.MON.address,
     amount: 10n ** 18n,
     value: 10n ** 18n,
   });
 });
 
-test('a withdraw names only token and amount', () => {
-  assert.deepEqual(accepted(withdrawCall(ACCOUNT_CORE, USDC, 5n)), {
+test('a withdraw reports its root id and recipient for the verifier to hold (SEN-185)', () => {
+  assert.deepEqual(accepted(withdrawCall(ACCOUNT_CORE, USDC, 5n, 7n, OWNER)), {
     ok: true,
     kind: 'withdraw',
+    rootAccountId: 7n,
     token: USDC.address,
     amount: 5n,
+    recipient: OWNER,
   });
+});
+
+test('a deposit crediting no account, or a withdraw from no root, is refused', () => {
+  const deposit = encodeFunctionData({
+    abi: KURU_LEG_ABI,
+    functionName: 'deposit',
+    args: ['0x0000000000000000000000000000000000000000', USDC.address, 5n],
+  });
+  refused({ to: ACCOUNT_CORE, value: 0n, data: deposit }, /credits no account/);
+  const withdraw = encodeFunctionData({
+    abi: KURU_LEG_ABI,
+    functionName: 'withdraw',
+    args: [0, USDC.address, 5n, OWNER],
+  });
+  refused({ to: ACCOUNT_CORE, value: 0n, data: withdraw }, /names no Kuru account/);
 });
 
 test('a place without a client order id uses the 3-argument batch', () => {
@@ -242,7 +263,7 @@ function builderBatch(builder: { builder: Address; feePps: number }, clientOrder
     clientOrderId === undefined
       ? 'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))'
       : 'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],bytes32,(address,uint32))';
-  const fragment = sdkFunction(kuruAbi.spotOrderBookAbi, signature);
+  const fragment = sdkFunction(kuruAbi.orderBookAbi, signature);
   const tail = clientOrderId === undefined ? [builder] : [clientOrderId, builder];
   return encodeFunctionData({
     abi: [fragment],
@@ -292,7 +313,7 @@ test('a builder order paying the zero address or outside Kuru’s range is refus
 
 test('a cancel carrying a builder fee is refused', () => {
   const fragment = sdkFunction(
-    kuruAbi.spotOrderBookAbi,
+    kuruAbi.orderBookAbi,
     'batch(uint40,(uint8,uint96,uint32,uint8,uint8,uint32)[],uint8[],(address,uint32))',
   );
   const data = encodeFunctionData({
@@ -333,27 +354,30 @@ test('approveBuilder to anyone but AccountCore, with value, or out of range is r
   refused(raw(STRANGER, 10_000, 0n), /never takes effect/);
 });
 
-test('revokeBuilder and claimBuilderFees are refused', () => {
-  for (const [name, args] of [
-    ['revokeBuilder', [STRANGER]],
-    ['claimBuilderFees', [USDC.address]],
-  ] as const) {
-    const data = encodeFunctionData({
-      abi: kuruAbi.accountCoreAbi,
-      functionName: name,
-      args: args as never,
-    });
-    refused({ to: ACCOUNT_CORE, value: 0n, data }, /is not a Kuru call/);
-  }
-});
-
-test('withdrawFromAccount is refused', () => {
+test('revokeBuilder is refused', () => {
   const data = encodeFunctionData({
     abi: kuruAbi.accountCoreAbi,
-    functionName: 'withdrawFromAccount',
-    args: [STRANGER, USDC.address, 5n],
+    functionName: 'revokeBuilder',
+    args: [STRANGER],
   });
   refused({ to: ACCOUNT_CORE, value: 0n, data }, /is not a Kuru call/);
+});
+
+test('transferBetweenAccounts and the root-id deposit overload are refused (SEN-185)', () => {
+  const transfer = encodeFunctionData({
+    abi: kuruAbi.accountCoreAbi,
+    functionName: 'transferBetweenAccounts',
+    args: [7, 8, USDC.address, 5n],
+  });
+  refused({ to: ACCOUNT_CORE, value: 0n, data: transfer }, /is not a Kuru call/);
+  // `deposit(uint40 rootAccountId, …)` credits whatever root id it names: only
+  // the owner-address overload, whose owner the verifier checks, is signable.
+  const byId = encodeFunctionData({
+    abi: kuruAbi.accountCoreAbi,
+    functionName: 'deposit',
+    args: [7, USDC.address, 5n],
+  });
+  refused({ to: ACCOUNT_CORE, value: 0n, data: byId }, /is not a Kuru call/);
 });
 
 test('ERC-20 transfer and transferFrom are refused', () => {
@@ -389,13 +413,18 @@ test('an approval to anyone but AccountCore is refused', () => {
 // 2026-09-27, §2A); a zero leg is signable noise the server never emits.
 test('a zero approve, deposit or withdraw is refused', () => {
   // Encoded by hand: the `@sente/venues` builders already refuse a zero amount.
+  const args = {
+    approve: [ACCOUNT_CORE, 0n],
+    deposit: [OWNER, USDC.address, 0n],
+    withdraw: [7, USDC.address, 0n, OWNER],
+  } as const;
   const zero = (to: Address, functionName: 'approve' | 'deposit' | 'withdraw', value = 0n) => ({
     to,
     value,
     data: encodeFunctionData({
       abi: KURU_LEG_ABI,
       functionName,
-      args: [functionName === 'approve' ? ACCOUNT_CORE : USDC.address, 0n],
+      args: args[functionName],
     } as never),
   });
   refused(zero(USDC.address, 'approve'), /approval is for nothing/);
@@ -417,8 +446,8 @@ test('a trailing byte is refused', () => {
 });
 
 test('dirty padding on an address word is refused', () => {
-  const call = withdrawCall(ACCOUNT_CORE, USDC, 5n);
-  // Byte 4 is the first padding byte of the `token` word.
+  const call = withdrawCall(ACCOUNT_CORE, USDC, 5n, 7n, OWNER);
+  // Byte 4 is the first padding byte of the `rootAccountId` word.
   const data = `0x${call.data!.slice(2, 10)}ff${call.data!.slice(12)}` as Hex;
   refused({ ...call, data }, /not canonically encoded|does not decode/);
 });
@@ -439,22 +468,22 @@ test('a non-canonical array offset is refused', () => {
 
 test('value on a place, approve or withdraw is refused', () => {
   refused({ ...placeOrderCall(MON_USDC.address, ORDER), value: 1n }, /carries value/);
-  refused({ ...depositCalls(ACCOUNT_CORE, USDC, 5n)[0]!, value: 1n }, /carries value/);
-  refused({ ...withdrawCall(ACCOUNT_CORE, USDC, 5n), value: 1n }, /carries value/);
+  refused({ ...depositCalls(ACCOUNT_CORE, USDC, 5n, OWNER)[0]!, value: 1n }, /carries value/);
+  refused({ ...withdrawCall(ACCOUNT_CORE, USDC, 5n, 7n, OWNER), value: 1n }, /carries value/);
 });
 
 test('a token deposit sending MON is refused', () => {
-  refused({ ...depositCalls(ACCOUNT_CORE, USDC, 5n)[1]!, value: 1n }, /also sends MON/);
+  refused({ ...depositCalls(ACCOUNT_CORE, USDC, 5n, OWNER)[1]!, value: 1n }, /also sends MON/);
 });
 
 test('a native deposit whose value differs from its amount is refused', () => {
-  const [deposit] = depositCalls(ACCOUNT_CORE, KURU_TESTNET_TOKENS.MON, 10n ** 18n);
+  const [deposit] = depositCalls(ACCOUNT_CORE, KURU_TESTNET_TOKENS.MON, 10n ** 18n, OWNER);
   refused({ ...deposit!, value: 10n ** 18n - 1n }, /different value/);
 });
 
 test('AccountCore calls to another address are refused', () => {
-  refused({ ...depositCalls(ACCOUNT_CORE, USDC, 5n)[1]!, to: STRANGER }, /not AccountCore/);
-  refused({ ...withdrawCall(ACCOUNT_CORE, USDC, 5n), to: STRANGER }, /not AccountCore/);
+  refused({ ...depositCalls(ACCOUNT_CORE, USDC, 5n, OWNER)[1]!, to: STRANGER }, /not AccountCore/);
+  refused({ ...withdrawCall(ACCOUNT_CORE, USDC, 5n, 7n, OWNER), to: STRANGER }, /not AccountCore/);
 });
 
 // ---------------------------------------------------------------------------

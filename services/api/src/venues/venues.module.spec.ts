@@ -16,7 +16,9 @@ describe('VenuesModule', () => {
   it('boots, serves both venues and closes the feed on shutdown', async () => {
     const kuru = {
       market: jest.fn(),
-      getMarkets: jest.fn(() => Promise.resolve([])),
+      // Kuru's catalog listing none of the pinned books is a stale deployment
+      // (SEN-185): reported, never read as an empty, healthy venue.
+      listedMarkets: jest.fn(() => Promise.resolve({ markets: [], missing: ['MON-USDC'] })),
       getDepth: jest.fn(),
       getKlines: jest.fn(),
       bookSnapshot: jest.fn(),
@@ -38,7 +40,7 @@ describe('VenuesModule', () => {
 
     const markets = await moduleRef.get(MarketDataService).markets();
     expect(markets.venues).toEqual([
-      { venue: 'kuru', ok: true },
+      { venue: 'kuru', ok: false, error: 'MON-USDC not in Kuru catalog', missing: ['MON-USDC'] },
       { venue: 'perpl', ok: false, error: expect.stringContaining('offline in specs') },
     ]);
     expect(perplData.context).toHaveBeenCalled();

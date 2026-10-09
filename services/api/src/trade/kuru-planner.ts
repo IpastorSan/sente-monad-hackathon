@@ -37,7 +37,9 @@ import {
   depositCalls,
   encodeNativeOrder,
   fromUnits,
-  KURU_ACCOUNT_CORE_BALANCE_ABI,
+  readKuruFreeAtoms,
+  readKuruFreeById,
+  readKuruRootId,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KuruVenue,
@@ -52,6 +54,7 @@ import {
   type KuruMarketConfig,
   type KuruMarketParams,
   type KuruOrderRef,
+  type KuruContractReader,
   type KuruToken,
 } from '@sente/venues/kuru';
 import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
@@ -307,7 +310,8 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
     const amount = `${fromUnits(shortfall, token.decimals)} ${token.symbol}`;
     // `depositCalls` is `[approve, deposit]` for an ERC-20 (approve for the
     // exact amount) and `[deposit]` with `value` for native MON.
-    const funding = depositCalls(KURU_TESTNET_CONTRACTS.accountCore, token, shortfall);
+    // `deposit(rootOwner, …)` credits the root it names: the wallet itself.
+    const funding = depositCalls(KURU_TESTNET_CONTRACTS.accountCore, token, shortfall, deps.wallet);
     const deposit = funding[funding.length - 1]!;
     if (funding.length === 2) {
       legs.push({ kind: 'approve', title: `Approve ${amount} for Kuru`, call: funding[0]! });
@@ -395,7 +399,7 @@ async function planCancel(intent: KuruCancelIntent, deps: KuruPlannerDeps): Prom
   }
   const live = await deps.client.readContract({
     address: market.address,
-    abi: kuruAbi.spotOrderBookAbi,
+    abi: kuruAbi.orderBookAbi,
     functionName: 'getOrderId',
     args: [Number(accountId), ref.slotIdx],
   });
@@ -424,8 +428,12 @@ async function planWithdraw(intent: KuruWithdrawIntent, deps: KuruPlannerDeps): 
   }
   const amount = positiveAtoms(intent.amountAtoms, 'amountAtoms');
   // Only free balance can leave; asking for more reverts on chain, where
-  // Monad still charges the whole gas limit (gotcha 4).
-  const free = await kuruFree(deps, token);
+  // Monad still charges the whole gas limit (gotcha 4). The root id is read
+  // once: the free balance is keyed by it, and the withdraw names it (SEN-185).
+  const client = deps.client as KuruContractReader;
+  const core = KURU_TESTNET_CONTRACTS.accountCore;
+  const rootId = await readKuruRootId(client, core, deps.wallet);
+  const free = await readKuruFreeById(client, core, rootId, token.address);
   if (amount > free) {
     throw new KuruPlanRefusedError(
       'insufficient_balance',
@@ -434,13 +442,21 @@ async function planWithdraw(intent: KuruWithdrawIntent, deps: KuruPlannerDeps): 
   }
   const shown = `${fromUnits(amount, token.decimals)} ${token.symbol}`;
   const title = `Withdraw ${shown} from Kuru`;
+  // Free balance above zero means the wallet has a root; withdraw names it and
+  // pays the wallet itself (SEN-185: the recipient is explicit).
   return {
     steps: packSteps(
       [
         {
           kind: 'withdraw',
           title,
-          call: withdrawCall(KURU_TESTNET_CONTRACTS.accountCore, token, amount),
+          call: withdrawCall(
+            KURU_TESTNET_CONTRACTS.accountCore,
+            token,
+            amount,
+            rootId,
+            deps.wallet,
+          ),
         },
       ],
       deps,
@@ -529,14 +545,12 @@ export function baseReserveAtoms(
   return (numerator + params.sizePrecision - 1n) / params.sizePrecision;
 }
 
-async function kuruFree(deps: KuruPlannerDeps, token: KuruToken): Promise<bigint> {
-  return BigInt(
-    (await deps.client.readContract({
-      address: KURU_TESTNET_CONTRACTS.accountCore,
-      abi: KURU_ACCOUNT_CORE_BALANCE_ABI,
-      functionName: 'getBalance',
-      args: [deps.wallet, token.address],
-    })) as bigint,
+function kuruFree(deps: KuruPlannerDeps, token: KuruToken): Promise<bigint> {
+  return readKuruFreeAtoms(
+    deps.client as KuruContractReader,
+    KURU_TESTNET_CONTRACTS.accountCore,
+    deps.wallet,
+    token.address,
   );
 }
 

@@ -161,7 +161,7 @@ describe('NansenClient', () => {
     const fake = fakeNansen();
     const client = clientWith(fake);
     await fetchSmartMoneySignals(client, 'MON-USDC');
-    await fetchSmartMoneySignals(client, 'cbBTC-USDC');
+    await fetchSmartMoneySignals(client, 'WBTC-USDC');
     // Same body means the same cache key: two markets, still two requests.
     expect(fake.calls).toHaveLength(2);
   });
@@ -375,13 +375,13 @@ describe('tokenForMarket', () => {
       addresses: [WETH],
       native: false,
     });
-    expect(tokenForMarket('cbBTC-USDC')).toEqual({
+    expect(tokenForMarket('WBTC-USDC')).toEqual({
       symbol: 'cbBTC',
       addresses: [CBBTC],
       native: false,
     });
-    // Monad's gold token is XAUt0, not plain XAUt.
-    expect(tokenForMarket('XAUt-USDC')).toEqual({
+    // Kuru testnet's XAUT stands for Monad's gold token, XAUt0, not a plain XAUt.
+    expect(tokenForMarket('XAUT-USDC')).toEqual({
       symbol: 'XAUt0',
       addresses: [XAUT0],
       native: false,

@@ -116,8 +116,8 @@ const XAUT0_ADDRESS = '0x01bff41798a0bcf287b996046ca68b395dbc1071';
 
 /**
  * The token behind each base symbol we actually trade, as a mainnet proxy:
- * BTC exposure on our venues maps to cbBTC (Coinbase's wrapped BTC on Monad),
- * ETH to WETH, gold to XAUt0. Anything else is matched by its own name and
+ * BTC exposure on our venues (WBTC on Kuru testnet) maps to cbBTC (Coinbase's wrapped BTC on Monad),
+ * ETH to WETH, gold (XAUT) to XAUt0. Anything else is matched by its own name and
  * reports `no_data` if Nansen has nothing for it.
  */
 const BASE_TO_TOKEN: Readonly<Record<string, NansenToken>> = {
@@ -128,6 +128,8 @@ const BASE_TO_TOKEN: Readonly<Record<string, NansenToken>> = {
   ETH: { symbol: 'WETH', addresses: [WETH_ADDRESS], native: false },
   cbBTC: { symbol: 'cbBTC', addresses: [CBBTC_ADDRESS], native: false },
   BTC: { symbol: 'cbBTC', addresses: [CBBTC_ADDRESS], native: false },
+  // Kuru's testnet BTC market is WBTC-USDC since SEN-185; same BTC exposure.
+  WBTC: { symbol: 'cbBTC', addresses: [CBBTC_ADDRESS], native: false },
   XAUt: { symbol: 'XAUt0', addresses: [XAUT0_ADDRESS], native: false },
   XAUt0: { symbol: 'XAUt0', addresses: [XAUT0_ADDRESS], native: false },
   PAXG: { symbol: 'XAUt0', addresses: [XAUT0_ADDRESS], native: false },

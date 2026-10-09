@@ -28,8 +28,8 @@ import { toLedgerEntries, type LedgerEvent } from './ledger.ts';
 
 const NOW = Date.parse('2026-09-27T12:00:00.000Z');
 const H = 3_600_000;
-const MON_USDC = '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61';
-const USDC = '0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E';
+const MON_USDC = '0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9';
+const USDC = '0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1';
 
 let seq = 0;
 function event(kind: string, at: number, detail: Record<string, unknown>): LedgerEvent {

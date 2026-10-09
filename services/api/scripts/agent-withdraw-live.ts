@@ -243,9 +243,13 @@ async function main(): Promise<number> {
       args: [ACCOUNT_CORE, usdc],
     }),
   });
-  const withdrawOwn = withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n);
+  // SEN-185: the account-id AccountCore pays the recipient the call names; the
+  // policy pins it to returnTo. The root id does not reach the policy (1 stands in).
+  const withdrawOwn = withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n, 1n, returnTo);
+  const withdrawStranger = withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n, 1n, address);
   const probes: Record<string, { call: KuruCall; want: 'signed' | 'refused' }> = {
-    'withdraw 14 USDC to itself': { call: withdrawOwn, want: 'signed' },
+    'withdraw 14 USDC to the owner': { call: withdrawOwn, want: 'signed' },
+    'withdraw 14 USDC to the agent itself': { call: withdrawStranger, want: 'refused' },
     'withdrawFromAccount(treasury, …)': {
       call: {
         to: ACCOUNT_CORE,
@@ -372,7 +376,7 @@ async function main(): Promise<number> {
   if (kuruAtoms > 0n) {
     const { kuru } = await venues.forAgent(agent);
     const amount = fromUnits(kuruAtoms, USDC.decimals);
-    const execution = await kuru.withdraw('USDC', amount);
+    const execution = await kuru.withdraw('USDC', amount, returnTo);
     const receipt = await receiptOf(execution.transactionHash);
     const decoded = events(receipt.logs);
     const withdrawal = decoded.find((e) => e.event === 'Withdrawal');

@@ -32,7 +32,16 @@
  * the agent's wallet can send nothing anywhere (fail closed).
  */
 import type { Decimal } from '@sente/venues';
-import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
+import {
+  KURU_RETIRED_DEPLOYMENT,
+  KURU_TESTNET_MARKETS,
+  KURU_TESTNET_TOKENS,
+  kuruMarketSuccessor,
+  kuruTokenSuccessor,
+  NATIVE_TOKEN,
+  retiredKuruMarket,
+  retiredKuruToken,
+} from '@sente/venues/kuru';
 import { PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
 import { getAddress, isAddress, isAddressEqual, type Address } from 'viem';
 
@@ -174,6 +183,14 @@ function parseVenues(value: unknown): VenueId[] {
   return venues;
 }
 
+/** The rest of a refusal naming a retired Kuru book or token (SEN-185): where it went. */
+function retiredHint(next: { symbol: string; address: Address }): string {
+  return (
+    `Kuru retired on ${KURU_RETIRED_DEPLOYMENT.retiredOn}; ` +
+    `name ${next.symbol} (${next.address}) instead`
+  );
+}
+
 function parseKuru(value: unknown): KuruMandate {
   const kuru = object(value, 'kuru', ['markets', 'maxDepositAtoms']);
 
@@ -181,7 +198,13 @@ function parseKuru(value: unknown): KuruMandate {
   for (const [i, raw] of array(kuru.markets, 'kuru.markets').entries()) {
     const market = address(raw, `kuru.markets[${i}]`);
     if (!KURU_TESTNET_MARKETS.some((m) => isAddressEqual(m.address, market))) {
-      fail(`kuru.markets[${i}] ${market} is not a Kuru testnet market`);
+      const retired = retiredKuruMarket(market);
+      fail(
+        retired
+          ? `kuru.markets[${i}] ${market} is the ${retired.symbol} book ` +
+              retiredHint(kuruMarketSuccessor(market))
+          : `kuru.markets[${i}] ${market} is not a Kuru testnet market`,
+      );
     }
     if (markets.includes(market)) fail(`kuru.markets lists ${market} twice`);
     markets.push(market);
@@ -192,7 +215,13 @@ function parseKuru(value: unknown): KuruMandate {
   for (const [raw, cap] of Object.entries(object(kuru.maxDepositAtoms, 'kuru.maxDepositAtoms'))) {
     const token = address(raw, `kuru.maxDepositAtoms key ${raw}`);
     if (!tokens.some((t) => isAddressEqual(t.address, token))) {
-      fail(`kuru.maxDepositAtoms names ${token}, which is not a Kuru testnet token`);
+      const retired = retiredKuruToken(token);
+      fail(
+        retired
+          ? `kuru.maxDepositAtoms names ${token}, the ${retired.symbol} ` +
+              retiredHint(kuruTokenSuccessor(token))
+          : `kuru.maxDepositAtoms names ${token}, which is not a Kuru testnet token`,
+      );
     }
     if (token in maxDepositAtoms) fail(`kuru.maxDepositAtoms lists ${token} twice`);
     maxDepositAtoms[token] = atoms(cap, `kuru.maxDepositAtoms[${token}]`);

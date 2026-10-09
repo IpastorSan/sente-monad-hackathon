@@ -49,7 +49,11 @@ export interface MarketDto {
 }
 export interface MarketsResponseDto {
   markets: MarketDto[];
-  venues: { venue: VenueId; ok: boolean; error?: string }[]; // partial when a venue is down
+  /**
+   * Partial when a venue is down. `missing` (Kuru only, SEN-185): markets this
+   * build pins that the venue's catalog no longer lists — `ok` is then false.
+   */
+  venues: { venue: VenueId; ok: boolean; error?: string; missing?: string[] }[];
   asOf: number;
 }
 

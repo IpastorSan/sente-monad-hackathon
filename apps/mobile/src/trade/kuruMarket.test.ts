@@ -192,14 +192,19 @@ function sdkFragment(abi: Abi, name: string): unknown {
 
 test('the read fragments are exactly the SDK functions', () => {
   for (const fragment of KURU_MARKET_READ_ABI) {
-    assert.deepEqual(fragment, sdkFragment(kuruAbi.spotOrderBookAbi as Abi, fragment.name));
+    assert.deepEqual(fragment, sdkFragment(kuruAbi.orderBookAbi as Abi, fragment.name));
   }
+  // SEN-185: the root id by owner, then the balance by id.
   assert.deepEqual(
     KURU_BALANCE_READ_ABI[0],
+    sdkFragment(kuruAbi.accountCoreAbi as Abi, 'rootAccountIdOf'),
+  );
+  assert.deepEqual(
+    KURU_BALANCE_READ_ABI[1],
     sdkFragment(kuruAbi.accountCoreAbi as Abi, 'getBalance'),
   );
   assert.deepEqual(
-    KURU_BALANCE_READ_ABI[0],
+    KURU_BALANCE_READ_ABI[1],
     sdkFragment(KURU_ACCOUNT_CORE_BALANCE_ABI, 'getBalance'),
   );
 });
@@ -215,7 +220,8 @@ function fakeClient(results: Record<string, unknown>, calls: Call[] = []): KuruR
   };
 }
 
-const RAW_PARAMS = [1_000_000, 100_000_000n, 1, 1_000_000n, 10n ** 12n, 3_000n, 400n] as const;
+// MON-USDC's precisions as the chain answers them since SEN-185 (size 10^6).
+const RAW_PARAMS = [1_000_000, 1_000_000n, 1, 1_000_000n, 10n ** 12n, 3_000n, 400n] as const;
 
 test('readMarketFacts decodes params and best prices from the market itself', async () => {
   const calls: Call[] = [];
@@ -226,7 +232,7 @@ test('readMarketFacts decodes params and best prices from the market itself', as
   assert.deepEqual(facts, {
     params: {
       pricePrecision: 1_000_000n,
-      sizePrecision: 100_000_000n,
+      sizePrecision: 1_000_000n,
       tickSize: 1n,
       minQuoteNotional: 1_000_000n,
       maxQuoteNotional: 10n ** 12n,
@@ -256,11 +262,35 @@ test('readMarketFacts refuses a market whose units differ from config', async ()
   );
 });
 
-test('readKuruFree reads getBalance(wallet, token) on AccountCore', async () => {
+test('readKuruFree reads the root id, then getBalance(rootId, token), on AccountCore', async () => {
   const calls: Call[] = [];
   const token = MON_USDC.quote.address;
-  const free = await readKuruFree(fakeClient({ getBalance: 42n }, calls), WALLET, token);
+  const free = await readKuruFree(
+    fakeClient({ rootAccountIdOf: 63, getBalance: 42n }, calls),
+    WALLET,
+    token,
+  );
   assert.equal(free, 42n);
-  assert.equal(calls[0]!.address, KURU_TESTNET_CONTRACTS.accountCore);
-  assert.deepEqual(calls[0]!.args, [WALLET, token]);
+  assert.ok(calls.every((call) => call.address === KURU_TESTNET_CONTRACTS.accountCore));
+  assert.deepEqual(
+    calls.map((call) => [call.functionName, call.args]),
+    [
+      ['rootAccountIdOf', [WALLET]],
+      ['getBalance', [63, token]],
+    ],
+  );
+});
+
+test('readKuruFree: a wallet that never deposited holds nothing, and its balance is not read', async () => {
+  const calls: Call[] = [];
+  const free = await readKuruFree(
+    fakeClient({ rootAccountIdOf: 0, getBalance: 42n }, calls),
+    WALLET,
+    MON_USDC.quote.address,
+  );
+  assert.equal(free, 0n);
+  assert.deepEqual(
+    calls.map((call) => call.functionName),
+    ['rootAccountIdOf'],
+  );
 });

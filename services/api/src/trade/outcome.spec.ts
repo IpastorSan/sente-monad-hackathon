@@ -1,5 +1,6 @@
 import type { AuthorizationPayload } from '@sente/mandate';
 import {
+  KURU_RETIRED_DEPLOYMENT,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   type KuruLog,
@@ -19,7 +20,12 @@ const { RECEIPT_ACCOUNT_ID, RECEIPTS } = jest.requireActual<{
   RECEIPTS: Record<'placeLimit' | 'cancel' | 'placeMarket', { logs: readonly KuruLog[] }>;
 }>('../../../../packages/venues/src/kuru/receipts.fixture.ts');
 
-const MON_USDC = KURU_TESTNET_MARKETS.find((m) => m.symbol === 'MON-USDC')!;
+// The fixtures were recorded on the RETIRED Set-C MON-USDC book (SEN-185); the
+// decoding is unchanged, but it matches logs by the book's address.
+const MON_USDC = {
+  ...KURU_TESTNET_MARKETS.find((m) => m.symbol === 'MON-USDC')!,
+  address: KURU_RETIRED_DEPLOYMENT.markets.find((m) => m.symbol === 'MON-USDC')!.address,
+};
 
 /** The market's params when the fixtures were recorded (as in `receipts.test.ts`). */
 const PARAMS: KuruMarketParams = {

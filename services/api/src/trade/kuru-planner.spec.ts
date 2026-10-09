@@ -1,6 +1,7 @@
 import {
   KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+  KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
   KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
@@ -57,6 +58,7 @@ type World = {
   /** Free Kuru balance per token address (lowercase). */
   kuruFree?: Record<string, bigint>;
   walletMon?: bigint;
+  /** The wallet's Kuru root id; 63 unless a test says it has none (0). */
   accountId?: bigint;
   liveOrderId?: bigint;
   /** `getBuilderApproval(WALLET, builder)`; none by default. */
@@ -88,11 +90,15 @@ function fakeClient(world: World = {}): PublicClient {
     }
     if (functionName === 'getBalance') {
       expect(isAddressEqual(address, ACCOUNT_CORE)).toBe(true);
-      expect(isAddressEqual(args![0] as Address, WALLET)).toBe(true);
+      // SEN-185: balances are keyed by the wallet's root id, read first.
+      expect(BigInt(args![0] as number)).toBe(world.accountId ?? 63n);
       const token = (args![1] as Address).toLowerCase();
       return Promise.resolve(world.kuruFree?.[token] ?? 0n);
     }
-    if (functionName === 'userRegistry') return Promise.resolve(world.accountId ?? 0n);
+    if (functionName === 'rootAccountIdOf') {
+      expect(isAddressEqual(args![0] as Address, WALLET)).toBe(true);
+      return Promise.resolve(Number(world.accountId ?? 63n));
+    }
     if (functionName === 'getOrderId') return Promise.resolve(world.liveOrderId ?? 0n);
     if (functionName === 'getBuilderApproval') {
       expect(isAddressEqual(address, ACCOUNT_CORE)).toBe(true);
@@ -117,7 +123,7 @@ function buy(over: Partial<KuruPlaceIntent> = {}): KuruPlaceIntent {
     market: MON_USDC.address,
     side: 'buy',
     orderType: 'limit',
-    sizeAtoms: (500n * 10n ** 8n).toString(),
+    sizeAtoms: (500n * 10n ** 6n).toString(),
     priceUnits: '20000',
     maxDepositAtoms: '20000000',
     ...over,
@@ -165,7 +171,7 @@ describe('planKuru — place', () => {
     expect(BigInt(placed.userId)).toBe(0n);
     expect(placed.cancels).toEqual([]);
     expect(placed.orders).toHaveLength(1);
-    expect(placed.orders[0]!.quantity).toBe(500n * 10n ** 8n);
+    expect(placed.orders[0]!.quantity).toBe(500n * 10n ** 6n);
     expect(BigInt(placed.orders[0]!.price)).toBe(20_000n);
     expect(placed.orders[0]!.tif).toBe(0); // GTC
     expect(placed.orders[0]!.executionInstruction).toBe(0);
@@ -189,13 +195,14 @@ describe('planKuru — place', () => {
       abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
       data: deposit!.transaction.data,
     });
-    expect(deposited.args).toEqual([USDC.address, 6_004_000n]);
+    // SEN-185: the owner-address overload, crediting the wallet's own root.
+    expect(deposited.args).toEqual([WALLET, USDC.address, 6_004_000n]);
     expect(approve!.title).toBe('Approve 6.004 USDC for Kuru');
     // What the receipt is decoded against later (SEN-97).
     expect(plan.place).toMatchObject({
       market: MON_USDC.address,
       timeInForce: 'GTC',
-      quantity: 500n * 10n ** 8n,
+      quantity: 500n * 10n ** 6n,
       quoteDecimals: 6,
       funding: { symbol: 'USDC', decimals: 6, deposit: 6_004_000n },
     });
@@ -267,7 +274,7 @@ describe('planKuru — place', () => {
       abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
       data: deposit!.transaction.data,
     });
-    expect(deposited.args).toEqual([NATIVE_TOKEN, parseEther('500')]);
+    expect(deposited.args).toEqual([WALLET, NATIVE_TOKEN, parseEther('500')]);
   });
 
   it('needs no deposit to sell MON already free on Kuru', async () => {
@@ -281,7 +288,7 @@ describe('planKuru — place', () => {
   it('refuses a native deposit that would leave the wallet under the 10 MON reserve', async () => {
     const intent = buy({
       side: 'sell',
-      sizeAtoms: (1000n * 10n ** 8n).toString(),
+      sizeAtoms: (1000n * 10n ** 6n).toString(),
       maxDepositAtoms: parseEther('1000').toString(),
     });
     expect(await refusal(planKuru(intent, deps({ walletMon: parseEther('1009.9') })))).toBe(
@@ -373,6 +380,12 @@ describe('planKuru — cancel and withdraw', () => {
     expect(plan.steps.map((s) => s.kind)).toEqual(['withdraw']);
     expect(plan.steps[0]!.transaction.to).toBe(ACCOUNT_CORE);
     expect(plan.steps[0]!.title).toBe('Withdraw 5 USDC from Kuru');
+    // SEN-185: by root id, paying the wallet itself — the recipient is explicit now.
+    const { args } = decodeFunctionData({
+      abi: KURU_ACCOUNT_CORE_WITHDRAW_ABI,
+      data: plan.steps[0]!.transaction.data,
+    });
+    expect(args).toEqual([63, USDC.address, 5_000_000n, WALLET]);
   });
 
   it('refuses more than is free, and a token Kuru does not list', async () => {

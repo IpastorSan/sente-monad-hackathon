@@ -161,7 +161,7 @@ async function recordTrail(events: AgentEventLog, agentId: string): Promise<void
     agentId,
     runId: 'run-3',
     kind: 'thesis',
-    detail: { market: 'cbBTC-USDC', direction: 'long', venue: 'kuru' },
+    detail: { market: 'WBTC-USDC', direction: 'long', venue: 'kuru' },
   });
   await events.append({
     agentId,
@@ -169,7 +169,7 @@ async function recordTrail(events: AgentEventLog, agentId: string): Promise<void
     kind: 'fill',
     detail: {
       venue: 'kuru',
-      symbol: 'cbBTC-USDC',
+      symbol: 'WBTC-USDC',
       side: 'buy',
       filledSize: '1',
       averageFillPrice: '100',

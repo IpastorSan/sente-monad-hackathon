@@ -29,7 +29,7 @@ import {
 } from './ledger.ts';
 
 const AT = Date.parse('2026-09-17T12:00:00.000Z');
-const USDC = '0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E';
+const USDC = '0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1';
 
 function event(
   seq: number,

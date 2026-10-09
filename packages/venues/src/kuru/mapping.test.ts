@@ -26,8 +26,12 @@ const market = (symbol: string): KuruMarketConfig => {
   assert.ok(found, symbol);
   return found;
 };
-const MON_USDC = market('MON-USDC');
-const CBBTC_USDC = market('cbBTC-USDC');
+// The MON/USDC payloads below were captured on the retired Set-C book, whose
+// size precision was 10^8 (today's is 10^6). SEN-185 moved their addresses to
+// the current book and USDC; the numbers keep Set C's precision, and the
+// mapping arithmetic is the same at either.
+const MON_USDC: KuruMarketConfig = { ...market('MON-USDC'), sizePrecision: 100_000_000n };
+const WBTC_USDC = market('WBTC-USDC');
 
 /** MON/USDC as `getMarketParams()` returns it on testnet. */
 const MON_PARAMS: KuruMarketParams = {
@@ -42,7 +46,7 @@ const MON_PARAMS: KuruMarketParams = {
 
 test('toMarket: precisions become decimal increments, the notional floor comes through', () => {
   const api: ApiMarket = {
-    marketAddress: '0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61',
+    marketAddress: '0x26cd68436b6a4aeb3ec52abc20a4d121f8b4bac9',
     symbol: 'MONUSDC',
     baseToken: {
       tokenAddress: '0x0000000000000000000000000000000000000000',
@@ -50,7 +54,7 @@ test('toMarket: precisions become decimal increments, the notional floor comes t
       decimals: 18,
     },
     quoteToken: {
-      tokenAddress: '0xee0722ead54f1b4fe97be399be43bc0226a6f97e',
+      tokenAddress: '0xa402b424f392eaa05dbc8779e4502a1f6a96fef1',
       symbol: 'USDC',
       decimals: 6,
     },
@@ -79,7 +83,7 @@ test('toMarket: precisions become decimal increments, the notional floor comes t
 
 test('toMarket: fee pps scale by 10^7 into fractions of notional (SEN-63)', () => {
   const api = (takerFeePps: number, makerFeePps: number): ApiMarket => ({
-    marketAddress: '0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61',
+    marketAddress: '0x26cd68436b6a4aeb3ec52abc20a4d121f8b4bac9',
     symbol: 'MONUSDC',
     baseToken: {
       tokenAddress: '0x0000000000000000000000000000000000000000',
@@ -87,7 +91,7 @@ test('toMarket: fee pps scale by 10^7 into fractions of notional (SEN-63)', () =
       decimals: 18,
     },
     quoteToken: {
-      tokenAddress: '0xee0722ead54f1b4fe97be399be43bc0226a6f97e',
+      tokenAddress: '0xa402b424f392eaa05dbc8779e4502a1f6a96fef1',
       symbol: 'USDC',
       decimals: 6,
     },
@@ -108,7 +112,7 @@ test('toMarket: fee pps scale by 10^7 into fractions of notional (SEN-63)', () =
 test('toDepth: book units to decimals, best first, clamped, sequence kept', () => {
   const api: ApiDepth = {
     symbol: 'MONUSDC',
-    market_id: '0xfdbe356828c8f5a5d5ed4f69dde0816f4058ef61',
+    market_id: '0x26cd68436b6a4aeb3ec52abc20a4d121f8b4bac9',
     market_seq: 26,
     bids: [
       { price: '28968', total_base: '31700000000' },
@@ -213,19 +217,19 @@ test('weekly buckets open on Monday 00:00 UTC', () => {
 test('toOpenOrder: the id binds slot and order id; size is the remaining size', () => {
   const api: ApiOpenOrder = {
     orderId: '23818',
-    marketAddress: '0x5bdea6f9f9aba34f4ecb9b865646a792b835ef7f',
+    marketAddress: '0x8661cb7c5f4f8ae3ee116b63aa5a23c69110e357',
     slotIdx: 0,
-    symbol: 'CBBTCUSDC',
+    symbol: 'WBTCUSDC',
     isBuy: true,
     price: '7854647',
     remainingSize: '1000000',
     minSizeAfterBlock: null,
     clientOrderId: '0x18d3a457c4234e28000000000000000000000000000000000000000000001cf4',
   };
-  assert.deepEqual(toOpenOrder(api, CBBTC_USDC, 99), {
+  assert.deepEqual(toOpenOrder(api, WBTC_USDC, 99), {
     id: '0:23818',
     clientOrderId: '0x18d3a457c4234e28000000000000000000000000000000000000000000001cf4',
-    symbol: 'cbBTC-USDC',
+    symbol: 'WBTC-USDC',
     side: 'buy',
     type: 'limit',
     status: 'open',

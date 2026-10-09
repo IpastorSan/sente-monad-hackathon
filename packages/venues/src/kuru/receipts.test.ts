@@ -9,7 +9,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { KURU_TESTNET_MARKETS } from './constants.ts';
+import {
+  KURU_RETIRED_DEPLOYMENT,
+  KURU_TESTNET_MARKETS,
+  type KuruMarketConfig,
+} from './constants.ts';
 import { toMakerFill, toPlacedOrder } from './mapping.ts';
 import {
   decodeMakerFills,
@@ -21,7 +25,14 @@ import {
 import { RECEIPT_ACCOUNT_ID, RECEIPTS } from './receipts.fixture.ts';
 
 const market = (symbol: string) => KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol)!.address;
-const MON_USDC = market('MON-USDC');
+// The fixture was recorded on the RETIRED Set-C MON-USDC book (SEN-185), whose
+// size precision was 10^8. The events and their decoding are unchanged.
+const MON_USDC = KURU_RETIRED_DEPLOYMENT.markets.find((m) => m.symbol === 'MON-USDC')!.address;
+const SET_C_MON_USDC: KuruMarketConfig = {
+  ...KURU_TESTNET_MARKETS.find((m) => m.symbol === 'MON-USDC')!,
+  address: MON_USDC,
+  sizePrecision: 100_000_000n,
+};
 
 const PARAMS: KuruMarketParams = {
   pricePrecision: 1_000_000n,
@@ -140,8 +151,7 @@ test('the same IOC read from the maker side: its resting ask filled later (SEN-1
   assert.equal(fill.tradeId, 98n);
   assert.equal(fill.blockNumber, 61_406_913n);
 
-  const monUsdc = KURU_TESTNET_MARKETS.find((m) => m.symbol === 'MON-USDC')!;
-  const decimals = toMakerFill(fill, monUsdc);
+  const decimals = toMakerFill(fill, SET_C_MON_USDC);
   assert.equal(decimals.orderId, '1:3679');
   assert.equal(decimals.side, 'sell');
   assert.equal(decimals.price, '0.030974');

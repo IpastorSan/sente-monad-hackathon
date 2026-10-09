@@ -254,7 +254,7 @@ describe('agent wallet RPC', () => {
     const agent = generateAuthorizationKey();
     const { client: privy, calls } = client();
     const transaction = privyTransaction({
-      to: '0x6384e9b2bf3b65e1535403a0a543b5fda905ee22',
+      to: '0xdbaade7b42c95399bb1e9614d51b5b9e2cf78038',
       data: '0x47e7ef24',
       chainId: 10143,
       nonce: 0,
@@ -291,7 +291,7 @@ describe('agent wallet RPC', () => {
     // A decimal string is rejected by Privy's RPC; bigint.toString() makes one.
     expect(
       privyTransaction({
-        to: '0x6384e9b2bf3b65e1535403a0a543b5fda905ee22',
+        to: '0xdbaade7b42c95399bb1e9614d51b5b9e2cf78038',
         value: 10n ** 18n,
         chainId: 10143,
         nonce: 3,
@@ -300,7 +300,7 @@ describe('agent wallet RPC', () => {
         maxPriorityFeePerGas: 0n,
       }),
     ).toEqual({
-      to: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22',
+      to: '0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038',
       value: '0xde0b6b3a7640000',
       chain_id: 10143,
       nonce: 3,

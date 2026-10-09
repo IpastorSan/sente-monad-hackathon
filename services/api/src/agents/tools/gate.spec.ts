@@ -148,15 +148,19 @@ describe('gate', () => {
   });
 
   it('lets withdraw through without a thesis, even after the mandate expires', async () => {
-    const h = await harness();
+    const owner = '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8';
+    const h = await harness({
+      agent: { mandate: { ...testAgent().mandate, returnTo: owner } },
+    });
     h.setNow(EXPIRES_AT + 86_400);
     const outcome = await h.call('withdraw', { asset: 'USDC', amount: '14' });
     expect(outcome).toEqual({
       ok: true,
       result: expect.objectContaining({ withdrawn: '14', asset: 'USDC' }),
     });
+    // SEN-185: straight to the owner, the only recipient the policy pins.
     expect(h.kuru.writes()).toEqual([
-      { method: 'withdraw', args: { asset: 'USDC', amount: '14' } },
+      { method: 'withdraw', args: { asset: 'USDC', amount: '14', recipient: owner } },
     ]);
     // Deposits, by contrast, stop at expiry.
     await h.thesis();
@@ -176,6 +180,10 @@ describe('gate', () => {
     expect(odd.refusal?.code).toBe('invalid_input');
     const fine = refused(await h.call('withdraw', { asset: 'USDC', amount: '0.0000001' }));
     expect(fine.refusal?.code).toBe('invalid_input');
+    // SEN-185: a mandate with no returnTo has nowhere a Kuru withdraw may pay.
+    const nowhere = refused(await h.call('withdraw', { asset: 'USDC', amount: '1' }));
+    expect(nowhere.refusal?.code).toBe('invalid_input');
+    expect(nowhere.message).toMatch(/names no owner wallet/);
     expect(h.kuru.writes()).toEqual([]);
     expect(perplOnly.kuru.writes()).toEqual([]);
   });

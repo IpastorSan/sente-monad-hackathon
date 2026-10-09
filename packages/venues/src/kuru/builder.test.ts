@@ -42,7 +42,7 @@ const SENTE_FEE = { address: BUILDER, feePps: 10_000 } as const;
 
 const PARAMS: KuruMarketParams = {
   pricePrecision: 1_000_000n,
-  sizePrecision: 100_000_000n,
+  sizePrecision: 1_000_000n, // MON-USDC, as the chain answers it (SEN-185)
   tickSize: 1n,
   minQuoteNotional: 10_000_000n,
   maxQuoteNotional: 5_000_000_000_000n,
@@ -157,7 +157,7 @@ function builderVenue(
     readContract: ({ functionName }: { functionName: string }) => {
       reads.push(functionName);
       if (functionName === 'getBuilderApproval') return Promise.resolve(approval);
-      if (functionName === 'userRegistry') return Promise.resolve(63);
+      if (functionName === 'rootAccountIdOf') return Promise.resolve(63);
       if (functionName === 'getMarketParams') {
         return Promise.resolve([
           PARAMS.pricePrecision,
