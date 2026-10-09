@@ -2,6 +2,14 @@
 // on both venues, Monad testnet (10143).
 //
 //   pnpm --filter @sente/api run agent:venues-live [-- --env-file <path>] [-- --out <file.json>]
+//   pnpm --filter @sente/api run agent:venues-live -- --skip-perpl --builder [--builder-take]
+//
+// `--builder` (SEN-184) compiles the policy WITH Sente's builder-fee rules
+// (KURU_BUILDER_ADDRESS / KURU_BUILDER_FEE_PPS from the env file) and sends the
+// Kuru bid through `approveBuilder` + the builder `batch` overload: the live
+// proof that Privy accepts the new ABIs and matches the tuple overloads by
+// name. `--builder-take` then buys the market's minimum as an IOC, the one
+// order that should pay the fee, and prints what `BuilderFeeAccrued` said.
 //
 // What it does, in order, with every hash printed:
 //   1. Reuses the probe agent wallet recorded in .env as PRIVY_AGENT_VENUES_*,
@@ -43,6 +51,7 @@ import {
 import { monadTestnet } from 'viem/chains';
 
 import { loadAgentsConfig } from '../src/agents/agents.config.ts';
+import { agentKuruBuilder, loadKuruBuilderConfig } from '../src/fees/kuru-builder.config.ts';
 import { EnclaveRefusedError } from '../src/agents/agents.errors.ts';
 import { getAgentWallet } from '../src/agents/privy/agent-wallet.ts';
 import { PrivyAgentWalletProvider } from '../src/agents/privy/privy-agent-wallet.provider.ts';
@@ -60,7 +69,9 @@ import {
   perplAccountReader,
 } from '../src/agents/venues/perpl-agent.ts';
 import {
+  AGENT_APPROVE_BUILDER_GAS,
   AGENT_APPROVE_GAS,
+  KURU_BUILDER_ORDER_SURCHARGE_GAS,
   PrivyKuruSubmitter,
 } from '../src/agents/venues/privy-kuru-submitter.ts';
 import { envFileFromArgs, upsertEnv } from './env-file.ts';
@@ -125,6 +136,20 @@ async function main(): Promise<number> {
   const outIndex = process.argv.indexOf('--out');
   const out = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;
 
+  // SEN-184: the policy carries the Sente-fee rules, and Kuru orders pay it.
+  const builderConfig = process.argv.includes('--builder')
+    ? loadKuruBuilderConfig(process.env)
+    : null;
+  if (process.argv.includes('--builder') && !builderConfig) {
+    console.log('--builder needs KURU_BUILDER_ADDRESS in the env file');
+    return 1;
+  }
+  const grant = builderConfig
+    ? { address: builderConfig.address, maxFeePps: builderConfig.feePps }
+    : null;
+  const compile = (expiresAt: number) =>
+    compileMandate(parseMandate(mandateInput(expiresAt)), { kuruBuilder: grant });
+
   const config = loadAgentsConfig(process.env);
   if (!config.privy) {
     console.log('pending credentials: PRIVY_* is not configured');
@@ -152,13 +177,15 @@ async function main(): Promise<number> {
   let walletId = process.env['PRIVY_AGENT_VENUES_WALLET_ID'];
   let policyId = process.env['PRIVY_AGENT_VENUES_POLICY_ID'];
   let address: Address;
+  let policyExpiresAt = now + WEEK;
   if (walletId && policyId) {
     address = getAddress((await getAgentWallet(client, walletId)).address);
     // Always re-PATCH with freshly compiled rules: this keeps the policy in step
     // with @sente/mandate (the Perpl enrollment struct changed under us once,
     // 2026-09-11) and renews its expiry. Only this script's own policy.
     const renewed = now + WEEK;
-    await provider.updatePolicy(policyId, compileMandate(parseMandate(mandateInput(renewed))));
+    await provider.updatePolicy(policyId, compile(renewed));
+    policyExpiresAt = renewed;
     upsertEnv(envFile, { PRIVY_AGENT_VENUES_EXPIRES_AT: String(renewed) }, { overwrite: true });
     show('policy recompiled', `${policyId} until ${new Date(renewed * 1000).toISOString()}`);
     await sleep(PATCH_SETTLE_MS);
@@ -166,7 +193,7 @@ async function main(): Promise<number> {
   } else {
     const expiresAt = now + WEEK;
     const provisioned = await provider.provision({
-      rules: compileMandate(parseMandate(mandateInput(expiresAt))),
+      rules: compile(expiresAt),
       displayName: 'sente-agent-venues-live',
     });
     ({ walletId, policyId } = provisioned);
@@ -187,6 +214,12 @@ async function main(): Promise<number> {
   const accountOf = perplAccountReader(pub);
   const perplAccounts = new PerplAgentAccounts({ sender, wallets: provider, secrets, accountOf });
   const venues = new AgentVenues({ publicClient: pub, sender, secrets });
+  const builder = agentKuruBuilder(
+    { mandate: { expiresAt: policyExpiresAt }, ...(grant ? { kuruBuilder: grant } : {}) },
+    builderConfig,
+  );
+  const venueOptions = builder ? { kuruBuilder: builder } : {};
+  if (builder) show('sente fee', `${builder.feePps} pps to ${builder.address}`);
 
   // --- 2. Funding ---------------------------------------------------------------
   const balanceOf = (token: Address) =>
@@ -198,25 +231,31 @@ async function main(): Promise<number> {
     accountOf(address),
     pub.estimateFeesPerGas(),
   ]);
-  const { kuru } = await venues.forAgent(agent);
+  const { kuru } = await venues.forAgent(agent, venueOptions);
   const kuruUsdc = (await kuru.getBalances()).find((b) => b.asset === 'USDC');
   const kuruNeedsDeposit = Number(kuruUsdc?.available ?? '0') < KURU_ORDER_NOTIONAL;
 
   // --skip-kuru: rerun only the Perpl half (Kuru costs ~0.07 MON a pass).
   const skipKuru = process.argv.includes('--skip-kuru');
+  const skipPerpl = process.argv.includes('--skip-perpl');
   const gas =
     (skipKuru
       ? 0n
       : (kuruNeedsDeposit ? AGENT_APPROVE_GAS + KURU_MEASURED_GAS.firstDeposit : 0n) +
         KURU_MEASURED_GAS.placeTakingOneLevel +
-        KURU_MEASURED_GAS.cancelOne) +
-    (perplAccount === null
+        KURU_MEASURED_GAS.cancelOne +
+        (builder
+          ? AGENT_APPROVE_BUILDER_GAS +
+            KURU_BUILDER_ORDER_SURCHARGE_GAS * 2n +
+            (process.argv.includes('--builder-take') ? KURU_MEASURED_GAS.placeTakingOneLevel : 0n)
+          : 0n)) +
+    (perplAccount === null && !skipPerpl
       ? PERPL_ONBOARDING_GAS.approve +
         PERPL_ONBOARDING_GAS.createAccount +
         PERPL_ONBOARDING_GAS.allowOrderForwarding
       : 0n);
   const needMon = (gas * fees.maxFeePerGas! * 11n) / 10n;
-  const needAusd = perplAccount === null ? PERPL_OPEN_ATOMS : 0n;
+  const needAusd = perplAccount === null && !skipPerpl ? PERPL_OPEN_ATOMS : 0n;
   const needUsdc =
     !skipKuru && kuruNeedsDeposit ? BigInt(KURU_DEPOSIT) * 10n ** BigInt(USDC.decimals) : 0n;
   show('agent balances', {
@@ -327,10 +366,42 @@ async function main(): Promise<number> {
     Object.assign(kuruResult, { cancelStatus: cancelled.status, cancelTx: cancelled.txHash });
     show('kuru cancelled', { id: cancelled.id, status: cancelled.status, tx: cancelled.txHash });
     if (cancelled.status !== 'cancelled') throw new Error(`cancel ended ${cancelled.status}`);
+
+    // SEN-184: one taker fill, the order that should pay Sente's fee.
+    if (builder && process.argv.includes('--builder-take')) {
+      const takeSize = (Math.ceil(KURU_ORDER_NOTIONAL / bestBid / step_) * step_).toFixed(
+        decimalsOf(market.stepSize),
+      );
+      const taken = await kuru.placeMarket({
+        symbol: KURU_SYMBOL,
+        side: 'buy',
+        size: takeSize,
+        maxSlippage: '0.02',
+      });
+      Object.assign(kuruResult, {
+        takeTx: taken.txHash,
+        takeFilled: taken.filledSize,
+        takeVenueFee: taken.fee,
+        takeSenteFee: taken.builderFee,
+        takeSenteFeeAsset: taken.builderFeeAsset,
+      });
+      show('kuru take (Sente fee)', {
+        tx: taken.txHash,
+        filled: taken.filledSize,
+        venueFee: taken.fee,
+        senteFee: `${taken.builderFee} ${taken.builderFeeAsset}`,
+      });
+    }
   });
 
   // --- 5. Perpl: onboard, enroll once, order + cancel, open + close -------------
   await step('perpl', async () => {
+    // --skip-perpl: the Kuru half only (a Sente-fee probe needs nothing from Perpl).
+    if (skipPerpl) {
+      results['perpl'] = 'skipped (--skip-perpl)';
+      show('perpl', 'skipped (--skip-perpl)');
+      return;
+    }
     const perplResult: Record<string, unknown> = {};
     results['perpl'] = perplResult;
     const onboarding = await perplAccounts.onboard(agent);
@@ -353,7 +424,7 @@ async function main(): Promise<number> {
       `enrolled; held server-side; reused on second call: ${first.apiKey === second.apiKey}`,
     );
 
-    const { perpl } = await venues.forAgent(agent);
+    const { perpl } = await venues.forAgent(agent, venueOptions);
     if (!perpl) throw new Error('AgentVenues gave no Perpl venue after enrollment');
     try {
       show('perpl balances', await perpl.getBalances());
