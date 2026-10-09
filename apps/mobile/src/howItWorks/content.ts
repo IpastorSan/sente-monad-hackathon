@@ -248,6 +248,15 @@ export const SECTIONS: readonly HelpSection[] = [
         ],
       },
       {
+        id: 'terminal',
+        aliases: ['run-terminal'],
+        question: 'What is the run terminal?',
+        body: [
+          'The agent’s page shows each run in a terminal, live while it runs and afterwards: the instruction, what the model wrote, each tool it called and whether the call went through or was refused (and by whom: Sente’s check or the enclave), the tokens and cost of each turn, and how the run ended. If the model returns its reasoning, that is shown too; Kimi K2.6 has been seen to, Claude Sonnet 5 normally does not.',
+          'It is a view, not the record: orders and fills stay on the Ledger. Long text is cut short, Sente keeps the last 10 runs per agent, and keys and tokens are removed from it before it is stored.',
+        ],
+      },
+      {
         id: 'tools',
         question: 'What tools does an agent have?',
         body: [
@@ -332,7 +341,7 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'storage',
         question: 'What does Sente store, and where?',
         body: [
-          'On one server, in one state directory (`STATE_DIR`): the registry of user wallets, agents and their event logs, starter-kit records, profiles, value history, and venue credentials (your Perpl read key is encrypted under a server-side key). Your passkey and the keys derived from it never reach the server.',
+          'On one server, in one state directory (`STATE_DIR`): the registry of user wallets, agents and their event logs, starter-kit records, profiles, value history, run transcripts, and venue credentials (your Perpl read key is encrypted under a server-side key). Your passkey and the keys derived from it never reach the server.',
           'Some state is only in memory: sign-in challenges and prepared approvals do not survive a restart. Only one API process can use the directory at a time, so the API cannot run more than one copy yet.',
         ],
       },
