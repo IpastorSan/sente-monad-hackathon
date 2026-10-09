@@ -36,7 +36,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { p256 } from '@noble/curves/nist.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import {
   KURU_TESTNET_MARKETS,
@@ -53,19 +52,17 @@ import {
 } from '@sente/venues/perpl';
 import {
   createWalletClient,
-  decodeEventLog,
   erc20Abi,
   formatUnits,
   hashTypedData,
   http,
-  parseAbi,
   parseUnits,
   recoverTypedDataAddress,
   type Address,
   type Hash,
   type Hex,
 } from 'viem';
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { privateKeyToAccount } from 'viem/accounts';
 import { monadTestnet } from 'viem/chains';
 
 import { devicePublicKeySpki, signPrivyAuthorization } from '../src/auth/deviceKey.ts';
@@ -85,6 +82,15 @@ import { readKuruFree, readMarketFacts, worstPriceUnits } from '../src/trade/kur
 import { createPerplTrader } from '../src/trade/perplTrader.ts';
 import type { TradeView } from '../src/trade/types.ts';
 import { WalletApi, type SessionAuth, type UserWallet } from '../src/wallet/api.ts';
+import {
+  landedAt as landedOn,
+  newPhoneKeys,
+  notionalAtoms,
+  sessionAuth as phoneSession,
+  sizeForNotional,
+  USER_OPERATION_EVENT,
+  type PhoneKeys,
+} from './phone.ts';
 
 // ---------------------------------------------------------------------------
 // Arguments
@@ -116,14 +122,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // ---------------------------------------------------------------------------
 // The throwaway "phone": an auth key and a device key
 
-type Keys = { authKey: `0x${string}`; deviceKey: string };
-
-function loadKeys(): Keys {
-  if (existsSync(KEYS_FILE)) return JSON.parse(readFileSync(KEYS_FILE, 'utf8')) as Keys;
-  const keys: Keys = {
-    authKey: generatePrivateKey(),
-    deviceKey: bytesToHex(p256.utils.randomSecretKey()),
-  };
+function loadKeys(): PhoneKeys {
+  if (existsSync(KEYS_FILE)) return JSON.parse(readFileSync(KEYS_FILE, 'utf8')) as PhoneKeys;
+  const keys = newPhoneKeys();
   mkdirSync(dirname(KEYS_FILE), { recursive: true });
   writeFileSync(KEYS_FILE, JSON.stringify(keys), { mode: 0o600 });
   console.log(`new throwaway keys written to ${KEYS_FILE} (0600)`);
@@ -134,28 +135,8 @@ const keys = loadKeys();
 const authAccount = privateKeyToAccount(keys.authKey);
 const deviceKey = hexToBytes(keys.deviceKey);
 
-/** `session/auth.ts` minus React: challenge, personal_sign, exchange. */
 function sessionAuth(): SessionAuth {
-  let token: string | null = null;
-  const post = async (path: string, body: unknown): Promise<Record<string, string>> => {
-    const response = await fetch(`${API}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${path} → ${response.status}: ${text}`);
-    return JSON.parse(text) as Record<string, string>;
-  };
-  return {
-    token: () => token,
-    async refresh() {
-      const challenge = await post('/auth/challenge', { address: authAccount.address });
-      const signature = await authAccount.signMessage({ message: challenge['message']! });
-      token = (await post('/auth/session', { address: authAccount.address, signature }))['token']!;
-      return token;
-    },
-  };
+  return phoneSession(API, authAccount);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,18 +230,6 @@ function market(symbol: string): KuruMarketConfig {
   const found = KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol);
   if (!found) throw new Error(`no market ${symbol}`);
   return found;
-}
-
-/** Size units whose quote notional at `price` is at least `notionalAtoms`. */
-function sizeForNotional(m: KuruMarketConfig, price: bigint, notionalAtoms: bigint): bigint {
-  // notionalAtoms = price * size * 10^quoteDec / (pricePrecision * sizePrecision)
-  const denominator = price * 10n ** BigInt(m.quote.decimals);
-  const numerator = notionalAtoms * m.pricePrecision * m.sizePrecision;
-  return (numerator + denominator - 1n) / denominator;
-}
-
-function notionalAtoms(m: KuruMarketConfig, price: bigint, size: bigint): bigint {
-  return (price * size * 10n ** BigInt(m.quote.decimals)) / (m.pricePrecision * m.sizePrecision);
 }
 
 /** Prints each flow phase once, not every poll of `following`. */
@@ -703,9 +672,6 @@ async function perpl(): Promise<void> {
 // ---------------------------------------------------------------------------
 // P2: replay the last signed send straight to Privy
 
-const USER_OPERATION_EVENT = parseAbi([
-  'event UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)',
-]);
 /** Monad's public RPC caps `eth_getLogs` ranges; stay under it. */
 const LOG_RANGE = 100n;
 
@@ -714,22 +680,7 @@ async function landedAt(
   transactionHash: Hash,
   userOpHash: Hash,
 ): Promise<{ entryPoint: Address; block: bigint }> {
-  const receipt = await publicClient.getTransactionReceipt({ hash: transactionHash });
-  for (const log of receipt.logs) {
-    try {
-      const event = decodeEventLog({
-        abi: USER_OPERATION_EVENT,
-        data: log.data,
-        topics: log.topics,
-      });
-      if (event.args.userOpHash === userOpHash) {
-        return { entryPoint: log.address, block: receipt.blockNumber };
-      }
-    } catch {
-      // not a UserOperationEvent
-    }
-  }
-  throw new Error(`no UserOperationEvent for ${userOpHash} in ${transactionHash}`);
+  return landedOn(publicClient, transactionHash, userOpHash);
 }
 
 type LandedOp = { userOpHash: Hash; transactionHash: Hash; success: boolean };
