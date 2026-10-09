@@ -11,6 +11,7 @@ import { HealthModule } from './health/health.module';
 import { ValueHistoryModule } from './portfolio/history/value-history.module';
 import { PortfolioModule } from './portfolio/portfolio.module';
 import { PresetsModule } from './presets/presets.module';
+import { ProfileModule } from './profile/profile.module';
 import { TradeModule } from './trade/trade.module';
 import { VenuesModule } from './venues/venues.module';
 import { WalletModule } from './wallet/wallet.module';
@@ -39,6 +40,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     LeaderboardModule,
     // The preset catalog and its cohort stats (SEN-76).
     PresetsModule,
+    // GET/PATCH /profile: the user's chosen name and avatar (SEN-172).
+    ProfileModule,
     // Monad's commit state, followed over `MONAD_WS_URL` (SEN-21).
     ChainModule,
     CreditsModule,
