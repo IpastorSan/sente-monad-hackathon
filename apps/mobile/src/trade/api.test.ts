@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { isTradingEnabled, isUnavailable, TradeApi, TradeApiError } from './api.ts';
+import { isPerpsEnabled, isTradingEnabled, isUnavailable, TradeApi, TradeApiError } from './api.ts';
 import type { TradeCapabilities, TradeIntent, TradeRefusalReason } from './types.ts';
 
 const BASE = 'http://api.test';
@@ -79,6 +79,29 @@ test('each method hits its route with the session token', async () => {
   assert.equal(calls[0]!.init!.body, undefined);
 });
 
+test('the Perpl routes: account, enroll prepare and commit, with their bodies', async () => {
+  const { api, calls } = recorder();
+  const prepare = { publicKeyHex: `0x${'ab'.repeat(32)}`, label: 'sente-app' } as const;
+  const commit = {
+    prepareId: TRADE_ID,
+    signatures: ['c2ln', 'c2lo'],
+    popSignature: `0x${'cd'.repeat(64)}`,
+  } as const;
+  await api.perplAccount();
+  await api.enrollPrepare(prepare);
+  await api.enrollCommit(commit);
+  assert.deepEqual(
+    calls.map((c) => `${c.init?.method} ${c.url}`),
+    [
+      `GET ${BASE}/trade/perpl/account`,
+      `POST ${BASE}/trade/perpl/enroll/prepare`,
+      `POST ${BASE}/trade/perpl/enroll/commit`,
+    ],
+  );
+  assert.deepEqual(JSON.parse(calls[1]!.init!.body as string), prepare);
+  assert.deepEqual(JSON.parse(calls[2]!.init!.body as string), commit);
+});
+
 test('the answer is returned as sent', async () => {
   const capabilities: TradeCapabilities = {
     enabled: true,
@@ -112,6 +135,8 @@ const REFUSALS: [TradeRefusalReason, number][] = [
   ['reserve_balance', 422],
   ['deposit_cap_exceeded', 422],
   ['insufficient_balance', 422],
+  ['below_min_account_open', 422],
+  ['perpl_already_onboarded', 409],
 ];
 
 for (const [reason, status] of REFUSALS) {
@@ -159,4 +184,22 @@ test('trading is on only with the build flag, the server flag and testnet', () =
   assert.equal(isTradingEnabled({ ...ok, capabilities: null }), false);
   assert.equal(isTradingEnabled({ ...ok, capabilities: { ...on, enabled: false } }), false);
   assert.equal(isTradingEnabled({ ...ok, network: 'mainnet' }), false);
+});
+
+test('perps are on only with trading on and the Perpl venue on', () => {
+  const on: TradeCapabilities = {
+    enabled: true,
+    atomicBatch: false,
+    chainId: 10143,
+    venues: { kuru: true, perpl: true },
+  };
+  const ok = { buildFlag: '1', capabilities: on, network: 'testnet' } as const;
+  assert.equal(isPerpsEnabled(ok), true);
+  assert.equal(
+    isPerpsEnabled({ ...ok, capabilities: { ...on, venues: { kuru: true, perpl: false } } }),
+    false,
+  );
+  assert.equal(isPerpsEnabled({ ...ok, capabilities: { ...on, enabled: false } }), false);
+  assert.equal(isPerpsEnabled({ ...ok, buildFlag: undefined }), false);
+  assert.equal(isPerpsEnabled({ ...ok, network: 'mainnet' }), false);
 });

@@ -41,6 +41,8 @@ export default function RootLayout() {
           <Stack.Screen name="trade" options={wide ? DESKTOP_MODAL : { presentation: 'modal' }} />
           {/* A ticket (SEN-167): on a wide window a sheet too, over the picker or the page. */}
           <Stack.Screen name="trade/[venue]/[symbol]" options={wide ? DESKTOP_MODAL : {}} />
+          {/* Perps setup (SEN-120): the same sheet, over the ticket that opened it. */}
+          <Stack.Screen name="trade/perpl-setup" options={wide ? DESKTOP_MODAL : {}} />
         </Stack>
       ) : (
         <View style={{ flex: 1, backgroundColor: color.ink }} />

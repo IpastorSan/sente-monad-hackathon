@@ -21,8 +21,9 @@
  *    cancelled", never rounded up) or resting, and where the unspent money is.
  *
  * Trading off (`useTradingEnabled`) shows the whole ticket as "coming", never
- * a half-enabled form. Perps are U-14: a Perpl market says so and offers an
- * agent instead. Every rule lives in `trade/ticket.ts`, under test.
+ * a half-enabled form. A Perpl market gets the perp ticket (`PerpTicket.tsx`,
+ * SEN-120) while the API trades perps for users, and otherwise says so and
+ * offers an agent. Every rule lives in `trade/ticket.ts`, under test.
  *
  * On the web (SEN-167) the ticket also takes the keyboard: digits, `.` and
  * Backspace drive the same `pressKey` the keypad does, Tab moves between a
@@ -33,20 +34,10 @@
  */
 import { KURU_TESTNET_MARKETS, NATIVE_TOKEN, type KuruMarketConfig } from '@sente/venues/kuru';
 import * as Haptics from '@/platform/haptics';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import Animated, {
-  cancelAnimation,
-  Easing,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { scheduleOnRN } from 'react-native-worklets';
 import { erc20Abi, type Address } from 'viem';
 
 import { formatAtoms, formatFixedAtoms } from '@/agents/amounts';
@@ -97,15 +88,27 @@ import {
   type Key,
   type OrderType,
   type Side,
-  type StepState,
   type TicketInput,
   type TicketMarket,
 } from '@/trade/ticket';
 import type { PreparedTrade, TradeFunds, TradeView } from '@/trade/types';
-import { useTradingEnabled } from '@/trade/useTradingEnabled';
+import {
+  Frame,
+  HoldToConfirm,
+  Keypad,
+  Note,
+  SIDE_TONE,
+  StepStone,
+  TxLink,
+  useLitKey,
+  useNow,
+  useWebKeys,
+} from '@/trade/ticketKit';
+import { PerpTicket } from '@/trade/PerpTicket';
+import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { ComingNext } from '@/ui/ComingNext';
-import { Pill, Stone } from '@/ui/goban';
+import { Pill } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
 import {
   Button,
@@ -113,7 +116,6 @@ import {
   Chip,
   Chips,
   IconButton,
-  isHovered,
   Loading,
   Notice,
   Row,
@@ -128,21 +130,15 @@ import { formatPct, pctChange } from '@/ui/tradingFormat';
 
 /** How long the book read under the ticket is trusted before it is read again. */
 const FACTS_MS = 5_000;
-/** How long the confirm must be held. Long enough to be deliberate, short enough not to annoy. */
-const HOLD_MS = 1_200;
 const CHART_HEIGHT = 120;
-/** How long a typed key lights its keypad key: the web's stand-in for a haptic tick. */
-const KEY_FLASH_MS = 140;
-/** The side colours: the final confirm, and the selected side segment. */
-const SIDE_TONE: Record<Side, string> = { buy: color.mint, sell: color.berry };
 
 export default function TicketRoute() {
   const router = useRouter();
   const params = useLocalSearchParams<{ venue?: string; symbol?: string; side?: string }>();
   const venue = parseVenue(params.venue);
   const symbol = typeof params.symbol === 'string' ? params.symbol : '';
-  const side: Side = params.side === 'sell' ? 'sell' : 'buy';
-  const trading = useTradingEnabled();
+  const side: Side = params.side === 'sell' || params.side === 'short' ? 'sell' : 'buy';
+  const { trading, perps } = useTradingCapabilities();
   const markets = useMarkets();
   const close = () => (router.canGoBack() ? router.back() : router.replace('/markets'));
 
@@ -152,8 +148,8 @@ export default function TicketRoute() {
   );
   const config = useMemo(() => (venue === 'kuru' ? kuruConfig(symbol) : null), [venue, symbol]);
 
-  if (venue === 'perpl') {
-    // U-14 builds the perp ticket; until then the honest route is an agent.
+  if (venue === 'perpl' && !perps) {
+    // Perps from the wallet are off on this server: the honest route is an agent.
     return (
       <Frame onClose={close}>
         <Text style={[text.display, styles.title]}>{symbol}</Text>
@@ -194,7 +190,7 @@ export default function TicketRoute() {
       </Frame>
     );
   }
-  if (venue === null || config === null) {
+  if (venue === null || (venue === 'kuru' && config === null)) {
     return (
       <Frame onClose={close}>
         <Notice tone="error" title="There's no such market" detail="Pick one from Markets." />
@@ -212,6 +208,16 @@ export default function TicketRoute() {
       </Frame>
     );
   }
+  if (venue === 'perpl' || config === null) {
+    return (
+      <PerpTicket
+        key={symbol}
+        market={market}
+        initialSide={side === 'sell' ? 'short' : 'long'}
+        onClose={close}
+      />
+    );
+  }
   return (
     <Ticket
       key={symbol}
@@ -224,8 +230,12 @@ export default function TicketRoute() {
   );
 }
 
-/** A Kuru market the phone has a config for: the only kind `TicketPanel` can embed. */
-export function canEmbedTicket(market: MarketDto): boolean {
+/**
+ * Whether `TicketPanel` can embed a ticket for this market: a Kuru market the
+ * phone has a config for, or a Perpl market once perps are on (SEN-120).
+ */
+export function canEmbedTicket(market: MarketDto, perps = false): boolean {
+  if (market.venue === 'perpl') return perps;
   return market.venue === 'kuru' && kuruConfig(market.symbol) !== null;
 }
 
@@ -235,14 +245,26 @@ function kuruConfig(symbol: string): KuruMarketConfig | null {
 
 /**
  * The ticket beside a market's chart on a wide web window (SEN-167): the same
- * `Ticket`, without a close button or a second market header. Whatever would
- * close the route — Done, "Keep trading", leaving an error — starts a fresh
- * ticket in place instead. The caller checks `canEmbedTicket` and that
- * trading is on; this renders nothing for a market it cannot ticket.
+ * `Ticket` (or `PerpTicket`), without a close button or a second market
+ * header. Whatever would close the route — Done, "Keep trading", leaving an
+ * error — starts a fresh ticket in place instead. The caller checks
+ * `canEmbedTicket` and that trading is on; this renders nothing for a market
+ * it cannot ticket.
  */
 export function TicketPanel({ market }: { market: MarketDto }) {
   const [round, setRound] = useState(0);
   const config = useMemo(() => kuruConfig(market.symbol), [market.symbol]);
+  if (market.venue === 'perpl') {
+    return (
+      <PerpTicket
+        key={`${market.symbol}:${round}`}
+        market={market}
+        initialSide="long"
+        embedded
+        onClose={() => setRound((n) => n + 1)}
+      />
+    );
+  }
   if (market.venue !== 'kuru' || config === null) return null;
   return (
     <Ticket
@@ -254,33 +276,6 @@ export function TicketPanel({ market }: { market: MarketDto }) {
       embedded
       onClose={() => setRound((n) => n + 1)}
     />
-  );
-}
-
-function Frame({
-  onClose,
-  embedded = false,
-  children,
-}: {
-  onClose: () => void;
-  /** Inside `TicketPanel`: there is no route to close, so no close button. */
-  embedded?: boolean;
-  children: ReactNode;
-}) {
-  const insets = useSafeAreaInsets();
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={[
-        styles.content,
-        { paddingTop: insets.top, paddingBottom: insets.bottom + 40 },
-      ]}
-    >
-      {embedded ? null : (
-        <TopBar right={<IconButton icon="close" label="Close" onPress={onClose} />} />
-      )}
-      {children}
-    </ScrollView>
   );
 }
 
@@ -512,21 +507,7 @@ function Ticket({
     setStage({ kind: 'ticket' });
   };
 
-  // A typed key goes through `press`, like a tapped one, and lights its key.
-  const [lit, setLit] = useState<Key | null>(null);
-  const litTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (litTimer.current !== null) clearTimeout(litTimer.current);
-    },
-    [],
-  );
-  const typeKey = (key: Key) => {
-    press(key);
-    setLit(key);
-    if (litTimer.current !== null) clearTimeout(litTimer.current);
-    litTimer.current = setTimeout(() => setLit(null), KEY_FLASH_MS);
-  };
+  const { lit, typeKey } = useLitKey(press);
   useWebKeys(stage.kind === 'ticket' && !gear, (event) => {
     if (event.type !== 'keydown') return false;
     if (/^[0-9]$/.test(event.key)) typeKey(event.key as Key);
@@ -890,44 +871,6 @@ function useTicketFunds(config: KuruMarketConfig, wallet: Address | null) {
   return { quote, base, refresh };
 }
 
-/**
- * Hardware keys on the web (SEN-167), while the screen holding the caller is
- * focused and `active`. `handle` sees keydown and keyup and returns whether it
- * took the key; a taken key goes no further. The capture phase is why: Enter
- * would otherwise also press whichever Pressable has focus. A key typed into a
- * text field, or with a modifier (a browser shortcut), is left alone. Native
- * has no hardware-key path here, so this is a no-op there.
- */
-function useWebKeys(active: boolean, handle: (event: KeyboardEvent) => boolean) {
-  const handleRef = useRef(handle);
-  handleRef.current = handle;
-  useFocusEffect(
-    useCallback(() => {
-      if (Platform.OS !== 'web' || !active) return;
-      const listener = (event: KeyboardEvent) => {
-        if (event.metaKey || event.ctrlKey || event.altKey || inTextField(event.target)) return;
-        if (handleRef.current(event)) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      };
-      window.addEventListener('keydown', listener, true);
-      window.addEventListener('keyup', listener, true);
-      return () => {
-        window.removeEventListener('keydown', listener, true);
-        window.removeEventListener('keyup', listener, true);
-      };
-    }, [active]),
-  );
-}
-
-function inTextField(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
-  );
-}
-
 // ─── Pieces ─────────────────────────────────────────────────────────────────
 
 /** Buy/Sell. The selected side takes its colour; nothing else on the ticket does until the confirm. */
@@ -950,45 +893,6 @@ function SideSegment({ side, onChange }: { side: Side; onChange: (side: Side) =>
           </Pressable>
         );
       })}
-    </View>
-  );
-}
-
-const KEYS: readonly Key[] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'];
-
-function Keypad({
-  onKey,
-  lit,
-  compact,
-}: {
-  onKey: (key: Key) => void;
-  /** The key just typed on a keyboard, lit as if pressed. */
-  lit: Key | null;
-  /** Shorter keys, for a ticket that is also typed into (wide web). */
-  compact: boolean;
-}) {
-  return (
-    <View style={styles.keypad}>
-      {KEYS.map((key) => (
-        <Pressable
-          key={key}
-          accessibilityRole="button"
-          accessibilityLabel={key === 'back' ? 'Delete' : key === '.' ? 'Decimal point' : key}
-          onPress={() => onKey(key)}
-          style={(state) => [
-            styles.key,
-            compact && styles.keyCompact,
-            isHovered(state) && styles.keyHover,
-            (state.pressed || key === lit) && styles.keyPressed,
-          ]}
-        >
-          {key === 'back' ? (
-            <Icon name="back" size={22} color={color.text} />
-          ) : (
-            <Text style={styles.keyText}>{key}</Text>
-          )}
-        </Pressable>
-      ))}
     </View>
   );
 }
@@ -1107,15 +1011,6 @@ function FieldBox({
   );
 }
 
-function Note({ icon, children }: { icon: 'stop' | 'shield'; children: ReactNode }) {
-  return (
-    <View style={styles.note}>
-      <Icon name={icon} size={14} color={color.textDim} />
-      <Text style={[text.dim, styles.grow]}>{children}</Text>
-    </View>
-  );
-}
-
 // ─── Review ─────────────────────────────────────────────────────────────────
 
 function Review({
@@ -1185,7 +1080,7 @@ function Review({
           <Button kind="primary" label="Refresh quote" onPress={onRefresh} />
         ) : (
           <HoldToConfirm
-            side={input.side}
+            tone={SIDE_TONE[input.side]}
             keys={keys}
             label={`Hold to ${input.side} ${sizeLabel}${
               input.orderType === 'limit' ? ` at ${input.limitPrice}` : ''
@@ -1201,94 +1096,6 @@ function Review({
         </Text>
       </View>
     </View>
-  );
-}
-
-function useNow(everyMs: number): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), everyMs);
-    return () => clearInterval(timer);
-  }, [everyMs]);
-  return now;
-}
-
-/**
- * The final confirm: hold for {@link HOLD_MS}, in the side's colour. Letting
- * go early drains it. Under reduced motion there is no fill to watch, so it is
- * a plain press — same colour, same label.
- */
-function HoldToConfirm({
-  side,
-  keys,
-  label,
-  onConfirm,
-}: {
-  side: Side;
-  /** Holding Enter (or Space) holds the button, on the web. */
-  keys: boolean;
-  label: string;
-  onConfirm: () => void;
-}) {
-  const reduced = useReducedMotion();
-  const progress = useSharedValue(0);
-  const firedRef = useRef(false);
-  const tone = SIDE_TONE[side];
-
-  const fire = useCallback(() => {
-    if (firedRef.current) return;
-    firedRef.current = true;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    onConfirm();
-  }, [onConfirm]);
-
-  const fill = useAnimatedStyle(() => ({ width: `${progress.value * 100}%` }));
-
-  const hold = () => {
-    void Haptics.selectionAsync();
-    progress.value = withTiming(1, { duration: HOLD_MS, easing: Easing.linear }, (finished) => {
-      if (finished) scheduleOnRN(fire);
-    });
-  };
-  const letGo = () => {
-    if (firedRef.current) return;
-    cancelAnimation(progress);
-    progress.value = withTiming(0, { duration: 180 });
-  };
-  useWebKeys(keys, (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return false;
-    if (event.repeat) return true;
-    if (event.type === 'keydown') {
-      if (reduced) fire();
-      else hold();
-    } else if (!reduced) letGo();
-    return true;
-  });
-
-  if (reduced) {
-    return (
-      <Pressable
-        accessibilityRole="button"
-        onPress={fire}
-        style={({ pressed }) => [styles.hold, { backgroundColor: tone }, pressed && styles.pressed]}
-      >
-        <Text style={styles.holdText}>
-          {label.replace(/^Hold to (\w)/, (_, c: string) => c.toUpperCase())}
-        </Text>
-      </Pressable>
-    );
-  }
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityHint="Press and hold to confirm"
-      onPressIn={hold}
-      onPressOut={letGo}
-      style={[styles.hold, { backgroundColor: `${tone}38` }]}
-    >
-      <Animated.View style={[styles.holdFill, { backgroundColor: tone }, fill]} />
-      <Text style={styles.holdText}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -1356,12 +1163,14 @@ function Execution({
                   </Text>
                 </View>
                 {tx ? (
-                  <Text style={text.mono} numberOfLines={1}>
-                    {tx.slice(0, 6)}…{tx.slice(-4)}
-                    {step.blockNumber
-                      ? ` · block ${Number(step.blockNumber).toLocaleString('en-US')}`
-                      : ''}
-                  </Text>
+                  <TxLink
+                    hash={tx}
+                    suffix={
+                      step.blockNumber
+                        ? ` · block ${Number(step.blockNumber).toLocaleString('en-US')}`
+                        : ''
+                    }
+                  />
                 ) : null}
                 {step.error ? <Text style={[text.caption, text.danger]}>{step.error}</Text> : null}
               </View>
@@ -1386,27 +1195,6 @@ function Execution({
       />
     </Frame>
   );
-}
-
-function StepStone({ state }: { state: StepState }) {
-  const reduced = useReducedMotion();
-  const breath = useSharedValue(0);
-  useEffect(() => {
-    if (state !== 'now' || reduced) return;
-    breath.value = withRepeat(
-      withTiming(1, { duration: 900, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-    return () => cancelAnimation(breath);
-  }, [state, reduced, breath]);
-  const halo = useAnimatedStyle(() => ({ opacity: 0.25 + 0.5 * breath.value }));
-  if (state === 'done') return <Stone kind="trade" size={18} />;
-  if (state === 'failed') return <Stone kind="refusal" size={18} />;
-  if (state === 'now') {
-    return <Animated.View style={[styles.ring, { borderColor: color.purple }, halo]} />;
-  }
-  return <View style={[styles.ring, { borderColor: color.lineStrong }]} />;
 }
 
 // ─── Result ─────────────────────────────────────────────────────────────────
@@ -1727,23 +1515,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(240, 80, 140, 0.08)',
   },
   link: { color: color.purpleHi, fontFamily: font.medium },
-  keypad: { flexDirection: 'row', flexWrap: 'wrap', marginVertical: 12 },
-  key: {
-    width: '33.33%',
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: RADIUS.well,
-  },
-  keyCompact: { height: 44 },
-  keyHover: { backgroundColor: color.board },
-  keyPressed: { backgroundColor: color.well },
-  keyText: {
-    fontFamily: font.medium,
-    fontSize: 24,
-    color: color.text,
-    fontVariant: ['tabular-nums'],
-  },
   disclose: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
   chart: { marginTop: 14 },
   field: { marginTop: 12, gap: 6 },
@@ -1768,7 +1539,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.well,
     backgroundColor: color.well,
   },
-  note: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   reviewHead: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 18 },
   sheetTitle: { fontSize: 22, lineHeight: 28 },
   reviewBig: { alignItems: 'center', paddingVertical: 14, gap: 4 },
@@ -1779,19 +1549,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 12,
   },
-  hold: {
-    minHeight: 54,
-    borderRadius: RADIUS.stone,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  holdFill: { position: 'absolute', left: 0, top: 0, bottom: 0 },
-  holdText: { fontFamily: font.semibold, fontSize: 15, color: color.ink },
   steps: { marginTop: 20, gap: 18 },
   step: { flexDirection: 'row', gap: 14, alignItems: 'flex-start' },
   stepHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  ring: { width: 18, height: 18, borderRadius: 9, borderWidth: 2.5, marginTop: 2 },
   markWrap: { alignItems: 'center', marginTop: 12, marginBottom: 14 },
   mark: {
     width: 56,

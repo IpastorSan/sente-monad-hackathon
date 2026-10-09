@@ -11,7 +11,10 @@
  * not on Perpl yet, pointing at an agent that watches levels instead.
  *
  * Close, sell and add need the trade flow and are shown only while manual
- * trading is on (`useTradingEnabled`).
+ * trading is on (`useTradingEnabled`). Closing a perp (SEN-120) is a
+ * reduce-only market order for the whole position, bounded at 1% of Perpl's
+ * mark, placed by this device's Perpl trading key after a confirm sheet; it
+ * needs perps on (`capabilities().venues.perpl`) and the key set up.
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
@@ -22,6 +25,12 @@ import { useKlines, useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
 import { HideToggle } from '@/portfolio/parts';
 import { useUserPortfolio } from '@/portfolio/usePortfolio';
+import { useSession } from '@/session';
+import { createAppPerplTrader } from '@/trade/appPerplTrader';
+import { PERP_MAX_SLIPPAGE } from '@/trade/perpTicket';
+import { TxLink } from '@/trade/ticketKit';
+import { usePerplSetup, type PerplSetup } from '@/trade/usePerplSetup';
+import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import {
   amountText,
   baseOf,
@@ -35,7 +44,7 @@ import {
   type SpotRow,
 } from '@/portfolio/view';
 import { Chart } from '@/ui/chart/Chart';
-import { Button, ButtonRow, Card, Loading, Notice, Row, Screen, TopBar } from '@/ui/kit';
+import { Button, ButtonRow, Card, Loading, Notice, Row, Screen, Sheet, TopBar } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { AsOf, BigNumber, Levels, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
 
@@ -53,6 +62,9 @@ export default function PositionScreen() {
   const tickers = useTickers();
   const [hidden, toggleHidden] = useHideBalances();
   const [range, setRange] = useState<Range>('1H');
+  const { perps } = useTradingCapabilities();
+  const setup = usePerplSetup(perps && venue === 'perpl');
+  const [closing, setClosing] = useState(false);
 
   const held = useMemo(
     () => (user.wallet ? holdings(user.wallet, user.portfolio, tickers.data?.tickers ?? []) : null),
@@ -73,7 +85,22 @@ export default function PositionScreen() {
         found && user.trading ? (
           <Actions
             kind={found.kind}
-            onAdd={() => router.push('/trade')}
+            perps={perps}
+            setup={setup}
+            onClose={() => setClosing(true)}
+            onSetup={() => router.push({ pathname: '/trade/perpl-setup', params: { symbol } })}
+            onAdd={() =>
+              found.kind === 'perp'
+                ? router.push({
+                    pathname: '/trade/[venue]/[symbol]',
+                    params: {
+                      venue: 'perpl',
+                      symbol,
+                      side: found.row.position.side === 'long' ? 'buy' : 'sell',
+                    },
+                  })
+                : router.push('/trade')
+            }
             // The spot ticket's route, prefilled for a sell of this holding on
             // its USDC book (the same market the chart shows).
             onSell={() =>
@@ -149,7 +176,130 @@ export default function PositionScreen() {
           {found.kind === 'spot' ? <SpotBody row={found.row} hidden={hidden} /> : null}
         </>
       )}
+      {found?.kind === 'perp' && setup.kind === 'ready' ? (
+        <CloseSheet
+          visible={closing}
+          row={found.row}
+          apiKey={setup.apiKey}
+          onDismiss={() => setClosing(false)}
+          onClosed={() => user.polled.refresh()}
+        />
+      ) : null}
     </Screen>
+  );
+}
+
+/**
+ * The close confirmation: what closes, at what bound, and where the money
+ * goes. Closing is `closePosition` on the app's Perpl trader — the whole
+ * position, reduce-only, at market within 1% of Perpl's fresh mark.
+ */
+function CloseSheet({
+  visible,
+  row,
+  apiKey,
+  onDismiss,
+  onClosed,
+}: {
+  visible: boolean;
+  row: PerpRow;
+  apiKey: string;
+  onDismiss: () => void;
+  onClosed: () => void;
+}) {
+  const session = useSession();
+  const [state, setState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'busy' }
+    | { kind: 'done'; price: string | undefined; filled: string; tx: string | undefined }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+  const { position } = row;
+  const detail = perpDetail(position);
+
+  const close = async () => {
+    const derive = session.auth.perplTradeKey;
+    const wallet = session.wallet.wallet;
+    if (derive === null || wallet === null) {
+      setState({ kind: 'error', message: 'Sign in with your passkey first.' });
+      return;
+    }
+    setState({ kind: 'busy' });
+    let trader: ReturnType<typeof createAppPerplTrader> | null = null;
+    try {
+      const key = derive(wallet.address);
+      trader = createAppPerplTrader({ credentials: { apiKey, secretKey: key.secretKey } });
+      key.secretKey.fill(0);
+      const order = await trader.closePosition({
+        symbol: position.symbol,
+        maxSlippage: PERP_MAX_SLIPPAGE,
+      });
+      setState({
+        kind: 'done',
+        price: order.averageFillPrice,
+        filled: order.filledSize,
+        tx: order.txHash,
+      });
+      onClosed();
+    } catch (error) {
+      setState({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      trader?.release();
+    }
+  };
+  const dismiss = () => {
+    if (state.kind === 'busy') return;
+    setState({ kind: 'idle' });
+    onDismiss();
+  };
+
+  return (
+    <Sheet
+      visible={visible}
+      title={`Close your ${position.symbol} ${position.side}?`}
+      onClose={dismiss}
+    >
+      <Row label="Size" value={detail.size} />
+      <Row label="Mark" value={position.markPrice} />
+      <Row label="Unrealised P&L" value={`${detail.pnl.sign}${detail.pnl.magnitude} AUSD`} />
+      <Text style={[text.caption, styles.sheetLead]}>
+        A reduce-only market order for the whole position. It fills within 1% of the mark, or not at
+        all. The margin and P&amp;L stay in your Perpl account, less Perpl’s fee.
+      </Text>
+      {state.kind === 'done' ? (
+        <View style={styles.sheetLead}>
+          <Notice
+            tone="ok"
+            title={Number(state.filled) > 0 ? 'Position closed' : 'Nothing filled'}
+            detail={
+              Number(state.filled) > 0
+                ? `${state.filled} ${baseOf(position.symbol)}${state.price ? ` at ${state.price}` : ''}. Portfolio catches up within about 30 s.`
+                : 'The book couldn’t fill it within 1% of the mark. The position is still open.'
+            }
+          />
+          {state.tx ? <TxLink hash={state.tx} /> : null}
+        </View>
+      ) : null}
+      {state.kind === 'error' ? (
+        <View style={styles.sheetLead}>
+          <Notice tone="error" title="The close didn’t go through" detail={state.message} />
+        </View>
+      ) : null}
+      {state.kind === 'done' ? (
+        <Button label="Done" kind="primary" onPress={dismiss} style={styles.sheetButton} />
+      ) : (
+        <>
+          <Button
+            label="Close position"
+            kind="primary"
+            busy={state.kind === 'busy'}
+            onPress={() => void close()}
+            style={styles.sheetButton}
+          />
+          <Button label="Keep it open" onPress={dismiss} style={styles.keep} />
+        </>
+      )}
+    </Sheet>
   );
 }
 
@@ -289,39 +439,57 @@ function SpotBody({ row, hidden }: { row: SpotRow; hidden: boolean }) {
 }
 
 /**
- * Close / sell and add. Add opens the ticket. Sell opens the spot ticket
- * (SEN-119) on a sell (SEN-144) rather than selling from here: the ticket owns
- * size, price and review, and runs `runTrade` itself. Close is a reduce-only
- * market order on Perpl, which arrives with the perp ticket (U-14).
+ * Close / sell and add. Add opens the ticket on this market. Sell opens the
+ * spot ticket (SEN-119) on a sell (SEN-144) rather than selling from here: the
+ * ticket owns size, price and review, and runs `runTrade` itself. Close on a
+ * perp opens the close sheet once this device can trade Perpl (SEN-120), the
+ * setup when it can't yet, and stays off while perps are off on this server.
  */
 function Actions({
   kind,
+  perps,
+  setup,
   onAdd,
   onSell,
+  onClose,
+  onSetup,
 }: {
   kind: 'perp' | 'spot';
+  perps: boolean;
+  setup: PerplSetup;
   onAdd: () => void;
   onSell: () => void;
+  onClose: () => void;
+  onSetup: () => void;
 }) {
+  const perp = kind === 'perp';
+  const needsSetup = perp && perps && setup.kind === 'needed';
   return (
     <>
       <ButtonRow>
+        <Button label={perp ? 'Add to position' : 'Buy more'} kind="soft" onPress={onAdd} />
         <Button
-          label={kind === 'perp' ? 'Add to position' : 'Buy more'}
-          kind="soft"
-          onPress={onAdd}
-        />
-        <Button
-          label={kind === 'perp' ? 'Close position' : 'Sell'}
+          label={perp ? (needsSetup ? 'Set up to close' : 'Close position') : 'Sell'}
           kind="primary"
-          disabled={kind === 'perp'}
-          onPress={onSell}
+          disabled={perp && (!perps || setup.kind === 'loading' || setup.kind === 'error')}
+          busy={perp && perps && setup.kind === 'loading'}
+          onPress={perp ? (needsSetup ? onSetup : onClose) : onSell}
           style={styles.grow}
         />
       </ButtonRow>
-      {kind === 'perp' ? (
+      {perp && !perps ? (
         <Text style={[text.caption, styles.pending]}>
           Closing from here arrives with the perp ticket.
+        </Text>
+      ) : null}
+      {needsSetup ? (
+        <Text style={[text.caption, styles.pending]}>
+          This device needs its Perpl trading key before it can close.
+        </Text>
+      ) : null}
+      {perp && perps && setup.kind === 'error' ? (
+        <Text style={[text.caption, styles.pending]}>
+          Couldn’t read your Perpl account. Pull Portfolio to retry.
         </Text>
       ) : null}
     </>
@@ -361,4 +529,7 @@ const styles = StyleSheet.create({
   rows: { marginTop: 8 },
   note: { marginTop: 10 },
   pending: { textAlign: 'center' },
+  sheetLead: { marginTop: 12, gap: 8 },
+  sheetButton: { marginTop: 18 },
+  keep: { marginTop: 8 },
 });

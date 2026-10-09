@@ -311,7 +311,28 @@ side drifts from the other.
   next onboarding plans the forwarding leg again (harmless, but it costs a
   sponsored user operation and the app shows the account as half set up). A
   fix reads forwarding from Perpl through the server's read key, which SEN-174
-  now persists, or persists the evidence itself.
+  now persists, or persists the evidence itself. The app (SEN-104) works
+  around it: `perplSetupNeeds` treats a wallet with an api-key token as set up
+  whatever `forwarding` says, and for an open account without one it signs
+  only `allowOrderForwarding` (`runPerplOnboard` refuses any plan that would
+  approve or open again).
+
+## In the app (SEN-104, SEN-120)
+
+The same flow as the P5 run, from the phone's own code:
+
+- `WalletSession.perplTradeKey(wallet)` derives the HKDF trade key from the
+  device key; a web session restored after a reload derives the same one.
+- `runPerplOnboard` and `runPerplEnrollment` (`trade/flow.ts`) verify before
+  the first signature; the enrollment's proof of possession signs the digest
+  the phone computed. The api-key token is kept per wallet in `platform/kv`
+  (`trade/perplApiKeys.ts`) as well as on the server.
+- `app/trade/perpl-setup.tsx` runs onboarding then enrollment as one list of
+  steps; the perp ticket (`trade/PerpTicket.tsx`) places market orders bounded
+  at 1% of the mark through `createAppPerplTrader`, and a perp position closes
+  from its screen with `closePosition`. All of it is gated on
+  `capabilities().venues.perpl` (`USER_TRADING_PERPL`); off, perp markets keep
+  pointing at an agent.
 
 ## Spend
 

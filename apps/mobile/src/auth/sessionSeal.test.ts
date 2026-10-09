@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { test } from 'node:test';
 
+import { deriveDeviceKey } from './derive.ts';
+import { perplTradeKey } from './perplKey.ts';
 import * as native from './sessionSeal.ts';
 import {
   createSessionSeal,
@@ -90,6 +92,21 @@ test('round trip: what was sealed comes back, and nothing in storage is plaintex
   assert.deepEqual(out.credential, input.credential);
   assert.equal(out.accountIndex, 0);
   assert.equal(out.address, ADDRESS);
+});
+
+test('a restored session derives the same Perpl trade key (SEN-104)', async () => {
+  // `restoreWallet` rebuilds the device key from the unsealed PRF output, and
+  // the trade key derives from that: the enrolled key must survive a reload.
+  const { seal } = harness();
+  const input = session();
+  const wallet = '0x7777777777777777777777777777777777777777';
+  const before = perplTradeKey(deriveDeviceKey(input.devicePrfOutput), wallet);
+  await seal.seal(input);
+  const out = await seal.unseal();
+  assert.ok(out);
+  const after = perplTradeKey(deriveDeviceKey(out.devicePrfOutput), wallet);
+  assert.equal(after.publicKeyHex, before.publicKeyHex);
+  assert.deepEqual(after.secretKey, before.secretKey);
 });
 
 test('the wrapping key is non-extractable', async () => {

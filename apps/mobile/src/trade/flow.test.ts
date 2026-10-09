@@ -508,6 +508,8 @@ const REASONS = {
   reserve_balance: true,
   deposit_cap_exceeded: true,
   insufficient_balance: true,
+  below_min_account_open: true,
+  perpl_already_onboarded: true,
 } satisfies Record<TradeRefusalReason, true>;
 
 test('every refusal reason has its own plain copy', () => {

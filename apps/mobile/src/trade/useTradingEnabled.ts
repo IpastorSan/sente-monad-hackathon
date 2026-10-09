@@ -1,5 +1,6 @@
 /**
- * Whether to offer manual trading at all (SEN-102, plan §5 "Feature flag").
+ * Whether to offer manual trading at all (SEN-102, plan §5 "Feature flag"),
+ * and perps on Perpl among it (SEN-120, `capabilities().venues.perpl`).
  *
  * The build flag is checked first so a build without it never even asks the
  * API; the capabilities read is once per signed-in client, not polled, because
@@ -12,12 +13,19 @@ import { useEffect, useState } from 'react';
 import { MONAD_NETWORK } from '@/chain';
 import { useSession } from '@/session';
 
-import { isTradingEnabled } from './api';
+import { isPerpsEnabled, isTradingEnabled } from './api';
 import type { TradeCapabilities } from './types';
 
 const BUILD_FLAG = process.env.EXPO_PUBLIC_USER_TRADING;
 
-export function useTradingEnabled(): boolean {
+export type TradingCapabilities = {
+  /** Manual trading (Kuru spot) is on for this build, this API and this network. */
+  readonly trading: boolean;
+  /** …and the API also trades perps for users (`USER_TRADING_PERPL`). */
+  readonly perps: boolean;
+};
+
+export function useTradingCapabilities(): TradingCapabilities {
   const { trade } = useSession();
   const [capabilities, setCapabilities] = useState<TradeCapabilities | null>(null);
 
@@ -38,5 +46,10 @@ export function useTradingEnabled(): boolean {
     };
   }, [trade]);
 
-  return isTradingEnabled({ buildFlag: BUILD_FLAG, capabilities, network: MONAD_NETWORK });
+  const input = { buildFlag: BUILD_FLAG, capabilities, network: MONAD_NETWORK };
+  return { trading: isTradingEnabled(input), perps: isPerpsEnabled(input) };
+}
+
+export function useTradingEnabled(): boolean {
+  return useTradingCapabilities().trading;
 }

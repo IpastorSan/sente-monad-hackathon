@@ -25,7 +25,7 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex, concatBytes, utf8ToBytes } from '@noble/hashes/utils.js';
+import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { isAddress, type Address, type Hex } from 'viem';
 
 /**
@@ -72,4 +72,20 @@ export function perplTradeKey(devicePrivateKey: Uint8Array, wallet: Address): Pe
   const secretKey = hkdf(sha256, devicePrivateKey, undefined, info, TRADE_KEY_BYTES);
   const publicKeyHex: Hex = `0x${bytesToHex(ed25519.getPublicKey(secretKey))}`;
   return { secretKey, publicKeyHex };
+}
+
+/**
+ * The trade key's proof of possession for its own enrollment (SEN-104): an
+ * Ed25519 signature over the 32-byte EIP-712 digest of the typed data the
+ * wallet signs. The digest must be one the PHONE computed
+ * (`verifyEnrollmentPrepare` returns it), never one the server sent: the
+ * signature vouches that the key consents to exactly that registration.
+ *
+ * @throws TypeError when `digest` is not 32 bytes of `0x` hex.
+ */
+export function perplProofOfPossession(secretKey: Uint8Array, digest: Hex): Hex {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(digest)) {
+    throw new TypeError('perplProofOfPossession: the digest is not 32 bytes of hex');
+  }
+  return `0x${bytesToHex(ed25519.sign(hexToBytes(digest.slice(2)), secretKey))}`;
 }
