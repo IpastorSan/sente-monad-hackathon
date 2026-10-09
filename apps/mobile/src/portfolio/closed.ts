@@ -40,7 +40,7 @@ import type { PortfolioFill, PortfolioVenue } from '../trade/types.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct, formatPrice, type Direction } from '../ui/tradingFormat.ts';
 
-import { amountText, baseOf, shortDate, shown } from './view.ts';
+import { amountText, baseOf, cents, shortDate, shown } from './view.ts';
 
 // ---------------------------------------------------------------------------
 // Exact decimals
@@ -131,6 +131,8 @@ export type ClosableFill = Pick<
 
 export type ClosedPosition = {
   key: string;
+  /** The fill that closed it, as `fillKey` names it, so History can show the P&L on it. */
+  closedBy: string;
   venue: PortfolioVenue;
   symbol: string;
   direction: 'long' | 'short';
@@ -340,6 +342,7 @@ function finish(
   const pnl = Number(text(trip.pnl));
   return {
     key: `${venue}:${symbol}:${trip.openedAt}:${fillKey(last)}`,
+    closedBy: fillKey(last),
     venue,
     symbol,
     direction: trip.direction,
@@ -477,7 +480,8 @@ export function closedRow(p: ClosedPosition, hidden: boolean): ClosedRow {
   const spot = p.venue === 'kuru';
   const base = baseOf(p.symbol);
   const size = spot ? amountText(p.size, base) : p.size;
-  const figure = signedFigure(p.realisedPnl, 2);
+  // Floored to the cent like every Portfolio figure (SEN-179): a 0.004 loss is −0.01, not 0.00.
+  const figure = signedFigure(cents(p.realisedPnl), 2);
   const opened = shortDate(p.openedAt);
   const closed = shortDate(p.closedAt);
   const dates = opened === closed ? closed : `${opened} – ${closed}`;
@@ -500,6 +504,6 @@ export function closedRow(p: ClosedPosition, hidden: boolean): ClosedRow {
 /** `+$1,204.50` for the list's total, masked when hidden; `null` stays `null`. */
 export function closedTotal(total: string | null, hidden: boolean): string | null {
   if (total === null) return null;
-  const figure = signedFigure(total, 2);
+  const figure = signedFigure(cents(total), 2);
   return figure === null ? null : `${figure.sign}$${shown(figure.magnitude, hidden)}`;
 }

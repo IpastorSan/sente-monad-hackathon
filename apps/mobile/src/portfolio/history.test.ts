@@ -44,7 +44,9 @@ test('the recorded points end at the live total, and the change is exact', () =>
   assert.equal(line.partial, false);
 });
 
-test('a live read older than the newest point is not appended', () => {
+test('the line always ends at the live total, even when a recorded point is newer (SEN-179)', () => {
+  // A snapshot taken from an older cached read must not stand in for the
+  // number on screen: the change line would disagree with the total.
   const line = heroLine(
     history([
       { at: T, usd: '10' },
@@ -55,9 +57,9 @@ test('a live read older than the newest point is not appended', () => {
   );
   assert.deepEqual(
     line?.points.map((p) => p.usd),
-    ['10', '9'],
+    ['10', '50'],
   );
-  assert.equal(line?.change?.tone, 'down');
+  assert.equal(line?.change?.tone, 'up');
   assert.equal(line?.suffix, ' this week');
 });
 

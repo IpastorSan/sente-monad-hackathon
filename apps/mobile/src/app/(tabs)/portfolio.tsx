@@ -14,7 +14,8 @@
  * read-only: an agent's funds are the agent's, so a row opens its cockpit.
  *
  * The total is computed on the phone (`portfolio/view.ts`): USDC and AUSD at
- * $1, anything else at its Kuru last price, and it always says "≈ $". The
+ * $1, anything else at its Kuru last price (then, and only then, "≈ $"),
+ * summed exactly and floored to the cent. The
  * line under it is the server's recorded history over 1D / 1W / 1M / ALL
  * (SEN-152, `portfolio/ValueHero.tsx`); until that has a point, it is what
  * this phone observed since the app opened, and the caption says exactly that.
@@ -24,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
 
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
+import { closedList } from '@/portfolio/closed';
 import { ClosedPositions } from '@/portfolio/ClosedPositions';
 import { useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
@@ -52,6 +54,7 @@ import {
   perplFillsNote,
   sectionFailure,
   shown,
+  totalIsApprox,
   type Holdings,
   type OrderRow,
   type PortfolioSection,
@@ -160,6 +163,7 @@ export default function PortfolioScreen() {
         <>
           <ValueHero
             total={split.total}
+            approx={totalIsApprox(held, group?.priced ?? false)}
             at={at}
             trading={user.trading}
             hidden={hidden}
@@ -440,7 +444,15 @@ function History({
   hidden: boolean;
   now: number;
 }) {
-  const days = fillDays(fills.fills, now);
+  // SEN-179: a fill that closed a round trip carries what the trip realised,
+  // from the same replay as Positions → Closed (only over complete histories).
+  const realised = useMemo(() => {
+    const list = closedList(fills.fills, fills.coverage);
+    return new Map(
+      list.positions.map((p) => [p.closedBy, { pnl: p.realisedPnl, asset: p.pnlAsset }]),
+    );
+  }, [fills.fills, fills.coverage]);
+  const days = fillDays(fills.fills, now, realised);
   const perplNote = perplFillsNote(fills.perplGap);
   return (
     <View style={styles.section}>

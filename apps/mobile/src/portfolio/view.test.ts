@@ -12,7 +12,10 @@ import {
   amountText,
   appendSample,
   approxUsd,
+  cents,
   fillDays,
+  floorTo,
+  money,
   findPosition,
   holdings,
   legendValue,
@@ -27,6 +30,7 @@ import {
   shown,
   signedUsd,
   subDecimal,
+  totalIsApprox,
   unreadSections,
   usdPrice,
 } from './view.ts';
@@ -458,6 +462,7 @@ test('history: fills grouped by UTC day, newest first, with the chain hash', () 
   );
   assert.deepEqual(days[0]?.fills[0], {
     key: `kuru:t${Date.UTC(2026, 8, 27, 9, 0)}:v`,
+    realised: null,
     side: null,
     title: '412',
     detail: 'at 0.9420 · Kuru spot',
@@ -475,7 +480,7 @@ test('your perp: P&L on margin, notional at the mark, liquidation est. with its 
   const detail = perpDetail(ETH);
   assert.deepEqual(detail.pnl, { sign: '+', magnitude: '11.53', tone: 'up' });
   assert.equal(detail.pct, '+5.54%');
-  assert.equal(detail.size, '0.25 ETH · 636.03 AUSD');
+  assert.equal(detail.size, '0.25 ETH · 636.02 AUSD', '636.025 floored (SEN-179)');
   assert.equal(detail.margin, '208.17 AUSD · 3×');
   assert.equal(detail.funding, '−0.38 AUSD');
   assert.equal(detail.liq, 'LIQ est. 1,690.00 · 33.6% below');
@@ -545,4 +550,120 @@ test('a Perpl fill has no trade id of ours and still keys uniquely (SEN-151)', (
   assert.equal(day?.fills[0]?.key, 'perpl::0xabc:4');
   assert.equal(day?.fills[0]?.title, '0.0025 BTC-PERP');
   assert.equal(day?.fills[0]?.side, 'Sell');
+});
+
+// SEN-179: every Portfolio money figure is exact to the cent, floored, never rounded up.
+
+test('floorTo cuts at the cent toward −∞, exactly', () => {
+  assert.equal(floorTo('349.996127'), '349.99');
+  assert.equal(floorTo('350'), '350.00');
+  assert.equal(floorTo('0.009'), '0.00');
+  assert.equal(floorTo('-0.003873'), '-0.01', 'a loss under a cent still shows');
+  assert.equal(floorTo('-2'), '-2.00');
+  assert.equal(floorTo('-2.50'), '-2.50');
+  assert.equal(floorTo('1.23456789', 4), '1.2345');
+  assert.equal(floorTo('x'), null);
+  assert.equal(cents(null), null);
+  assert.equal(money('349.996127'), '349.99');
+  assert.equal(money('1234.999'), '1,234.99');
+});
+
+/** Ignacio's account after one ETH-PERP round trip: 150 AUSD + 90 USDC, 99.996127 AUSD in Perpl, $10 with an agent. */
+function afterRoundTrip(): Portfolio {
+  return portfolio({
+    wallet: {
+      ok: true,
+      balances: [
+        { symbol: 'USDC', address: '0x1', decimals: 6, raw: '0', amount: '90' },
+        { symbol: 'AUSD', address: '0x2', decimals: 6, raw: '0', amount: '150' },
+      ],
+    },
+    kuru: { ok: true, accountId: null, balances: [], openOrders: [] },
+    perpl: {
+      ok: true,
+      status: 'ok',
+      accountId: '1028',
+      balances: [{ asset: 'AUSD', available: '99.996127', locked: '0', total: '99.996127' }],
+      positions: [],
+      openOrders: [],
+    },
+  });
+}
+
+test('the total and its parts are exact sums, shown to the cent without rounding up', () => {
+  const p = afterRoundTrip();
+  const held = holdings(walletOf(p), p, TICKERS);
+  assert.deepEqual(held.venueCash, [{ venue: 'perpl', asset: 'AUSD', amount: '99.996127' }]);
+  const split = allocation(allocationParts(held, '10'));
+  assert.equal(split.total, '349.996127');
+  assert.equal(money(split.total), '349.99', 'not $350.00');
+  const cash = split.segments.find((s) => s.key === 'cash');
+  assert.equal(
+    cash && legendValue(cash, false),
+    '$339.99',
+    'the parts the card lists add up to it',
+  );
+  assert.equal(amountText('99.996127', 'AUSD'), '99.99');
+});
+
+test('only a total that prices a non-stable token is ≈', () => {
+  const p = afterRoundTrip();
+  const stableOnly = holdings(walletOf(p), p, TICKERS);
+  assert.equal(totalIsApprox(stableOnly, false), false);
+  assert.equal(totalIsApprox(stableOnly, true), true, 'an agent holding MON');
+  const withMon = holdings(walletOf(portfolio()), portfolio(), TICKERS);
+  assert.equal(totalIsApprox(withMon, false), true);
+  const priced = agentGroup([
+    { agent: { id: 'a1', name: 'R', status: 'active' }, portfolio: agentPortfolio() },
+  ]).priced;
+  assert.equal(priced, true);
+  const cashOnly = agentGroup([
+    {
+      agent: { id: 'a1', name: 'R', status: 'active' },
+      portfolio: agentPortfolio({ holdings: [] }),
+    },
+  ]).priced;
+  assert.equal(cashOnly, false);
+});
+
+test('the change line is the difference of the totals as shown: 350.00 → 349.99 is −$0.01', () => {
+  const change = seriesChange([
+    { at: 0, usd: '350' },
+    { at: 10_000, usd: '349.996127' },
+  ]);
+  assert.equal(change?.delta, '-0.01');
+  assert.equal(change?.tone, 'down');
+  assert.equal(signedUsd(change!.delta), '−$0.01');
+  // A move inside the same shown cent is no change at all.
+  assert.equal(
+    seriesChange([
+      { at: 0, usd: '349.991' },
+      { at: 1, usd: '349.999' },
+    ])?.delta,
+    '0.00',
+  );
+});
+
+test('a fill that closed a round trip carries its realised P&L, floored and toned', () => {
+  const day = fillDays(
+    [
+      {
+        venue: 'perpl',
+        tradeId: null,
+        venueTradeId: 'sell',
+        orderId: null,
+        symbol: 'ETH-PERP',
+        side: 'sell',
+        price: '2484.66',
+        size: '0.008',
+        fee: '0.007',
+        feeAsset: 'AUSD',
+        transactionHash: null,
+        timestamp: NOW,
+      },
+    ],
+    NOW,
+    new Map([['perpl::sell', { pnl: '-0.00344', asset: 'AUSD' }]]),
+  )[0];
+  assert.deepEqual(day?.fills[0]?.realised, { text: '−0.01', asset: 'AUSD', tone: 'down' });
 });
