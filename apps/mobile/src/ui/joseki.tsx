@@ -4,6 +4,9 @@
  * only paints them, the way agents.html's script does — purple stones for
  * the agent, white for the market, hollow purple rings for watched levels,
  * dashed purple bands for the lines a range or a mean is drawn between.
+ *
+ * Native only: the web build resolves `joseki.web.tsx`, the same layout as DOM
+ * SVG, so a preset list does not cost a WebGL context per card (SEN-173).
  */
 import {
   Canvas,

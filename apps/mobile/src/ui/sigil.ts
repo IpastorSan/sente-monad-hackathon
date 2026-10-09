@@ -36,3 +36,38 @@ export function sigilStones(seed: string): SigilStone[] {
   }
   return stones;
 }
+
+export type SigilBoardLayout = {
+  /** The board's side: three quarters of the sigil's. */
+  readonly board: number;
+  readonly gridStroke: number;
+  /** Each grid line, horizontal and vertical, in board coordinates. */
+  readonly lines: readonly { x1: number; y1: number; x2: number; y2: number }[];
+  readonly stones: readonly { cx: number; cy: number; r: number; tone: SigilStone['tone'] }[];
+};
+
+/**
+ * Where a sigil of side `size` draws its grid and stones: what `SigilBoard.tsx`
+ * (Skia, native) and `SigilBoard.web.tsx` (SVG, SEN-173) both paint.
+ */
+export function sigilBoard(seed: string, size: number): SigilBoardLayout {
+  const board = size * 0.75;
+  const edge = board * 0.12;
+  const step = (board - edge * 2) / (SIGIL_LINES - 1);
+  const at = (i: number) => edge + i * step;
+  const lines = Array.from({ length: SIGIL_LINES }, (_, i) => at(i)).flatMap((p) => [
+    { x1: edge, y1: p, x2: board - edge, y2: p },
+    { x1: p, y1: edge, x2: p, y2: board - edge },
+  ]);
+  return {
+    board,
+    gridStroke: Math.max(1, board / 34),
+    lines,
+    stones: sigilStones(seed).map((stone) => ({
+      cx: at(stone.x),
+      cy: at(stone.y),
+      r: step * 0.44,
+      tone: stone.tone,
+    })),
+  };
+}

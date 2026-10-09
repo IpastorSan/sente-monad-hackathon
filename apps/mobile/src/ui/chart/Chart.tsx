@@ -13,6 +13,11 @@
  * gradient, the levels and the stones are one surface, not a stack of views
  * that can round to different pixel rows.
  *
+ * This is the one drawing that stays Skia on web too (SEN-173): a screen has
+ * one chart, and it needs the scrub. Everything small and static has a
+ * `.web.tsx` SVG twin instead, because each web `<Canvas>` is a WebGL context
+ * and Chrome keeps ~16 per page (`docs/web.md`). Do not add another web canvas.
+ *
  * THE CHART NEVER OWNS THE HEADLINE. Scrubbing reports the sample under the
  * finger through `onScrub(index)`, and `onScrub(null)` when it lets go; the
  * screen decides what its big number says. The crosshair and dot move on the

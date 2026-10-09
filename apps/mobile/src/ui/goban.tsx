@@ -5,7 +5,6 @@
  *
  * Reference: `docs/design/design-system.html` ("Stones", "Components").
  */
-import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
 import { useEffect, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
@@ -18,7 +17,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { Icon } from './icons';
-import { SIGIL_LINES, sigilStones } from './sigil';
+import { SigilBoard } from './SigilBoard';
 import { color, font, RADIUS, text } from './theme';
 
 // ─── Stones ─────────────────────────────────────────────────────────────────
@@ -83,11 +82,6 @@ export function Sigil({
   size?: number;
   dimmed?: boolean;
 }) {
-  const board = size * 0.75;
-  const edge = board * 0.12;
-  const step = (board - edge * 2) / (SIGIL_LINES - 1);
-  const at = (i: number) => edge + i * step;
-  const lines = Array.from({ length: SIGIL_LINES }, (_, i) => at(i));
   return (
     <View
       style={[
@@ -98,25 +92,7 @@ export function Sigil({
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      <Canvas style={{ width: board, height: board }}>
-        <Group color={color.lineStrong} style="stroke" strokeWidth={Math.max(1, board / 34)}>
-          {lines.map((p) => (
-            <Group key={p}>
-              <Line p1={vec(edge, p)} p2={vec(board - edge, p)} />
-              <Line p1={vec(p, edge)} p2={vec(p, board - edge)} />
-            </Group>
-          ))}
-        </Group>
-        {sigilStones(seed).map((stone) => (
-          <Circle
-            key={`${stone.x},${stone.y}`}
-            cx={at(stone.x)}
-            cy={at(stone.y)}
-            r={step * 0.44}
-            color={stone.tone === 'purple' ? color.purple : color.text}
-          />
-        ))}
-      </Canvas>
+      <SigilBoard seed={seed} size={size} />
     </View>
   );
 }

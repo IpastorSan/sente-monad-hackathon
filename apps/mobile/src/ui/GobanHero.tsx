@@ -10,6 +10,9 @@
  * The breath is a blurred purple halo behind the stone, not a scale on the
  * stone itself: a stone that grows reads as a move, and nothing moved. Reduced
  * motion leaves the halo off and the board still.
+ *
+ * Native only: the web build resolves `GobanHero.web.tsx`, the same board as
+ * DOM SVG, so Welcome spends no WebGL context on it (SEN-173, `docs/web.md`).
  */
 import {
   BlurMask,

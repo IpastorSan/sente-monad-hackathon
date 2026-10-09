@@ -16,6 +16,7 @@ import {
   priceDecimals,
   pointsXY,
   scaleFor,
+  sparklineModel,
   toPrice,
   xOf,
   yOf,
@@ -335,4 +336,22 @@ test('property: markerIndex lands on a real sample or on nothing', () => {
     }),
     RUNS,
   );
+});
+
+test('sparklineModel: nothing for an empty series', () => {
+  assert.equal(sparklineModel([], 64, 28), null);
+});
+
+test('sparklineModel: the line ends on the dot, inside the box, short of the right pad', () => {
+  const model = sparklineModel(['1', '3', '2'], 64, 28);
+  assert.ok(model !== null);
+  assert.equal(model.rising, true);
+  assert.match(model.path, /^M0,[\d.]+L30,[\d.]+L60,[\d.]+$/);
+  assert.equal(model.end.x, 60);
+  assert.ok(model.path.endsWith(`L60,${Math.round(model.end.y * 10) / 10}`));
+  assert.ok(model.end.y >= 3 && model.end.y <= 25);
+});
+
+test('sparklineModel: a falling series is not rising', () => {
+  assert.equal(sparklineModel(['5', '4'], 64, 28)?.rising, false);
 });

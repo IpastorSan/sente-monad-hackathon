@@ -285,6 +285,40 @@ export function formatPrice(value: Decimal, places: number): string | null {
   return `${negative ? '−' : ''}${groupThousands(intPart)}${places > 0 ? `.${fracPart}` : ''}`;
 }
 
+/** The sparkline's top and bottom padding. */
+const SPARK_PAD = 3;
+/** Room on the sparkline's right for the end dot. */
+const SPARK_PAD_RIGHT = 4;
+
+export type SparklineModel = {
+  readonly rising: boolean;
+  /** The line as an SVG path, which both Skia (native) and the DOM (web) draw as is. */
+  readonly path: string;
+  /** The last price's dot. */
+  readonly end: { readonly x: number; readonly y: number };
+};
+
+/**
+ * Everything `Sparkline.tsx` and its web twin draw (SEN-107, SEN-173), or
+ * `null` for an empty series.
+ */
+export function sparklineModel(
+  points: readonly Decimal[],
+  width: number,
+  height: number,
+): SparklineModel | null {
+  const closes = points.map(toPrice);
+  if (closes.length === 0) return null;
+  const scale = scaleFor(closes, [], { height, padTop: SPARK_PAD, padBottom: SPARK_PAD });
+  const plotWidth = width - SPARK_PAD_RIGHT;
+  const xy = pointsXY(closes, scale, plotWidth);
+  return {
+    rising: isUp(closes[0] ?? 0, closes[closes.length - 1] ?? 0),
+    path: linePath(closes, scale, plotWidth),
+    end: xy[xy.length - 1] ?? { x: plotWidth, y: height / 2 },
+  };
+}
+
 /** `true` when the series ended at or above where it is measured from. */
 export function isUp(first: number, last: number): boolean {
   return last >= first;

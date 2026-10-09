@@ -43,7 +43,6 @@
  * they trade, the latest move, the nudge). A phone keeps the single column in
  * the order above.
  */
-import { Canvas, Group, Path, Skia } from '@shopify/react-native-skia';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
@@ -622,43 +621,8 @@ function Hero({
 }
 
 /** The study's eye: open shows balances, struck through hides them. */
-const EYE = Skia.Path.MakeFromSVGString(
-  'M2 12Q12 1 22 12Q12 23 2 12zM15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0',
-);
-const STRIKE = Skia.Path.MakeFromSVGString('M4 4l16 16');
-
-/**
- * Drawn here rather than added to `ui/icons.tsx`: SEN-113 is scoped to Home
- * while other screens change the shared kit in parallel. Same 24-unit grid,
- * stroke and caps as the icon set, so it reads as one of them.
- */
 function EyeIcon({ off }: { off: boolean }) {
-  const size = 18;
-  return (
-    <Canvas style={{ width: size, height: size }} pointerEvents="none">
-      <Group transform={[{ scale: size / 24 }]}>
-        {EYE ? (
-          <Path
-            path={EYE}
-            style="stroke"
-            strokeWidth={1.8}
-            strokeCap="round"
-            strokeJoin="round"
-            color={color.textDim}
-          />
-        ) : null}
-        {off && STRIKE ? (
-          <Path
-            path={STRIKE}
-            style="stroke"
-            strokeWidth={1.8}
-            strokeCap="round"
-            color={color.textDim}
-          />
-        ) : null}
-      </Group>
-    </Canvas>
-  );
+  return <Icon name={off ? 'balancesHidden' : 'balances'} size={18} color={color.textDim} />;
 }
 
 /**
