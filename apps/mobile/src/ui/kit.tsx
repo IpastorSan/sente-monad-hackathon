@@ -53,6 +53,8 @@ export const DOCK = {
 const WIDE_MIN = 1024;
 /** The centred column a wide screen reads in. */
 export const CONTENT_MAX = 720;
+/** A centred dialog on a wide window, and the sign-in column: a form, not a page. */
+export const SHEET_MAX = 480;
 /**
  * The wider column for the screens laid out in two (SEN-167): a market beside
  * its ticket, and Home. The rest stay at `CONTENT_MAX`.
@@ -640,21 +642,30 @@ export function Sheet({
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  // A wide web window gets a centred dialog: a full-width drawer sliding up a
+  // desktop screen reads as a phone layout stretched, not as a sheet.
+  const wide = useWide();
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
+      animationType={wide ? 'fade' : 'slide'}
       onRequestClose={onClose}
       statusBarTranslucent
     >
       <KeyboardAvoidingView
-        style={styles.sheetRoot}
+        style={[styles.sheetRoot, wide && styles.sheetRootWide]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
-          <View style={styles.grip} />
+        <View
+          style={[
+            styles.sheet,
+            wide ? styles.sheetWide : null,
+            { paddingBottom: wide ? 20 : insets.bottom + 16 },
+          ]}
+        >
+          {wide ? null : <View style={styles.grip} />}
           <View style={styles.sheetHead}>
             <Text style={[text.title, styles.sheetTitle, styles.grow]}>{title}</Text>
             <IconButton icon="close" label="Close" onPress={onClose} />
@@ -908,6 +919,16 @@ const styles = StyleSheet.create({
     borderTopColor: color.lineStrong,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
+  },
+  sheetRootWide: { justifyContent: 'center', alignItems: 'center', padding: 24 },
+  sheetWide: {
+    width: '100%',
+    maxWidth: SHEET_MAX,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: color.lineStrong,
+    borderRadius: 20,
+    paddingTop: 8,
   },
   grip: {
     alignSelf: 'center',

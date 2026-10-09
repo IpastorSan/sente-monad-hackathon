@@ -32,7 +32,7 @@ import {
 import { useSession } from '@/session';
 import { GobanHero } from '@/ui/GobanHero';
 import { Mark, Pill } from '@/ui/goban';
-import { Button, Notice, Screen, Sheet } from '@/ui/kit';
+import { Button, Notice, Screen, SHEET_MAX, Sheet } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
 
 /** Default WebAuthn account name. The passkey is what identifies the user. */
@@ -84,6 +84,7 @@ export default function Welcome() {
 
   return (
     <Screen
+      maxWidth={SHEET_MAX}
       footer={
         <>
           {hasCredential ? (
