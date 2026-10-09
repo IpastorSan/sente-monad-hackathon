@@ -22,3 +22,9 @@ export function maxDecimal(a: Decimal, b: Decimal): Decimal {
 export function isPositiveDecimal(value: unknown): value is Decimal {
   return isDecimal(value) && /[1-9]/.test(value);
 }
+
+/** Significant digits after the point in a decimal string: `"0.0100"` → 2. */
+export function decimalsOf(value: string): number {
+  const fraction = value.split('.')[1];
+  return fraction ? fraction.replace(/0+$/, '').length : 0;
+}
