@@ -320,6 +320,14 @@ Read this section before the demo video.
 - **Manual trading is behind `USER_TRADING`**, off by default. The Kuru spot
   ticket is built and verified by the phone before it signs; the manual Perpl
   ticket is not finished. Agents trade both venues.
+- **On the web, Perpl orders go through Sente's proxy.** Perpl testnet refuses
+  browser origins (its trading socket answers `sente.lol` with 403 and its API
+  sends no CORS headers), so the web build reaches it through `api.sente.lol/perpl`.
+  Perpl authenticates a socket once, with a sign-in frame the user's trade key
+  signs, and every later order frame on it is unsigned: whoever runs the proxy
+  could inject orders into an open socket. It can never withdraw, which is an
+  on-chain transaction the user's wallet signs. The Android app connects to Perpl
+  directly. Testnet only.
 - **Two unset credentials each degrade a feature to a named "unconfigured"
   answer**: the two ERC-8004 EOAs (no agent is ever registered on chain) and the
   Alchemy webhook keys. Nothing invents a number to fill the gap.
