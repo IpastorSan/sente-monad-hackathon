@@ -1314,3 +1314,124 @@ describe('AgentsService', () => {
     });
   });
 });
+
+describe('AgentsService with the Sente builder fee (SEN-184)', () => {
+  const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
+  const FEE = { address: SENTE, feePps: 10_000 };
+  const GRANT = { address: SENTE, maxFeePps: 10_000 };
+
+  function feeSetup(fee: typeof FEE | null = FEE) {
+    const store = new InMemoryAgentStore();
+    const wallets = new FakeAgentWalletProvider();
+    const service = new AgentsService(
+      store,
+      wallets,
+      new ServerMandateOwners(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      fee,
+    );
+    return { store, wallets, service };
+  }
+
+  it('hires with the fee rules and records the grant beside the mandate', async () => {
+    const { service, wallets } = feeSetup();
+    const { agent } = await service.hire(ALICE, hireInput());
+    expect(wallets.provisioned[0]!.rules).toEqual(
+      compileMandate(parseMandate(mandateInput()), { kuruBuilder: GRANT }),
+    );
+    expect((await service.get(ALICE, agent.id)).kuruBuilder).toEqual(GRANT);
+  });
+
+  it('with the fee off, or a mandate that cannot trade on Kuru, compiles and records none', async () => {
+    const off = feeSetup(null);
+    const { agent } = await off.service.hire(ALICE, hireInput());
+    expect(off.wallets.provisioned[0]!.rules).toEqual(compileMandate(parseMandate(mandateInput())));
+    expect((await off.service.get(ALICE, agent.id)).kuruBuilder).toBeUndefined();
+
+    const on = feeSetup();
+    const perplOnly = await on.service.hire(
+      ALICE,
+      hireInput({ mandate: mandateInput({ venues: ['perpl'] }) }),
+    );
+    expect((await on.service.get(ALICE, perplOnly.agent.id)).kuruBuilder).toBeUndefined();
+  });
+
+  it('a fork gets the grant of its own policy, not its source’s', async () => {
+    const { service } = feeSetup();
+    const { agent: source } = await service.hire(ALICE, hireInput());
+    const { agent: fork } = await service.fork(BOB, source.id, {
+      mandate: mandateInput({ venues: ['perpl'] }),
+    });
+    expect((await service.get(BOB, fork.id)).kuruBuilder).toBeUndefined();
+    expect((await service.get(BOB, fork.id)).forkedFrom).toBe(source.id);
+  });
+
+  it('an amend re-PATCHes an old agent with the fee rules: that is how it starts paying', async () => {
+    // Hired before the fee existed: a live policy without the rules (gotcha 13).
+    const before = feeSetup(null);
+    const { agent } = await before.service.hire(ALICE, hireInput());
+    expect(agent.kuruBuilder).toBeUndefined();
+
+    const after = new AgentsService(
+      before.store,
+      before.wallets,
+      new ServerMandateOwners(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      FEE,
+    );
+    const amended = await after.amendMandate(ALICE, agent.id, mandateInput());
+    expect(amended.kuruBuilder).toEqual(GRANT);
+    expect(before.wallets.policies.get(agent.policyId)).toEqual(
+      compileMandate(parseMandate(mandateInput()), { kuruBuilder: GRANT }),
+    );
+
+    // Amending to a mandate without Kuru drops the grant with the rules.
+    const perplOnly = await after.amendMandate(
+      ALICE,
+      agent.id,
+      mandateInput({ venues: ['perpl'] }),
+    );
+    expect(perplOnly.kuruBuilder).toBeUndefined();
+  });
+
+  it('a device owner’s amend carries the fee rules on screen and records the grant on commit', async () => {
+    const registry = new InMemoryUserWalletRegistry();
+    const wallet = getAddress(`0x${'b'.repeat(40)}`);
+    await registry.bind({
+      userId: ALICE.userId,
+      walletId: 'user-wallet-alice',
+      address: wallet,
+      ownerQuorumId: 'kq-device-alice',
+      devicePublicKey: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE-fake-device-key',
+    });
+    const store = new InMemoryAgentStore();
+    const wallets = new FakeAgentWalletProvider();
+    const service = new AgentsService(
+      store,
+      wallets,
+      new DeviceMandateOwners(registry),
+      undefined,
+      undefined,
+      undefined,
+      new RegistryReturnAddresses(registry),
+      FEE,
+    );
+    const { agent } = await service.hire(ALICE, hireInput());
+    const prepared = await service.prepareMandateAmend(ALICE, agent.id, mandateInput());
+    const onScreen = compileMandate(parseMandate({ ...mandateInput(), returnTo: wallet }), {
+      kuruBuilder: GRANT,
+    });
+    expect((prepared.payload.body as { rules: unknown }).rules).toEqual(onScreen);
+    const amended = await service.commitMandateAmend(ALICE, agent.id, {
+      prepareId: prepared.prepareId,
+      signature: 'device-signature',
+    });
+    expect(amended.kuruBuilder).toEqual(GRANT);
+  });
+});

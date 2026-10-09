@@ -59,7 +59,13 @@ class FakeTrades {
 
   capabilities(): TradeCapabilitiesDto {
     const { enabled, atomicBatch, chainId } = this.config;
-    return { enabled, atomicBatch, chainId, venues: { kuru: enabled, perpl: false } };
+    return {
+      enabled,
+      atomicBatch,
+      chainId,
+      venues: { kuru: enabled, perpl: false },
+      kuruBuilder: null,
+    };
   }
   async prepare(principal: Principal, dto: unknown): Promise<PreparedTradeDto> {
     this.#record('prepare', principal, dto);
@@ -180,6 +186,7 @@ describe('TradeController over HTTP (SEN-135)', () => {
           atomicBatch: false,
           chainId: TRADE_CHAIN_ID,
           venues: { kuru: false, perpl: false },
+          kuruBuilder: null,
         },
       });
     });

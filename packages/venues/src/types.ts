@@ -177,6 +177,14 @@ export interface Order {
   /** The asset `fee` is denominated in. */
   feeAsset?: string;
   /**
+   * Kuru (SEN-184): the builder fee these fills paid on top of the venue fee,
+   * read from AccountCore's `BuilderFeeAccrued`. Present only when the order
+   * carried a builder fee; `"0"` when it took nothing.
+   */
+  builderFee?: Decimal;
+  /** The asset `builderFee` is denominated in. */
+  builderFeeAsset?: string;
+  /**
    * Perps only, set by `closePosition`: the position's realised price PnL at
    * the close (Perpl's `dpnl`), in collateral units. Cumulative over the
    * position's life, not only this close.

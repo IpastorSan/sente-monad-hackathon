@@ -39,6 +39,7 @@ export type TradeKind = 'kuru.place' | 'kuru.cancel' | 'kuru.withdraw' | 'perpl.
 export type StepKind =
   | 'approve'
   | 'deposit'
+  | 'approveBuilder'
   | 'place'
   | 'cancel'
   | 'withdraw'
@@ -66,6 +67,12 @@ export type KuruPlaceResult = {
   feeAsset: 'USDC';
   fills: { price: string; size: string; tradeId: string }[];
   unfilledCancelled?: string;
+  /**
+   * Sente's builder fee these fills paid (SEN-184), read from AccountCore's
+   * `BuilderFeeAccrued`, in `feeAsset`. Present only when the order carried a
+   * builder fee; `"0"` when it took nothing.
+   */
+  senteFee?: string;
 };
 
 /**
@@ -91,6 +98,8 @@ export type KuruPlaceContext = {
     readonly decimals: number;
     readonly deposit: bigint;
   };
+  /** The builder the order pays (SEN-184), when it pays one. */
+  readonly builder?: { readonly address: Address; readonly feePps: number };
 };
 
 export type TradeFunds = { where: 'wallet' | 'kuru' | 'perpl'; symbol: string; amount: string }[];

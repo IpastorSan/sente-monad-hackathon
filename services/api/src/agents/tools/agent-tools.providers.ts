@@ -2,12 +2,20 @@ import { join } from 'node:path';
 
 import { Logger, type Provider } from '@nestjs/common';
 
+import {
+  AGENT_KURU_BUILDER,
+  agentKuruBuilder,
+  type KuruBuilderConfig,
+} from '../../fees/kuru-builder.config';
+import { FeesModule } from '../../fees/fees.module';
 import { StateDirLease } from '../../state/state.module';
 import { MarketDataService } from '../../venues/market-data.service';
 import { VenuesModule } from '../../venues/venues.module';
 
 import { AgentsService } from '../agents.service';
+import { CREATOR_FEES, type CreatorFeeLedger } from '../../fees/creator-fees';
 import { AGENT_EVENTS, InMemoryAgentEventLog, type AgentEventLog } from '../events/agent-event-log';
+import { CreatorFeeEventLog } from '../events/creator-fee-event-log';
 import { AGENT_EVENTS_FILE, FileAgentEventLog } from '../events/file-agent-event-log';
 import {
   createErc8004Client,
@@ -69,13 +77,24 @@ const agentEventsProvider: Provider = {
   provide: AGENT_EVENTS,
   // StateDirLease: the log is only opened once this process holds the
   // STATE_DIR lock, so a second API cannot interleave appends (SEN-161).
-  inject: [ERC8004_WRITER, StateDirLease],
-  useFactory: (reputation: Erc8004Reputation, lease: StateDirLease): AgentEventLog => {
+  inject: [ERC8004_WRITER, StateDirLease, CREATOR_FEES, AGENT_STORE],
+  useFactory: (
+    reputation: Erc8004Reputation,
+    lease: StateDirLease,
+    creatorFees: CreatorFeeLedger,
+    store: AgentStore,
+  ): AgentEventLog => {
     const dir = lease.dir;
-    if (!dir) return new ReputationEventLog(new InMemoryAgentEventLog(), reputation);
-    const log = new FileAgentEventLog(join(dir, AGENT_EVENTS_FILE));
-    Logger.log(`${log.size} agent event(s) loaded from ${log.path}`, 'AgentEventLog');
-    return new ReputationEventLog(log, reputation);
+    let log: AgentEventLog;
+    if (dir) {
+      const file = new FileAgentEventLog(join(dir, AGENT_EVENTS_FILE));
+      Logger.log(`${file.size} agent event(s) loaded from ${file.path}`, 'AgentEventLog');
+      log = file;
+    } else {
+      log = new InMemoryAgentEventLog();
+    }
+    // SEN-184: a fork's fee-paying fill owes its creator a share.
+    return new ReputationEventLog(new CreatorFeeEventLog(log, creatorFees, store), reputation);
   },
 };
 
@@ -104,6 +123,7 @@ export const agentToolsProviders: Provider[] = [
       AGENT_TOOLS_CONFIG,
       MarketDataService,
       WatcherService,
+      AGENT_KURU_BUILDER,
     ],
     useFactory: (
       store: AgentStore,
@@ -112,6 +132,7 @@ export const agentToolsProviders: Provider[] = [
       config: AgentToolsConfig,
       marketData: MarketDataService,
       watchers: WatcherService,
+      kuruBuilder: KuruBuilderConfig | null,
     ) =>
       new AgentTools({
         store,
@@ -125,8 +146,13 @@ export const agentToolsProviders: Provider[] = [
         venuesFor: (agent) =>
           venues.forAgent(
             { agentId: agent.id, walletId: agent.walletId, address: agent.address },
-            // SEN-148: a run whose mandate allows Perpl enrolls its key on first use.
-            { enrollPerpl: agent.mandate.venues.includes('perpl') },
+            {
+              // SEN-148: a run whose mandate allows Perpl enrolls its key on first use.
+              enrollPerpl: agent.mandate.venues.includes('perpl'),
+              // SEN-184: the Sente fee, only when this agent's live policy allows it;
+              // otherwise its orders keep the plain overloads.
+              kuruBuilder: agentKuruBuilder(agent, kuruBuilder),
+            },
           ),
       }),
   },
@@ -143,8 +169,11 @@ export const agentToolsProviders: Provider[] = [
 
 export const agentToolsControllers = [McpController];
 
-/** VenuesModule: the shared `MarketDataService` the read tools go through (SEN-79). */
-export const agentToolsImports = [VenuesModule];
+/**
+ * VenuesModule: the shared `MarketDataService` the read tools go through (SEN-79).
+ * FeesModule: the creator ledger the event log records fork fees into (SEN-184).
+ */
+export const agentToolsImports = [VenuesModule, FeesModule];
 
 /** What AgentsModule exports for SEN-8 (the runner) and the future Agent Ledger. */
 export const agentToolsExports = [AgentTools, AGENT_EVENTS];

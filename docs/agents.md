@@ -449,6 +449,103 @@ back to the treasury for 0.0201 MON of that agent's own gas. A revoked agent's
 money is reachable as long as anything can address its wallet — which is the
 argument for SEN-48's persistence, not against the exit rules.
 
+## The Sente fee on agents' Kuru orders (SEN-184)
+
+An agent's Kuru orders pay Sente's builder fee (10 bps, to `KURU_BUILDER_ADDRESS`)
+through Kuru's builder overload of `batch` (`docs/kuru.md`, "Builder fee").
+**Perpl orders carry no Sente fee.**
+
+The enclave is what bounds it. A policy compiled with the fee
+(`compileMandate(mandate, { kuruBuilder })`) has one rule that lets the agent
+approve Sente's builder, at no more than the rate and until no later than the
+mandate's expiry, and one rule per market that lets it place through the builder
+overloads (`docs/privy-policy-enforcement.md`, "The Sente fee rules"). Before an
+order, `KuruVenue` adds an `approveBuilder` transaction when the agent's approval
+does not cover the rate; the order then names Sente as builder.
+
+**Old policies keep working, without the fee.** A live policy is whatever was last
+PATCHed (CLAUDE.md gotcha 13), and one compiled before SEN-184 has no builder
+rules: the enclave would refuse a builder order. So the agent record carries
+`kuruBuilder` — the builder and maximum rate its live policy was compiled with —
+set at hire, fork and amend, and `agentKuruBuilder` gives an agent's venue the fee
+only when that grant names the configured builder at no less than the configured
+rate. Every other agent places through the plain overloads, which every policy
+signs. To move an existing agent onto the fee, amend its mandate (unchanged is
+fine): a server-owned agent with `PATCH /agents/:id/mandate`, a device-owned one
+with an amend its owner approves on an app build that pins the same builder and
+rate (`EXPO_PUBLIC_KURU_BUILDER_*`). The phone accepts a policy with the fee
+rules only for its pinned builder, and one without them always, so with the fee
+on an app build WITHOUT the pin refuses every amend of a device-owned agent: ship
+the pinned app before setting `KURU_BUILDER_ADDRESS`. Revokes are unaffected (a
+revoked policy carries no fee rule). Revoked agents trade nothing, fee or not.
+
+**What each fill records.** A Kuru fill event carries `senteFee` and
+`senteFeeAsset` — what AccountCore's `BuilderFeeAccrued` said this agent paid in
+that execution — next to the venue's own `fee`.
+
+**Creators get 3 of the 10 bps.** When the trading agent was forked from another
+user's agent (`forkedFrom`), the source agent's owner is owed 3/10 of each fill's
+Sente fee, floored to whole atoms. `CreatorFeeEventLog` records that share in
+`<STATE_DIR>/creator-fees.json` as the fill event is appended, once per agent and
+transaction, whichever writer appended it. Forking your own agent accrues
+nothing. The creator reads it at `GET /creators/me/fees`:
+
+```json
+{
+  "share": "0.3",
+  "totals": [{ "asset": "USDC", "accrued": "0.0105", "paid": "0", "owed": "0.0105" }],
+  "recent": [
+    {
+      "kind": "accrued",
+      "asset": "USDC",
+      "amount": "0.0105",
+      "fee": "0.035",
+      "agentId": "…",
+      "sourceAgentId": "…",
+      "txHash": "0x…",
+      "at": "2026-10-09T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+The fee itself lands in the treasury whole. Paying creators is periodic and by
+hand: send the amount from the treasury, then record it, with the API stopped
+(the script takes the `STATE_DIR` lock):
+
+```bash
+pnpm --filter @sente/api run creator:payout -- --state-dir services/api/.state
+pnpm --filter @sente/api run creator:payout -- --state-dir services/api/.state \
+  --creator <userId> --asset USDC --amount 0.0105 --tx 0x<treasury transfer>
+```
+
+The first lists what each creator is owed; the second refuses a payout above what
+is owed or a transaction hash already recorded. The treasury claims its accrued
+builder fees from AccountCore with `claimBuilderFees(asset)` (by hand, not wired).
+
+### Live probe: PENDING
+
+Two things only a live run can show, both covered by one command against a
+throwaway probe agent (it only creates and re-PATCHes its own wallet's policy):
+
+```bash
+# .env: PRIVY_* and KURU_BUILDER_ADDRESS (the treasury) set.
+pnpm --filter @sente/api run agent:venues-live -- --skip-perpl --builder --builder-take
+```
+
+1. **Privy matches the builder overloads by name.** The policy PATCH must be
+   accepted with the new ABIs, the `approveBuilder` leg must sign, and the
+   resting bid — the builder overload, whose `builderConfig` is a bare tuple,
+   not the `tuple[]` the plain rules already proved — must sign. A
+   `policy_violation` on the bid means Privy does not match it; the fallback is
+   `KURU_BUILDER_AGENTS=0` (agents trade fee-free through the plain overloads
+   while users' trades still pay), see `docs/privy-policy-enforcement.md`.
+2. **What a taker fill is charged.** `--builder-take` buys the minimum as an IOC
+   and prints `senteFee`; check `BuilderFeeAccrued` on that transaction for the
+   side charged (taker), the asset (USDC) and the amount (10 bps of the
+   notional), and compare its `gasUsed` with the plain place's 425,430 to replace
+   `KURU_BUILDER_ORDER_SURCHARGE_GAS`.
+
 ## The runner (SEN-8)
 
 An agent **runs** as one bounded Tool Runner loop

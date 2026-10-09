@@ -67,12 +67,23 @@
  * the check refused the extra rules. That was the right way round to be wrong,
  * and it is the reason this file changed in the same commit as the API.
  *
+ * ## Sente's builder fee (SEN-184)
+ *
+ * A policy compiled with the server's `KURU_BUILDER_ADDRESS` also lets the
+ * agent approve SENTE's builder (`AccountCore.approveBuilder`, builder pinned,
+ * rate and expiry capped) and trade through the builder `batch` overloads.
+ * The phone expects those rules only for the builder this build pins
+ * (`KURU_BUILDER_PIN`), at its rate, and accepts a policy WITHOUT them too —
+ * that one is strictly narrower. So a server that names another builder, or
+ * a higher rate, gets an amend nobody signs.
+ *
  * Plain TS, no React Native: `approval.test.ts` runs under plain node.
  */
 import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
 import { getAddress, isAddressEqual, keccak256, stringToBytes, type Address } from 'viem';
 
 import { canonicalize, type AuthorizationPayload } from '../auth/deviceKey.ts';
+import { KURU_BUILDER_PIN, type KuruBuilderPin } from '../trade/kuruBuilder.ts';
 import {
   ALLOWED_HEADERS,
   NoDeviceKeyError,
@@ -146,6 +157,10 @@ const BLOB = {
   kuruDeposit: 'abi:0x4c3ae6c5cb499c7e14be5485e4c866d5a0cf9fd376d6d417b87b8bee09882c0a',
   kuruWithdraw: 'abi:0x1f8d34385430b9e8700a82ce0363bf308d2b912ba7d83c2157eaa25ec0b79245',
   kuruBatch: 'abi:0x52a7f0313269da737b4e09ca73c491c3cdf7b0e95e255446f74c8d6d95e4b3a4',
+  /** SEN-184: the two builder-config `batch` overloads. */
+  kuruBuilderBatch: 'abi:0xf254685b9f76f6a037d4cceeb29a12c77e907d0b430795452cf159d1e80e929c',
+  /** SEN-184: `AccountCore.approveBuilder`. */
+  kuruApproveBuilder: 'abi:0x85a212871c2fbec9322b02ec21c563d6babc1cf6e82acd652a845a439343913d',
   perplExchange: 'abi:0x707f79244b442e26e2ddef60d36184989f95f4438fb3bca7f8b7f403ba2aa6e7',
   perplEnroll: 'typed_data:0x7686763c1dc183308e3eb0edecd9f61a0e10f57747fb5dab2c77674e9911c575',
   /** A condition Privy evaluates without decoding anything. */
@@ -213,8 +228,14 @@ export type ExpectedRule = { method: string; conditions: string[] };
  *
  * Kept in the same order and shape as the original so the two can be read side
  * by side when one changes.
+ *
+ * `builder` is the Sente fee the compiler was given (`compileMandate`'s
+ * `kuruBuilder`, SEN-184): `null` for a policy without the builder rules.
  */
-export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
+export function expectedPolicyRules(
+  mandate: AgentMandate,
+  builder: KuruBuilderPin | null = null,
+): ExpectedRule[] {
   const chain = condition('ethereum_transaction', 'chain_id', 'eq', hexUint(mandate.chainId));
   const expiry = condition('system', 'current_unix_timestamp', 'lte', String(mandate.expiresAt));
   const tx = (conditions: string[], maxValue = 0n): ExpectedRule => ({
@@ -253,6 +274,20 @@ export function expectedPolicyRules(mandate: AgentMandate): ExpectedRule[] {
     }
     for (const market of mandate.kuru.markets) {
       rules.push(tx([txTo(market), calldataEq(BLOB.kuruBatch, 'function_name', 'batch')]));
+    }
+    if (builder && mandate.kuru.markets.length > 0) {
+      const approve = BLOB.kuruApproveBuilder;
+      rules.push(
+        tx([
+          txTo(ACCOUNT_CORE),
+          calldataEq(approve, 'approveBuilder.builder', getAddress(builder.address)),
+          calldataLte(approve, 'approveBuilder.maxFeePps', BigInt(builder.feePps)),
+          calldataLte(approve, 'approveBuilder.expiry', BigInt(mandate.expiresAt)),
+        ]),
+      );
+      for (const market of mandate.kuru.markets) {
+        rules.push(tx([txTo(market), calldataEq(BLOB.kuruBuilderBatch, 'function_name', 'batch')]));
+      }
     }
     rules.push(
       recovery([txTo(ACCOUNT_CORE), calldataEq(BLOB.kuruWithdraw, 'function_name', 'withdraw')]),
@@ -368,6 +403,8 @@ export type MandateChangeIntent = {
   policyId: string;
   mandate: AgentMandate;
   ownWallet: Address | null;
+  /** The Sente builder this build accepts (SEN-184); defaults to `KURU_BUILDER_PIN`. */
+  builder?: KuruBuilderPin | null;
 };
 
 /**
@@ -458,10 +495,19 @@ export function verifyPolicyPatch(
   const pinned = pinReturnTo(intent);
   if (!pinned.ok) return pinned;
   const { mandate } = pinned;
-  return compareRules(
-    rules,
-    intent.kind === 'revoke' ? expectedRevocationRules(mandate) : expectedPolicyRules(mandate),
-  );
+  if (intent.kind === 'revoke') return compareRules(rules, expectedRevocationRules(mandate));
+
+  // SEN-184: with the build's builder pin, the policy may also carry the Sente
+  // fee rules for exactly that builder; without them it is narrower, and fine.
+  const builder = intent.builder === undefined ? KURU_BUILDER_PIN : intent.builder;
+  const plain = expectedPolicyRules(mandate);
+  const verdict = compareRules(rules, plain);
+  if (verdict.ok || builder === null) return verdict;
+  const withFee = expectedPolicyRules(mandate, builder);
+  if (withFee.length === plain.length) return verdict;
+  const feeVerdict = compareRules(rules, withFee);
+  // Word the refusal against the shape the payload is trying to be.
+  return feeVerdict.ok || rules.length === withFee.length ? feeVerdict : verdict;
 }
 
 /** Rule-set equality, as multisets: order is Privy's business, content is ours. */

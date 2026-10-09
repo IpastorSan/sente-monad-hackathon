@@ -203,3 +203,28 @@ test('perps are on only with trading on and the Perpl venue on', () => {
   assert.equal(isPerpsEnabled({ ...ok, buildFlag: undefined }), false);
   assert.equal(isPerpsEnabled({ ...ok, network: 'mainnet' }), false);
 });
+
+test('Kuru trading is on only when the API’s Sente fee is the one this build pins (SEN-184)', () => {
+  const pin = { address: '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8', feePps: 10_000 } as const;
+  const on: TradeCapabilities = {
+    enabled: true,
+    atomicBatch: false,
+    chainId: 10143,
+    venues: { kuru: true, perpl: true },
+    kuruBuilder: pin,
+  };
+  const ok = { buildFlag: '1', capabilities: on, network: 'testnet', builderPin: pin } as const;
+  assert.equal(isTradingEnabled(ok), true);
+  // The server charges a fee this build would refuse at the signature: off.
+  assert.equal(isTradingEnabled({ ...ok, builderPin: null }), false);
+  assert.equal(isTradingEnabled({ ...ok, builderPin: { ...pin, feePps: 5_000 } }), false);
+  // The server charges nothing while the build expects a fee: off too, so a
+  // deploy and an app release out of step read as such.
+  assert.equal(isTradingEnabled({ ...ok, capabilities: { ...on, kuruBuilder: null } }), false);
+  // An API older than SEN-184 against a build without a pin: on.
+  const older: TradeCapabilities = { ...on };
+  delete (older as { kuruBuilder?: unknown }).kuruBuilder;
+  assert.equal(isTradingEnabled({ ...ok, capabilities: older, builderPin: null }), true);
+  // Perpl carries no Sente fee, so a Kuru mismatch leaves perps alone.
+  assert.equal(isPerpsEnabled({ ...ok, builderPin: null }), true);
+});

@@ -574,6 +574,27 @@ describe('gate', () => {
     });
     // A JSON round-trip proves the detail crosses the wire unchanged.
     expect(JSON.parse(JSON.stringify(fill!.detail)).blockNumber).toBe(74_000_042);
+    expect(fill!.detail).not.toHaveProperty('senteFee');
+  });
+
+  it('a Kuru fill that paid Sente’s builder fee records it (SEN-184)', async () => {
+    const h = await harness();
+    h.kuru.fillRecord = {
+      fee: '0.0108',
+      feeAsset: 'USDC',
+      builderFee: '0.035',
+      builderFeeAsset: 'USDC',
+    };
+    await h.thesis();
+    await h.call('place_market', {
+      venue: 'kuru',
+      market: MON_USDC,
+      side: 'buy',
+      size: '10',
+      slippageLimitPrice: '3.6',
+    });
+    const [fill] = await h.events.list(h.agent.id, { kind: 'fill' });
+    expect(fill!.detail).toMatchObject({ fee: '0.0108', senteFee: '0.035', senteFeeAsset: 'USDC' });
   });
 
   it('a Perpl fill carries its leverage', async () => {

@@ -87,6 +87,9 @@ export type KuruReserveOrder = {
  * headroom is needed. `quoteReserveAtoms` has no sell counterpart, hence the
  * base branch lives only here.
  *
+ * `builderFeePps` is Sente's builder fee (SEN-184), the pinned rate, added to
+ * the buy's fee headroom exactly as the planner adds it; 0 without one.
+ *
  * The verifier caps the deposit at this, not at the shortfall against the
  * free balance: a read the server also makes may be a block apart, and a
  * deposit up to the full reserve can only park the user's own funds in the
@@ -99,6 +102,7 @@ export function depositCapAtoms(
     'pricePrecision' | 'sizePrecision' | 'makerFeePps' | 'takerFeePps'
   >,
   decimals: { readonly quote: number; readonly base: number },
+  builderFeePps: number = 0,
 ): bigint {
   if (order.quantity <= 0n || order.price <= 0n) {
     throw new KuruMarketError('order price and quantity must be positive');
@@ -107,7 +111,8 @@ export function depositCapAtoms(
     const numerator = order.quantity * 10n ** BigInt(decimals.base);
     return ceilDiv(numerator, params.sizePrecision);
   }
-  const feePps = order.tif === 'gtc' ? params.makerFeePps : params.takerFeePps;
+  const venueFeePps = order.tif === 'gtc' ? params.makerFeePps : params.takerFeePps;
+  const feePps = venueFeePps + BigInt(builderFeePps);
   const numerator = order.price * order.quantity * 10n ** BigInt(decimals.quote) * (PPS + feePps);
   return ceilDiv(numerator, params.pricePrecision * params.sizePrecision * PPS);
 }

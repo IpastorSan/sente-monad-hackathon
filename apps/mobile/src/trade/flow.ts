@@ -19,7 +19,9 @@
  *   user's slippage, and must equal the price the user confirmed on screen —
  *   if the book moved in between, the user reviews again (never a silent
  *   retry at a new price);
- * - the deposit cap is `depositCapAtoms(...)` from the same facts.
+ * - the deposit cap is `depositCapAtoms(...)` from the same facts, with this
+ *   build's Sente fee pin (`kuruBuilder.ts`, SEN-184) as extra headroom;
+ * - the Sente fee the order may pay is that pin, never the server's.
  *
  * Following a committed trade never reports a failure it has not seen: a
  * timeout is `pending`, because the steps may well still land.
@@ -41,6 +43,7 @@ import { NoDeviceKeyError, type Approver } from '../auth/privyApproval.ts';
 import { publicClient } from '../chain/client.ts';
 import { confirmationDelay } from '../wallet/confirmation.ts';
 import { TradeApiError, type TradeApi } from './api.ts';
+import { KURU_BUILDER_PIN, type KuruBuilderPin } from './kuruBuilder.ts';
 import {
   depositCapAtoms,
   KuruMarketError,
@@ -132,6 +135,8 @@ export type TradeFlowOptions = {
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** The Sente builder this build accepts; defaults to `KURU_BUILDER_PIN`. */
+  builder?: KuruBuilderPin | null;
 };
 
 /** The server proposed something the verifier refused; nothing was signed. */
@@ -189,6 +194,7 @@ export async function runTrade(
   if (!sign) throw new NoDeviceKeyError('trading');
   const clientTradeId = (opts.newClientTradeId ?? (() => globalThis.crypto.randomUUID()))();
 
+  const builder = opts.builder === undefined ? KURU_BUILDER_PIN : opts.builder;
   let intent: KuruIntent;
   let facts: MarketFacts | undefined;
   if (draft.kind === 'kuru.place') {
@@ -201,7 +207,7 @@ export async function runTrade(
     onUpdate({ phase: 'reading_market' });
     const readFacts = opts.readFacts ?? ((m) => readMarketFacts(publicClient, m));
     facts = await readFacts(market);
-    intent = placeIntent(draft, clientTradeId, market, facts, ctx.slippageBps);
+    intent = placeIntent(draft, clientTradeId, market, facts, ctx.slippageBps, builder);
   } else {
     intent = { ...draft, clientTradeId };
   }
@@ -221,6 +227,8 @@ export async function runTrade(
     intent,
     ...(facts !== undefined ? { facts } : {}),
     ...(ctx.slippageBps !== undefined ? { slippageBps: ctx.slippageBps } : {}),
+    builder,
+    nowSeconds: Math.floor((opts.now ?? Date.now)() / 1000),
   });
   if (!verdict.ok) throw new TradeApprovalRefusedError(verdict.problem, verdict.stepIndex);
 
@@ -241,6 +249,7 @@ function placeIntent(
   market: KuruMarketConfig,
   facts: MarketFacts,
   slippageBps: number | undefined,
+  builder: KuruBuilderPin | null,
 ): KuruPlaceIntent {
   let price: bigint;
   try {
@@ -268,6 +277,7 @@ function placeIntent(
     },
     facts.params,
     { quote: market.quote.decimals, base: market.base.decimals },
+    builder?.feePps ?? 0,
   );
   return { ...draft, clientTradeId, maxDepositAtoms: cap.toString() };
 }

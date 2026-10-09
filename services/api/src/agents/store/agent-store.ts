@@ -1,4 +1,4 @@
-import type { Mandate } from '@sente/mandate';
+import type { KuruBuilderGrant, Mandate } from '@sente/mandate';
 import type { ParamValue } from '@sente/presets';
 import type { Address, Hash } from 'viem';
 
@@ -45,6 +45,15 @@ export interface AgentRecord {
   readonly model: AgentModel;
   /** The mandate the wallet's policy was last compiled from. */
   readonly mandate: Mandate;
+  /**
+   * Sente's Kuru builder fee the wallet's policy was last compiled to allow
+   * (SEN-184): the builder `approveBuilder` may name and the most it may
+   * charge. Absent when the live policy has no builder rules — hired before
+   * SEN-184, or while the fee was off — and then the agent's Kuru orders use
+   * the plain overloads, which that policy still signs (CLAUDE.md gotcha 13).
+   * An amend recompiles the policy and sets it.
+   */
+  readonly kuruBuilder?: KuruBuilderGrant;
   /** The provider's (Privy's) wallet id. */
   readonly walletId: string;
   /**
@@ -182,6 +191,7 @@ export type AgentPatch = Partial<
   Pick<
     AgentRecord,
     | 'mandate'
+    | 'kuruBuilder'
     | 'mandateSince'
     | 'status'
     | 'policyCleared'

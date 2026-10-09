@@ -41,15 +41,35 @@
  * The builders take the value bound as an argument so a new rule cannot forget
  * it.
  *
+ * SENTE'S BUILDER FEE (SEN-184). Compiled with `kuruBuilder`, the Kuru block
+ * gains two kinds of rule:
+ *
+ * - **approve the Sente fee**: `AccountCore.approveBuilder` with `builder`
+ *   pinned to Sente's address, `maxFeePps lte` its rate and `expiry lte` the
+ *   mandate's `expiresAt`, value 0. This is the one rule that decides who can
+ *   be paid a builder fee from the agent's account, and how much.
+ * - **trade with the Sente fee**, one per market: the two builder-config
+ *   `batch` overloads, matched by function name only. Privy need not read the
+ *   `builderConfig` tuple: AccountCore refuses any builder the account has not
+ *   approved (`BuilderApprovalNotFound`) and any rate above the approval
+ *   (`BuilderFeeTooHigh`), and the only approval the agent can sign is the one
+ *   above.
+ *
+ * Without `kuruBuilder` neither is emitted and the policy is byte-identical to
+ * what it was before SEN-184, so an agent whose live policy predates it simply
+ * keeps trading through the plain overloads (`AgentRecord.kuruBuilder`).
+ *
  * Raw `eth_signTransaction` only, never Privy's Transfer API: Transfer
  * policies are evaluated at the API level, outside the enclave
  * (docs/privy-policy-enforcement.md).
  */
 import {
   ERC20_TRANSFER_ABI,
+  KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_ORDERBOOK_BATCH_ABI,
+  KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -120,6 +140,46 @@ function kuruTokenSymbol(token: Address): string {
 
 function kuruMarketSymbol(market: Address): string {
   return KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, market))?.symbol ?? market;
+}
+
+/**
+ * The builder an agent's orders may pay (SEN-184): Sente's, at most at
+ * `maxFeePps` parts per ten million.
+ */
+export interface KuruBuilderGrant {
+  readonly address: Address;
+  readonly maxFeePps: number;
+}
+
+/** What `compileMandate` takes besides the mandate: server config, not the user's terms. */
+export interface CompileOptions {
+  /** Sente's builder fee; absent or `null`, no builder rule is compiled. */
+  readonly kuruBuilder?: KuruBuilderGrant | null;
+}
+
+/** The approve-the-fee rule's name, so `readBackCaps` and a reader can find it. */
+export const KURU_APPROVE_BUILDER_RULE = 'Kuru: approve the Sente fee';
+
+function kuruBuilderRules(mandate: Mandate, tx: TxRule, builder: KuruBuilderGrant): AllowRule[] {
+  const abi = KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI;
+  const rules = [
+    tx(KURU_APPROVE_BUILDER_RULE, [
+      txToEq(KURU_TESTNET_CONTRACTS.accountCore),
+      calldataAddressEq(abi, 'approveBuilder.builder', builder.address),
+      calldataUintLte(abi, 'approveBuilder.maxFeePps', BigInt(builder.maxFeePps)),
+      // Never past the mandate: an approval cannot outlive the authority to trade.
+      calldataUintLte(abi, 'approveBuilder.expiry', BigInt(mandate.expiresAt)),
+    ]),
+  ];
+  for (const market of mandate.kuru.markets) {
+    rules.push(
+      tx(`Kuru: trade ${kuruMarketSymbol(market)} with the Sente fee`, [
+        txToEq(market),
+        calldataFunctionEq(KURU_ORDERBOOK_BUILDER_BATCH_ABI, 'batch'),
+      ]),
+    );
+  }
+  return rules;
 }
 
 function kuruRules(mandate: Mandate, tx: TxRule): AllowRule[] {
@@ -243,7 +303,7 @@ function recoveryRuleBuilder(mandate: Mandate): TxRule {
  * nothing, so an empty `venues` and no `returnTo` compile to `[]` — a policy
  * that signs nothing.
  */
-export function compileMandate(mandate: Mandate): AllowRule[] {
+export function compileMandate(mandate: Mandate, options: CompileOptions = {}): AllowRule[] {
   const chain = txChainIdEq(mandate.chainId);
   const expiry = unixTimestampLte(mandate.expiresAt);
   const tx: TxRule = (name, conditions, maxValue = 0n) =>
@@ -253,6 +313,9 @@ export function compileMandate(mandate: Mandate): AllowRule[] {
   const rules: AllowRule[] = [];
   if (mandate.venues.includes('kuru')) {
     rules.push(...kuruRules(mandate, tx));
+    if (options.kuruBuilder && mandate.kuru.markets.length > 0) {
+      rules.push(...kuruBuilderRules(mandate, tx, options.kuruBuilder));
+    }
     rules.push(kuruWithdrawRule(recovery));
   }
   if (mandate.venues.includes('perpl')) rules.push(...perplRules(mandate, tx, expiry));
@@ -306,6 +369,12 @@ export interface PolicyCaps {
   readonly kuruWithdraw: boolean;
   /** The one address an ERC-20 `transfer` may pay; `null` if no rule allows a transfer. */
   readonly returnTo: Address | null;
+  /**
+   * The builder an `approveBuilder` rule lets the wallet approve, and the most
+   * it may charge (SEN-184); `null` when the policy has no such rule, i.e. it
+   * predates SEN-184 or was compiled with the fee off.
+   */
+  readonly kuruBuilder: KuruBuilderGrant | null;
 }
 
 function minBig(a: bigint | null, b: bigint): bigint {
@@ -331,6 +400,7 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
   let expiresAt: number | null = null;
   let kuruWithdraw = false;
   let returnTo: Address | null = null;
+  let kuruBuilder: KuruBuilderGrant | null = null;
 
   const lowerKuru = (token: string, cap: bigint): void => {
     const key = getAddress(token);
@@ -378,6 +448,12 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
     }
     if (fn === 'withdraw' && isAddressEqual(to as Address, accountCore)) kuruWithdraw = true;
 
+    const builder = find('ethereum_calldata', 'approveBuilder.builder', 'eq');
+    const builderFee = find('ethereum_calldata', 'approveBuilder.maxFeePps', 'lte');
+    if (builder && builderFee && isAddressEqual(to as Address, accountCore)) {
+      kuruBuilder = { address: getAddress(builder), maxFeePps: Number(BigInt(builderFee)) };
+    }
+
     const recipient = find('ethereum_calldata', 'transfer.to', 'eq');
     if (recipient) {
       if (returnTo !== null && !isAddressEqual(returnTo, recipient as Address)) {
@@ -389,7 +465,15 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
     }
   }
 
-  return { kuruDepositAtoms, kuruMarkets, perplCollateralAtoms, expiresAt, kuruWithdraw, returnTo };
+  return {
+    kuruDepositAtoms,
+    kuruMarkets,
+    perplCollateralAtoms,
+    expiresAt,
+    kuruWithdraw,
+    returnTo,
+    kuruBuilder,
+  };
 }
 
 /**

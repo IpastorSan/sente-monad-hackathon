@@ -27,6 +27,7 @@ import {
   type EnrollPrivy,
 } from './perpl-enroll.service';
 import { StepExecutor } from './step-executor';
+import { describeKuruBuilder } from '../fees/kuru-builder.config';
 import { loadTradeConfig, TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeController, TradingEnabledGuard } from './trade.controller';
 import { TradeService } from './trade.service';
@@ -49,6 +50,7 @@ const configProvider: Provider = {
           ? `, atomic batch ${config.atomicBatch ? 'on' : 'off'}, perps ${config.perpl ? 'on' : 'off'}`
           : ''),
     );
+    new Logger('TradeConfig').log(describeKuruBuilder(config.kuruBuilder ?? null));
     return config;
   },
 };

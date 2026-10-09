@@ -302,6 +302,51 @@ the trade key and `"1"` for the read key, `builderId`, `expiresAt` and
 the public key only as unpadded base64url. `contract.test.ts` fails if either
 side drifts from the other.
 
+## The Sente fee (SEN-184)
+
+With `KURU_BUILDER_ADDRESS` set, every Kuru place a user makes pays Sente 10 bps
+of the notional (`KURU_BUILDER_FEE_PPS`, default 10000 pps) on top of Kuru's own
+fee, through Kuru's builder overload of `batch` (`docs/kuru.md`, "Builder fee").
+**Perpl trades carry no Sente fee.** Cancels and withdrawals carry none either.
+
+**What the planner adds.** The place leg becomes the builder overload naming the
+treasury at the configured rate. When the wallet's
+`getBuilderApproval(wallet, builder)` is missing, inactive, below the rate or
+within a day of lapsing, an `approveBuilder` leg — step kind `approveBuilder` —
+comes right before the place, so legs run `[approve?, deposit?, approveBuilder?,
+place]`. The approval lasts one year, so a user signs it about once a year. A buy
+reserves the fee as headroom too (10.014 USDC for a 10 USDC GTC bid at a 4 bps
+maker rate).
+
+**What the phone signs.** The verifier holds the fee to the pair the app was
+built with, `EXPO_PUBLIC_KURU_BUILDER_ADDRESS` and `EXPO_PUBLIC_KURU_BUILDER_FEE_PPS`
+(`apps/mobile/src/trade/kuruBuilder.ts`):
+
+- a builder order only to exactly that builder at exactly that rate; a plain
+  order always (it costs the user less);
+- an `approveBuilder` only for that builder, at no more than that rate, expiring
+  after now and no later than a year and a day from the phone's clock, and only
+  right before a builder order;
+- without the pin, any builder order or approval is refused.
+
+`GET /trade/capabilities` names the server's builder as `kuruBuilder` (`null` when
+off). When it differs from the app's pin — a deploy that changed the fee without
+an app release, in either direction — `isTradingEnabled` turns manual Kuru
+trading off rather than letting the user confirm a trade the phone would then
+refuse. Perps stay on: they carry no Sente fee.
+
+**What the ticket can show.** A prepared Kuru place's `summary` carries
+`senteFeeBps` (`"10"`), `senteFeePps` (`"10000"`), `senteFee` (the estimate on the
+whole notional, rounded up) and `senteFeeAsset` (`"USDC"`): "Sente fee 0.10% (≈
+0.02 USDC)". `senteFeeOf(summary)` reads them; before preparing, the ticket can
+compute the same estimate with `senteFeeEstimateAtoms(notional, KURU_BUILDER_PIN)`.
+A completed place's `result.senteFee` is what AccountCore's `BuilderFeeAccrued`
+says was actually charged (`"0"` for an order that only rested).
+
+**Not yet adjusted:** the ticket's "spend all" sizing (`trade/ticket.ts`) inverts
+`depositCapAtoms` without the fee headroom, so with the fee on a max-size buy can
+ask to deposit up to 0.10% more quote than the wallet holds.
+
 ## Known gaps
 
 - **`/trade/perpl/account` reports `forwarding: false` after an API restart**

@@ -844,6 +844,103 @@ survived an expired mandate. Tx hashes are in `docs/agents.md`.
 - A calldata param called `to` (`transfer.to`) is fine. It is distinct from
   the transaction's `to`.
 
+## The Sente fee rules (SEN-184)
+
+With `KURU_BUILDER_ADDRESS` set (and `KURU_BUILDER_AGENTS` not `0`), a mandate
+that trades on Kuru compiles to two more kinds of ALLOW rule
+(`compileMandate(mandate, { kuruBuilder })` in `packages/mandate/src/policy.ts`).
+Both carry the chain, the mandate's expiry and `value lte 0x0` like every other
+risk-taking rule.
+
+**Approve the Sente fee** — the rule that decides who can be paid and how much:
+
+```json
+{
+  "name": "Kuru: approve the Sente fee",
+  "method": "eth_signTransaction",
+  "action": "ALLOW",
+  "conditions": [
+    {
+      "field_source": "ethereum_transaction",
+      "field": "chain_id",
+      "operator": "eq",
+      "value": "0x279f"
+    },
+    {
+      "field_source": "system",
+      "field": "current_unix_timestamp",
+      "operator": "lte",
+      "value": "<expiresAt>"
+    },
+    {
+      "field_source": "ethereum_transaction",
+      "field": "to",
+      "operator": "eq",
+      "value": "0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "approveBuilder.builder",
+      "operator": "eq",
+      "value": "<KURU_BUILDER_ADDRESS>",
+      "abi": "<approveBuilder>"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "approveBuilder.maxFeePps",
+      "operator": "lte",
+      "value": "0x2710",
+      "abi": "<approveBuilder>"
+    },
+    {
+      "field_source": "ethereum_calldata",
+      "field": "approveBuilder.expiry",
+      "operator": "lte",
+      "value": "<expiresAt, hex>",
+      "abi": "<approveBuilder>"
+    },
+    { "field_source": "ethereum_transaction", "field": "value", "operator": "lte", "value": "0x0" }
+  ]
+}
+```
+
+**Trade `<market>` with the Sente fee**, one per market:
+`to eq <OrderBook>` and `function_name eq batch` decoded with
+`KURU_ORDERBOOK_BUILDER_BATCH_ABI` — the two `batch` overloads that end in
+`builderConfig(address builder, uint32 feePps)`.
+
+The trade rule does not read the tuple, and does not need to. AccountCore refuses
+an order whose builder the account has not approved (`BuilderApprovalNotFound`)
+or whose rate is above the approval (`BuilderFeeTooHigh`), and the only approval
+this wallet can sign is the one above: Sente's address, at most the rate, never
+past the mandate. The plain `batch` rules are untouched, byte for byte, and their
+ABI does not decode a builder order, so a policy without the new rules refuses
+one.
+
+The phone pins both new ABIs by hash (`kuruBuilderBatch`, `kuruApproveBuilder` in
+`apps/mobile/src/agents/approval.ts`) and expects the rules only for the builder
+and rate it was built with (`EXPO_PUBLIC_KURU_BUILDER_*`). It also accepts the
+same policy without them, which is narrower.
+
+**Unverified live: whether Privy matches the builder overloads.** The plain
+`batch` rule (two overloads, an order `tuple[]`) has signed on 10143 since SEN-6.
+The builder overloads add a bare `tuple` parameter, which no rule here has
+decoded yet. The probe is `agent:venues-live -- --skip-perpl --builder` (see
+`docs/agents.md`, "The Sente fee on agents' Kuru orders"). If Privy refuses the
+ABI at PATCH or answers the bid with `policy_violation`:
+
+- Set `KURU_BUILDER_AGENTS=0`. Agents' policies then compile without the fee
+  rules, `AgentRecord.kuruBuilder` stays unset, and agents trade through the
+  plain overloads; users' own trades, which the phone signs and no Privy policy
+  decodes, keep paying the fee.
+- The fallback NOT taken: dropping the calldata condition from the trade rule
+  (`to eq <OrderBook>` alone). It would sign any OrderBook function, which is a
+  wider grant than a fee is worth.
+
+**Existing agents** keep their pre-SEN-184 policy, and with it fee-free orders,
+until amended — the gotcha 13 pattern. `AgentRecord.kuruBuilder` is what tells the
+runtime which policy an agent has, so nothing fails in between.
+
 ## Plan availability
 
 The policy engine is **included on the Developer plan**, not an add-on. The

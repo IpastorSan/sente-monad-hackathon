@@ -1,4 +1,5 @@
 import {
+  approveBuilderCall,
   cancelOrderCall,
   depositCalls,
   KURU_MEASURED_GAS,
@@ -18,7 +19,9 @@ import { EnclaveRefusedError } from '../agents.errors';
 import type { PrivyTransactionRequest } from '../privy/agent-wallet';
 import { AgentTransactionSender, type AgentChainClient } from './agent-transactions';
 import {
+  AGENT_APPROVE_BUILDER_GAS,
   AGENT_APPROVE_GAS,
+  KURU_BUILDER_ORDER_SURCHARGE_GAS,
   kuruGasLimit,
   PrivyKuruSubmitter,
   UnmeasuredCallError,
@@ -276,6 +279,29 @@ describe('kuruGasLimit', () => {
     expect(kuruGasLimit(withdrawCall(ACCOUNT_CORE, USDC, 14_000_000n))).toBe(
       KURU_MEASURED_GAS.withdraw,
     );
+  });
+
+  it('gives the Sente fee legs their own limits (SEN-184)', () => {
+    const builder = {
+      address: getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8'),
+      feePps: 10_000,
+    };
+    const order = {
+      side: 'buy',
+      quantity: 5_000n,
+      price: 2_000n,
+      tif: 'ioc',
+      executionInstruction: 'none',
+      minSizeAfterBlock: 0n,
+    } as const;
+    expect(kuruGasLimit(approveBuilderCall(ACCOUNT_CORE, builder.address, 10_000, 1n))).toBe(
+      AGENT_APPROVE_BUILDER_GAS,
+    );
+    for (const clientOrderId of [undefined, `0x${'11'.repeat(32)}` as Hex]) {
+      expect(kuruGasLimit(placeOrderCall(MARKET, order, clientOrderId, builder))).toBe(
+        KURU_MEASURED_GAS.placeTakingOneLevel + KURU_BUILDER_ORDER_SURCHARGE_GAS,
+      );
+    }
   });
 
   it('throws for anything unmeasured', () => {

@@ -14,6 +14,7 @@ import { renderPreset } from '@sente/presets';
 import { isAddressEqual, type Address } from 'viem';
 
 import type { Principal } from '../auth/principal';
+import { AGENT_KURU_BUILDER, type KuruBuilderConfig } from '../fees/kuru-builder.config';
 import { GasDripService } from '../gas/gas.service';
 import {
   AGENT_WALLETS,
@@ -165,9 +166,14 @@ export function forkName(sourceName: string): string {
  * and the moment it took effect travel together, so no amend path can install
  * a new mandate and leave the expiry gauge measuring from the old one.
  */
-function mandateChange(mandate: Mandate): AgentPatch {
+/**
+ * A new mandate and what its compiled policy allows of the Sente fee
+ * (SEN-184). `kuruBuilder` is always written, `undefined` included: a policy
+ * recompiled with the fee off no longer has the rules.
+ */
+function mandateChange(mandate: Mandate, kuruBuilder: AgentRecord['kuruBuilder']): AgentPatch {
   const now = new Date();
-  return { mandate, mandateSince: now, updatedAt: now };
+  return { mandate, kuruBuilder, mandateSince: now, updatedAt: now };
 }
 
 function clampAgentName(name: string, sourceName: string): string {
@@ -231,6 +237,8 @@ export interface MandateApproval {
 interface MandateChangeContext {
   /** Stored once the enclave accepts the change. Absent on a revoke. */
   mandate?: Mandate;
+  /** The builder fee the prepared rules allow (SEN-184), stored with the mandate. */
+  kuruBuilder?: AgentRecord['kuruBuilder'];
 }
 
 /** The slice of `GasDripService` hiring needs. */
@@ -310,7 +318,31 @@ export class AgentsService {
     @Optional()
     @Inject(RETURN_ADDRESSES)
     private readonly returnAddresses?: ReturnAddresses,
+    /**
+     * Sente's Kuru builder fee for agents (SEN-184), `null` when off. Optional
+     * like the four above: without it policies compile exactly as before.
+     */
+    @Optional()
+    @Inject(AGENT_KURU_BUILDER)
+    private readonly kuruBuilder?: KuruBuilderConfig | null,
   ) {}
+
+  /**
+   * `compileMandate` with the Sente fee rules when the fee is on and the
+   * mandate trades on Kuru, and the grant to record beside the mandate: the
+   * agent's orders pay the fee only while its live policy carries them.
+   */
+  private compile(mandate: Mandate): {
+    rules: PolicyRule[];
+    kuruBuilder: AgentRecord['kuruBuilder'];
+  } {
+    const fee = this.kuruBuilder;
+    const kuruBuilder =
+      fee && mandate.venues.includes('kuru') && mandate.kuru.markets.length > 0
+        ? { address: fee.address, maxFeePps: fee.feePps }
+        : undefined;
+    return { rules: compileMandate(mandate, { kuruBuilder: kuruBuilder ?? null }), kuruBuilder };
+  }
 
   /**
    * parseMandate -> compileMandate -> provision (wallet + policy together) ->
@@ -332,7 +364,7 @@ export class AgentsService {
     // Before the mandate, like the model: a local refusal never creates a Privy object.
     const text = resolveHireText(input);
     const mandate = await this.parseFor(principal, input.mandate);
-    const rules = compileMandate(mandate);
+    const { rules, kuruBuilder } = this.compile(mandate);
     const id = randomUUID();
     const { wallet, ownerQuorumId } = await this.provisionWallet(principal, id, rules);
 
@@ -341,6 +373,7 @@ export class AgentsService {
     const agent: AgentRecord = {
       id,
       userId: principal.userId,
+      ...(kuruBuilder ? { kuruBuilder } : {}),
       name: input.name,
       systemPrompt: text.systemPrompt,
       strategy: text.strategy,
@@ -405,7 +438,7 @@ export class AgentsService {
       );
     }
     const mandate = await this.parseFor(principal, input.mandate);
-    const rules = compileMandate(mandate);
+    const { rules, kuruBuilder } = this.compile(mandate);
     const id = randomUUID();
     // Provisioned for the FORKER, so the owner quorum is theirs and never the
     // source agent's: a fork is bounded by the person who made it.
@@ -433,6 +466,7 @@ export class AgentsService {
       // The fork inherits the strategy, never the source's sharing choice.
       public: false,
       forkedFrom: source.id,
+      ...(kuruBuilder ? { kuruBuilder } : {}),
       // The fork runs the same preset (SEN-73), but a withheld prompt means it
       // is not running the preset's text, so its results are not the preset's.
       ...(source.preset
@@ -688,7 +722,7 @@ export class AgentsService {
         );
       }
       const mandate = await this.parseFor(principal, rawMandate);
-      const rules = compileMandate(mandate);
+      const { rules, kuruBuilder } = this.compile(mandate);
       try {
         await this.wallets.updatePolicy(agent.policyId, rules);
       } catch (error) {
@@ -699,7 +733,7 @@ export class AgentsService {
         );
       }
       this.logger.log(`amended agent ${id}: policy ${agent.policyId} now ${rules.length} rules`);
-      return this.store.update(id, mandateChange(mandate));
+      return this.store.update(id, mandateChange(mandate, kuruBuilder));
     });
   }
 
@@ -800,8 +834,8 @@ export class AgentsService {
     const mandate = await this.parseFor(principal, rawMandate);
     // The SAME compiler the one-step path and the hire use: what the owner
     // approves has to be what the enclave would have been given anyway.
-    const rules = compileMandate(mandate);
-    return this.prepare(principal, agent, 'mandate_amend', rules, { mandate });
+    const { rules, kuruBuilder } = this.compile(mandate);
+    return this.prepare(principal, agent, 'mandate_amend', rules, { mandate, kuruBuilder });
   }
 
   /**
@@ -870,7 +904,7 @@ export class AgentsService {
       this.logger.log(
         `amended agent ${id} with an owner signature: policy ${agent.policyId} replaced`,
       );
-      return this.store.update(id, mandateChange(mandate));
+      return this.store.update(id, mandateChange(mandate, prepared.context.kuruBuilder));
     });
   }
 

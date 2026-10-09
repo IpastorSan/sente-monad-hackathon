@@ -13,11 +13,13 @@
  * names the transaction that reverted.
  */
 import {
+  KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_ACCOUNT_CORE_WITHDRAW_ABI,
   KURU_FAUCET,
   KURU_MEASURED_GAS,
   KURU_ORDERBOOK_BATCH_ABI,
+  KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   type KuruCall,
   type KuruExecution,
   type KuruSubmitter,
@@ -33,6 +35,26 @@ import type { AgentTransactionSender, AgentWalletRef } from './agent-transaction
 export const AGENT_APPROVE_GAS = 80_000n;
 
 const APPROVE_SELECTOR = '0x095ea7b3';
+
+/**
+ * `AccountCore.approveBuilder` from an account AccountCore already knows
+ * (SEN-184). `eth_estimateGas` on Monad testnet, 2026-10-09, from the
+ * registered Kernel test account (id 63): 104,858. An unregistered caller
+ * costs 188,689, but an agent only approves on its way to an order, and an
+ * order needs a deposit, which registers the account. NOT YET MEASURED from a
+ * landed transaction: replace with the receipt's `gasUsed` after the first
+ * live approval.
+ */
+export const AGENT_APPROVE_BUILDER_GAS = 105_000n;
+
+/**
+ * What the builder-config `batch` overloads add over the plain ones: the
+ * approval read and the fee accrual (a storage write and an event). NOT
+ * MEASURED — no builder order has landed yet. 40,000 is an allowance, not a
+ * reading: replace with `gasUsed(builder order) - gasUsed(plain order)` from
+ * the first live pair (docs/kuru.md, "Builder fee").
+ */
+export const KURU_BUILDER_ORDER_SURCHARGE_GAS = 40_000n;
 
 /** A call this module has no measured gas limit for. Refused before anything is signed. */
 export class UnmeasuredCallError extends Error {
@@ -75,16 +97,22 @@ export function kuruGasLimit(call: KuruCall): bigint {
   // The first deposit also registers the account; later ones cost less.
   if (decode(KURU_ACCOUNT_CORE_DEPOSIT_ABI, call)) return KURU_MEASURED_GAS.firstDeposit;
   if (decode(KURU_ACCOUNT_CORE_WITHDRAW_ABI, call)) return KURU_MEASURED_GAS.withdraw;
+  if (decode(KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI, call)) return AGENT_APPROVE_BUILDER_GAS;
 
-  const batch = decode(KURU_ORDERBOOK_BATCH_ABI, call);
+  const plain = decode(KURU_ORDERBOOK_BATCH_ABI, call);
+  const builder = plain ? undefined : decode(KURU_ORDERBOOK_BUILDER_BATCH_ABI, call);
+  const batch = plain ?? builder;
   if (batch?.functionName === 'batch') {
     const [, orders, cancels] = batch.args as readonly [
       unknown,
       readonly unknown[],
       readonly unknown[],
     ];
-    if (orders.length === 1 && cancels.length === 0) return KURU_MEASURED_GAS.placeTakingOneLevel;
-    if (orders.length === 0 && cancels.length === 1) return KURU_MEASURED_GAS.cancelOne;
+    const surcharge = builder ? KURU_BUILDER_ORDER_SURCHARGE_GAS : 0n;
+    if (orders.length === 1 && cancels.length === 0) {
+      return KURU_MEASURED_GAS.placeTakingOneLevel + surcharge;
+    }
+    if (orders.length === 0 && cancels.length === 1 && !builder) return KURU_MEASURED_GAS.cancelOne;
   }
   throw new UnmeasuredCallError(call);
 }

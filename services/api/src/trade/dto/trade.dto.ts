@@ -173,6 +173,12 @@ export interface TradeCapabilitiesDto {
   chainId: number;
   /** `perpl` is `USER_TRADING_PERPL`, and false whenever `enabled` is. */
   venues: { kuru: boolean; perpl: boolean };
+  /**
+   * Sente's builder fee on Kuru orders (SEN-184), or `null` when there is none.
+   * The phone refuses manual Kuru trading when this differs from the builder
+   * it was built with. Perpl orders carry no Sente fee.
+   */
+  kuruBuilder: { address: Address; feePps: number } | null;
 }
 
 /**

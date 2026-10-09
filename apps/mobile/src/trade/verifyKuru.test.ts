@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  approveBuilderCall,
   cancelOrderCall,
   depositCalls,
   KURU_TESTNET_CONTRACTS,
@@ -633,5 +634,128 @@ test('withdraw: a zero amount in the intent is refused', () => {
   refused(
     verifyKuruTrade(steps, ctx({ ...WITHDRAW, amountAtoms: '0' })),
     /withdrawal amount is not an amount/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Sente's builder fee (SEN-184): held to the build's pin, never the server's.
+
+const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
+const PIN = { address: SENTE, feePps: 10_000 } as const;
+const NOW = 1_800_000_000;
+const YEAR = 365 * 86_400;
+/** The phone's cap with the pinned fee as headroom, as `flow.ts` sizes it. */
+const BUILDER_BUY_CAP = depositCapAtoms(
+  { side: 'buy', price: LIMIT_PRICE, quantity: SIZE, tif: 'gtc' },
+  PARAMS,
+  { quote: 6, base: 18 },
+  PIN.feePps,
+);
+const BUILDER_BUY: KuruPlaceIntent = { ...BUY_LIMIT, maxDepositAtoms: BUILDER_BUY_CAP.toString() };
+
+const builderPlace = (fee: { address: Address; feePps: number } = PIN): Erc7579Call =>
+  placeOrderCall(MON_USDC.address, BUY_ORDER as never, CLIENT_ORDER_ID, fee);
+const approval = (
+  builder: Address = SENTE,
+  pps: number = PIN.feePps,
+  expiry = BigInt(NOW + YEAR),
+) => approveBuilderCall(ACCOUNT_CORE, builder, pps, expiry);
+const builderCtx = (extra: Partial<KuruVerifyContext> = {}) =>
+  ctx(BUILDER_BUY, { builder: PIN, nowSeconds: NOW, ...extra });
+
+test('builder: the pinned fee with a one-year approval is signable, batched or not', () => {
+  const calls = [...usdcFunding(BUILDER_BUY_CAP), approval(), builderPlace()];
+  accepted(
+    verifyKuruTrade(
+      unbatched(calls, ['approve', 'deposit', 'approveBuilder', 'place']),
+      builderCtx(),
+    ),
+  );
+  accepted(verifyKuruTrade(atomic(calls), builderCtx()));
+});
+
+test('builder: an already-approved account needs only the builder order', () => {
+  accepted(verifyKuruTrade(unbatched([builderPlace()], ['place']), builderCtx()));
+});
+
+test('builder: a plain order still passes with a pin (it costs the user less)', () => {
+  accepted(verifyKuruTrade(unbatched([place()], ['place']), builderCtx()));
+});
+
+test('builder: without a pin every builder order is refused', () => {
+  const steps = unbatched([builderPlace()], ['place']);
+  refused(verifyKuruTrade(steps, ctx(BUILDER_BUY)), /builder fee this app does not allow/);
+  refused(verifyKuruTrade(steps, builderCtx({ builder: null })), /does not allow/);
+});
+
+test('builder: a fee to anyone but Sente is refused', () => {
+  const steps = unbatched([builderPlace({ address: STRANGER, feePps: PIN.feePps })], ['place']);
+  refused(verifyKuruTrade(steps, builderCtx()), /not Sente/);
+});
+
+test('builder: a fee at another rate is refused, higher or lower', () => {
+  for (const feePps of [10_001, 20_000, 9_999]) {
+    const steps = unbatched([builderPlace({ address: SENTE, feePps })], ['place']);
+    refused(verifyKuruTrade(steps, builderCtx()), /pps fee, not Sente's/);
+  }
+});
+
+test('builder: an approval for another builder is refused', () => {
+  const steps = unbatched([approval(STRANGER), builderPlace()], ['approveBuilder', 'place']);
+  refused(verifyKuruTrade(steps, builderCtx()), /approval is for .* not Sente/);
+});
+
+test('builder: an approval above the pinned rate is refused', () => {
+  const steps = unbatched([approval(SENTE, 10_001), builderPlace()], ['approveBuilder', 'place']);
+  refused(verifyKuruTrade(steps, builderCtx()), /more than Sente's/);
+});
+
+test('builder: an approval lasting over a year, already expired, or with no clock is refused', () => {
+  const tooLong = unbatched(
+    [approval(SENTE, PIN.feePps, BigInt(NOW + 366 * 86_400 + 1)), builderPlace()],
+    ['approveBuilder', 'place'],
+  );
+  refused(verifyKuruTrade(tooLong, builderCtx()), /more than a year/);
+  const stale = unbatched(
+    [approval(SENTE, PIN.feePps, BigInt(NOW)), builderPlace()],
+    ['approveBuilder', 'place'],
+  );
+  refused(verifyKuruTrade(stale, builderCtx()), /already expired/);
+  const steps = unbatched([approval(), builderPlace()], ['approveBuilder', 'place']);
+  refused(verifyKuruTrade(steps, builderCtx({ nowSeconds: undefined })), /no clock/);
+});
+
+test('builder: an approval with a plain order, or out of place, is refused', () => {
+  const lone = unbatched([approval(), place()], ['approveBuilder', 'place']);
+  refused(verifyKuruTrade(lone, builderCtx()), /not followed by a builder order/);
+  const first = unbatched(
+    [approval(), ...usdcFunding(BUILDER_BUY_CAP), builderPlace()],
+    ['approveBuilder', 'approve', 'deposit', 'place'],
+  );
+  refused(verifyKuruTrade(first, builderCtx()), /where the order should be/);
+});
+
+test('builder: a deposit sized for the fee passes only with the fee as headroom', () => {
+  // The pinned fee widens the buy's cap by exactly its rate, nothing more.
+  const steps = (amount: bigint) =>
+    unbatched([...usdcFunding(amount), builderPlace()], ['approve', 'deposit', 'place']);
+  accepted(verifyKuruTrade(steps(BUILDER_BUY_CAP), builderCtx()));
+  refused(verifyKuruTrade(steps(BUILDER_BUY_CAP + 1n), builderCtx()), /more than the order needs/);
+  // A plain order gets no such headroom, whatever the intent says.
+  const plain = unbatched(
+    [...usdcFunding(BUILDER_BUY_CAP), place()],
+    ['approve', 'deposit', 'place'],
+  );
+  refused(verifyKuruTrade(plain, builderCtx()), /more than the order needs/);
+});
+
+test('builder: a cancel never carries a builder approval', () => {
+  const cancel = unbatched(
+    [cancelOrderCall(MON_USDC.address, 7), approval()],
+    ['cancel', 'approveBuilder'],
+  );
+  refused(
+    verifyKuruTrade(cancel, ctx(CANCEL, { builder: PIN, nowSeconds: NOW })),
+    /extra approveBuilder/,
   );
 });

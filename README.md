@@ -126,7 +126,32 @@ POST /agents/:id/revoke/prepare   · POST .../revoke
 POST /agents/:id/run · POST /agents/:id/fork
 GET  /leaderboard · GET /venues · GET /chain/blocks/:n/consensus
 POST /credits/provision · POST /gas/drip · /mcp
+GET  /creators/me/fees                             what forks of your agents owe you
 ```
+
+---
+
+## Fees
+
+Sente earns on spot volume, through Kuru's builder fee: **every Kuru order Sente
+composes — yours and your agents' — pays Sente 0.10% (10 bps) of its notional**,
+on top of Kuru's own fee, into the treasury. **Perpl trades carry no Sente fee.**
+
+- **Bounded on both signing paths.** Your phone signs a fee only to the builder and
+  rate the app was built with, and approves it for at most a year. An agent can
+  approve only Sente's builder, at no more than 10 bps and never past its mandate,
+  because that is the one approval rule its enclave policy holds; Kuru refuses an
+  order to any builder the account did not approve.
+- **Creators share it.** When someone forks your published agent, 3 of the 10 bps
+  on each of that fork's Kuru fills are owed to you. Sente records them as they
+  happen and pays them from the treasury periodically
+  (`GET /creators/me/fees`, `docs/agents.md`).
+- **Shown before you confirm.** A prepared Kuru trade carries the fee and its
+  estimate ("Sente fee 0.10%, ≈ 0.02 USDC"), and a completed one what was actually
+  charged.
+
+Off unless `KURU_BUILDER_ADDRESS` is set; the details are in `docs/kuru.md`
+("Builder fee"), `docs/user-trading.md` and `docs/privy-policy-enforcement.md`.
 
 ---
 
@@ -333,6 +358,11 @@ Read this section before the demo video.
 - **Manual trading is behind `USER_TRADING`**, off by default. The Kuru spot
   ticket is built and verified by the phone before it signs; the manual Perpl
   ticket is not finished. Agents trade both venues.
+- **The Sente fee has not landed on chain yet.** The builder-fee legs are built,
+  verified by the phone and compiled into agents' policies, and off until
+  `KURU_BUILDER_ADDRESS` is set. Which side Kuru charges, in which token, and
+  whether Privy matches the builder overloads are confirmed only by the first live
+  taker fill (`docs/agents.md`, "Live probe").
 - **On the web, Perpl orders go through Sente's proxy.** Perpl testnet refuses
   browser origins (its trading socket answers `sente.lol` with 403 and its API
   sends no CORS headers), so the web build reaches it through `api.sente.lol/perpl`.

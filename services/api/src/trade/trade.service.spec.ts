@@ -675,6 +675,15 @@ describe('TradeService.capabilities', () => {
   ])('enabled %p, perpl %p gives venues %p', (enabled, perpl, venues) => {
     expect(harness({ enabled, perpl }).service.capabilities().venues).toEqual(venues);
   });
+
+  it('publishes the Sente builder so the phone can compare it with its own pin (SEN-184)', () => {
+    const kuruBuilder = {
+      address: '0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8',
+      feePps: 10_000,
+    } as const;
+    expect(harness({ kuruBuilder }).service.capabilities().kuruBuilder).toEqual(kuruBuilder);
+    expect(harness().service.capabilities().kuruBuilder).toBeNull();
+  });
 });
 
 describe('trading_disabled', () => {
@@ -685,6 +694,7 @@ describe('trading_disabled', () => {
       atomicBatch: false,
       chainId: 10143,
       venues: { kuru: false, perpl: false },
+      kuruBuilder: null,
     });
     expect(await refusal(service.prepare(ALICE, intent()))).toBe('trading_disabled');
     expect(await refusal(service.commit(ALICE, 'x', [SIG]))).toBe('trading_disabled');

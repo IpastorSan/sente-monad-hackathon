@@ -23,14 +23,17 @@
  */
 
 import {
+  builderFeePaidAtoms,
   decodeOrderOutcome,
+  KURU_TESTNET_CONTRACTS,
+  KURU_TESTNET_MARKETS,
   formatOrderId,
   fromUnits,
   precisionDecimals,
   toPlacedOrder,
   type KuruLog,
 } from '@sente/venues/kuru';
-import type { Address } from 'viem';
+import { isAddressEqual, type Address } from 'viem';
 
 import type {
   KuruPlaceContext,
@@ -43,6 +46,23 @@ import type {
 
 /** Every allowed Kuru market is quoted in USDC, and Kuru charges fees in the quote. */
 const FEE_ASSET = 'USDC';
+
+/** What this place paid Sente's builder, in the quote token, from AccountCore's events (SEN-184). */
+function senteFeePaid(
+  logs: readonly KuruLog[],
+  accountId: bigint,
+  place: KuruPlaceContext,
+): string {
+  const quote = KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, place.market))!.quote;
+  const paid = builderFeePaidAtoms(
+    logs,
+    KURU_TESTNET_CONTRACTS.accountCore,
+    place.builder!.address,
+    accountId,
+    quote.address,
+  );
+  return fromUnits(paid, place.quoteDecimals);
+}
 
 /** A step whose user operation runs the place leg: the place itself, or a packed batch. */
 export function carriesPlace(step: Pick<TradeStep, 'kind'>): boolean {
@@ -104,6 +124,7 @@ export function placeResult(
       tradeId: fill.tradeId.toString(),
     })),
     ...(rested ? { orderId: formatOrderId(rested) } : {}),
+    ...(place.builder ? { senteFee: senteFeePaid(logs, accountId, place) } : {}),
   } as const;
   const discarded = { unfilledCancelled: fromUnits(remainder, sizeDecimals) };
 
