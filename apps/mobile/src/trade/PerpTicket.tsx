@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MarketDto } from '@/markets/api';
 import { useTicker } from '@/markets/hooks';
 import { useUserPortfolio } from '@/portfolio/usePortfolio';
+import { amountText } from '@/portfolio/view';
 import { useSession } from '@/session';
 import { createAppPerplTrader } from '@/trade/appPerplTrader';
 import {
@@ -436,7 +437,7 @@ function Ticket({
 
             {available !== null ? (
               <Text style={[text.caption, styles.center, styles.spacedSm]}>
-                {available} AUSD free in your Perpl account
+                {amountText(available, 'AUSD')} AUSD free in your Perpl account
               </Text>
             ) : null}
             {ticket.short ? (

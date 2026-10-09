@@ -37,6 +37,7 @@ import {
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -116,6 +117,12 @@ const CHART_HEIGHT = 210;
 const CHART_HEIGHT_WIDE = 380;
 /** The ticket's column on a wide window. */
 const SIDE_WIDTH = 380;
+/**
+ * The ticket's column held at the top of the window while the page scrolls
+ * under it (wide is web-only, where `sticky` and `vh` exist; RN's types know
+ * neither). A window's height, so its rules run the full height.
+ */
+const STICKY_SIDE = { position: 'sticky', top: 0, height: '100vh' } as unknown as ViewStyle;
 const CTA_HEIGHT = 50;
 /** A stable empty series, so the line's memo holds before the first answer. */
 const NO_BARS: readonly KlineDto[] = [];
@@ -460,27 +467,26 @@ function Asset({
   );
 
   if (wide) {
+    // One scroll for the page (SEN-179): a scroller per column put its bar
+    // between the chart and the ticket. The ticket's column sticks to the top
+    // of the window and scrolls on its own only if the window is too short.
     return (
       <View style={styles.root}>
-        <View style={styles.desk}>
-          <ScrollView
-            style={styles.grow}
-            contentContainerStyle={[styles.content, styles.deskContent]}
-            refreshControl={refreshControl}
-          >
-            {sections}
-          </ScrollView>
-          <View style={styles.deskSide}>
-            {trading && canEmbedTicket(market, perps) ? (
-              <TicketPanel market={market} side={side} />
-            ) : (
-              <View style={styles.deskActions}>
-                <Text style={text.label}>Trade {header.title}</Text>
-                <View style={styles.deskButtons}>{sideButtons}</View>
-              </View>
-            )}
+        <ScrollView style={styles.grow} refreshControl={refreshControl}>
+          <View style={styles.desk}>
+            <View style={[styles.grow, styles.content, styles.deskContent]}>{sections}</View>
+            <View style={[styles.deskSide, STICKY_SIDE]}>
+              {trading && canEmbedTicket(market, perps) ? (
+                <TicketPanel market={market} side={side} />
+              ) : (
+                <View style={styles.deskActions}>
+                  <Text style={text.label}>Trade {header.title}</Text>
+                  <View style={styles.deskButtons}>{sideButtons}</View>
+                </View>
+              )}
+            </View>
           </View>
-        </View>
+        </ScrollView>
         {gatedSheet}
       </View>
     );
@@ -875,8 +881,8 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: GUTTER, paddingTop: 8 },
   // Wide (SEN-167): the page as a row, the ticket's column ruled off down the right.
   desk: {
-    flex: 1,
     flexDirection: 'row',
+    alignItems: 'flex-start',
     width: '100%',
     maxWidth: WIDE_MAX,
     alignSelf: 'center',

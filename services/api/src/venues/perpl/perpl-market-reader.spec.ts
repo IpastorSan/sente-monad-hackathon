@@ -194,6 +194,21 @@ describe('PerplMarketReader', () => {
       });
     });
 
+    it('dates the ticker by its prices, not by the 60 s cache of its 24h fields (SEN-179)', async () => {
+      const { reader, data, advance } = setup();
+      await reader.ticker('BTC-PERP');
+      // 45 s on: the context (3 s TTL) is reloaded with a fresh state, the day
+      // stats are still the ones loaded at NOW.
+      advance(45_000);
+      const ctx = context();
+      ctx.markets[0].state.at = { b: 6, t: NOW + 44_500 };
+      data.context.mockResolvedValue(ctx);
+      const ticker = await reader.ticker('BTC-PERP');
+      expect(ticker.open24h).toBe('90000');
+      expect(ticker.asOf).toBe(NOW + 44_500);
+      expect(ticker.stale).toBe(false);
+    });
+
     it('reports an absent (zero) price as null and keeps the ticker without candles', async () => {
       const { reader, data } = setup();
       const ctx = context();
