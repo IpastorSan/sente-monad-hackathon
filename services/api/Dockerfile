@@ -57,6 +57,9 @@ WORKDIR /app
 # packages. `--frozen-lockfile` is the point of copying the lockfile at all:
 # the image must install exactly what the repo pins.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+# pnpm-workspace.yaml declares patchedDependencies (SEN-176 patches mera); the install
+# refuses to run when a declared patch file is missing.
+COPY patches/ patches/
 COPY packages/mandate/package.json packages/mandate/
 COPY packages/presets/package.json packages/presets/
 COPY packages/venues/package.json packages/venues/
