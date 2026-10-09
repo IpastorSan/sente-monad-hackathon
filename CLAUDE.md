@@ -495,6 +495,16 @@ first. A second replica will not work just because the lock allows it.
 
 ---
 
+## Browser testing: Google Chrome, never Chromium
+
+Test the web build in **Google Chrome** (the Claude-in-Chrome extension's Chrome browser), not
+Chromium. The wallet is derived from the passkey's PRF extension, and only Google Password Manager
+passkeys provide it here: Chromium has no GPM passkeys, and the Bitwarden extension intercepts the
+ceremony without PRF (measured 2026-10-09, `docs/web.md`). Passkey sign-in is a human step, so an
+agent never waits on the login screen or tries to automate it. It finishes what it can without a
+session and names the page that needs a signed-in human. Headless Playwright is fine for anything
+that needs no session.
+
 ## Conventions
 
 - Strict TypeScript everywhere; every package extends `tsconfig.base.json`.
