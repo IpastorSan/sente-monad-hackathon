@@ -655,8 +655,11 @@ const BUILDER_BUY: KuruPlaceIntent = { ...BUY_LIMIT, maxDepositAtoms: BUILDER_BU
 
 const builderPlace = (fee: { address: Address; feePps: number } = PIN): Erc7579Call =>
   placeOrderCall(MON_USDC.address, BUY_ORDER as never, CLIENT_ORDER_ID, fee);
-const approval = (builder: Address = SENTE, pps: number = PIN.feePps, expiry = BigInt(NOW + YEAR)) =>
-  approveBuilderCall(ACCOUNT_CORE, builder, pps, expiry);
+const approval = (
+  builder: Address = SENTE,
+  pps: number = PIN.feePps,
+  expiry = BigInt(NOW + YEAR),
+) => approveBuilderCall(ACCOUNT_CORE, builder, pps, expiry);
 const builderCtx = (extra: Partial<KuruVerifyContext> = {}) =>
   ctx(BUILDER_BUY, { builder: PIN, nowSeconds: NOW, ...extra });
 
