@@ -81,7 +81,8 @@ export const agentRunnerProviders: Provider[] = [
 /** CreditsService: the owner's OpenRouter key (`keyFor`) and its usage. */
 export const agentRunnerImports = [CreditsModule];
 
-export const agentRunnerExports = [AgentRunnerService];
+/** RUN_TRANSCRIPTS: also read by `GET /credits` for the per-run cost breakdown (SEN-183). */
+export const agentRunnerExports = [AgentRunnerService, RUN_TRANSCRIPTS];
 
 /** `GET /agents/:id/runs` and `GET /agents/:id/runs/:runId` (SEN-178). */
 export const agentRunnerControllers = [AgentRunsController];

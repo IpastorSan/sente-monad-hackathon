@@ -22,7 +22,7 @@
 //   3. Registers that wallet as an agent of user `sente-live-runner` in the
 //      in-memory store (hire would mint a new, unfunded wallet).
 //   4. Runs it once. The runner provisions the user's OpenRouter key
-//      (OPENROUTER_DEFAULT_LIMIT_USD, default $5) on first use.
+//      (OPENROUTER_DEFAULT_LIMIT_USD, default $10) on first use.
 //   5. Prints the RunResult and its events, and exits 1 unless the run
 //      produced at least one `thesis` event and one `order` event that landed.
 //   6. Deletes the OpenRouter key it minted and closes the app, whatever happened.

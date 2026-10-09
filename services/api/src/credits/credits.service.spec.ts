@@ -164,6 +164,120 @@ describe('CreditsService.status', () => {
   });
 });
 
+describe('the free tier raise (SEN-183)', () => {
+  const tenDollars: CreditsConfig = { ...configured, defaultLimitUsd: 10 };
+
+  /** A user minted under the old $5 default, now read by a server whose default is $10. */
+  async function legacyUser(options: { failUpdate?: number } = {}) {
+    const fake = fakeOpenRouter({ failUpdate: options.failUpdate });
+    const store = new InMemoryCreditKeyStore();
+    const old = new CreditsService(configured, createOpenRouterKeys(configured, fake.fetch), store);
+    await old.provision(USER);
+    fake.spend('hash1', 1.25);
+    const service = new CreditsService(
+      tenDollars,
+      createOpenRouterKeys(tenDollars, fake.fetch),
+      store,
+    );
+    return { fake, service };
+  }
+
+  const patches = (fake: ReturnType<typeof fakeOpenRouter>) =>
+    fake.calls.filter((call) => call.method === 'PATCH');
+
+  it('raises a key below the free tier on its first read, keeping what was spent', async () => {
+    const { fake, service } = await legacyUser();
+
+    const view = await service.status(USER, new Date('2026-10-09T12:00:00Z'));
+
+    expect(view).toEqual({
+      limitUsd: 10,
+      remainingUsd: 8.75,
+      usageMonthUsd: 1.25,
+      resetsAt: '2026-11-01T00:00:00.000Z',
+    });
+    expect(patches(fake).map((call) => call.body)).toEqual([{ limit: 10 }]);
+  });
+
+  it('is idempotent: once raised, later reads (and provisions) never PATCH again', async () => {
+    const { fake, service } = await legacyUser();
+
+    await service.status(USER);
+    await service.status(USER);
+    await service.provision(USER);
+    await service.standing(USER);
+
+    expect(patches(fake)).toHaveLength(1);
+  });
+
+  it('never lowers a key, and leaves one that is not ours or not monthly alone', async () => {
+    const fake = fakeOpenRouter();
+    const store = new InMemoryCreditKeyStore();
+    const service = new CreditsService(
+      tenDollars,
+      createOpenRouterKeys(tenDollars, fake.fetch),
+      store,
+    );
+    const users = ['rich', 'foreign', 'weekly', 'off'].map((userId) => ({ userId }));
+    for (const user of users) await service.provision(user);
+    Object.assign(fake.keys.get('hash1')!, { limit: 25 });
+    Object.assign(fake.keys.get('hash2')!, { limit: 5, name: 'handmade' });
+    Object.assign(fake.keys.get('hash3')!, { limit: 5, limit_reset: 'weekly' });
+    Object.assign(fake.keys.get('hash4')!, { limit: 5, disabled: true });
+
+    for (const user of users) await service.status(user);
+
+    expect(patches(fake)).toHaveLength(0);
+  });
+
+  it('answers with the key as it is when the raise fails, and does not retry it', async () => {
+    const { fake, service } = await legacyUser({ failUpdate: 500 });
+
+    const first = await service.status(USER);
+    await service.status(USER);
+
+    expect(first.limitUsd).toBe(5);
+    expect(patches(fake)).toHaveLength(1);
+  });
+});
+
+describe('CreditsService.standing', () => {
+  it('without a key: the free tier untouched, nothing minted', async () => {
+    const { fake, service } = setup({ config: { ...configured, defaultLimitUsd: 10 } });
+
+    expect(await service.standing(USER, new Date('2026-10-09T12:00:00Z'))).toEqual({
+      provisioned: false,
+      mode: 'per-user',
+      limitReset: 'monthly',
+      view: {
+        limitUsd: 10,
+        remainingUsd: 10,
+        usageMonthUsd: 0,
+        resetsAt: '2026-11-01T00:00:00.000Z',
+      },
+    });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it('with a key: the key, and the reset OpenRouter reports for it', async () => {
+    const { service } = setup();
+    await service.provision(USER);
+
+    expect(await service.standing(USER)).toMatchObject({
+      provisioned: true,
+      mode: 'per-user',
+      limitReset: 'monthly',
+      view: { limitUsd: 5 },
+    });
+  });
+
+  it('unconfigured: refuses with credits_unconfigured', async () => {
+    const { service } = setup({ config: loadCreditsConfig({}) });
+
+    expect((await refusal(service.standing(USER))).reason).toBe('credits_unconfigured');
+  });
+});
+
 describe('CreditsService.keyFor', () => {
   it('hands the server the plaintext key the user was minted', async () => {
     const { service } = setup();
@@ -196,7 +310,7 @@ describe('an unconfigured server', () => {
 });
 
 describe('loadCreditsConfig', () => {
-  it('defaults to a $5 limit and no management key', () => {
+  it('defaults to the $10 free tier and no management key', () => {
     expect(loadCreditsConfig({})).toEqual({
       managementKey: undefined,
       sharedKey: undefined,
@@ -334,6 +448,17 @@ describe('shared-key dev mode (SEN-18)', () => {
     });
     expect(paths(fake)).toEqual(['GET /api/v1/key', 'GET /api/v1/key']);
     expect(JSON.stringify([provisioned, status])).not.toContain(FAKE_SHARED_KEY);
+  });
+
+  it('standing says the numbers are the shared key’s', async () => {
+    const { service } = sharedSetup();
+
+    expect(await service.standing(USER)).toMatchObject({
+      provisioned: true,
+      mode: 'shared',
+      limitReset: null,
+      view: { limitUsd: 10 },
+    });
   });
 
   it('maps a failing GET /key to status_unavailable', async () => {

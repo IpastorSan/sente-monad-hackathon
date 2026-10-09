@@ -21,12 +21,17 @@ export interface CreditsConfig {
   /** One OpenRouter inference key shared by every user. Dev only. */
   sharedKey: string | undefined;
   mode: CreditsMode;
-  /** Hard monthly spending limit, in USD, on every newly provisioned key (per-user mode). */
+  /**
+   * The free tier (SEN-183): the hard monthly spending limit, in USD, on every
+   * newly provisioned key (per-user mode). Keys minted under a lower default are
+   * raised to it the next time they are read (`CreditsService`).
+   */
   defaultLimitUsd: number;
 }
 
 export const CREDITS_DEFAULTS = {
-  defaultLimitUsd: 5,
+  /** SEN-183: 10 USD of model credits a month, on us. Was 5 before. */
+  defaultLimitUsd: 10,
 } as const;
 
 function parsePositiveUsd(raw: string | undefined, fallback: number, name: string): number {

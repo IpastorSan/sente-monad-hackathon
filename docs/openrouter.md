@@ -6,30 +6,91 @@ Each user gets their own OpenRouter API key, minted through the Management API w
 limit that resets monthly**. That is the whole credit system. OpenRouter meters usage and enforces
 the limit, so we build no metering of our own.
 
-| Piece                                                | What it does                                                                                                                                                                                                        |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                           |
-| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                            |
-| `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                 |
-| `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision`, `GET /credits` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt}`. `provision` adds `created`. The routes sit behind `SessionAuthGuard` and use the same principal seam as `wallet/`. |
+| Piece                                                | What it does                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                                                                                       |
+| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                                                                                        |
+| `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                                                                             |
+| `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt, created}`; `GET /credits/plans`, `POST /credits/purchase`, `GET`/`PUT /credits/auto-top-up` (SEN-183). Every route sits behind `SessionAuthGuard` and uses the same principal seam as `wallet/`. |
+| `services/api/src/credits/usage/`                    | `GET /credits` (SEN-183): the free tier, how it resets, and an estimated breakdown by agent and run from the SEN-178 transcripts. Its own module, because `AgentsModule` imports `CreditsModule`.                                                                               |
+| `services/api/src/credits/purchase/`                 | The plans, the request checks, the `CREDITS_PURCHASES_ENABLED` flag and the `CreditPayments` seam (SEN-183). No payment is implemented.                                                                                                                                         |
 
 The plaintext key (`sk-or-v1-…`) comes back **only** in the create response. The store keeps it,
 and only `CreditsService.keyFor` hands it out, to the agent runner. No HTTP response and no log line
 ever carries it. The controller builds each response field by field from a view type that has no key
 and no hash, and a spec asserts this on the serialised JSON.
 
-Every provisioned key is created with `limit: OPENROUTER_DEFAULT_LIMIT_USD` (default 5),
-`limit_reset: 'monthly'`, `include_byok_in_limit: true`, `name: sente:<userId>` and
-`external: { user: <userId> }`. OpenRouter echoes the last one back as `external_user`.
+Every provisioned key is created with `limit: OPENROUTER_DEFAULT_LIMIT_USD` (default 10, the free
+tier; 5 before SEN-183), `limit_reset: 'monthly'`, `include_byok_in_limit: true`,
+`name: sente:<userId>` and `external: { user: <userId> }`. OpenRouter echoes the last one back as
+`external_user`.
+
+## The free tier and buying credits (SEN-183)
+
+Sente does not pay for users' AI beyond a free tier: **10 USD of model credits per calendar month**,
+on us, on the user's own key.
+
+**What the limit actually is.** The key's `limit` is a hard USD cap that OpenRouter enforces; with
+`limit_reset: 'monthly'` OpenRouter zeroes the key's usage counter at 00:00 UTC on the 1st, so
+`limit_remaining = limit − usage_monthly` and the full 10 USD comes back each month. Unused credit
+does **not** carry over: the reset clears usage, it does not add to the limit. A run that would go
+past the cap gets OpenRouter's 402 and ends `credits_exhausted`; the scheduler also skips scheduled
+runs while less than `AGENT_SCHEDULE_MIN_CREDITS_USD` (0.10) is left. If the free tier is meant to
+be a one-off grant instead, mint with `limit_reset: null` (`FREE_TIER_RESET` in
+`credits.service.ts`); `GET /credits` reports whichever the key carries.
+
+**Existing keys.** A key minted under the old 5 USD default is raised to the current default the
+first time the API reads it (`GET /credits`, the scheduler's credit check, a run's provision):
+one `PATCH /keys/:hash {limit}`. It only ever raises, and only a key that is ours (`sente:` name),
+monthly and enabled; a failed PATCH is logged and not retried by that process. To cap one user below
+the free tier, disable their key rather than lowering its limit, or the next read raises it again.
+Note the key store is still in memory, so after a restart a user's next run mints a fresh key at the
+current default anyway (see the caveat above).
+
+**`GET /credits`** → the four original fields, plus:
+
+| Field         | Meaning                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tier`        | `free` — every user, until purchases open.                                                                                                                      |
+| `provisioned` | `false` until the first run mints a key. Reading never mints; the answer is the untouched free tier.                                                            |
+| `mode`        | `shared` on a dev server where every user draws on one key (the numbers are everyone's).                                                                        |
+| `usedUsd`     | OpenRouter's meter for this window — exact.                                                                                                                     |
+| `reset`       | `{period, resetsAt, rollover: false, summary}`, from the key's own `limit_reset`.                                                                               |
+| `usage`       | `estimated: true`. By agent (this window) and the 20 newest runs, from the run transcripts. `unattributedUsd` is the meter less what the held runs account for. |
+
+The breakdown is an estimate on purpose: the transcripts keep only the last 10 runs per agent
+(SEN-178), and a run's cost is the sum of OpenRouter's per-response `usage.cost`.
+
+**`GET /credits/plans`** → packs of 10, 20 and 50 USD, a custom amount (5–500 whole USD), auto
+top-up options (threshold 1/2/5 USD, amount 10/20/50 USD), the payment assets (USDC, AUSD) and
+`purchasesEnabled` from `CREDITS_PURCHASES_ENABLED` (off unless `1`/`true`), with `note` saying why
+when it is off. `POST /credits/purchase` (`{plan: 'pack_20'}` or `{plan: 'custom', amountUsd}`) and
+`PUT /credits/auto-top-up` refuse:
+
+| reason                 | HTTP | when                                                        |
+| ---------------------- | ---- | ----------------------------------------------------------- |
+| `purchases_disabled`   | 403  | the flag is off — checked before the body is read           |
+| `purchase_invalid`     | 400  | the flag is on and the plan or amount is not one we sell    |
+| `payments_unavailable` | 501  | the flag is on and no payment rail is bound (today, always) |
+
+**The payment seam** (`purchase/credit-payments.ts`, `CREDIT_PAYMENTS`, bound to
+`NoCreditPayments`). The rail it is shaped for: the app makes a sponsored send of the pack's USD in
+USDC or AUSD from the user's Privy wallet to the treasury and hands the API the UserOperation hash;
+the API confirms it from the bundler's UserOperation receipt (`success` on the operation, never the
+carrying transaction — CLAUDE.md gotcha 8), checks token, amount, sender and recipient from the
+Transfer log, and only then raises the key's `limit` by the amount through `updateKey`, keyed by the
+UserOperation hash so a retried confirmation never credits twice. Auto top-up is the same, started
+by the server under the threshold; it needs a standing authorisation to move the user's funds (a
+Privy policy rule scoped to the treasury, with a monthly cap), which is not designed yet.
 
 Refusals (`credits.errors.ts`) are part of the API contract:
 
-| reason                 | HTTP | when                                            |
-| ---------------------- | ---- | ----------------------------------------------- |
-| `credits_unconfigured` | 503  | `OPENROUTER_MANAGEMENT_KEY` unset               |
-| `not_provisioned`      | 404  | `GET /credits` before `POST /credits/provision` |
-| `provision_failed`     | 502  | OpenRouter would not mint the key               |
-| `status_unavailable`   | 502  | OpenRouter could not report the key's usage     |
+| reason                 | HTTP | when                                                                                |
+| ---------------------- | ---- | ----------------------------------------------------------------------------------- |
+| `credits_unconfigured` | 503  | `OPENROUTER_MANAGEMENT_KEY` unset                                                   |
+| `not_provisioned`      | 404  | internal reads before the first mint (`GET /credits` answers the free tier instead) |
+| `provision_failed`     | 502  | OpenRouter would not mint the key                                                   |
+| `status_unavailable`   | 502  | OpenRouter could not report the key's usage                                         |
 
 Concurrency: concurrent provisions for one user in one process share a single mint. Across
 replicas, the store's first-write-wins `claim()` decides the winner, and the loser **deletes the key
