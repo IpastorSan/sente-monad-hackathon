@@ -85,11 +85,13 @@ describe('spaceWrites', () => {
   const byName = (tools: readonly { name: string }[], name: string) =>
     tools.find((t) => t.name === name);
 
-  it('wraps only the signing writes: reads and record_thesis pass through as they are', () => {
+  it('wraps only the signing writes: reads, record_thesis and the watcher writes pass through', () => {
     const spaced = spaceWrites(GATED_TOOLS, new WriteSpacer({ spacingMs: 5_000 }));
     for (const original of GATED_TOOLS) {
       const same = byName(spaced, original.name) === original;
-      const signing = original.kind === 'write' && original.name !== 'record_thesis';
+      const signing =
+        original.kind === 'write' &&
+        !['record_thesis', 'set_watchers', 'clear_watchers'].includes(original.name);
       expect([original.name, same]).toEqual([original.name, !signing]);
     }
   });

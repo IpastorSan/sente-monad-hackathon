@@ -431,6 +431,7 @@ describe('GET /agents/:id/schedule (SEN-71)', () => {
       lastRunAt: new Date(T0 - 20_000).toISOString(),
       nextRunAt: new Date(T0 + 40_000).toISOString(),
       paused: null,
+      watchers: null,
     });
   });
 
@@ -442,6 +443,7 @@ describe('GET /agents/:id/schedule (SEN-71)', () => {
       lastRunAt: null,
       nextRunAt: null,
       paused: null,
+      watchers: null,
     });
   });
 });

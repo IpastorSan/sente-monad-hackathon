@@ -20,6 +20,7 @@ import {
 } from '../reputation/erc8004';
 import { AGENT_STORE, type AgentStore } from '../store/agent-store';
 import { AgentVenues } from '../venues/agent-venues';
+import { WatcherService } from '../watchers/watcher.service';
 import { AgentTools } from './context';
 import { McpController } from './mcp.controller';
 import { McpHttp } from './mcp-http';
@@ -96,13 +97,21 @@ export const agentToolsProviders: Provider[] = [
   agentEventsProvider,
   {
     provide: AgentTools,
-    inject: [AGENT_STORE, AgentVenues, AGENT_EVENTS, AGENT_TOOLS_CONFIG, MarketDataService],
+    inject: [
+      AGENT_STORE,
+      AgentVenues,
+      AGENT_EVENTS,
+      AGENT_TOOLS_CONFIG,
+      MarketDataService,
+      WatcherService,
+    ],
     useFactory: (
       store: AgentStore,
       venues: AgentVenues,
       events: AgentEventLog,
       config: AgentToolsConfig,
       marketData: MarketDataService,
+      watchers: WatcherService,
     ) =>
       new AgentTools({
         store,
@@ -111,6 +120,8 @@ export const agentToolsProviders: Provider[] = [
         // SEN-79: klines, quotes and Perpl depth through the phone's cached
         // path, so N agents cost the venue what one screen does.
         marketData,
+        // SEN-182: set_watchers, list_watchers and clear_watchers.
+        watchers,
         venuesFor: (agent) =>
           venues.forAgent(
             { agentId: agent.id, walletId: agent.walletId, address: agent.address },

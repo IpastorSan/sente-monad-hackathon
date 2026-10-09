@@ -32,7 +32,7 @@ import type { GatedTool, ToolOutcome } from '../tools/gate';
 export { WriteSpacer, type WriteSpacerOptions };
 
 /** Writes that never reach the enclave. */
-const UNSIGNED_WRITES = new Set(['record_thesis']);
+const UNSIGNED_WRITES = new Set(['record_thesis', 'set_watchers', 'clear_watchers']);
 
 export const SPACING_ABORTED_MESSAGE =
   'Not sent: the run ended (timeout) while this write waited for its turn. Nothing was signed.';

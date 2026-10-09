@@ -803,6 +803,104 @@ ray to small hand-checked series, with the arithmetic in comments. It also cover
 too few candles, empty windows and gaps. `get-indicators.spec.ts` covers the tool through the
 gate.
 
+## Watchers: wake-ups without the model (SEN-182)
+
+A scheduled agent used to call the model on every tick: at 5 minutes, about 290 runs a day, most
+of them ending in "nothing to do". With watchers, the agent leaves conditions behind during a
+run. On each later tick the scheduler checks them deterministically, with no model call, and
+starts a run only when one fires, or when the **heartbeat** comes due (no run of any trigger for
+`heartbeatHours`, default 4) so the agent can re-plan. An agent with no watchers keeps the old
+behaviour: one run per tick.
+
+The code is in `agents/watchers/`: `watcher.schema.ts` (shape and validation),
+`watcher-eval.ts` (the check), `watcher.service.ts` (set, edit, check, counters),
+`watcher-store.ts` (persistence), `watchers.controller.ts` (owner routes), and `wake.ts` (what
+the woken run is told).
+
+**Tools.** `set_watchers {watchers, heartbeatHours?}` replaces the agent's set. `list_watchers`
+reads it back, each condition in words with its fire count. `clear_watchers` removes them all.
+They go through the gate like every tool, so the runner and `/mcp` both have them. The two
+writes take the agent's write lock and need it active, but they reach no venue and are not
+write-spaced. Setting watchers writes nothing to the event log: they are not trades. They
+show up in the run transcript as tool calls.
+
+**A watcher.** `{id?, label, match: "all"|"any" (default all), clauses: 1-4, cooldownMinutes:
+1-1440 (default 60)}`, at most 8 per agent, heartbeat 1 to 24 h. Passing a watcher's `id` back
+with the same condition keeps its edge state and history. Every market must be in the mandate
+(`market_not_allowed` / `venue_not_allowed` otherwise), at set time and again at every check: a
+market amended out of the mandate is no longer read.
+
+| Clause       | Fields                                                                                       | Fires                  |
+| ------------ | -------------------------------------------------------------------------------------------- | ---------------------- |
+| `price`      | `venue, market, source: mark (default; the mid on Kuru) or last, op, value`                  | `above`/`below`: level |
+|              |                                                                                              | `crosses_*`: edge      |
+| `price_band` | `venue, market, source, op: inside / outside / enters / leaves, low < high`                  | inside/outside: level  |
+|              |                                                                                              | enters/leaves: edge    |
+| `indicator`  | `venue, market, timeframe, indicator` (a `get_indicators` spec), `output`, `op`, then either | as `price`             |
+|              | `value` or `compareTo: {indicator?, output}` (default: the same indicator)                   |                        |
+| `position`   | `market` (Perpl), `op: pnl_above / pnl_below` (`value`: unrealised P&L as % of margin)       | P&L: level             |
+|              | or `opened / closed`                                                                         | opened/closed: edge    |
+| `funding`    | `market` (Perpl), `op: above / below`, `value`: % per 8 h, as `get_funding`'s `ratePctPer8h` | level                  |
+
+`output` names a multi-output indicator's output (`line`, `signal`, `histogram` for MACD) and may
+be omitted for a one-value indicator. "MACD line crosses its signal on 15m" is
+`{type: "indicator", timeframe: "15m", indicator: {type: "macd"}, output: "line", op:
+"crosses_above", compareTo: {output: "signal"}}`.
+
+**The check.** An EDGE clause is true only on the check where its condition flips from false
+to true, so each one keeps the previous check's answer. The first readable check only records.
+A LEVEL clause is true on every check while it holds. A watcher fires when its clauses are true
+by `match` and its cooldown has passed. Edges are recorded during a cooldown too, so a cross
+inside one is consumed, never reported late. A clause whose data cannot be read (venue down,
+indicator still warming up, no position) is unknown: not true, and its edge state is kept, so
+an outage neither fires nor hides a cross. Indicators use the same candles (`MarketDataService.
+klines`, 200 of them, the shared TTL cache) and the same `computeIndicator` as `get_indicators`.
+The value is the newest candle's, which may still be forming. Prices and funding come from the
+cached ticker. Positions come from the agent's own Perpl venue, which never enrolls a key for a
+check. A check reads each market once, however many clauses share it.
+
+**The scheduler** (`runner/agent-run.scheduler.ts`). When an agent with watchers is due, it is
+checked instead of run, and its next due time moves a cadence on. A check that wakes nothing
+is counted as a model call saved. One that fires starts a normal scheduled run through the
+existing credits guard, daily cap and one-run-per-agent lock, with a `wake` naming the fired
+watchers, what they saw and when. A wake the guard holds back stays pending and is retried on
+the next poll, without re-checking. It is dropped after a heartbeat's length. A run in progress
+is neither checked nor run.
+
+**The woken run.** The first message says, outside the user's fences, "Woken by your watchers
+at <time>:" with one line per firing, for example `“MACD 15m cross” (macd) — BTC-PERP 15m
+macd(12,26,9).line 1.23 crossed above macd(12,26,9).signal 1.19`. The labels are the agent's own
+text, so they are defused like user text. The transcript opens with the same line as a note
+(`Woken by: …`), and the run's `run` event carries `detail.wake`. A heartbeat run says so
+instead. The system prompt has one rule about watchers (rule 7).
+
+**Owner routes**, session-authenticated and owner-only (another user's agent is a 404
+`agent_not_found`):
+
+| Route                              | Does                                                                                |
+| ---------------------------------- | ----------------------------------------------------------------------------------- |
+| `GET /agents/:id/watchers`         | the set: each watcher with `reads` (in words), last check, last firing, fire count, |
+|                                    | last error; `checks`, `wakes`, `heartbeats`, `modelCallsSaved`, `everySeconds`      |
+| `PUT /agents/:id/watchers`         | replaces the set: `{watchers, heartbeatHours?}`                                     |
+| `PUT /agents/:id/watchers/:wid`    | adds or edits one watcher: `{label, match?, clauses, cooldownMinutes?}`             |
+| `DELETE /agents/:id/watchers/:wid` | deletes one; 404 `watcher_not_found` when there is none                             |
+
+Bodies go through the same validation as the tool. A rule broken is a 400 with `reason`
+`invalid_input`, `market_not_allowed` or `venue_not_allowed`. `GET /agents/:id/schedule` gains
+`watchers: {count, heartbeatSeconds, nextHeartbeatAt, wakes, modelCallsSaved} | null`. With
+watchers set, its `nextRunAt` is the next check.
+
+**Persistence.** `<STATE_DIR>/agent-watchers.json`, rewritten on every change and every check, so
+edge state survives a restart. In memory without `STATE_DIR`.
+
+**Tests.** `watcher.schema.spec.ts` covers validation and mandate scoping.
+`watcher-eval.spec.ts` covers edge crossings with state, the cooldown, unknowns, all/any, bands,
+positions, and a MACD cross checked against `computeIndicator`. `watcher.service.spec.ts`
+covers the persistence round-trip, the tools through the gate and the owner-only routes.
+`watcher-scheduler.spec.ts` covers no-run checks, exactly one run per firing with its
+instruction, the heartbeat, a wake held by the guard, the lock, and the woken run's prompt,
+transcript and summary.
+
 ## Authenticating
 
 Every `/agents` route (and `/wallet`, `/credits`, `/chain`, `POST /gas/drip`)

@@ -34,9 +34,17 @@ import { toMandateDto } from '../dto/agent.dto';
 import type { AgentRecord } from '../store/agent-store';
 import type { KuruToolVenue, ToolContext, ToolVenues } from './context';
 import { decimalsOf, isPositiveDecimal, maxDecimal, mulDecimal } from './decimal';
-import { summarize, type IndicatorSpec, type SourceCandle } from './indicators';
+import { checkSpec, indicatorSpec, KLINE_INTERVALS } from './indicator-schema';
+import { summarize, type SourceCandle } from './indicators';
 import { fetchSmartMoneySignals, NansenClient } from './nansen';
 import { invalidInput, SenteRefusal } from './refusals';
+import type { WatcherSetView } from '../watchers/watcher.service';
+import {
+  MAX_CLAUSES,
+  MAX_WATCHERS,
+  WatcherInvalidError,
+  watcherSetInput,
+} from '../watchers/watcher.schema';
 
 export type ToolKind = 'read' | 'write';
 
@@ -417,8 +425,6 @@ const getDepth = defineTool({
   },
 });
 
-const KLINE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const;
-
 /**
  * The most recent candles of one market, oldest first: from the shared cached
  * read path when there is one, else from the agent's own venue. Perpl's 1w is
@@ -487,54 +493,12 @@ const getKlines = defineTool({
 
 const MAX_INDICATOR_TIMEFRAMES = 4;
 const MAX_INDICATOR_SPECS = 8;
-const MAX_INDICATOR_PERIOD = 200;
 const DEFAULT_INDICATOR_LOOKBACK = 200;
 const MAX_INDICATOR_LOOKBACK = 500;
 const DEFAULT_INDICATOR_SERIES = 5;
 const MAX_INDICATOR_SERIES = 20;
 /** Without a tick size, the closes' own precision, up to this many places. */
 const MAX_INFERRED_PRICE_DECIMALS = 8;
-
-const indicatorPeriod = (fallback: number, min = 2) =>
-  z.number().int().min(min).max(MAX_INDICATOR_PERIOD).default(fallback).describe('Candles.');
-
-const indicatorSpec = z.discriminatedUnion('type', [
-  z.strictObject({ type: z.literal('sma'), period: indicatorPeriod(20) }),
-  z.strictObject({ type: z.literal('ema'), period: indicatorPeriod(20) }),
-  z.strictObject({ type: z.literal('wma'), period: indicatorPeriod(20) }),
-  z.strictObject({
-    type: z.literal('macd'),
-    fast: indicatorPeriod(12),
-    slow: indicatorPeriod(26),
-    signal: indicatorPeriod(9),
-  }),
-  z.strictObject({ type: z.literal('rsi'), period: indicatorPeriod(14) }),
-  z.strictObject({
-    type: z.literal('stochastic'),
-    k: indicatorPeriod(14),
-    d: indicatorPeriod(3, 1),
-    smooth: indicatorPeriod(3, 1).describe('%K smoothing in candles; 1 for fast %K.'),
-  }),
-  z.strictObject({ type: z.literal('atr'), period: indicatorPeriod(14) }),
-  z.strictObject({
-    type: z.literal('bollinger'),
-    period: indicatorPeriod(20),
-    stddev: z.number().min(0.5).max(5).default(2).describe('Band width in σ.'),
-  }),
-  z.strictObject({ type: z.literal('vwap') }),
-  z.strictObject({ type: z.literal('obv') }),
-  z.strictObject({ type: z.literal('adx'), period: indicatorPeriod(14) }),
-  z.strictObject({ type: z.literal('force_index'), period: indicatorPeriod(13) }),
-  z.strictObject({ type: z.literal('elder_ray'), period: indicatorPeriod(13) }),
-]);
-
-/** The one rule the schema cannot state per field. */
-function checkSpec(spec: IndicatorSpec): IndicatorSpec {
-  if (spec.type === 'macd' && spec.fast >= spec.slow) {
-    throw invalidInput(`macd needs fast < slow; got fast ${spec.fast}, slow ${spec.slow}`);
-  }
-  return spec;
-}
 
 /**
  * Indicators read only markets the mandate lets the agent trade: they are
@@ -545,18 +509,25 @@ async function requireMandateMarket(ctx: ToolContext, venue: ToolVenueId, symbol
   if (!mandate.venues.includes(venue)) {
     throw new SenteRefusal('venue_not_allowed', `your mandate does not include ${venue}`);
   }
-  // The static table, not `mandateMarket`: that needs the agent's venues
-  // built, and a read should not pay for that.
-  const market =
-    venue === 'kuru'
-      ? (KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol)?.address ?? symbol)
-      : symbol;
-  if (!marketAllowed(mandate, venue, market)) {
+  if (!symbolInMandate(mandate, venue, symbol)) {
     throw new SenteRefusal(
       'market_not_allowed',
       `${symbol} on ${venue} is not in your mandate; get_mandate lists the markets you may use`,
     );
   }
+}
+
+/**
+ * Whether the mandate lets the agent use `symbol` on `venue`, by symbol. The
+ * static Kuru table, not `mandateMarket`: that needs the agent's venues built,
+ * and a read (or a watcher check) should not pay for that.
+ */
+export function symbolInMandate(mandate: Mandate, venue: ToolVenueId, symbol: string): boolean {
+  const market =
+    venue === 'kuru'
+      ? (KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol)?.address ?? symbol)
+      : symbol;
+  return marketAllowed(mandate, venue, market);
 }
 
 /** The market's tick precision, or undefined when the catalog cannot say. */
@@ -847,6 +818,94 @@ const smartMoneySignals = defineTool({
   input: z.strictObject({ market }),
   async handler(_ctx, args) {
     return fetchSmartMoneySignals(nansenClient(), args.market);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Watchers (SEN-182): conditions Sente checks between runs without the model.
+
+function requireWatchers(ctx: ToolContext) {
+  if (!ctx.watchers) throw new VenueUnavailableError('watchers are not available in this session');
+  return ctx.watchers;
+}
+
+/** A watcher as the model reads it back: the condition in words, and its history. */
+function watcherSummary(view: WatcherSetView) {
+  return {
+    heartbeatHours: view.heartbeatSeconds / 3_600,
+    watchers: view.watchers.map((w) => ({
+      id: w.id,
+      label: w.label,
+      reads: w.reads,
+      cooldownMinutes: w.cooldownMinutes,
+      setBy: w.setBy,
+      fireCount: w.fireCount,
+      lastFiredAt: w.lastFiredAt,
+      ...(w.lastError ? { lastError: w.lastError } : {}),
+    })),
+  };
+}
+
+function watcherRefusal(error: unknown): never {
+  if (error instanceof WatcherInvalidError) throw new SenteRefusal(error.code, error.message);
+  throw error;
+}
+
+const listWatchers = defineTool({
+  name: 'list_watchers',
+  kind: 'read',
+  description:
+    'Your watchers: the conditions Sente checks for you between runs without calling you, ' +
+    'each in words, with how often it has fired.',
+  input: z.strictObject({}),
+  async handler(ctx) {
+    return watcherSummary(requireWatchers(ctx).view(ctx.agent.id));
+  },
+});
+
+const setWatchers = defineTool({
+  name: 'set_watchers',
+  kind: 'write',
+  description:
+    'Replace your watchers. Between runs Sente checks them on your schedule WITHOUT calling ' +
+    'you, and starts a run only when one fires (or after heartbeatHours with no run, default ' +
+    '4), telling you which fired and what it saw. Without watchers you are run on every ' +
+    `scheduled tick. Up to ${MAX_WATCHERS} watchers of up to ${MAX_CLAUSES} clauses, joined by ` +
+    'match "all" (default) or "any"; mandate markets only. Clause types: ' +
+    'price {venue, market, source "mark"|"last", op above|below|crosses_above|crosses_below, ' +
+    'value}; price_band {venue, market, source, op inside|outside|enters|leaves, low, high}; ' +
+    'indicator {venue, market, timeframe, indicator (a get_indicators spec), output (e.g. ' +
+    '"line"; omit for one-value indicators), op, then value OR compareTo {indicator?, output}} ' +
+    '— e.g. macd line crosses_above compareTo {output:"signal"}; position {market (Perpl), op ' +
+    'pnl_above|pnl_below (value = % of margin)|opened|closed}; funding {market (Perpl), op ' +
+    'above|below, value = % per 8h}. crosses_*, enters, leaves, opened and closed fire once on ' +
+    'the flip; the others fire while true, at most once per cooldownMinutes (default 60). ' +
+    "Pass a watcher's id back to keep its state. An empty list removes them all.",
+  input: watcherSetInput,
+  async handler(ctx, args) {
+    const watchers = requireWatchers(ctx);
+    const { agent } = await currentMandate(ctx);
+    try {
+      watchers.replace(agent, args, 'agent');
+    } catch (error) {
+      watcherRefusal(error);
+    }
+    return { set: args.watchers.length, ...watcherSummary(watchers.view(agent.id)) };
+  },
+});
+
+const clearWatchers = defineTool({
+  name: 'clear_watchers',
+  kind: 'write',
+  description:
+    'Remove all your watchers. You are then run on every scheduled tick again, as before ' +
+    'you set any.',
+  input: z.strictObject({}),
+  async handler(ctx) {
+    const watchers = requireWatchers(ctx);
+    const cleared = watchers.view(ctx.agent.id).watchers.length;
+    watchers.clear(ctx.agent.id);
+    return { cleared };
   },
 });
 
@@ -1142,6 +1201,9 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   getPositions,
   getOpenOrders,
   smartMoneySignals,
+  listWatchers,
+  setWatchers,
+  clearWatchers,
   recordThesis,
   placeLimit,
   placeMarket,
