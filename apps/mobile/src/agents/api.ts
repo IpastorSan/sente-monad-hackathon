@@ -14,6 +14,7 @@ import type { Address } from 'viem';
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
+import type { RunSummary, RunTranscriptPage } from './terminal.ts';
 
 /** Mirrors `AGENT_MODELS` in `services/api/src/agents/agents.config.ts`. */
 export const AGENT_MODELS = [
@@ -870,6 +871,31 @@ export class AgentsApi {
     return this.optional(
       this.request<AgentScheduleStatusDto>('GET', `/agents/${encodeURIComponent(id)}/schedule`),
     );
+  }
+
+  /**
+   * `GET /agents/:id/runs` (SEN-178) — the agent's last runs, newest first,
+   * each with its status and totals. `null` while the route is not deployed.
+   */
+  async runs(id: string): Promise<RunSummary[] | null> {
+    const page = await this.optional(
+      this.request<{ runs?: RunSummary[] }>('GET', `/agents/${encodeURIComponent(id)}/runs`),
+    );
+    return page === null ? null : (page.runs ?? []);
+  }
+
+  /**
+   * `GET /agents/:id/runs/:runId?after=<seq>` (SEN-178) — one run's summary
+   * and its transcript entries after the cursor. A 404 `run_not_found` means
+   * the server no longer holds the run (it keeps the last ten).
+   */
+  async runTranscript(id: string, runId: string, after?: number): Promise<RunTranscriptPage> {
+    const page = await this.request<Partial<RunTranscriptPage> & { run: RunSummary }>(
+      'GET',
+      `/agents/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}` +
+        (after !== undefined && after > 0 ? `?after=${after}` : ''),
+    );
+    return { run: page.run, entries: page.entries ?? [], nextSeq: page.nextSeq ?? after ?? 0 };
   }
 
   /**
