@@ -353,3 +353,67 @@ fee to the atom. These receipts are `receipts.fixture.ts`.
 
 Also in `KURU_MEASURED_GAS`. Placement grows with the number of price levels
 crossed.
+
+## Builder fee (SEN-184)
+
+Kuru lets an integrator ("builder") charge a fee on the orders it routes. Sente
+uses it for its own fee: **10 bps (10,000 pps) on Kuru orders, paid to the
+treasury**. Perpl has no equivalent Sente can use (its builder codes are issued
+by hand), so Perpl trades carry no Sente fee.
+
+### The contract surface
+
+Read from the SDK's ABIs (`@toxicflow-labs/ts-sdk` 0.0.4) and, where marked, from
+testnet AccountCore `0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22` on 2026-10-09.
+
+| Piece                                                                                       | What it does                                                                         |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `AccountCore.approveBuilder(builder, uint32 maxFeePps, uint64 expiry)`                      | The root account lets `builder` charge up to `maxFeePps` until `expiry` (Unix s).    |
+| `AccountCore.getBuilderApproval(root, builder)`                                             | `(maxFeePps, expiry, active)`; all zero when never granted.                          |
+| `AccountCore.revokeBuilder(builder)`                                                        | Withdraws the approval.                                                              |
+| `PPS_MULTIPLIER()` / `MAX_FEE_PPS()`                                                        | `10,000,000` / `100,000` (1%), read on testnet.                                      |
+| `OrderBook.batch(…, (address builder, uint32 feePps))`                                      | `0xed7dc4d7`; the plain `batch(uint40,tuple[],uint8[])` plus `builderConfig`.        |
+| `OrderBook.batch(…, bytes32 clientOrderId, (address, uint32))`                              | `0x2975ed7e`; the client-order-id overload plus `builderConfig`.                     |
+| `BuilderApprovalNotFound()` / `BuilderFeeTooHigh()`                                         | `0xd595f3a2` / `0x89c89cba`: an order naming an unapproved builder or a higher rate. |
+| `event BuilderFeeAccrued(builder, asset, takerAccountId, orderBook, builderFeePps, amount)` | One per fee-paying execution; `builder`, `asset` and `takerAccountId` indexed.       |
+| `AccountCore.getClaimableBuilderFees(builder, asset)` / `claimBuilderFees(asset)`           | Fees accrue inside AccountCore; the builder claims them per asset.                   |
+
+`approveBuilder` is called by the root account itself, so it needs no account
+id. `eth_estimateGas` on testnet (2026-10-09): **104,858** from a registered
+account (the Kernel test account, id 63), **188,689** from an address AccountCore
+has never seen — the call registers it. Not yet measured from a landed
+transaction.
+
+### How Sente uses it
+
+- **Orders.** `placeOrderCall(market, order, clientOrderId?, builder?)` encodes
+  the builder overload when `builder` is given and the plain one otherwise.
+  `KuruVenue({ builder })` puts every order through it.
+- **Approval.** Before an order, `KuruVenue.builderApprovalCalls()` reads
+  `getBuilderApproval(account, builder)` and adds an `approveBuilder` leg when
+  the approval is missing, inactive, below the rate, or about to lapse. Users
+  approve for a year and re-approve with a day left; agents approve until their
+  mandate's `expiresAt` (their policy's ceiling) and re-approve only within a
+  minute of it lapsing.
+- **What was paid.** `decodeBuilderFees(logs, accountCore, builder, accountId)`
+  reads `BuilderFeeAccrued` off the execution's own logs; a placed order reports
+  it as `Order.builderFee`.
+- **Reserve.** A buy sets the builder rate aside on top of the venue fee
+  (`quoteReserveAtoms` with `feePps + builderPps`, and the phone's
+  `depositCapAtoms(…, builderFeePps)`), so the deposit covers the fee whichever
+  way Kuru takes it.
+
+### Not yet observed on chain
+
+No builder order has landed yet. Three things the code assumes and a live
+taker fill must confirm (`agent:venues-live -- --skip-perpl --builder
+--builder-take`, see `docs/agents.md`):
+
+1. **Taker only.** `BuilderFeeAccrued` names a `takerAccountId`, so a resting
+   order's maker fills are taken to pay nothing; the creator ledger and
+   `Order.builderFee` only count taker fills.
+2. **Charged in the quote token, on top of Kuru's own fee.** The fee estimate,
+   the ledger's asset and the reserve headroom assume USDC.
+3. **Gas.** The builder overload costs more than the plain one (an approval read
+   and a fee write). `KURU_BUILDER_ORDER_SURCHARGE_GAS` (40,000) is an
+   allowance, not a reading: replace it with the measured difference.
