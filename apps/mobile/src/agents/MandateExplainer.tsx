@@ -6,10 +6,14 @@
  * enclave signs, `enforce.ts` for Sente's pre-check, and the module comment of
  * `packages/mandate/src/mandate.ts` for the honest limits of the first. The
  * preset values and the Kuru market list are read from code, not retyped.
+ *
+ * Short on purpose: the long version is the in-app guide's mandate section
+ * (`/how-it-works#mandate`, SEN-181), which "See more" opens.
  */
+import { useRouter, type Href } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { Section, Sheet, Tag } from '@/ui/kit';
+import { Section, SectionLink, Sheet, Tag } from '@/ui/kit';
 import { text } from '@/ui/theme';
 
 import { KURU_MARKETS, type Enforcer } from './mandate';
@@ -31,8 +35,7 @@ const LIMITS: readonly { title: string; by: Enforcer; detail: string }[] = [
   {
     title: 'Kuru markets',
     by: 'enclave',
-    detail:
-      'Each market you pick lets the agent place orders on that market’s contract, and on no other.',
+    detail: `Each market you pick lets the agent place orders on that market’s contract, and on no other. The enclave can only allow a market it can name by contract address, so the choice is the ${KURU_MARKETS.length} Kuru testnet markets Sente has checked on chain.`,
   },
   {
     title: 'Kuru deposit caps',
@@ -48,7 +51,8 @@ const LIMITS: readonly { title: string; by: Enforcer; detail: string }[] = [
   {
     title: 'Perpl markets',
     by: 'sente',
-    detail: 'Symbols such as BTC-PERP. Orders on any other market are refused.',
+    detail:
+      'Symbols such as BTC-PERP. Typed rather than picked: Perpl orders are API calls the enclave never sees, so Sente refuses any other market itself.',
   },
   {
     title: 'Max leverage',
@@ -76,41 +80,24 @@ const LIMITS: readonly { title: string; by: Enforcer; detail: string }[] = [
 
 const BY: Record<Enforcer, string> = { enclave: 'Enclave', sente: 'Sente' };
 
+/** SEN-181's in-app guide; its mandate section carries the long version. */
+const GUIDE = '/how-it-works#mandate' as Href;
+
 export function MandateExplainer({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const kuruMarkets = KURU_MARKETS.map((market) => market.symbol);
+  const router = useRouter();
+  const seeMore = () => {
+    onClose();
+    router.push(GUIDE);
+  };
   return (
     <Sheet visible={visible} title="How the limits work" onClose={onClose}>
       <Text style={text.body}>
-        A mandate is the set of limits you give one agent. Sente turns it into the signing policy of
-        the agent’s own wallet, whose key lives in Privy’s secure enclave. The agent decides what to
-        trade; the mandate decides what it is allowed to.
+        A mandate is the set of limits you give one agent. Limits tagged Enclave are compiled into
+        the signing policy of the agent’s wallet, whose key lives in Privy’s secure enclave: it
+        can’t sign past them, whatever the agent is told. Limits tagged Sente are checked by Sente
+        before each order, because those orders never reach the enclave. Caps apply per transaction,
+        not to a total over time.
       </Text>
-
-      <Section label="Who enforces what">
-        <View style={styles.block}>
-          <View style={styles.head}>
-            <Text style={text.strong}>The enclave</Text>
-            <Tag label={BY.enclave} filled />
-          </View>
-          <Text style={text.dim}>
-            Checks every transaction the agent’s wallet signs. Its key can’t sign one that breaks
-            these limits, whatever the agent is told. Each cap applies to one transaction: it bounds
-            a single deposit, not the total over time.
-          </Text>
-        </View>
-        <View style={styles.block}>
-          <View style={styles.head}>
-            <Text style={text.strong}>Sente</Text>
-            <Tag label={BY.sente} />
-          </View>
-          <Text style={text.dim}>
-            Checks each order before it goes out. Perpl orders are signed API calls rather than
-            wallet transactions, and Kuru order sizes sit inside batched calldata the policy can’t
-            read, so the enclave never sees them. On Perpl the enclave bounds the money that can
-            reach the exchange, not what is done with it there.
-          </Text>
-        </View>
-      </Section>
 
       <Section label="Presets">
         {PRESETS.map((preset) => (
@@ -140,19 +127,7 @@ export function MandateExplainer({ visible, onClose }: { visible: boolean; onClo
         ))}
       </Section>
 
-      <Section label="Why only these markets">
-        <Text style={text.dim}>
-          The enclave can only allow a market it can name by contract address, so every Kuru market
-          in a mandate is pinned to its order book’s address. Sente knows {kuruMarkets.length} Kuru
-          markets on Monad testnet ({kuruMarkets.join(', ')}), with their contracts and settings
-          checked on chain, and refuses a mandate naming any other.
-        </Text>
-        <Text style={[text.dim, styles.after]}>
-          Perpl markets are typed rather than picked. Perpl orders are API calls, not wallet
-          transactions, so the enclave can’t pin a Perpl market; Sente checks the list before each
-          order instead.
-        </Text>
-      </Section>
+      <SectionLink label="See more" onPress={seeMore} />
     </Sheet>
   );
 }
@@ -160,5 +135,4 @@ export function MandateExplainer({ visible, onClose }: { visible: boolean; onClo
 const styles = StyleSheet.create({
   block: { gap: 4, marginBottom: 14 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  after: { marginTop: 10 },
 });
