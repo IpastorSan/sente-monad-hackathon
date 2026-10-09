@@ -19,7 +19,8 @@
  * second salt gets the old second assertion, pinned to the credential the first
  * one chose; the outputs are the same bytes either way. Everything after
  * sign-in is prompt-free: `signDigest` and `signPrivyAuthorization` both sign
- * locally from the derived keys.
+ * locally from the derived keys, and `perplTradeKey` derives from the device
+ * key.
  *
  * On web, a signed-in tab also survives a reload: the session's two secrets
  * are sealed under a non-extractable key for the life of the tab
@@ -45,6 +46,7 @@ import {
   signPrivyAuthorization as signWithDeviceKey,
   type AuthorizationPayload,
 } from './deviceKey';
+import { perplTradeKey as derivePerplTradeKey, type PerplTradeKey } from './perplKey';
 import { clearSealedSession, sealSession, unsealSession } from './sessionSeal';
 import { webAuthnClient } from './webauthnClient';
 
@@ -109,6 +111,17 @@ export type WalletSession = {
    * @throws Error once the session has ended.
    */
   readonly signPrivyAuthorization: (payload: AuthorizationPayload) => string;
+  /**
+   * The phone's Perpl trade key for `wallet` (the Privy wallet that owns the
+   * Perpl account), derived from the device key exactly as CLAUDE.md "Perpl
+   * trade-key label" pins (`./perplKey`, SEN-89/104). Each call derives a
+   * fresh copy: the caller owns `secretKey` and zeroes it once used (the Perpl
+   * trader copies it, so zero right after creating one). A session restored
+   * after a web reload rebuilds the same device key, so the same trade key.
+   *
+   * @throws Error once the session has ended; TypeError for a malformed address.
+   */
+  readonly perplTradeKey: (wallet: Address) => PerplTradeKey;
   /** Zeroes both session keys. Idempotent. */
   end(): void;
   [Symbol.dispose](): void;
@@ -168,6 +181,12 @@ function openWalletSession({
         // instead of the same "session ended" mera reports for the EOA.
         if (!live) throw new Error('wallet session ended — sign in again to sign');
         return signWithDeviceKey(deviceKey, payload);
+      },
+      perplTradeKey: (wallet) => {
+        // Same reason as above: a zeroed device key would derive a valid-looking
+        // key that Perpl has never seen.
+        if (!live) throw new Error('wallet session ended — sign in again to trade perps');
+        return derivePerplTradeKey(deviceKey, wallet);
       },
       end,
       [Symbol.dispose]: end,

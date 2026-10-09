@@ -119,6 +119,55 @@ export type EnrollPrepareResult = {
   readonly items: readonly EnrollPrepareItem[];
 };
 
+/** `POST /trade/perpl/enroll/prepare` body: the phone's trade key and its label in Perpl. */
+export type EnrollPrepareRequest = {
+  /** `0x` + 32 bytes: `perplTradeKey(...).publicKeyHex`. */
+  readonly publicKeyHex: Hex;
+  /** 1-40 printable ASCII characters. */
+  readonly label: string;
+};
+
+/** `POST /trade/perpl/enroll/commit` body. `signatures[i]` signs `items[i]`. */
+export type EnrollCommitRequest = {
+  readonly prepareId: string;
+  readonly signatures: readonly string[];
+  /** The trade key's Ed25519 signature over the trade item's EIP-712 digest. */
+  readonly popSignature: Hex;
+};
+
+/** `POST /trade/perpl/enroll/commit`. */
+export type EnrollCommitResult = {
+  /** The trade key's api-key token. Not secret on its own: useless without the key. */
+  readonly apiKey: string;
+  readonly accountId: string;
+  readonly readKey: 'linked';
+};
+
+/**
+ * `GET /trade/perpl/account` (SEN-99, SEN-174). Copied from `PerplAccountDto`.
+ *
+ * `forwarding` is what the SERVER saw: it learns it only from an onboarding it
+ * ran itself, so after an API restart an onboarded account reads `false`
+ * (docs/user-trading.md, "Known gaps"). Never read it as "forwarding is off".
+ */
+export type PerplAccount = {
+  /** `null`: the wallet has no Perpl account. */
+  readonly accountId: string | null;
+  readonly forwarding: boolean;
+  /** Perpl's live opening minimum, AUSD atoms. */
+  readonly minOpenAtoms: string;
+  /** The phone's trade-key token, once enrolled. */
+  readonly apiKey?: string;
+  readonly readKey: 'linked' | 'unlinked';
+};
+
+/** The `reason`s `/trade/perpl/enroll/*` refuses with (besides `trading_disabled`). */
+export type PerplEnrollRefusalReason =
+  | 'perpl_not_onboarded' // 422
+  | 'perpl_enroll_refused' // 422
+  | 'perpl_format_changed' // 502
+  | 'enroll_prepare_not_found'; // 404
+
 // ---------------------------------------------------------------------------
 // Responses of `/trade` (SEN-102, plan M-T20). Copied from
 // `services/api/src/trade/dto/trade.dto.ts` and `trade-store.ts` (SEN-96);
@@ -201,7 +250,9 @@ export type TradeRefusalReason =
   | 'below_min_notional' // 422
   | 'reserve_balance' // 422
   | 'deposit_cap_exceeded' // 422
-  | 'insufficient_balance'; // 422
+  | 'insufficient_balance' // 422
+  | 'below_min_account_open' // 422, Perpl onboarding
+  | 'perpl_already_onboarded'; // 409, Perpl onboarding: nothing left to sign
 
 // ---------------------------------------------------------------------------
 // `/portfolio` (SEN-101, plan M-T19). Copied from

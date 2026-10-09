@@ -15,6 +15,7 @@ import type { Address, LocalAccount } from 'viem';
 
 import { clearCredential, loadCredential, saveCredential } from './credentialStore';
 import type { AuthorizationPayload } from './deviceKey';
+import type { PerplTradeKey } from './perplKey';
 import {
   createWallet,
   describeAuthError,
@@ -55,6 +56,11 @@ export type UseAccount = {
    * refuses to sign once the session has ended.
    */
   readonly signPrivyAuthorization: ((payload: AuthorizationPayload) => string) | null;
+  /**
+   * Derives the Perpl trade key for a wallet (`WalletSession.perplTradeKey`),
+   * or `null` unless `status === 'ready'`. The caller zeroes what it returns.
+   */
+  readonly perplTradeKey: ((wallet: Address) => PerplTradeKey) | null;
   /** Whether a credential hint is stored. Only affects the sign-in prompt. */
   readonly hasCredential: boolean;
   readonly error: AuthErrorDescription | null;
@@ -179,6 +185,7 @@ export function useAccount(): UseAccount {
     address: session?.address ?? null,
     devicePublicKey: session?.devicePublicKey ?? null,
     signPrivyAuthorization: session?.signPrivyAuthorization ?? null,
+    perplTradeKey: session?.perplTradeKey ?? null,
     hasCredential: storedCredential !== null,
     error,
     createPasskey,

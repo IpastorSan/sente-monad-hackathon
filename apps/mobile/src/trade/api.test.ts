@@ -79,6 +79,29 @@ test('each method hits its route with the session token', async () => {
   assert.equal(calls[0]!.init!.body, undefined);
 });
 
+test('the Perpl routes: account, enroll prepare and commit, with their bodies', async () => {
+  const { api, calls } = recorder();
+  const prepare = { publicKeyHex: `0x${'ab'.repeat(32)}`, label: 'sente-app' } as const;
+  const commit = {
+    prepareId: TRADE_ID,
+    signatures: ['c2ln', 'c2lo'],
+    popSignature: `0x${'cd'.repeat(64)}`,
+  } as const;
+  await api.perplAccount();
+  await api.enrollPrepare(prepare);
+  await api.enrollCommit(commit);
+  assert.deepEqual(
+    calls.map((c) => `${c.init?.method} ${c.url}`),
+    [
+      `GET ${BASE}/trade/perpl/account`,
+      `POST ${BASE}/trade/perpl/enroll/prepare`,
+      `POST ${BASE}/trade/perpl/enroll/commit`,
+    ],
+  );
+  assert.deepEqual(JSON.parse(calls[1]!.init!.body as string), prepare);
+  assert.deepEqual(JSON.parse(calls[2]!.init!.body as string), commit);
+});
+
 test('the answer is returned as sent', async () => {
   const capabilities: TradeCapabilities = {
     enabled: true,
@@ -112,6 +135,8 @@ const REFUSALS: [TradeRefusalReason, number][] = [
   ['reserve_balance', 422],
   ['deposit_cap_exceeded', 422],
   ['insufficient_balance', 422],
+  ['below_min_account_open', 422],
+  ['perpl_already_onboarded', 409],
 ];
 
 for (const [reason, status] of REFUSALS) {

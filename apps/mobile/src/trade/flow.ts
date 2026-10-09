@@ -24,11 +24,19 @@
  * Following a committed trade never reports a failure it has not seen: a
  * timeout is `pending`, because the steps may well still land.
  *
+ * Perpl setup (SEN-104) follows the same rule: `runPerplOnboard` runs
+ * `verifyPerplOnboard` over every step before the first signature, and
+ * `runPerplEnrollment` runs `verifyEnrollmentPrepare` over both items before
+ * signing either, then proves possession of the trade key over the digest it
+ * computed itself. `perplSetupNeeds` turns `/trade/perpl/account` into what is
+ * left to do, without re-opening an account that exists.
+ *
  * Plain TS, no React Native: `flow.test.ts` runs under plain node.
  */
 import { KURU_TESTNET_MARKETS, type KuruMarketConfig } from '@sente/venues/kuru';
 import type { Address } from 'viem';
 
+import { perplProofOfPossession, type PerplTradeKey } from '../auth/perplKey.ts';
 import { NoDeviceKeyError, type Approver } from '../auth/privyApproval.ts';
 import { publicClient } from '../chain/client.ts';
 import { confirmationDelay } from '../wallet/confirmation.ts';
@@ -41,15 +49,24 @@ import {
   type MarketFacts,
 } from './kuruMarket.ts';
 import type {
+  EnrollCommitRequest,
+  EnrollCommitResult,
   KuruCancelIntent,
   KuruIntent,
   KuruPlaceIntent,
   KuruWithdrawIntent,
+  PerplAccount,
+  PerplOnboardIntent,
   PreparedTrade,
   TradeStatus,
   TradeView,
 } from './types.ts';
 import { verifyKuruTrade } from './verifyKuru.ts';
+import {
+  PERPL_MIN_ACCOUNT_OPEN_ATOMS,
+  verifyEnrollmentPrepare,
+  verifyPerplOnboard,
+} from './verifyPerpl.ts';
 
 /** The three routes the flow uses; a fake in tests, `TradeApi` in the app. */
 export type TradeFlowApi = Pick<TradeApi, 'prepare' | 'commit' | 'status'>;
@@ -99,7 +116,7 @@ export type TradeOutcome =
 /** What the flow is doing, for a progress screen. Reported in this order. */
 export type TradeFlowState =
   | { readonly phase: 'reading_market' }
-  | { readonly phase: 'preparing'; readonly intent: KuruIntent }
+  | { readonly phase: 'preparing'; readonly intent: KuruIntent | PerplOnboardIntent }
   | { readonly phase: 'verifying'; readonly prepared: PreparedTrade }
   | { readonly phase: 'signing'; readonly prepared: PreparedTrade }
   | { readonly phase: 'committing'; readonly prepared: PreparedTrade }
@@ -122,9 +139,10 @@ export class TradeApprovalRefusedError extends Error {
   readonly problem: string;
   readonly stepIndex: number | undefined;
 
-  constructor(problem: string, stepIndex?: number) {
+  /** `subject` names what was refused in the copy: a trade unless said otherwise. */
+  constructor(problem: string, stepIndex?: number, subject = 'This trade') {
     super(
-      `This trade doesn’t match what you confirmed, so it wasn’t signed: ${problem}. ` +
+      `${subject} doesn’t match what you confirmed, so it wasn’t signed: ${problem}. ` +
         'Nothing was sent.',
     );
     this.name = 'TradeApprovalRefusedError';
@@ -252,6 +270,203 @@ function placeIntent(
     { quote: market.quote.decimals, base: market.base.decimals },
   );
   return { ...draft, clientTradeId, maxDepositAtoms: cap.toString() };
+}
+
+// ─── Perpl (SEN-104) ────────────────────────────────────────────────────────
+
+/** The label the phone's trade key is enrolled under; Perpl shows it in the key list. */
+export const PERPL_TRADE_KEY_ENROLL_LABEL = 'sente-app';
+
+/**
+ * What a wallet still needs before it can trade perps from this phone.
+ *
+ * - `open`: no Perpl account — approve, open it, allow forwarding.
+ * - `forwarding`: the account is open, forwarding is not known on — that leg alone.
+ * - `enroll`: no trade key enrolled — enroll it (and the server's read key).
+ */
+export type PerplSetupNeeds = {
+  readonly open: boolean;
+  readonly forwarding: boolean;
+  readonly enroll: boolean;
+};
+
+/**
+ * The trade key's api-key token: the server's (it persists it, SEN-174), else
+ * the one this phone kept from its own enrollment. `null`: not enrolled.
+ */
+export function perplApiKeyOf(account: PerplAccount, stored: string | null): string | null {
+  return account.apiKey ?? stored ?? null;
+}
+
+/**
+ * Reads `/trade/perpl/account` into steps.
+ *
+ * `forwarding: false` is the server's "I did not see it", not "it is off": the
+ * evidence is lost on an API restart (docs/user-trading.md, "Known gaps"). A
+ * wallet whose trade key is enrolled went through an onboarding that ended
+ * with forwarding on, so it is not asked again — that would be a sponsored
+ * user operation for nothing. Without a key, re-allowing it is harmless and
+ * the planner does it alone; never a second `createAccount`.
+ */
+export function perplSetupNeeds(account: PerplAccount, stored: string | null): PerplSetupNeeds {
+  const open = account.accountId === null;
+  const enroll = perplApiKeyOf(account, stored) === null;
+  return { open, forwarding: !open && !account.forwarding && enroll, enroll };
+}
+
+export function perplReady(needs: PerplSetupNeeds): boolean {
+  return !needs.open && !needs.forwarding && !needs.enroll;
+}
+
+export type PerplFlowContext = {
+  /** Privy's id for the user's wallet; pins every step's envelope. */
+  readonly walletId: string;
+  /** The same wallet's address: the Perpl account's owner. */
+  readonly wallet: Address;
+};
+
+/** `already_onboarded`: the server had nothing left to sign (account open, forwarding seen). */
+export type PerplOnboardOutcome = TradeOutcome | { readonly status: 'already_onboarded' };
+
+/**
+ * Opens the wallet's Perpl account, or resumes one: prepare → `verifyPerplOnboard`
+ * → sign every step → commit → follow, the same order as {@link runTrade}.
+ *
+ * `accountOpen` is what `/trade/perpl/account` said. With the account already
+ * open the phone signs only `allowOrderForwarding`, whatever the planner
+ * proposes: a second `approve` + `createAccount` would move another deposit
+ * the user did not confirm here. The amount is then moot (the planner ignores
+ * it), and the minimum is sent so the verifier's floor still holds.
+ */
+export async function runPerplOnboard(
+  api: TradeFlowApi,
+  draft: { readonly amountAtoms: string },
+  ctx: PerplFlowContext & { readonly accountOpen: boolean },
+  sign: Approver | null,
+  onUpdate: (state: TradeFlowState) => void,
+  opts: TradeFlowOptions = {},
+): Promise<PerplOnboardOutcome> {
+  if (!sign) throw new NoDeviceKeyError('setting up perps');
+  const clientTradeId = (opts.newClientTradeId ?? (() => globalThis.crypto.randomUUID()))();
+  const intent: PerplOnboardIntent = {
+    kind: 'perpl.onboard',
+    clientTradeId,
+    amountAtoms: ctx.accountOpen ? PERPL_MIN_ACCOUNT_OPEN_ATOMS.toString() : draft.amountAtoms,
+  };
+
+  onUpdate({ phase: 'preparing', intent });
+  let prepared: PreparedTrade;
+  try {
+    prepared = await api.prepare(intent);
+  } catch (error) {
+    if (error instanceof TradeApiError && error.reason === 'perpl_already_onboarded') {
+      return { status: 'already_onboarded' };
+    }
+    throw error;
+  }
+
+  onUpdate({ phase: 'verifying', prepared });
+  if (prepared.clientTradeId !== clientTradeId) {
+    throw new TradeApprovalRefusedError('the prepared trade is for another trade id');
+  }
+  const verdict = verifyPerplOnboard(prepared.steps, {
+    walletId: ctx.walletId,
+    wallet: ctx.wallet,
+    intent,
+  });
+  if (!verdict.ok) throw new TradeApprovalRefusedError(verdict.problem, verdict.stepIndex);
+  if (
+    ctx.accountOpen &&
+    !(prepared.steps.length === 1 && prepared.steps[0]?.kind === 'perpl.allowForwarding')
+  ) {
+    throw new TradeApprovalRefusedError(
+      'your Perpl account is already open, so only turning on order forwarding may be signed',
+    );
+  }
+
+  onUpdate({ phase: 'signing', prepared });
+  const signatures = prepared.steps.map((step) => sign(step.payload));
+
+  onUpdate({ phase: 'committing', prepared });
+  const outcome = await follow(api, prepared.tradeId, signatures, onUpdate, opts);
+  onUpdate({ phase: 'settled', outcome });
+  return outcome;
+}
+
+/** The two enrollment routes; a fake in tests, `TradeApi` in the app. */
+export type PerplEnrollApi = Pick<TradeApi, 'enrollPrepare' | 'enrollCommit'>;
+
+/** Where the phone keeps its api-key token per wallet (`platform/kv` in the app). */
+export type PerplApiKeyStore = {
+  save(wallet: Address, apiKey: string): Promise<void>;
+};
+
+export type PerplEnrollPhase = 'preparing' | 'verifying' | 'signing' | 'committing';
+
+export type PerplEnrollOptions = {
+  /** Shown in the user's Perpl key list. */
+  label?: string;
+  /** The phone's clock, Unix ms: the verifier refuses a stale or future `time`. */
+  now?: () => number;
+  onPhase?: (phase: PerplEnrollPhase) => void;
+};
+
+/**
+ * Enrolls this phone's trade key with the wallet's Perpl account (and the
+ * server's read key, in the same prepare): derive the key → prepare →
+ * `verifyEnrollmentPrepare` → sign BOTH items with the device key → prove
+ * possession of the trade key over the digest the phone computed → commit.
+ * A refusal at any check signs nothing. The trade key's secret is zeroed
+ * before this returns, on every path. The token is kept per wallet in
+ * `store`; a failure to keep it is not a failed enrollment (the server holds
+ * it too).
+ */
+export async function runPerplEnrollment(
+  api: PerplEnrollApi,
+  ctx: PerplFlowContext,
+  keys: {
+    readonly sign: Approver | null;
+    readonly tradeKey: ((wallet: Address) => PerplTradeKey) | null;
+  },
+  store: PerplApiKeyStore,
+  opts: PerplEnrollOptions = {},
+): Promise<EnrollCommitResult> {
+  const { sign, tradeKey } = keys;
+  if (!sign || !tradeKey) throw new NoDeviceKeyError('setting up perps');
+  const label = opts.label ?? PERPL_TRADE_KEY_ENROLL_LABEL;
+  const phase = opts.onPhase ?? (() => undefined);
+  const key = tradeKey(ctx.wallet);
+  let commit: EnrollCommitRequest;
+  try {
+    phase('preparing');
+    const prepared = await api.enrollPrepare({ publicKeyHex: key.publicKeyHex, label });
+
+    phase('verifying');
+    const verdict = verifyEnrollmentPrepare(prepared, {
+      walletId: ctx.walletId,
+      wallet: ctx.wallet,
+      tradePublicKeyHex: key.publicKeyHex,
+      tradeLabel: label,
+      now: (opts.now ?? Date.now)(),
+    });
+    if (!verdict.ok) {
+      throw new TradeApprovalRefusedError(verdict.problem, undefined, 'This Perpl key enrollment');
+    }
+
+    phase('signing');
+    commit = {
+      prepareId: prepared.prepareId,
+      signatures: prepared.items.map((item) => sign(item.payload)),
+      popSignature: perplProofOfPossession(key.secretKey, verdict.digest),
+    };
+  } finally {
+    key.secretKey.fill(0);
+  }
+
+  phase('committing');
+  const result = await api.enrollCommit(commit);
+  await store.save(ctx.wallet, result.apiKey).catch(() => undefined);
+  return result;
 }
 
 /**
@@ -383,6 +598,36 @@ function describeRefusal(error: TradeApiError): TradeErrorCopy {
       };
     case 'insufficient_balance':
       return { title: 'Not enough balance', detail: 'Add funds or reduce the size.' };
+    case 'below_min_account_open':
+      return {
+        title: 'Perpl needs at least 100 AUSD',
+        detail: 'A Perpl account opens with 100 AUSD or more. Raise the amount.',
+      };
+    case 'perpl_already_onboarded':
+      return {
+        title: 'Your Perpl account is already set up',
+        detail: 'There was nothing left to sign.',
+      };
+    case 'perpl_not_onboarded':
+      return {
+        title: 'Open your Perpl account first',
+        detail: 'A trading key can only be added to an account that exists.',
+      };
+    case 'perpl_enroll_refused':
+      return {
+        title: 'Perpl refused the key',
+        detail: `Perpl didn’t accept this phone’s trading key. Try again in a minute. (${error.message})`,
+      };
+    case 'perpl_format_changed':
+      return {
+        title: 'Perpl changed its sign-up format',
+        detail: 'This version of the app can’t check the new one, so nothing was signed.',
+      };
+    case 'enroll_prepare_not_found':
+      return {
+        title: 'The sign-up expired',
+        detail: 'It lasts a few minutes. Start it again.',
+      };
     default:
       return { title: 'The trade didn’t go through', detail: error.message };
   }

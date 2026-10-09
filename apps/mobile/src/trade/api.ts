@@ -13,18 +13,23 @@
  * reports so a screen hides the section. A 404 that carries
  * `trading_disabled` or `trade_not_found` is a real answer and stays an error.
  *
- * Perpl enrollment (`perplAccount`, `enrollPrepare`, `enrollCommit`) is left to
- * M-T18 / M-T21b, which build the routes and the phone-side checks together: a
- * client method without the typed-data verifier would only invite signing an
- * unchecked payload.
+ * Perpl's account read and key enrollment (`perplAccount`, `enrollPrepare`,
+ * `enrollCommit`, SEN-104) answer from `/trade/perpl/*`, behind the same flag.
  *
- * Nothing here verifies what `prepare` returns. That is `verifyKuru.ts`'s job,
- * and the flow (M-T21) must run it before any step is signed.
+ * Nothing here verifies what `prepare` or `enrollPrepare` returns. That is
+ * `verifyKuru.ts`'s and `verifyPerpl.ts`'s job, and the flows (`flow.ts`) run
+ * them before anything is signed.
  */
 import type { HistoryRange, ValueHistory } from '../portfolio/history.ts';
 import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 import type {
+  EnrollCommitRequest,
+  EnrollCommitResult,
+  EnrollPrepareRequest,
+  EnrollPrepareResult,
+  PerplAccount,
+  PerplEnrollRefusalReason,
   Portfolio,
   PortfolioFills,
   PortfolioVenue,
@@ -39,7 +44,7 @@ import type {
 export class TradeApiError extends Error {
   readonly status: number;
   /** One of {@link TradeRefusalReason} from `/trade`; anything else passes through as sent. */
-  readonly reason: TradeRefusalReason | (string & {}) | undefined;
+  readonly reason: TradeRefusalReason | PerplEnrollRefusalReason | (string & {}) | undefined;
 
   constructor(status: number, reason: string | undefined, message: string) {
     super(message);
@@ -133,6 +138,25 @@ export class TradeApi {
   /** `GET /trade?limit=` — newest first; the API accepts 1..100. In memory server-side. */
   list(limit?: number): Promise<TradeView[]> {
     return this.request('GET', '/trade', { query: { limit } });
+  }
+
+  /** `GET /trade/perpl/account`: the wallet's Perpl account and what onboarding still needs. */
+  perplAccount(): Promise<PerplAccount> {
+    return this.request('GET', '/trade/perpl/account');
+  }
+
+  /**
+   * `POST /trade/perpl/enroll/prepare` — what the device key would sign to
+   * enroll the phone's trade key (and the server's read key). Signs nothing.
+   * Run `verifyEnrollmentPrepare` on the answer before signing any of it.
+   */
+  enrollPrepare(request: EnrollPrepareRequest): Promise<EnrollPrepareResult> {
+    return this.request('POST', '/trade/perpl/enroll/prepare', { body: request });
+  }
+
+  /** `POST /trade/perpl/enroll/commit` — single use: a replay is 404 `enroll_prepare_not_found`. */
+  enrollCommit(request: EnrollCommitRequest): Promise<EnrollCommitResult> {
+    return this.request('POST', '/trade/perpl/enroll/commit', { body: request });
   }
 
   /** `GET /portfolio` (M-T19): wallet, Kuru account and Perpl account, read fresh. */
