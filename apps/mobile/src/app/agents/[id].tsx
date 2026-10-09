@@ -62,6 +62,8 @@ import {
   signedParts,
   tabFrom,
   trackLayout,
+  windowPnl,
+  WINDOW_LABEL,
   type CockpitTab,
   type EquityRange,
   type PositionRow,
@@ -156,7 +158,8 @@ export default function AgentScreen() {
   const [portfolio, setPortfolio] = useState<AgentPortfolioDto | null | undefined>(undefined);
   const [schedule, setSchedule] = useState<AgentScheduleStatusDto | null>(null);
   const [loadError, setLoadError] = useState<NoticeState | null>(null);
-  const [balances, setBalances] = useState<Record<string, bigint> | null>(null);
+  /** `undefined` while reading; `null` when the chain read failed (SEN-177: said, never a 0). */
+  const [balances, setBalances] = useState<Record<string, bigint> | null | undefined>(undefined);
   const [sheet, setSheet] = useState<SheetId | null>(null);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -395,7 +398,7 @@ function Overview({
 }: {
   agent: Agent;
   summary: AgentSummary | undefined;
-  balances: Record<string, bigint> | null;
+  balances: Record<string, bigint> | null | undefined;
   portfolio: AgentPortfolioDto | null | undefined;
   schedule: AgentScheduleStatusDto | null;
   entries: LedgerEntry[];
@@ -415,11 +418,12 @@ function Overview({
     [trades, range, agent.createdAt],
   );
 
-  // Scrubbing the curve moves the headline to that point, and the right-hand
-  // line to its date; the chart never owns the headline.
+  // SEN-177: the headline is what the agent holds, so funding shows up where
+  // the eye lands; P&L sits under it, over the window the pills pick.
+  // Scrubbing the curve moves the P&L line to that point and its date.
   const scrubbed = scrub !== null && series ? scrub : null;
-  const headline = signedParts(
-    scrubbed !== null ? series?.points[scrubbed] : (summary?.pnl.allTime ?? null),
+  const pnl = signedParts(
+    scrubbed !== null ? series?.points[scrubbed] : windowPnl(range, summary, series),
   );
   const today = signedParts(summary?.pnl.last24h);
   const { unit, approx } = pnlUnit(agent.mandate.venues);
@@ -430,50 +434,59 @@ function Overview({
     : null;
   const others = holdings?.filter((holding) => holding !== main && holding.atoms > 0n) ?? [];
   const rows = portfolio ? positionRows(portfolio, entries, agent.preset) : null;
+  // Gain green, loss red, and zero the readable dim, never ink on ink.
+  const toneStyle = (tone: typeof pnl.tone) =>
+    tone === 'up' ? text.up : tone === 'down' ? text.down : text.dim;
+  // No summary (an API before SEN-56) is no figure, not a zero.
+  const hasPnl = scrubbed !== null || summary !== undefined;
 
   return (
     <View>
       <View style={styles.hero}>
-        <Text style={text.label}>{scrubbed !== null ? 'P&L at this point' : 'All-time P&L'}</Text>
-        <View style={styles.figure}>
-          <BigNumber
-            // No summary (an API before SEN-56) is no figure, not a zero.
-            value={scrubbed === null && !summary ? '—' : headline.magnitude}
-            prefix={headline.sign}
-            approx={approx}
-            style={headline.tone === 'up' ? text.up : headline.tone === 'down' ? text.down : null}
-          />
-          {unit ? <Text style={text.dim}>{unit}</Text> : null}
-          <Text
-            style={[
-              text.dim,
-              text.num,
-              styles.pushRight,
-              scrubbed === null && today.tone === 'up' && text.up,
-              scrubbed === null && today.tone === 'down' && text.down,
-            ]}
-          >
-            {scrubbed !== null && series
-              ? shortDate(series.ats[scrubbed] ?? now)
-              : summary
-                ? `${today.sign}${today.magnitude} today`
-                : ''}
+        <Text style={text.label}>Balance</Text>
+        {portfolio ? (
+          <BigNumber value={portfolio.totals.approxUsd} prefix="$" approx />
+        ) : main ? (
+          <View style={styles.figure}>
+            <BigNumber value={formatAtoms(main.atoms, main.decimals, { group: false })} />
+            <Text style={text.dim}>{main.symbol}</Text>
+          </View>
+        ) : portfolio === undefined || balances === undefined ? (
+          <Text style={[text.dim, styles.balanceNote]}>Reading its balance…</Text>
+        ) : (
+          <Text style={[text.dim, text.danger, styles.balanceNote]}>
+            Couldn’t read its balance right now.
           </Text>
-        </View>
+        )}
         <Text style={[text.caption, text.num]}>
           {portfolio
-            ? `≈ $${portfolio.totals.approxUsd} across its wallet and venues · P&L is realised only`
-            : main
-              ? `${formatHolding(main)} ${main.symbol} in its wallet · P&L is realised only`
-              : balances === null
-                ? 'Reading the chain…'
-                : 'P&L is realised only'}
+            ? 'Across its wallet and venues'
+            : others.length > 0
+              ? `In its wallet, with ${others
+                  .map((holding) => `${formatHolding(holding)} ${holding.symbol}`)
+                  .join(' · ')}`
+              : main
+                ? 'In its wallet'
+                : ''}
         </Text>
-        {!portfolio && others.length > 0 ? (
-          <Text style={[text.caption, text.num]}>
-            {others.map((holding) => `${formatHolding(holding)} ${holding.symbol}`).join(' · ')}
+        <View style={styles.pnlLine}>
+          <Text style={[text.strong, text.num, hasPnl ? toneStyle(pnl.tone) : text.dim]}>
+            {hasPnl
+              ? `${approx ? '≈ ' : ''}${pnl.sign}${pnl.magnitude}${unit ? ` ${unit}` : ''}`
+              : '—'}
           </Text>
-        ) : null}
+          <Text style={[text.dim, text.num]}>
+            {scrubbed !== null && series
+              ? `realised P&L at ${shortDate(series.ats[scrubbed] ?? now)}`
+              : `realised P&L, ${WINDOW_LABEL[range]}`}
+          </Text>
+          {scrubbed === null && summary && range !== '1D' ? (
+            <Text style={[text.dim, text.num, styles.pushRight, toneStyle(today.tone)]}>
+              {today.sign}
+              {today.magnitude} today
+            </Text>
+          ) : null}
+        </View>
       </View>
 
       {series ? (
@@ -1571,6 +1584,8 @@ const styles = StyleSheet.create({
   hero: { marginTop: 18, gap: 4 },
   figure: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 2 },
   pushRight: { marginLeft: 'auto' },
+  pnlLine: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  balanceNote: { marginVertical: 8 },
   chart: { marginTop: 10 },
   chartEmpty: { marginTop: 14, marginBottom: 8 },
   stats: { gap: 8, marginTop: 12 },

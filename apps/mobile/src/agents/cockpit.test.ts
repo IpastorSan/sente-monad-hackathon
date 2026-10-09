@@ -22,6 +22,7 @@ import {
   tabFrom,
   trackLayout,
   watchedLevels,
+  windowPnl,
 } from './cockpit.ts';
 import { toLedgerEntries, type LedgerEvent } from './ledger.ts';
 
@@ -375,4 +376,20 @@ test('scheduleLine: next check, pauses, manual, and the record alone without the
   );
   assert.equal(scheduleLine(null, { everySeconds: 3600 }, NOW), 'Checks the markets every 1h.');
   assert.equal(scheduleLine(null, null, NOW), 'Runs only when you run it.');
+});
+
+test('windowPnl follows the range pills: summary for All and 1D, the curve for 1W', () => {
+  const summary = { pnl: { last24h: '-1.5', allTime: '12.25' } };
+  assert.equal(windowPnl('All', summary, null), '12.25');
+  assert.equal(windowPnl('1D', summary, null), '-1.5');
+  // The week's curve starts where P&L stood when the window opened.
+  assert.equal(
+    windowPnl('1W', summary, { points: ['10', '11.5', '8.25'], ats: [0, 1, 2] }),
+    '-1.75',
+  );
+  assert.equal(windowPnl('1W', summary, { points: ['-2', '3'], ats: [0, 1] }), '5');
+  // No trade settled in the window: nothing was realised in it.
+  assert.equal(windowPnl('1W', summary, null), '0');
+  // No summary at all is no figure, not a zero.
+  assert.equal(windowPnl('All', undefined, null), null);
 });

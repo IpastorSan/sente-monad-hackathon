@@ -235,6 +235,34 @@ export function equitySeries(
   return { points, ats };
 }
 
+/**
+ * Realised P&L over the window the range pills pick (SEN-177): the summary's
+ * all-time and 24 h figures for All and 1D, and the curve's own change for
+ * 1W. `null` when there is no figure to give (no summary); a week with no
+ * settled trade is a zero, not a missing figure.
+ */
+export function windowPnl(
+  range: EquityRange,
+  summary: Pick<AgentSummary, 'pnl'> | undefined,
+  series: EquitySeries | null,
+): string | null {
+  if (!summary) return null;
+  if (range === 'All') return summary.pnl.allTime;
+  if (range === '1D') return summary.pnl.last24h;
+  const first = series?.points[0];
+  const last = series?.points.at(-1);
+  if (first === undefined || last === undefined) return '0';
+  const negated = first.startsWith('-') ? first.slice(1) : `-${first.replace(/^\+/, '')}`;
+  return sumDecimals([last, negated]) ?? '0';
+}
+
+/** What the window is called next to its P&L. */
+export const WINDOW_LABEL: Record<EquityRange, string> = {
+  All: 'all time',
+  '1W': 'past week',
+  '1D': 'past 24 h',
+};
+
 // ---------------------------------------------------------------------------
 // Overview: open positions
 
