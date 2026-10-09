@@ -68,17 +68,23 @@ import {
   type MakerFill,
 } from './mapping.ts';
 import {
+  approveBuilderCall,
+  builderApprovalCovers,
   cancelOrderCall,
+  decodeBuilderFees,
   decodeMakerFills,
   decodeOrderOutcome,
   depositCalls,
   encodeNativeOrder,
   formatOrderId,
+  KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI,
   KuruOrderError,
   parseOrderId,
   placeOrderCall,
   toClientOrderId,
   withdrawCall,
+  type KuruBuilderApproval,
+  type KuruBuilderFee,
   type KuruCall,
   type KuruLog,
   type KuruMarketParams,
@@ -119,8 +125,34 @@ export type KuruSubmitter = {
   submit(calls: readonly KuruCall[]): Promise<KuruExecution>;
 };
 
+/**
+ * A builder fee on every order this venue places (SEN-184), and how the
+ * account's approval of that builder is kept current.
+ */
+export type KuruBuilderSettings = KuruBuilderFee & {
+  /**
+   * The expiry to approve the builder until, in Unix seconds, given the time
+   * now. An agent passes its mandate's `expiresAt`, which its policy pins as
+   * the ceiling.
+   */
+  readonly approvalExpiry: (nowSeconds: number) => bigint;
+  /** Re-approve when the current approval has less than this left. Default 1 day. */
+  readonly renewWithinSeconds?: number;
+};
+
+/** Re-approve a builder once its approval has less than a day to run. */
+export const BUILDER_APPROVAL_RENEW_WITHIN_SECONDS = 86_400;
+
 export type KuruVenueConfig = {
   readonly publicClient: PublicClient;
+  /**
+   * With it, every order pays this builder fee, and `placeLimit`/`placeMarket`
+   * first approve the builder when the account's approval does not cover it.
+   * Without it, orders use the plain `batch` overloads.
+   */
+  readonly builder?: KuruBuilderSettings;
+  /** The clock builder approvals are checked against, ms. Defaults to `Date.now`. */
+  readonly now?: () => number;
   /** Without one the adapter is read-only and every write throws. */
   readonly submitter?: KuruSubmitter;
   /** Account whose balances and orders are read. Defaults to the submitter's. */
@@ -187,10 +219,14 @@ export class KuruVenue implements Venue {
   readonly #accountCore: Address;
   readonly #markets: readonly KuruMarketConfig[];
   readonly #params = new Map<Address, Promise<KuruMarketParams>>();
+  readonly #builder: KuruBuilderSettings | undefined;
+  readonly #now: () => number;
   #accountId: bigint | undefined;
 
   constructor(config: KuruVenueConfig) {
     this.#client = config.publicClient;
+    this.#builder = config.builder;
+    this.#now = config.now ?? Date.now;
     this.#submitter = config.submitter;
     this.#account = config.account ?? config.submitter?.address;
     this.#api = createKuruApi(config.api);
@@ -260,6 +296,45 @@ export class KuruVenue implements Venue {
    */
   async marketOrderCalls(request: MarketOrderRequest): Promise<KuruCall[]> {
     return [(await this.#prepareMarket(request)).call];
+  }
+
+  /** The builder fee every order of this venue pays, if any (SEN-184). */
+  get builder(): KuruBuilderFee | undefined {
+    const builder = this.#builder;
+    return builder ? { address: builder.address, feePps: builder.feePps } : undefined;
+  }
+
+  /** `getBuilderApproval(account, builder)`: what this account has approved `builder` for. */
+  async builderApproval(builder: Address): Promise<KuruBuilderApproval> {
+    const raw = (await this.#client.readContract({
+      address: this.#accountCore,
+      abi: KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI,
+      functionName: 'getBuilderApproval',
+      args: [this.#requireAccount(), builder],
+    })) as { maxFeePps: number; expiry: bigint; active: boolean };
+    return { maxFeePps: Number(raw.maxFeePps), expiry: BigInt(raw.expiry), active: raw.active };
+  }
+
+  /**
+   * `[approveBuilder]` when this account's approval of the configured builder
+   * is missing, expired or soon to be, or below the rate; `[]` when it covers
+   * the next order, or when no builder is configured.
+   */
+  async builderApprovalCalls(): Promise<KuruCall[]> {
+    const builder = this.#builder;
+    if (!builder) return [];
+    const nowSeconds = Math.floor(this.#now() / 1000);
+    const approval = await this.builderApproval(builder.address);
+    const renew = builder.renewWithinSeconds ?? BUILDER_APPROVAL_RENEW_WITHIN_SECONDS;
+    if (builderApprovalCovers(approval, builder.feePps, nowSeconds, renew)) return [];
+    return [
+      approveBuilderCall(
+        this.#accountCore,
+        builder.address,
+        builder.feePps,
+        builder.approvalExpiry(nowSeconds),
+      ),
+    ];
   }
 
   deposit(asset: string, amount: Decimal): Promise<KuruExecution> {
@@ -611,6 +686,7 @@ export class KuruVenue implements Venue {
         market.address,
         order,
         clientOrderId === undefined ? undefined : toClientOrderId(clientOrderId),
+        this.builder,
       ),
     };
   }
@@ -620,11 +696,13 @@ export class KuruVenue implements Venue {
     type: OrderType,
     price: Decimal | undefined,
   ): Promise<Order> {
-    const execution = await this.#submit([prepared.call]);
+    // The approval leg goes first: AccountCore refuses a builder order the
+    // account has not approved, and the whole list lands as one unit.
+    const execution = await this.#submit([...(await this.builderApprovalCalls()), prepared.call]);
     // Read after submitting: a first order can arrive in the same batch as the
     // deposit that registers the account.
     const accountId = await this.accountId();
-    return toPlacedOrder({
+    const order = toPlacedOrder({
       symbol: prepared.market.symbol,
       side: prepared.side,
       type,
@@ -641,6 +719,14 @@ export class KuruVenue implements Venue {
       quoteDecimals: prepared.market.quote.decimals,
       feeAsset: prepared.market.quote.symbol,
     });
+    const builder = this.#builder;
+    if (!builder) return order;
+    // What the builder was actually paid, from AccountCore's own events.
+    const quote = prepared.market.quote;
+    const paid = decodeBuilderFees(execution.logs, this.#accountCore, builder.address, accountId)
+      .filter((fee) => isAddressEqual(fee.asset, quote.address))
+      .reduce((sum, fee) => sum + fee.amount, 0n);
+    return { ...order, builderFee: fromUnits(paid, quote.decimals), builderFeeAsset: quote.symbol };
   }
 
   async #submit(calls: readonly KuruCall[]): Promise<KuruExecution> {

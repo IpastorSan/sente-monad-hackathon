@@ -29,6 +29,7 @@
  */
 import {
   abi as kuruAbi,
+  buildApproveBuilderRequest,
   buildApproveErc20Request,
   buildBatchRequest,
   buildDepositRequest,
@@ -224,8 +225,19 @@ function toCall(request: ContractRequest): KuruCall {
   };
 }
 
-/** The `batch` overloads this module encodes: without and with a `clientOrderId`. */
+/** The plain `batch` overloads this module encodes: without and with a `clientOrderId`. */
 const BATCH_SIGNATURES = new Set(['uint40,tuple[],uint8[]', 'uint40,tuple[],uint8[],bytes32']);
+
+/**
+ * The builder-fee `batch` overloads (SEN-184): the same two, plus a trailing
+ * `builderConfig(address builder, uint32 feePps)`. Kept apart from
+ * {@link BATCH_SIGNATURES} so the ABI every live agent policy already pins
+ * stays byte-identical.
+ */
+const BUILDER_BATCH_SIGNATURES = new Set([
+  'uint40,tuple[],uint8[],tuple',
+  'uint40,tuple[],uint8[],bytes32,tuple',
+]);
 
 function abiFunctions(abi: Abi, keep: (fn: AbiFunction) => boolean): Abi {
   return abi.filter((item): item is AbiFunction => item.type === 'function' && keep(item));
@@ -240,6 +252,31 @@ function abiFunctions(abi: Abi, keep: (fn: AbiFunction) => boolean): Abi {
 export const KURU_ORDERBOOK_BATCH_ABI: Abi = abiFunctions(
   kuruAbi.spotOrderBookAbi as Abi,
   (fn) => fn.name === 'batch' && BATCH_SIGNATURES.has(fn.inputs.map((i) => i.type).join(',')),
+);
+
+/**
+ * `OrderBook.batch`, the two builder-fee overloads only (SEN-184). A policy rule
+ * that allows these allows an order that pays SOME builder; AccountCore then
+ * refuses any builder the account has not approved (`BuilderApprovalNotFound`)
+ * or any rate above the approved maximum (`BuilderFeeTooHigh`), so the
+ * `approveBuilder` rule is what pins who is paid and how much.
+ */
+export const KURU_ORDERBOOK_BUILDER_BATCH_ABI: Abi = abiFunctions(
+  kuruAbi.spotOrderBookAbi as Abi,
+  (fn) =>
+    fn.name === 'batch' && BUILDER_BATCH_SIGNATURES.has(fn.inputs.map((i) => i.type).join(',')),
+);
+
+/** `AccountCore.approveBuilder(builder, maxFeePps, expiry)`, cut from the SDK's ABI. */
+export const KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI: Abi = abiFunctions(
+  kuruAbi.accountCoreAbi as Abi,
+  (fn) => fn.name === 'approveBuilder',
+);
+
+/** `AccountCore.getBuilderApproval(rootAccount, builder)`: what a root has approved a builder for. */
+export const KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI: Abi = abiFunctions(
+  kuruAbi.accountCoreAbi as Abi,
+  (fn) => fn.name === 'getBuilderApproval',
 );
 
 /** `AccountCore.deposit(token, amount)`, cut from the SDK's ABI for the same reason. */
@@ -292,15 +329,91 @@ export const ERC20_TRANSFER_ABI = [
   },
 ] as const satisfies Abi;
 
-/** `batch(0, [order], [])`: one order for the calling account. */
+/**
+ * A builder fee on an order (SEN-184): who is paid and at what rate, in parts
+ * per ten million of the notional. Kuru caps it at {@link KURU_MAX_BUILDER_FEE_PPS}.
+ */
+export type KuruBuilderFee = {
+  readonly address: Address;
+  readonly feePps: number;
+};
+
+/** AccountCore's `MAX_FEE_PPS()`, 1%, read on testnet 2026-10-09. */
+export const KURU_MAX_BUILDER_FEE_PPS = 100_000;
+
+/**
+ * `batch(0, [order], [])`: one order for the calling account. With `builder`,
+ * the builder-fee overload, which also pays `builder.feePps` of the notional
+ * to `builder` — only if the account approved that builder at that rate.
+ */
 export function placeOrderCall(
   market: Address,
   order: NativeOrderInput,
   clientOrderId?: Hex,
+  builder?: KuruBuilderFee,
 ): KuruCall {
   return toCall(
-    buildBatchRequest({ market, userId: 0n, orders: [order], cancelSlotIdxs: [], clientOrderId }),
+    buildBatchRequest({
+      market,
+      userId: 0n,
+      orders: [order],
+      cancelSlotIdxs: [],
+      clientOrderId,
+      ...(builder ? { builderConfig: { builder: builder.address, feePps: builder.feePps } } : {}),
+    }),
   );
+}
+
+/**
+ * `AccountCore.approveBuilder(builder, maxFeePps, expiry)`: lets `builder` charge
+ * up to `maxFeePps` on this account's orders until `expiry` (Unix seconds).
+ * Called by the account itself — the root — so it needs no account id.
+ */
+export function approveBuilderCall(
+  accountCore: Address,
+  builder: Address,
+  maxFeePps: number,
+  expiry: bigint,
+): KuruCall {
+  if (!Number.isInteger(maxFeePps) || maxFeePps <= 0 || maxFeePps > KURU_MAX_BUILDER_FEE_PPS) {
+    throw new KuruOrderError(`builder fee ${maxFeePps} pps is outside Kuru's range`);
+  }
+  if (expiry <= 0n) throw new KuruOrderError('builder approval expiry must be positive');
+  return toCall(buildApproveBuilderRequest({ accountCore, builder, maxFeePps, expiry }));
+}
+
+/** `getBuilderApproval(root, builder)` as read. `active` is false when none was ever granted. */
+export type KuruBuilderApproval = {
+  readonly maxFeePps: number;
+  /** Unix seconds. */
+  readonly expiry: bigint;
+  readonly active: boolean;
+};
+
+/**
+ * Whether an existing approval lets `feePps` be charged for at least
+ * `renewWithinSeconds` more. Anything less is re-approved rather than left to
+ * revert an order on chain, where Monad still charges the whole gas limit.
+ */
+export function builderApprovalCovers(
+  approval: KuruBuilderApproval,
+  feePps: number,
+  nowSeconds: number,
+  renewWithinSeconds: number,
+): boolean {
+  return (
+    approval.active &&
+    approval.maxFeePps >= feePps &&
+    approval.expiry > BigInt(Math.floor(nowSeconds) + renewWithinSeconds)
+  );
+}
+
+/**
+ * The builder fee on `notionalAtoms` of quote, rounded UP: what the app shows
+ * as "≈" and what a buy's reserve sets aside, so neither understates it.
+ */
+export function builderFeeAtoms(notionalAtoms: bigint, feePps: number | bigint): bigint {
+  return (notionalAtoms * BigInt(feePps) + PPS_DENOMINATOR - 1n) / PPS_DENOMINATOR;
 }
 
 /** `batch(0, [], [slotIdx])`: cancel one resting order of the calling account. */
@@ -358,6 +471,58 @@ export function erc20TransferCall(token: Address, to: Address, amount: bigint): 
 /** The testnet faucet's `claim()`. Pays whoever calls it. */
 export function faucetClaimCall(): KuruCall {
   return { to: KURU_FAUCET.address, value: 0n, data: KURU_FAUCET.claimSelector };
+}
+
+const BUILDER_FEE_ACCRUED = kuruAbi.accountCoreAbi.filter(
+  (item) => item.type === 'event' && item.name === 'BuilderFeeAccrued',
+);
+
+/** One `BuilderFeeAccrued`: what one execution paid one builder, in `asset` atoms. */
+export type KuruBuilderFeePaid = {
+  readonly asset: Address;
+  readonly amount: bigint;
+  readonly feePps: number;
+};
+
+/**
+ * The builder fees `takerAccountId` paid `builder` in this execution, from
+ * AccountCore's `BuilderFeeAccrued` events, one entry per event (SEN-184).
+ *
+ * The event names the TAKER account only, so a resting order's later maker
+ * fills cannot be attributed here; until a live fill shows whether makers
+ * pay a builder fee at all, a maker fill reports none.
+ */
+export function decodeBuilderFees(
+  logs: readonly KuruLog[],
+  accountCore: Address,
+  builder: Address,
+  takerAccountId: bigint,
+): KuruBuilderFeePaid[] {
+  const paid: KuruBuilderFeePaid[] = [];
+  for (const log of logs) {
+    if (!isAddressEqual(log.address, accountCore) || log.topics.length === 0) continue;
+    let event;
+    try {
+      event = decodeEventLog({
+        abi: BUILDER_FEE_ACCRUED,
+        data: log.data,
+        topics: log.topics as [Hex, ...Hex[]],
+      });
+    } catch {
+      continue;
+    }
+    const args = event.args as {
+      builder: Address;
+      asset: Address;
+      takerAccountId: number | bigint;
+      builderFeePps: number;
+      amount: bigint;
+    };
+    if (!isAddressEqual(args.builder, builder)) continue;
+    if (BigInt(args.takerAccountId) !== takerAccountId) continue;
+    paid.push({ asset: args.asset, amount: args.amount, feePps: Number(args.builderFeePps) });
+  }
+  return paid;
 }
 
 /** Where a resting order lives. */
