@@ -12,10 +12,11 @@
     "export:web": "pnpm run setup:web && expo export --platform web --output-dir dist-web",
     "read-block": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/read-block.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --test 'src/**/*.test.ts'",
+    "test": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --test 'src/**/*.test.ts' 'scripts/**/*.test.ts'",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "claim:ausd": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/claim-ausd.ts",
+    "live:flows": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/live-flows.ts",
     "trade:live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/trade-live.ts",
     "prf:equivalence": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/prf-equivalence.ts",
     "e2e:web-reload": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/web-reload-e2e.ts"
