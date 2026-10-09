@@ -15,6 +15,7 @@ import { PNL_LABEL_PLACES, pnlLabel } from './leaderboard.ts';
 import {
   depositAmount,
   venueLabel,
+  type AccountEntry,
   type DepositEntry,
   type Direction,
   type LedgerEntry,
@@ -42,7 +43,15 @@ export function stoneFor(entry: LedgerEntry): LedgerStone {
       return entry.kind;
     case 'verdict':
       return outcome(entry) === 'down' ? 'loss' : 'win';
+    // Money placed on the venue is a stone; a step still waiting is an open ring.
+    case 'account':
+      return accountOpened(entry) ? 'deposit' : 'thesis';
   }
+}
+
+/** Whether the account step landed, rather than waits on gas or a retry. */
+export function accountOpened(entry: AccountEntry): boolean {
+  return entry.status === 'opened' || entry.status === 'resumed' || entry.status === 'enrolled';
 }
 
 /**

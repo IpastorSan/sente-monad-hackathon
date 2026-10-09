@@ -71,6 +71,8 @@ import {
 } from '@/agents/cockpit';
 import { FUNDING_TOKENS } from '@/agents/fund';
 import { fundAgent } from '@/agents/initialFunding';
+import { perpsFundHint } from '@/agents/perps';
+import { PerpsStatus } from '@/agents/PerpsStatus';
 import { RiskConfirm } from '@/agents/Risks';
 import { alreadyRunning, liveRun, runningLine, waitForRunStart } from '@/agents/runState';
 import type { RunSummary } from '@/agents/terminal';
@@ -192,6 +194,10 @@ export default function AgentScreen() {
    */
   const [riskGate, setRiskGate] = useState<{ then: () => void } | null>(null);
   const [acking, setAcking] = useState(false);
+  /** SEN-187: bumped by a fund, so the Perps line asks the API to open the account. */
+  const [perpsNudge, setPerpsNudge] = useState(0);
+  /** The token the Perps line's "Fund" asked for; remounts the sheet on it. */
+  const [fundToken, setFundToken] = useState<string | undefined>(undefined);
 
   const refreshBalances = useCallback((address: Agent['address']) => {
     readBalances(address).then(setBalances, () => setBalances(null));
@@ -376,6 +382,17 @@ export default function AgentScreen() {
         />
       ) : null}
 
+      {active ? (
+        <PerpsStatus
+          agent={agent}
+          nudge={perpsNudge}
+          onFund={(token) => {
+            setFundToken(token);
+            setSheet('fund');
+          }}
+        />
+      ) : null}
+
       {active ? null : (
         <Notice
           title={`Revoked${agent.revokedAt ? ` on ${shortDate(Date.parse(agent.revokedAt))}` : ''}`}
@@ -433,11 +450,15 @@ export default function AgentScreen() {
 
       <DetailsSheet agent={agent} visible={sheet === 'details'} onClose={close} />
       <FundSheet
+        key={fundToken ?? 'fund'}
         agent={agent}
         visible={sheet === 'fund'}
         onClose={close}
-        onSent={finish}
-        initial={{ token: askedToken, amount: askedAmount }}
+        onSent={(next) => {
+          finish(next);
+          if (next.tone !== 'error') setPerpsNudge((n) => n + 1);
+        }}
+        initial={{ token: fundToken ?? askedToken, amount: askedAmount }}
       />
       <RunSheet
         agent={agent}
@@ -1010,6 +1031,9 @@ function SpineEntry({ entry }: { entry: LedgerEntry }) {
       body = source ? <Text style={text.mono}>{source}</Text> : null;
       break;
     }
+    case 'account':
+      head = <Text style={text.strong}>{entry.message}</Text>;
+      break;
   }
   return (
     <View style={styles.move}>
@@ -1311,6 +1335,8 @@ function FundSheet({
 
   const atoms = parseAmount(amount, token.decimals);
   const tooMuch = atoms !== null && available !== null && atoms > available;
+  // SEN-187: with perps in the mandate, AUSD of at least Perpl's minimum opens its account.
+  const perpsHint = perpsFundHint(agent.mandate.venues, token, atoms);
   const invalid = amount.trim() !== '' && atoms === null;
   const walletId = wallet.wallet?.walletId;
   const ready = wallet.status === 'ready' && walletId !== undefined;
@@ -1373,6 +1399,7 @@ function FundSheet({
             : undefined
         }
       />
+      {perpsHint ? <Text style={text.caption}>{perpsHint}</Text> : null}
       <Row label="From" value={from ? shortAddress(from) : '—'} mono />
       <Row label="To" value={shortAddress(agent.address)} mono />
       <Text style={[text.caption, styles.after]}>

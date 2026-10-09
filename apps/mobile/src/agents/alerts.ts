@@ -23,6 +23,7 @@
 import type { ActivityEvent } from './api.ts';
 import { heldLabel, toLedgerEntries, type LedgerEntry } from './ledger.ts';
 import {
+  accountOpened,
   depositHeadline,
   depositSource,
   heldBy,
@@ -157,6 +158,13 @@ function sentence(entry: Exclude<LedgerEntry, { kind: 'thesis' }>): Sentence {
         // The Ledger's `Funded 500.00 USDC`, with the agent as the one who received it.
         lead: ` received ${depositHeadline(entry).replace(/^Funded /u, '')}`,
         detail: depositSource(entry),
+      };
+    // SEN-187: Sente opening the agent's Perpl account, or why it could not yet.
+    case 'account':
+      return {
+        ...plain,
+        lead: accountOpened(entry) ? ': perps account opened' : '’s perps account is not open yet',
+        detail: orNull(entry.message),
       };
   }
 }

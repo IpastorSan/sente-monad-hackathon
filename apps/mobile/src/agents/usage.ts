@@ -278,5 +278,7 @@ export function describeMove(event: WireAgentEvent): Move | null {
         at,
       };
     }
+    case 'account':
+      return { stone: stoneFor(entry), line: entry.message, at };
   }
 }
