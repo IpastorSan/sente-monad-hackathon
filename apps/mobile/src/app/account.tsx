@@ -63,6 +63,15 @@ export default function Account() {
         </Text>
       </Section>
 
+      <Section label="Help">
+        <ActionRow
+          icon="help"
+          title="How Sente works"
+          detail="Your passkey, your wallet, agents and their mandates, and what isn't proven yet."
+          onPress={() => router.push('/how-it-works')}
+        />
+      </Section>
+
       <Section label="Session">
         <ActionRow
           icon="return"

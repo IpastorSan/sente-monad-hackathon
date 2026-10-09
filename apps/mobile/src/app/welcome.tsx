@@ -19,7 +19,7 @@
  * Signing in lands on the tabs: the moment the session is `ready` this
  * redirects to `/`, so there is no "continue" step after the system sheet.
  */
-import { Redirect } from 'expo-router';
+import { Link, Redirect } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -33,7 +33,7 @@ import { useSession } from '@/session';
 import { GobanHero } from '@/ui/GobanHero';
 import { Mark, Pill } from '@/ui/goban';
 import { Button, Notice, Screen, SHEET_MAX, Sheet } from '@/ui/kit';
-import { color, text } from '@/ui/theme';
+import { color, font, text } from '@/ui/theme';
 
 /** Default WebAuthn account name. The passkey is what identifies the user. */
 const USER_NAME = 'sente';
@@ -134,6 +134,10 @@ export default function Welcome() {
           Hire AI agents that trade for you on Monad — inside limits a secure enclave enforces,
           however the agent is prompted.
         </Text>
+        {/* SEN-181: readable before a passkey exists — the page needs no session. */}
+        <Link href="/how-it-works" style={styles.how}>
+          How it works →
+        </Link>
       </View>
 
       {error !== null ? (
@@ -173,4 +177,5 @@ const styles = StyleSheet.create({
   center: { textAlign: 'center' },
   tipNote: { marginTop: 10 },
   tipButton: { marginTop: 20 },
+  how: { alignSelf: 'flex-start', fontFamily: font.medium, fontSize: 15, color: color.purpleHi },
 });
