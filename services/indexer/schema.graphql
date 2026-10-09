@@ -1,12 +1,15 @@
 """
-Sente leaderboard schema — Monad testnet (10143), Kuru Spot V2 + Perpl.
+Sente leaderboard schema — Monad testnet (10143), Kuru Spot V2 fills.
+
+Kuru only (SEN-171): Perpl's event volume does not fit Envio Cloud's
+100k-event Development plan — see docs/indexer.md §budget. `Venue` and the
+`kuru-` id prefix stay so the API's reads do not change shape.
 
 Design notes:
-- Kuru identities are `uint40` account ids inside AccountCore, not addresses;
-  Perpl ids are `uint256` Exchange account ids. `Account.id` is therefore
-  `"kuru-<id>"` / `"perpl-<id>"`, and its address is read off the venue the
-  first time the account is seen (most registration events are older than the
-  indexed range — see docs/indexer.md §addresses).
+- Kuru identities are `uint40` account ids inside AccountCore, not addresses.
+  `Account.id` is therefore `"kuru-<id>"`, and its address is read off
+  AccountCore the first time the account is seen (most registration events
+  are older than the indexed range — see docs/indexer.md §addresses).
 - Money is stored as the venue's raw integer units wherever arithmetic happens
   (FIFO-style realised PnL is exact BigInt); `*Usd`/`price` conveniences are
   BigDecimal derived at write time. No float ever touches a raw value.
@@ -21,42 +24,36 @@ enum Side {
 
 enum Venue {
   KURU
-  PERPL
 }
 
 """
-A venue trading account: Kuru AccountCore account (uint40 id) or Perpl
-Exchange account (uint256 id). The address is resolved from the venue on first
-sight and confirmed by AccountRegistered / AccountCreated when one lands inside
-the indexed range; it is null only for an id the venue itself does not know,
-and then the leaderboard shows the raw account id.
+A Kuru AccountCore trading account (uint40 id). The address is resolved from
+AccountCore on first sight and confirmed by AccountRegistered when one lands
+inside the indexed range; it is null only for an id AccountCore itself does
+not know, and then the leaderboard shows the raw account id.
 """
 type Account {
-  # "kuru-62" | "perpl-1"
+  # "kuru-62"
   id: ID!
   venue: Venue!
   # Numeric account id exactly as emitted on-chain.
   accountId: BigInt!
-  # The venue account address (lowercase): Kuru `AccountRegistered.account`,
-  # Perpl `AccountCreated.account`, or — when that one-shot event is older than
-  # the indexed range, which is the common case — `AccountCore.userAddressById`
-  # / `Exchange.getAccountById`, read once per account. This is the address that
+  # The account address (lowercase): `AccountRegistered.account`, or — when
+  # that one-shot event is older than the indexed range, which is the common
+  # case — `AccountCore.userAddressById`, read once per account. This is the address that
   # trades and the one a Sente user is matched on, so a null here is an account
   # the leaderboard cannot show at all. See docs/indexer.md §addresses.
   address: String
-  # Owner the venue names separately (Kuru `AccountRegistered.owner`). Perpl has
-  # no equivalent, so it stays null there. Not inferred from `address`.
+  # Owner AccountCore names separately (`AccountRegistered.owner`); null until
+  # that event is seen. Not inferred from `address`.
   owner: String
   firstSeenBlock: BigInt!
   firstSeenAt: Timestamp!
-  # Custody rails (Kuru Deposit/Withdrawal + SpotReserveUpdated, Perpl
-  # CollateralDeposit/Withdrawal).
+  # Custody flows (AccountCore Deposit/Withdrawal).
   balances: [AccountBalance!]! @derivedFrom(field: "account")
   # Leaderboard rows, one per market traded.
   marketStats: [AccountMarketStats!]! @derivedFrom(field: "account")
   tradesAsTaker: [Trade!]! @derivedFrom(field: "taker")
-  # Perpl maker fills update stats but do not create Trade rows — see
-  # docs/indexer.md §perpl.
   tradesAsMaker: [Trade!]! @derivedFrom(field: "maker")
   # Cross-market rollup kept in sync with the stats rows.
   totalTradeCount: Int!
@@ -67,17 +64,14 @@ type Account {
 }
 
 """
-An account's custody of one token. Two independent readings of the same rail,
-kept apart on purpose because they answer different questions:
+An account's custody flow for one token: the cumulative movement between
+wallet and AccountCore. It knows nothing about what the venue did internally
+(fills, fees), so `net` is NOT a balance — it is the capital the account put
+in and has not taken out, which is what the leaderboard's ROI divides by.
 
-- `deposited`/`withdrawn`/`net` are the cumulative **flow** between wallet and
-  venue. They know nothing about what the venue did internally (fills, fees,
-  funding), so `net` is NOT a balance.
-- `freeRaw`/`reservedRaw` are the absolute **balances** the venue reports. They
-  are written from absolute values rather than accumulated, so a dropped event
-  is corrected by the next one instead of drifting forever.
-
-Fills are not applied here; this mirrors what moved between wallet and venue.
+The absolute balance (`SpotReserveUpdated`) is not indexed: it is emitted on
+every fill and custody change, ~29k a day, and the leaderboard never read it
+(docs/indexer.md §budget).
 """
 type AccountBalance {
   # "<accountId>-<tokenAddress>" (lowercase)
@@ -88,24 +82,14 @@ type AccountBalance {
   deposited: BigInt!
   withdrawn: BigInt!
   net: BigInt!
-  # Kuru `SpotReserveUpdated` free/reserved. Perpl: free is `balanceCNS` from
-  # CollateralDeposit/Withdrawal and reserved stays 0 (its locked balance is not
-  # on those events). Consumers sum the pair.
-  freeRaw: BigInt!
-  reservedRaw: BigInt!
   decimals: Int!
   lastUpdatedBlock: BigInt!
 }
 
 """
-One matched trade. Kuru: one row per record unpacked from a `TradesPacked`
-log (taker + maker both resolved). Perpl: one row per `TakerOrderFilledV2`
-log, attributed from the `OrderRequestV2` in the same transaction; the maker
-is the first `MakerOrderFilledV2` in that transaction (a multi-maker sweep
-records the taker's aggregate fill once and attributes the first maker, so
-market volume is counted once per match rather than once per leg). Perpl
-`Trade` rows are a tape, not the authority on PnL — see docs/indexer.md
-§perpl.
+One matched trade: one row per record unpacked from a `TradesPacked` log,
+with the taker (the event's indexed account) and the maker (inside the
+record) both resolved.
 """
 type Trade {
   # "<chainId>-<blockNumber>-<logIndex>-<recordIndex>"
@@ -114,17 +98,17 @@ type Trade {
   market: Market!
   # BUY = taker bought base; SELL = taker sold base.
   side: Side!
-  # Raw book units as emitted: Kuru price/size in book units (see Market
-  # precisions), Perpl pricePNS/lotLNS in the market's PNS/LNS scaling.
+  # Raw book units as emitted (see Market precisions).
   rawPrice: BigInt!
   rawSize: BigInt!
   # Human-readable price and quote notional, derived at write time.
   price: BigDecimal!
   notionalUsd: BigDecimal!
+  # The resting account whose order was hit.
   maker: Account
   # The aggressing account. Always set.
   taker: Account!
-  # Fee raw units: Kuru pps (per ten million), Perpl CNS (per million).
+  # Fees in quote atoms, from the taker's and maker's pps (per ten million).
   takerFeeRaw: BigInt!
   makerFeeRaw: BigInt!
   blockNumber: BigInt!
@@ -134,26 +118,24 @@ type Trade {
 }
 
 """
-A market. Kuru markets are seeded in src/lib/seeds.ts from
-packages/venues/src/kuru/constants.ts; Perpl markets are seeded from the
-live `/api/v1/pub/context` and upserted by `ContractAdded` if one lands
-inside the indexed range.
+A Kuru market, one per OrderBook proxy, seeded in src/lib/seeds.ts from
+packages/venues/src/kuru/constants.ts.
 """
 type Market {
-  # Kuru: "kuru-<orderBookAddress>" | Perpl: "perpl-<perpId>" (lowercase addr)
+  # "kuru-<orderBookAddress>" (lowercase)
   id: ID!
   venue: Venue!
-  # "MON-USDC" | "BTC-PERP"
+  # "MON-USDC"
   symbol: String!
   base: String!
   quote: String!
-  # Kuru: book price units per 1 quote-per-base. Perpl: 10^price_decimals.
+  # Book price units per 1 quote-per-base.
   pricePrecision: BigInt!
-  # Kuru: book size units per 1 base. Perpl: 10^lot_decimals.
+  # Book size units per 1 base.
   sizePrecision: BigInt!
   baseDecimals: Int!
   quoteDecimals: Int!
-  # Kuru only: the OrderBook proxy address (lowercase) emitting this market.
+  # The OrderBook proxy address (lowercase) emitting this market.
   address: String
   tradeCount: Int!
   volumeUsd: BigDecimal!
@@ -202,7 +184,7 @@ type AccountMarketStats {
   volumeUsd: BigDecimal!
   boughtBase: BigDecimal!
   soldBase: BigDecimal!
-  # Quote units (Kuru USDC 6dp, Perpl AUSD CNS 6dp).
+  # Quote units (USDC, 6dp).
   realizedPnlUsd: BigDecimal!
   wins: Int!
   losses: Int!
@@ -212,69 +194,4 @@ type AccountMarketStats {
   openCostRaw: BigInt!
   firstTradeBlock: BigInt!
   lastTradeBlock: BigInt!
-}
-
-"""
-Kuru `BookUpdatesPacked` history — every resting-order add/remove observed.
-Not needed by the leaderboard; it is the order-lifecycle feed (and the
-reason BookUpdatesPacked is indexed at all).
-"""
-type MakerOrderUpdate {
-  # "<chainId>-<blockNumber>-<logIndex>-<recordIndex>"
-  id: ID!
-  market: Market!
-  # AccountCore id (stringified uint40) of the maker this update belongs to.
-  makerAccountId: String!
-  slotIdx: Int!
-  orderId: BigInt!
-  priceRaw: BigInt!
-  sizeRaw: BigInt!
-  isBuy: Boolean!
-  # true = placed/rested on book, false = removed (filled/cancelled/dust).
-  isLive: Boolean!
-  blockNumber: BigInt!
-  timestamp: Timestamp!
-  txHash: String!
-  logIndex: Int!
-}
-
-"""
-Perpl `OrderRequestV2` context. Taker fills carry no perpId/accountId — they
-are joined to the most recent request in the same transaction with a
-lower logIndex. The handler that writes these runs before the fills in the
-same transaction (registration order follows log order), and Envio serves
-`getWhere` from uncommitted in-batch writes. Internal plumbing, not public API.
-"""
-type PerplOrderContext @internal {
-  # "<chainId>-<blockNumber>-<logIndex>"
-  id: ID!
-  # @index: required — handlers query getWhere({ txHash }) per fill.
-  txHash: String! @index
-  perpId: BigInt!
-  accountId: BigInt!
-  orderId: BigInt!
-  # Perpl `OrderDescEnum`, **zero-based** — 0 OpenLong (bid), 1 OpenShort (ask),
-  # 2 CloseLong (ask), 3 CloseShort (bid). Verified on chain and against
-  # PerplFoundation/dex-sdk crates/sdk/src/types/order.rs; see src/lib/perpl.ts.
-  orderType: Int!
-  blockNumber: BigInt!
-  logIndex: Int!
-}
-
-"""
-Perpl `MakerOrderFilledV2`, stashed so the `TakerOrderFilledV2` that follows in
-the same transaction can name the maker on its `Trade` row. One row per maker
-fill; `selectFirstMakerFill` picks the lowest logIndex. Internal plumbing, not
-public API.
-"""
-type PerplMakerFill @internal {
-  # "<chainId>-<blockNumber>-<logIndex>"
-  id: ID!
-  # @index: required — the taker handler queries getWhere({ txHash }).
-  txHash: String! @index
-  perpId: BigInt!
-  accountId: BigInt!
-  # The maker's own fee, carried so the taker's Trade row can report it.
-  feeCns: BigInt!
-  logIndex: Int!
 }

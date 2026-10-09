@@ -41,21 +41,14 @@ await import('../../src/EventHandlers.ts');
 
 const MONAD_TESTNET = 10143;
 
-/**
- * Every entity in `schema.graphql`, in the order the summary prints them.
- * `@internal` entities (the two Perpl join tables) are included: they are how
- * the Perpl attribution is checked, and a zero there explains an empty Trade.
- */
+/** Every entity in `schema.graphql`, in the order the summary prints them. */
 const ENTITIES = [
   'Trade',
   'AccountMarketStats',
   'Account',
   'Market',
   'MarketDay',
-  'MakerOrderUpdate',
   'AccountBalance',
-  'PerplOrderContext',
-  'PerplMakerFill',
 ] as const;
 
 type EntityRow = Record<string, unknown>;

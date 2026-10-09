@@ -2,22 +2,23 @@
  * Kuru Spot V2 handlers (Monad testnet, chain 10143).
  *
  * Kuru's OrderBook emits *packed* logs: `TradesPacked.packedTrades` is a flat
- * array of 64-byte bit-packed trade records and `BookUpdatesPacked` holds
- * 39-byte order-lifecycle records — neither is ABI-decodable, so src/lib/packed.ts
- * ports @toxicflow-labs/ts-sdk's decoder and pins it against a real fill
- * (tx 0x9d7fbce1… at block 61406913; see src/lib/packed.test.ts).
+ * array of 64-byte bit-packed trade records, not ABI-decodable, so
+ * src/lib/packed.ts ports @toxicflow-labs/ts-sdk's decoder and pins it against
+ * a real fill (tx 0x9d7fbce1… at block 61406913; see src/lib/packed.test.ts).
  *
  * One match emits the taker's `TradesPacked` (taker = the indexed accountId)
  * with one record per maker filled; each record resolves both leaderboard legs.
- * `BookUpdatesPacked` follows in the same tx for the maker book state.
  *
- * Custody comes off AccountCore, in three independent readings:
- *   SpotReserveUpdated  absolute free/reserved per (account, token) — the balance
- *   Deposit/Withdrawal  cumulative wallet↔venue flow
+ * AccountCore supplies the rest:
+ *   Deposit/Withdrawal  cumulative wallet↔venue flow — the ROI denominator
  *   AccountRegistered   account id → account address, and the owner
+ *
+ * `BookUpdatesPacked` and `SpotReserveUpdated` are deliberately not handled:
+ * together they are ~47k events a day, the leaderboard reads neither, and Envio
+ * Cloud's free plan stops at 100k (docs/indexer.md §budget).
  */
 import { indexer } from 'envio';
-import { decodeBookUpdatesPacked, decodeTradesPacked } from '../lib/packed.ts';
+import { decodeTradesPacked } from '../lib/packed.ts';
 import { kuruMarketByAddress, kuruTokenDecimals } from '../lib/seeds.ts';
 import { decimalsFromPrecision, kuruAccountId, kuruQuoteAtoms, tradeId } from '../lib/stats.ts';
 import { bumpMarket, ensureKuruMarkets, recordMarketDay } from '../lib/markets.ts';
@@ -58,14 +59,7 @@ indexer.onEvent(
     // not the base token's ERC-20 decimals; see decimalsFromPrecision.
     const baseUnitDecimals = decimalsFromPrecision(market.sizePrecision);
     const priceDecimals = decimalsFromPrecision(market.pricePrecision);
-    await ensureAccount(
-      context,
-      takerId,
-      'KURU',
-      event.params.accountId,
-      blockNumber,
-      timestampSec,
-    );
+    await ensureAccount(context, takerId, event.params.accountId, blockNumber, timestampSec);
 
     for (const [recordIdx, rec] of records.entries()) {
       if (rec.fillSize === 0n) continue; // zero-fill bookkeeping record
@@ -80,7 +74,7 @@ indexer.onEvent(
       const takerBuy = !rec.makerIsBuy;
       const takerSigned = takerBuy ? rec.fillSize : -rec.fillSize;
       const makerId = kuruAccountId(rec.makerId);
-      await ensureAccount(context, makerId, 'KURU', rec.makerId, blockNumber, timestampSec);
+      await ensureAccount(context, makerId, rec.makerId, blockNumber, timestampSec);
 
       const priceBd = bd(rec.price, priceDecimals);
       const notionalBd = bd(quoteAtoms, market.quoteDecimals);
@@ -106,7 +100,6 @@ indexer.onEvent(
 
       const leg: Omit<FillInput, 'accountId' | 'role' | 'signedBaseRaw'> = {
         marketId: market.marketId,
-        venue: 'KURU',
         baseUnitDecimals,
         quoteAtoms,
         quoteDecimals: market.quoteDecimals,
@@ -142,65 +135,6 @@ indexer.onEvent(
   },
 );
 
-indexer.onEvent(
-  { contract: 'KuruOrderBook', event: 'BookUpdatesPacked' },
-  async ({ event, context }) => {
-    const market = kuruMarketByAddress(event.srcAddress);
-    if (market === undefined) {
-      context.log.warn('BookUpdatesPacked from unseeded order book — skipped', {
-        srcAddress: event.srcAddress,
-      });
-      return;
-    }
-    await ensureKuruMarkets(context);
-    for (const [recordIdx, rec] of decodeBookUpdatesPacked(event.params.packedUpdates).entries()) {
-      context.MakerOrderUpdate.set({
-        id: tradeId(event.chainId, event.block.number, event.logIndex, recordIdx),
-        market_id: market.marketId,
-        makerAccountId: String(rec.makerId),
-        slotIdx: rec.slotIdx,
-        orderId: rec.orderId,
-        priceRaw: rec.price,
-        sizeRaw: rec.size,
-        isBuy: rec.makerIsBuy,
-        isLive: rec.isLive,
-        blockNumber: BigInt(event.block.number),
-        timestamp: new Date(event.block.timestamp * 1000),
-        txHash: event.transaction.hash,
-        logIndex: event.logIndex,
-      });
-    }
-  },
-);
-
-/**
- * Absolute free/reserved balances per (account, token). Emitted on every
- * custody change *and* every fill, which is what makes it the balance rather
- * than a running sum — a dropped delta is corrected by the next event.
- */
-indexer.onEvent(
-  { contract: 'KuruAccountCore', event: 'SpotReserveUpdated' },
-  async ({ event, context }) => {
-    const accountId = kuruAccountId(event.params.userId);
-    await ensureAccount(
-      context,
-      accountId,
-      'KURU',
-      event.params.userId,
-      event.block.number,
-      event.block.timestamp,
-    );
-    const token = event.params.token.toLowerCase();
-    const balance = await ensureBalance(context, accountId, token, kuruTokenDecimals(token));
-    context.AccountBalance.set({
-      ...balance,
-      freeRaw: event.params.freeBalance,
-      reservedRaw: event.params.reservedBalance,
-      lastUpdatedBlock: BigInt(event.block.number),
-    });
-  },
-);
-
 /** Cumulative wallet↔AccountCore flow. Deposit and Withdrawal differ only here. */
 async function applyCustodyFlow(
   context: Ctx,
@@ -212,7 +146,7 @@ async function applyCustodyFlow(
   timestampSec: number,
 ): Promise<void> {
   const accountId = kuruAccountId(accountIdRaw);
-  await ensureAccount(context, accountId, 'KURU', accountIdRaw, blockNumber, timestampSec);
+  await ensureAccount(context, accountId, accountIdRaw, blockNumber, timestampSec);
   const token = tokenRaw.toLowerCase();
   const balance = await ensureBalance(context, accountId, token, kuruTokenDecimals(token));
   const deposited = balance.deposited + (direction === 'deposit' ? amount : 0n);
@@ -261,7 +195,6 @@ indexer.onEvent(
     await ensureAccount(
       context,
       accountId,
-      'KURU',
       event.params.accountId,
       event.block.number,
       event.block.timestamp,

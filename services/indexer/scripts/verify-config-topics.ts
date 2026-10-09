@@ -11,8 +11,9 @@
  *     the declared one, so envio decodes topics and data in the wrong places and
  *     writes plausible garbage.
  *
- * Perpl events are declared by bare name against `abi_file_path`; that ABI is
- * loaded here and the signatures are taken from it, so the check is the same.
+ * An event declared by bare name against an `abi_file_path` has its signature
+ * taken from that ABI, so the check is the same. (Every event in config.yaml
+ * is a full signature today; Perpl's were the bare-name ones.)
  *
  * Usage (from services/indexer):
  *   mise exec -- npm run verify:topics            # 5 windows of 100 blocks
@@ -71,17 +72,18 @@ function readConfig(text: string): {
       abiFiles.set(contract, abi[1]!);
       continue;
     }
-    const addrList = /^\s*-\s*"(0x[0-9a-fA-F]{40})"\s*$/.exec(line);
+    // Either quote style: prettier rewrites config.yaml with single quotes.
+    const addrList = /^\s*-\s*["'](0x[0-9a-fA-F]{40})["']\s*$/.exec(line);
     if (addrList) {
       addresses.get(contract)!.push(addrList[1]!.toLowerCase());
       continue;
     }
-    const addrOne = /^\s*address:\s*"(0x[0-9a-fA-F]{40})"\s*$/.exec(line);
+    const addrOne = /^\s*address:\s*["'](0x[0-9a-fA-F]{40})["']\s*$/.exec(line);
     if (addrOne) {
       addresses.get(contract)!.push(addrOne[1]!.toLowerCase());
       continue;
     }
-    const quoted = /^\s*-\s*event:\s*"(.+)"\s*$/.exec(line);
+    const quoted = /^\s*-\s*event:\s*["'](.+)["']\s*$/.exec(line);
     if (quoted) {
       events.get(contract)!.push(quoted[1]!);
       continue;
@@ -223,9 +225,9 @@ for (let w = 0; w < windows; w++) {
 }
 
 /**
- * Rare events (a Kuru deposit, a Perpl AccountCreated) will not appear in any
+ * Rare events (a Kuru deposit, an AccountRegistered) will not appear in any
  * few hundred recent blocks. These are the documented transactions that do
- * contain them — the same evidence docs/kuru.md and src/lib/perpl.ts cite — so
+ * contain them — the same evidence docs/kuru.md cites — so
  * "no logs in range" is not the end of the check.
  */
 const EVIDENCE_TXS = [
@@ -236,10 +238,6 @@ const EVIDENCE_TXS = [
   {
     label: 'kuru account id 62',
     hash: '0xf0b6ffc917e6965f4e4cb88ed602c018b38e01144f7219ae907c26620e9c1e9a',
-  },
-  {
-    label: 'perpl btc close',
-    hash: '0xd58c92adeb7a58603a8ccb14599477de289bb1f03148039328a018fc40aad070',
   },
 ] as const;
 

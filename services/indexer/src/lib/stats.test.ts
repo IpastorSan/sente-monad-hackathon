@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  applyFill,
-  kuruQuoteAtoms,
-  perplQuoteAtoms,
-  yyyymmdd,
-  type PositionState,
-} from './stats.ts';
+import { applyFill, kuruQuoteAtoms, yyyymmdd, type PositionState } from './stats.ts';
 
 test('long opened at 10, closed at 12 realises +2', () => {
   const open = applyFill({ baseRaw: 0n, costRaw: 0n }, 1n, 10n);
@@ -93,12 +87,6 @@ test('kuruQuoteAtoms floors like the contract', () => {
   // MON-USDC live fill (docs/kuru.md): price 30974 ×1e6, size 31773742494 ×1e8
   const atoms = kuruQuoteAtoms(30974n, 31773742494n, 1_000_000n, 100_000_000n, 6);
   assert.equal(atoms, 9_841_599n); // $9.841599
-});
-
-test('perplQuoteAtoms scales PNS/LNS to CNS', () => {
-  // BTC (pd=1, sd=5): price 110000 PNS = $11000.0, size 100000 LNS = 1 BTC
-  const cns = perplQuoteAtoms(110_000n, 100_000n, 1, 5, 6);
-  assert.equal(cns, 11_000_000_000n); // 11000.000000 AUSD
 });
 
 test('yyyymmdd is UTC', () => {
