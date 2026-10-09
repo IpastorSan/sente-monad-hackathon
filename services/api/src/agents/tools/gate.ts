@@ -232,6 +232,9 @@ function fillOf(result: unknown, venue: string | undefined): Record<string, unkn
     ...(order['blockNumber'] !== undefined ? { blockNumber: order['blockNumber'] } : {}),
     ...(order['fee'] !== undefined ? { fee: order['fee'] } : {}),
     ...(order['feeAsset'] !== undefined ? { feeAsset: order['feeAsset'] } : {}),
+    // SEN-184: Sente's builder fee these fills paid (Kuru), on top of `fee`.
+    ...(order['builderFee'] !== undefined ? { senteFee: order['builderFee'] } : {}),
+    ...(order['builderFeeAsset'] !== undefined ? { senteFeeAsset: order['builderFeeAsset'] } : {}),
     ...(order['leverage'] !== undefined ? { leverage: order['leverage'] } : {}),
   };
 }

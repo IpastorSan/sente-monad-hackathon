@@ -167,7 +167,15 @@ export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
     { asset: 'MON', available: '100000', locked: '0', total: '100000' },
   ];
   /** Set to have filled orders report a receipt block and fee (SEN-20). */
-  fillRecord: { blockNumber?: number; fee?: string; feeAsset?: string } | undefined;
+  fillRecord:
+    | {
+        blockNumber?: number;
+        fee?: string;
+        feeAsset?: string;
+        builderFee?: string;
+        builderFeeAsset?: string;
+      }
+    | undefined;
 
   walletBalances(): Promise<Balance[]> {
     this.record('walletBalances', undefined);
