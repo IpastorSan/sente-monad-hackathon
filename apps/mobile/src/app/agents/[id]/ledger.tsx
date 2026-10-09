@@ -19,8 +19,9 @@
  *   an address, a policy code — so mono means "this came from the chain". The
  *   one exception is the time in each entry's margin, set in the same small
  *   mono the design gives it so the column reads as a margin, not as prose.
- *   Figures are Geist with tabular numbers; the agent's own words are the
- *   serif italic `text.voice`, so a thesis never reads like a system message.
+ *   Figures are Geist with tabular numbers; the agent's own words are
+ *   `text.voice` — mono too, but at reading size and purple, so a thesis never
+ *   reads like a hash or a system message.
  * - Purple is an event. A trade stone is purple because it is a move, and the
  *   consensus ramp (SEN-24) is purple only while its block is acquiring
  *   consensus — it drains to neutral once final, so settled rows go quiet and

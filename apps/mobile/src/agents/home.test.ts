@@ -424,6 +424,7 @@ test('atWork names the quote currency, or says ≈ $ for both venues', () => {
   assert.equal(atWork({ mandate: mandate(['perpl']) }, day('-4.1')).pnl?.label, '−4.1 AUSD');
   assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('3.1')).pnl?.label, '≈ +$3.1');
   assert.equal(atWork({ mandate: mandate(['kuru']) }, day('0')).pnl?.label, '0.00 USDC');
+  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0')).pnl?.label, '≈ $0.00');
   assert.deepEqual(atWork({ mandate: mandate(['kuru']) }, undefined), { move: null, pnl: null });
 });
 

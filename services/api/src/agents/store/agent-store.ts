@@ -100,6 +100,13 @@ export interface AgentRecord {
   readonly mandateSince?: Date;
   readonly revokedAt?: Date;
   /**
+   * When the owner acknowledged that the agent can lose the funds it is given
+   * (SEN-177): at hire or fork, or before its first run for an agent hired
+   * before the app asked. A record of what was shown, not a gate the server
+   * enforces. Absent: never acknowledged.
+   */
+  readonly riskAcknowledgedAt?: Date;
+  /**
    * Whether the owner published this agent's system prompt (SEN-28). Default
    * `false`: nothing is shared until its owner says so, and a fork copies the
    * system prompt ONLY when this is true. The strategy and the model are
@@ -183,6 +190,7 @@ export type AgentPatch = Partial<
     | 'gasFunding'
     | 'erc8004AgentId'
     | 'schedule'
+    | 'riskAcknowledgedAt'
   >
 >;
 

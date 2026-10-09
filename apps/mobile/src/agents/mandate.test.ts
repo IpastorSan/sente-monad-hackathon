@@ -32,6 +32,7 @@ import {
   formFromMandate,
   KURU_MARKETS,
   parsePerplMarkets,
+  quoteUnit,
   relevantDepositTokens,
   type MandateForm,
 } from './mandate.ts';
@@ -52,6 +53,12 @@ const WETH = KURU_TESTNET_TOKENS.WETH.address;
 function form(patch: Partial<MandateForm> = {}): MandateForm {
   return { ...defaultMandateForm(NOW), ...patch };
 }
+
+const PERPL_ONLY: Partial<MandateForm> = {
+  perplCollateral: '100',
+  perplMarkets: 'BTC-PERP',
+  maxLeverage: '2',
+};
 
 /** Both venues, three caps, the shape a real hire sends. */
 const BOTH: Partial<MandateForm> = {
@@ -226,7 +233,7 @@ test('the review states each limit in units a person reads', () => {
   assert.equal(values['kuru.deposit.WETH'], '0.5 WETH');
   assert.equal(values['perpl.collateral'], '500 AUSD');
   assert.equal(values['perpl.leverage'], '5×');
-  assert.equal(values.maxOrderNotional, '250.5 in quote units');
+  assert.equal(values.maxOrderNotional, '250.5 USDC or AUSD');
   assert.equal(values.expiresAt, formatExpiry(NOW + 30 * DAY));
   // 1,789,000,000 s = 20,706 days + 1,600 s after the epoch.
   assert.equal(formatExpiry(1_789_000_000), '2026-09-10 00:26 UTC');
@@ -235,4 +242,10 @@ test('the review states each limit in units a person reads', () => {
 test('a Kuru-only mandate lists no Perpl limits', () => {
   const ids = describeMandate(built(form())).map((limit) => limit.id);
   assert.ok(!ids.some((id) => id.startsWith('perpl.')));
+});
+
+test('the order cap is counted in the quote tokens the mandate trades', () => {
+  assert.equal(quoteUnit(built(form())), 'USDC');
+  assert.equal(quoteUnit(built(form(BOTH))), 'USDC or AUSD');
+  assert.equal(quoteUnit(built(form({ kuru: false, perpl: true, ...PERPL_ONLY }))), 'AUSD');
 });

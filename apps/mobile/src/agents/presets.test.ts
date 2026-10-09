@@ -21,7 +21,7 @@ import {
   type BuildResult,
   type MandateForm,
 } from './mandate.ts';
-import { mandateToSend, presetValues, type PresetId } from './presets.ts';
+import { describePreset, mandateToSend, presetValues, type PresetId } from './presets.ts';
 
 const NOW = 1_789_000_000;
 const DAY = 86_400;
@@ -133,4 +133,27 @@ test('cautious sits below standard and wide above it, on every limit a preset mo
 
 test('a preset keeps no returnTo it was not given', () => {
   assert.equal('returnTo' in presetValues('cautious', NOW).form, false);
+});
+
+test('the explainer describes each preset from the values it fills', () => {
+  assert.deepEqual(describePreset('cautious'), [
+    'Kuru: MON-USDC',
+    '25 USDC per Kuru deposit',
+    'Orders up to 10 USDC',
+    'Ends after 1 day',
+  ]);
+  assert.deepEqual(describePreset('standard'), [
+    'Kuru: MON-USDC',
+    '100 USDC per Kuru deposit',
+    'Orders up to 50 USDC',
+    'Ends after 7 days',
+  ]);
+  assert.deepEqual(describePreset('wide'), [
+    'Kuru: MON-USDC, WETH-USDC',
+    '500 USDC per Kuru deposit',
+    'Perpl: BTC-PERP, ETH-PERP, up to 2×',
+    '250 AUSD per transfer into Perpl',
+    'Orders up to 250 USDC or AUSD',
+    'Ends after 30 days',
+  ]);
 });

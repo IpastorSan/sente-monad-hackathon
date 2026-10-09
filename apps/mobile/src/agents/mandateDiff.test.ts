@@ -44,8 +44,8 @@ test('a raised limit shows old and new, labelled as describeMandate labels it', 
       label: label('maxOrderNotional'),
       enforcer: 'sente',
       kind: 'value',
-      before: '50 in quote units',
-      after: '500 in quote units',
+      before: '50 USDC',
+      after: '500 USDC',
     },
     {
       id: 'expiresAt',
@@ -81,11 +81,20 @@ test('turning a venue on adds its limits; turning it off removes them', () => {
     perplMarkets: 'BTC-PERP',
     maxLeverage: '2',
   };
+  // The order cap now covers Perpl orders too, so its unit widens (SEN-177).
   const on = diffMandates(mandate(), mandate(perpl));
   assert.deepEqual(
     on.map((change) => change.id),
-    ['venues', 'perpl.collateral', 'perpl.markets', 'perpl.leverage'],
+    ['venues', 'perpl.collateral', 'perpl.markets', 'perpl.leverage', 'maxOrderNotional'],
   );
+  assert.deepEqual(on[4], {
+    id: 'maxOrderNotional',
+    label: 'Largest single order',
+    enforcer: 'sente',
+    kind: 'value',
+    before: '50 USDC',
+    after: '50 USDC or AUSD',
+  });
   assert.deepEqual(on[0], {
     id: 'venues',
     label: 'Venues',
@@ -116,9 +125,9 @@ test('turning a venue on adds its limits; turning it off removes them', () => {
   const off = diffMandates(mandate(perpl), mandate());
   assert.deepEqual(
     off.map((change) => change.id),
-    ['venues', 'perpl.collateral', 'perpl.markets', 'perpl.leverage'],
+    ['venues', 'maxOrderNotional', 'perpl.collateral', 'perpl.markets', 'perpl.leverage'],
   );
-  assert.deepEqual(off[3], {
+  assert.deepEqual(off[4], {
     id: 'perpl.leverage',
     label: 'Max leverage',
     enforcer: 'sente',

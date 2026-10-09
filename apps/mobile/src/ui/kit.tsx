@@ -23,6 +23,7 @@ import {
   type KeyboardTypeOptions,
   type PressableStateCallbackType,
   type StyleProp,
+  type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -319,10 +320,62 @@ export function Button({
   );
 }
 
+/**
+ * Copy a value to the clipboard (SEN-177). Web only: the app ships no native
+ * clipboard module, and adding one would invalidate every installed dev
+ * client (CLAUDE.md, gotcha 5). On a phone the button is absent and the text
+ * beside it stays `selectable`, so a long press still copies it.
+ */
+export function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const clipboard =
+    Platform.OS === 'web' && typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+  if (!clipboard) return null;
+  const copy = () => {
+    clipboard.writeText(value).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1600);
+      },
+      () => undefined,
+    );
+  };
+  return (
+    <Button
+      label={copied ? 'Copied' : label}
+      kind="secondary"
+      size="sm"
+      icon={copied ? 'check' : 'copy'}
+      onPress={copy}
+    />
+  );
+}
+
 /** Buttons side by side, sharing the width. */
 export function ButtonRow({ children }: { children: ReactNode }) {
   return <View style={styles.buttonRow}>{children}</View>;
 }
+
+/**
+ * ONE FOCUS RING PER INPUT (SEN-177). On web the browser draws its own square
+ * outline on the inner `<input>`, inset from our rounded box, so a focused
+ * field showed two rings. The box is the indicator — a purple border and a
+ * soft glow — and every TextInput sets {@link BARE_INPUT} so the browser's
+ * outline goes. Removing it is only safe because the box takes over: a
+ * TextInput that sets BARE_INPUT must put {@link FOCUS_RING} on its container
+ * while focused.
+ *
+ * `outlineStyle: 'none'` is valid CSS that React Native's types don't list.
+ */
+export const BARE_INPUT = (Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) as TextStyle;
+
+export const FOCUS_RING: ViewStyle = {
+  borderColor: color.purple,
+  shadowColor: color.purple,
+  shadowOpacity: 0.45,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 0 },
+};
 
 export function Field({
   label,
@@ -338,6 +391,7 @@ export function Field({
   autoCapitalize = 'sentences',
   onSubmitEditing,
   maxLength,
+  autoFocus,
 }: {
   label: string;
   value: string;
@@ -355,6 +409,8 @@ export function Field({
   onSubmitEditing?: () => void;
   /** A hard cap on input, past the `max` counter's soft one. */
   maxLength?: number;
+  /** Focus on mount: a screen sending someone back to fix this field. */
+  autoFocus?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   const over = max !== undefined && value.length > max;
@@ -370,11 +426,7 @@ export function Field({
         ) : null}
       </View>
       <View
-        style={[
-          styles.inputRow,
-          focused && styles.inputRowFocus,
-          (error || over) && styles.inputRowError,
-        ]}
+        style={[styles.inputRow, focused && FOCUS_RING, (error || over) && styles.inputRowError]}
       >
         <TextInput
           value={value}
@@ -390,10 +442,16 @@ export function Field({
           onSubmitEditing={onSubmitEditing}
           returnKeyType={onSubmitEditing ? 'done' : undefined}
           maxLength={maxLength}
+          autoFocus={autoFocus}
           cursorColor={color.purpleHi}
           selectionColor={color.purple}
           textAlignVertical={multiline ? 'top' : 'center'}
-          style={[styles.input, multiline && styles.inputMultiline, numeric && text.num]}
+          style={[
+            styles.input,
+            BARE_INPUT,
+            multiline && styles.inputMultiline,
+            numeric && text.num,
+          ]}
         />
         {suffix ? <Text style={styles.suffix}>{suffix}</Text> : null}
       </View>
@@ -404,6 +462,21 @@ export function Field({
 }
 
 /** A checkbox or radio row. */
+/**
+ * Space toggles a checkbox or radio on the web, as it does a native one;
+ * react-native-web's Pressable only answers Enter for those roles.
+ */
+function spaceToggles(onPress: () => void): object {
+  if (Platform.OS !== 'web') return {};
+  return {
+    onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+      if (event.key !== ' ') return;
+      event.preventDefault();
+      onPress();
+    },
+  };
+}
+
 export function SelectRow({
   title,
   detail,
@@ -420,8 +493,11 @@ export function SelectRow({
   return (
     <Pressable
       accessibilityRole={mode === 'radio' ? 'radio' : 'checkbox'}
+      // `aria-checked` too: react-native-web drops `accessibilityState.checked`.
       accessibilityState={{ checked: selected }}
+      aria-checked={selected}
       onPress={onPress}
+      {...spaceToggles(onPress)}
       style={({ pressed }) => [styles.selectRow, pressed && styles.pressed]}
     >
       <View style={[mode === 'radio' ? styles.radio : styles.check, selected && styles.markOn]}>
@@ -554,6 +630,44 @@ export function Row({
 }
 
 /**
+ * A {@link Row} that opens to show more under it (SEN-177): a long text
+ * summarised by its length, read in full on demand. A button with
+ * `expanded` state, so the web gets `aria-expanded` and Enter / Space.
+ */
+export function DisclosureRow({
+  label,
+  value,
+  children,
+}: {
+  label: string;
+  value: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={open ? styles.disclosureOpen : null}>
+      <Pressable
+        accessibilityRole="button"
+        aria-expanded={open}
+        accessibilityLabel={`${label}, ${value}`}
+        accessibilityHint={open ? 'Hides the full text' : 'Shows the full text'}
+        onPress={() => setOpen(!open)}
+        style={({ pressed }) => [styles.row, open && styles.rowOpen, pressed && styles.pressed]}
+      >
+        <Text style={[text.dim, styles.rowLabel]}>{label}</Text>
+        <View style={styles.disclosureValue}>
+          <Text style={[text.body, text.num, styles.rowValue]}>{value}</Text>
+          <View style={open ? styles.chevronOpen : styles.chevronClosed}>
+            <Icon name="chevron" size={16} color={color.textFaint} />
+          </View>
+        </View>
+      </Pressable>
+      {open ? <View style={styles.disclosureBody}>{children}</View> : null}
+    </View>
+  );
+}
+
+/**
  * A pressable list row with an icon, a title, a line saying what it does, and
  * a chevron: the Controls list on an agent, the Account screen.
  */
@@ -594,10 +708,13 @@ export function Notice({
   tone = 'info',
   title,
   detail,
+  children,
 }: {
   tone?: NoticeTone;
   title: string;
   detail?: string | undefined;
+  /** An action under the text, e.g. a retry link. */
+  children?: ReactNode;
 }) {
   return (
     <View
@@ -614,6 +731,7 @@ export function Notice({
           {detail}
         </Text>
       ) : null}
+      {children}
     </View>
   );
 }
@@ -804,7 +922,6 @@ const styles = StyleSheet.create({
     borderColor: color.well,
     backgroundColor: color.well,
   },
-  inputRowFocus: { borderColor: color.purple },
   inputRowError: { borderColor: color.berry },
   input: {
     flex: 1,
@@ -883,6 +1000,12 @@ const styles = StyleSheet.create({
     borderBottomColor: color.line,
   },
   rowLabel: { flexShrink: 0, maxWidth: '55%' },
+  rowOpen: { borderBottomWidth: 0 },
+  disclosureOpen: { borderBottomWidth: 1, borderBottomColor: color.line },
+  disclosureValue: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
+  chevronClosed: { transform: [{ rotate: '90deg' }] },
+  chevronOpen: { transform: [{ rotate: '-90deg' }] },
+  disclosureBody: { paddingBottom: 12, gap: 8 },
   rowValue: { flexShrink: 1, textAlign: 'right' },
   actionRow: {
     flexDirection: 'row',

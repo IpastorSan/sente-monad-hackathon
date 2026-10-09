@@ -151,6 +151,14 @@ export class CreateAgentDto {
   'public'?: boolean;
 
   /**
+   * The owner ticked "I understand the agent can lose the funds I give it"
+   * (SEN-177). Recorded as `riskAcknowledgedAt`; omitted records nothing.
+   */
+  @IsOptional()
+  @IsBoolean()
+  riskAcknowledged?: boolean;
+
+  /**
    * Run on its own every `everySeconds` (SEN-67). Omitted, or `everySeconds:
    * null`, hires it with no cadence of its own.
    */
@@ -261,6 +269,11 @@ export class ForkAgentDto {
   @MaxLength(AGENT_NAME_MAX_LENGTH)
   @Matches(/\S/, { message: 'name must not be blank' })
   name?: string;
+
+  /** As on a hire (SEN-177). */
+  @IsOptional()
+  @IsBoolean()
+  riskAcknowledged?: boolean;
 }
 
 /**
@@ -470,6 +483,8 @@ export interface AgentResponseDto {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /** ISO 8601. When the owner acknowledged the risks (SEN-177); absent if never. */
+  riskAcknowledgedAt?: string;
   /** The agent's own run cadence (SEN-67); `null` when it has none. */
   schedule: { everySeconds: number } | null;
   /** The preset it was hired (or forked) from (SEN-73); `null` for a free-form agent. */
@@ -766,6 +781,9 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     ...(agent.revokedAt ? { revokedAt: agent.revokedAt.toISOString() } : {}),
+    ...(agent.riskAcknowledgedAt
+      ? { riskAcknowledgedAt: agent.riskAcknowledgedAt.toISOString() }
+      : {}),
     schedule: agent.schedule ? { everySeconds: agent.schedule.everySeconds } : null,
     preset: agent.preset
       ? {

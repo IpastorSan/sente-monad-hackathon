@@ -69,6 +69,8 @@ export interface HireAgentInput {
    * `AGENT_SCHEDULE_MIN_SECONDS`.
    */
   schedule?: AgentSchedule;
+  /** The owner ticked "I understand the agent can lose the funds I give it" (SEN-177). */
+  riskAcknowledged?: boolean;
 }
 
 export interface HirePresetInput {
@@ -134,6 +136,8 @@ export interface ForkAgentInput {
   mandate: unknown;
   /** The new agent's name. Absent means `<source name> (fork)`. */
   name?: string;
+  /** As on a hire (SEN-177). */
+  riskAcknowledged?: boolean;
 }
 
 /** What a fork is called when the caller does not name it. */
@@ -353,6 +357,7 @@ export class AgentsService {
       // Opt-in, per agent: unset means private, so nothing is shared by accident.
       public: input.public ?? false,
       ...(input.schedule ? { schedule: { everySeconds: input.schedule.everySeconds } } : {}),
+      ...(input.riskAcknowledged ? { riskAcknowledgedAt: now } : {}),
       createdAt: now,
       updatedAt: now,
       mandateSince: now,
@@ -440,6 +445,7 @@ export class AgentsService {
         : {}),
       // No `schedule` (SEN-67): every scheduled run spends the FORKER's credits,
       // so the cadence is theirs to opt into, never the source's to impose.
+      ...(input.riskAcknowledged ? { riskAcknowledgedAt: now } : {}),
       createdAt: now,
       updatedAt: now,
       mandateSince: now,
@@ -623,6 +629,18 @@ export class AgentsService {
 
   get(principal: Principal, id: string): Promise<AgentRecord> {
     return this.owned(principal, id);
+  }
+
+  /**
+   * Records that the owner acknowledged the risks (SEN-177), for an agent hired
+   * before the app asked at hire. Idempotent: the first acknowledgement stands.
+   */
+  acknowledgeRisk(principal: Principal, id: string): Promise<AgentRecord> {
+    return this.withAgentLock(id, async () => {
+      const agent = await this.owned(principal, id);
+      if (agent.riskAcknowledgedAt) return agent;
+      return this.store.update(id, { riskAcknowledgedAt: new Date() });
+    });
   }
 
   /**

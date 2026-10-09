@@ -27,7 +27,7 @@
  */
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { formatAtoms, parseAmount } from '@/agents/amounts';
 import {
@@ -39,6 +39,7 @@ import {
   type AgentScheduleStatusDto,
   type AgentSummary,
   type PreparedMandateChange,
+  type RunOutcome,
 } from '@/agents/api';
 import { describeApprovalError, needsApproval, revokeWithApproval } from '@/agents/approval';
 import { readBalance, readBalances } from '@/agents/balances';
@@ -62,11 +63,17 @@ import {
   signedParts,
   tabFrom,
   trackLayout,
+  windowPnl,
+  WINDOW_LABEL,
   type CockpitTab,
   type EquityRange,
   type PositionRow,
 } from '@/agents/cockpit';
 import { FUNDING_TOKENS } from '@/agents/fund';
+import { fundAgent } from '@/agents/initialFunding';
+import { RiskConfirm } from '@/agents/Risks';
+import { alreadyRunning, liveRun, runningLine, waitForRunStart } from '@/agents/runState';
+import type { RunSummary } from '@/agents/terminal';
 import { clockTime, type LedgerEntry } from '@/agents/ledger';
 import {
   depositHeadline,
@@ -83,11 +90,11 @@ import {
 } from '@/agents/ledgerView';
 import { describeMandate, type Enforcer, type Token } from '@/agents/mandate';
 import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usage';
-import { LiveRunSection, RunHistorySection } from '@/agents/AgentRuns';
+import { LiveRunSection, RunHistorySection, useAgentRuns } from '@/agents/AgentRuns';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
 import { useSession } from '@/session';
-import { describeSendError, sendSponsored } from '@/wallet/send';
+import { sendSponsored } from '@/wallet/send';
 import { Chart } from '@/ui/chart/Chart';
 import { shortAddress } from '@/ui/format';
 import { EnforcerTag, Gauge, Pill, Sigil, Stat, Stone } from '@/ui/goban';
@@ -123,6 +130,9 @@ type SheetId = 'fund' | 'run' | 'return' | 'revoke' | 'details';
  * or the expiry gauge — so the rows under the gauge leave them out. `returnTo`
  * is in Details: it is an address, not a limit.
  */
+/** Where the live run's terminal sits, so a started run can scroll it into view. */
+const LIVE_RUN_ID = 'agent-live-run';
+
 const NOT_A_ROW = new Set([
   'maxOrderNotional',
   'expiresAt',
@@ -137,7 +147,16 @@ export default function AgentScreen() {
     id,
     sheet: askedSheet,
     tab: askedTab,
-  } = useLocalSearchParams<{ id: string; sheet?: string; tab?: string }>();
+    token: askedToken,
+    amount: askedAmount,
+  } = useLocalSearchParams<{
+    id: string;
+    sheet?: string;
+    tab?: string;
+    /** SEN-177: a retried funding from the hire screen, prefilled. */
+    token?: string;
+    amount?: string;
+  }>();
   const { agents: api } = useSession();
 
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -146,7 +165,8 @@ export default function AgentScreen() {
   const [portfolio, setPortfolio] = useState<AgentPortfolioDto | null | undefined>(undefined);
   const [schedule, setSchedule] = useState<AgentScheduleStatusDto | null>(null);
   const [loadError, setLoadError] = useState<NoticeState | null>(null);
-  const [balances, setBalances] = useState<Record<string, bigint> | null>(null);
+  /** `undefined` while reading; `null` when the chain read failed (SEN-177: said, never a 0). */
+  const [balances, setBalances] = useState<Record<string, bigint> | null | undefined>(undefined);
   const [sheet, setSheet] = useState<SheetId | null>(null);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -154,6 +174,16 @@ export default function AgentScreen() {
   // The whole trail, tailed while the screen is focused: History draws it, and
   // Overview's stats, equity and best trades are read from it.
   const events = useAgentEvents(id);
+  // SEN-178's runs, read once for the terminal and (SEN-177) the header and
+  // Run now: an open run says "Running…" before a second one meets the 409.
+  const [runNudge, setRunNudge] = useState(0);
+  const runs = useAgentRuns(id ?? '', runNudge);
+  /**
+   * SEN-177: an agent hired before the app asked about risks shows them once,
+   * before its first run or schedule. Holds the action waiting on that.
+   */
+  const [riskGate, setRiskGate] = useState<{ then: () => void } | null>(null);
+  const [acking, setAcking] = useState(false);
 
   const refreshBalances = useCallback((address: Agent['address']) => {
     readBalances(address).then(setBalances, () => setBalances(null));
@@ -197,13 +227,13 @@ export default function AgentScreen() {
     setRefreshing(false);
   };
 
-  // Arriving from the list's inline "Return" opens the return sheet once, not
-  // on every refetch.
+  // Arriving from the list's inline "Return", or from the hire screen's "Fund"
+  // (SEN-177), opens that sheet once, not on every refetch.
   const opened = useRef(false);
   useEffect(() => {
-    if (agent && askedSheet === 'return' && !opened.current) {
+    if (agent && (askedSheet === 'return' || askedSheet === 'fund') && !opened.current) {
       opened.current = true;
-      setSheet('return');
+      setSheet(askedSheet);
     }
   }, [agent, askedSheet]);
 
@@ -234,13 +264,55 @@ export default function AgentScreen() {
   const active = agent.status === 'active';
   const now = Date.now();
   const trading = active && isTrading(summary, now);
+  const open = liveRun(runs);
+  const guarded = (action: () => void) => {
+    if (agent.riskAcknowledgedAt) action();
+    else setRiskGate({ then: action });
+  };
+  const confirmRisks = async () => {
+    const waiting = riskGate;
+    setAcking(true);
+    try {
+      if (api) setAgent(await api.acknowledgeRisk(agent.id));
+    } catch {
+      // An API without the route: acknowledged here, for this visit.
+      setAgent({ ...agent, riskAcknowledgedAt: new Date().toISOString() });
+    } finally {
+      setAcking(false);
+      setRiskGate(null);
+    }
+    waiting?.then();
+  };
+  /** A Run now the API took: close the sheet and show its terminal streaming. */
+  const runStarted = () => {
+    setSheet(null);
+    setTab('overview');
+    setRunNudge((n) => n + 1);
+    if (Platform.OS === 'web') {
+      setTimeout(
+        () =>
+          globalThis.document
+            ?.getElementById(LIVE_RUN_ID)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+        400,
+      );
+    }
+  };
   const amend = () => router.push({ pathname: '/agents/new', params: { amend: agent.id } });
 
   return (
     <Screen
       refreshing={refreshing}
       onRefresh={() => void refresh()}
-      footer={active ? <AskBar agent={agent} onOpen={() => setSheet('run')} /> : undefined}
+      footer={
+        active ? (
+          <AskBar
+            agent={agent}
+            running={open !== null}
+            onOpen={() => guarded(() => setSheet('run'))}
+          />
+        ) : undefined
+      }
     >
       <TopBar
         back={{ label: 'Agents', onPress: backToList }}
@@ -270,7 +342,9 @@ export default function AgentScreen() {
               <Tag label={`${agent.preset.name}${agent.preset.customized ? ' · edited' : ''}`} />
             ) : null}
             <Text style={text.caption}>{modelLabel(agent.model)}</Text>
-            {active ? (
+            {active && open ? (
+              <Pill label="Running…" tone="live" />
+            ) : active ? (
               <Pill label={trading ? 'Trading' : 'Watching'} tone={trading ? 'live' : 'idle'} />
             ) : (
               <Pill label="Revoked" tone="revoked" />
@@ -278,6 +352,10 @@ export default function AgentScreen() {
           </View>
         </View>
       </View>
+
+      {open ? (
+        <Text style={[text.caption, text.num, styles.running]}>{runningLine(open, now)}</Text>
+      ) : null}
 
       {notice ? <Notice tone={notice.tone} title={notice.title} detail={notice.detail} /> : null}
 
@@ -298,7 +376,11 @@ export default function AgentScreen() {
       </View>
 
       {/* SEN-178: the run terminal — live on Overview, every kept run on History. */}
-      {tab === 'overview' ? <LiveRunSection agentId={agent.id} /> : null}
+      {tab === 'overview' ? (
+        <View nativeID={LIVE_RUN_ID}>
+          <LiveRunSection agentId={agent.id} runs={runs} />
+        </View>
+      ) : null}
 
       {tab === 'overview' ? (
         <Overview
@@ -310,6 +392,7 @@ export default function AgentScreen() {
           entries={events.entries}
           now={now}
           onReturn={() => setSheet('return')}
+          guard={guarded}
           onScheduled={(updated) => {
             setAgent(updated);
             void load();
@@ -318,7 +401,7 @@ export default function AgentScreen() {
       ) : tab === 'history' ? (
         <>
           <History agent={agent} events={events} now={now} />
-          <RunHistorySection agentId={agent.id} />
+          <RunHistorySection agentId={agent.id} runs={runs} />
         </>
       ) : (
         <MandateCard
@@ -332,10 +415,33 @@ export default function AgentScreen() {
       )}
 
       <DetailsSheet agent={agent} visible={sheet === 'details'} onClose={close} />
-      <FundSheet agent={agent} visible={sheet === 'fund'} onClose={close} onSent={finish} />
-      <RunSheet agent={agent} visible={sheet === 'run'} onClose={close} />
+      <FundSheet
+        agent={agent}
+        visible={sheet === 'fund'}
+        onClose={close}
+        onSent={finish}
+        initial={{ token: askedToken, amount: askedAmount }}
+      />
+      <RunSheet
+        agent={agent}
+        visible={sheet === 'run'}
+        onClose={close}
+        live={open}
+        onStarted={runStarted}
+        onFinished={(next) => {
+          if (next) setNotice(next);
+          void load();
+        }}
+      />
       <ReturnSheet agent={agent} visible={sheet === 'return'} onClose={close} onDone={finish} />
       <RevokeSheet agent={agent} visible={sheet === 'revoke'} onClose={close} onDone={finish} />
+      <RiskConfirm
+        visible={riskGate !== null}
+        agentName={agent.name}
+        busy={acking}
+        onConfirm={() => void confirmRisks()}
+        onClose={() => setRiskGate(null)}
+      />
     </Screen>
   );
 }
@@ -345,10 +451,26 @@ export default function AgentScreen() {
  * field. Both open the run sheet, whose instruction field is the ask — the
  * full Ask sheet with suggestions is U-11's.
  */
-function AskBar({ agent, onOpen }: { agent: Agent; onOpen: () => void }) {
+function AskBar({
+  agent,
+  running,
+  onOpen,
+}: {
+  agent: Agent;
+  /** A run is open (SEN-177): Run now waits for it rather than meeting a 409. */
+  running: boolean;
+  onOpen: () => void;
+}) {
   return (
     <View style={styles.askBar}>
-      <Button label="Run now" kind="soft" size="sm" icon="bolt" onPress={onOpen} />
+      <Button
+        label={running ? 'Running…' : 'Run now'}
+        kind="soft"
+        size="sm"
+        icon="bolt"
+        disabled={running}
+        onPress={onOpen}
+      />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Ask ${agent.name} to do something`}
@@ -375,16 +497,19 @@ function Overview({
   entries,
   now,
   onReturn,
+  guard,
   onScheduled,
 }: {
   agent: Agent;
   summary: AgentSummary | undefined;
-  balances: Record<string, bigint> | null;
+  balances: Record<string, bigint> | null | undefined;
   portfolio: AgentPortfolioDto | null | undefined;
   schedule: AgentScheduleStatusDto | null;
   entries: LedgerEntry[];
   now: number;
   onReturn: () => void;
+  /** SEN-177: runs `action` once the risks are acknowledged. */
+  guard: (action: () => void) => void;
   onScheduled: (agent: Agent) => void;
 }) {
   const active = agent.status === 'active';
@@ -399,11 +524,12 @@ function Overview({
     [trades, range, agent.createdAt],
   );
 
-  // Scrubbing the curve moves the headline to that point, and the right-hand
-  // line to its date; the chart never owns the headline.
+  // SEN-177: the headline is what the agent holds, so funding shows up where
+  // the eye lands; P&L sits under it, over the window the pills pick.
+  // Scrubbing the curve moves the P&L line to that point and its date.
   const scrubbed = scrub !== null && series ? scrub : null;
-  const headline = signedParts(
-    scrubbed !== null ? series?.points[scrubbed] : (summary?.pnl.allTime ?? null),
+  const pnl = signedParts(
+    scrubbed !== null ? series?.points[scrubbed] : windowPnl(range, summary, series),
   );
   const today = signedParts(summary?.pnl.last24h);
   const { unit, approx } = pnlUnit(agent.mandate.venues);
@@ -414,50 +540,59 @@ function Overview({
     : null;
   const others = holdings?.filter((holding) => holding !== main && holding.atoms > 0n) ?? [];
   const rows = portfolio ? positionRows(portfolio, entries, agent.preset) : null;
+  // Gain green, loss red, and zero the readable dim, never ink on ink.
+  const toneStyle = (tone: typeof pnl.tone) =>
+    tone === 'up' ? text.up : tone === 'down' ? text.down : text.dim;
+  // No summary (an API before SEN-56) is no figure, not a zero.
+  const hasPnl = scrubbed !== null || summary !== undefined;
 
   return (
     <View>
       <View style={styles.hero}>
-        <Text style={text.label}>{scrubbed !== null ? 'P&L at this point' : 'All-time P&L'}</Text>
-        <View style={styles.figure}>
-          <BigNumber
-            // No summary (an API before SEN-56) is no figure, not a zero.
-            value={scrubbed === null && !summary ? '—' : headline.magnitude}
-            prefix={headline.sign}
-            approx={approx}
-            style={headline.tone === 'up' ? text.up : headline.tone === 'down' ? text.down : null}
-          />
-          {unit ? <Text style={text.dim}>{unit}</Text> : null}
-          <Text
-            style={[
-              text.dim,
-              text.num,
-              styles.pushRight,
-              scrubbed === null && today.tone === 'up' && text.up,
-              scrubbed === null && today.tone === 'down' && text.down,
-            ]}
-          >
-            {scrubbed !== null && series
-              ? shortDate(series.ats[scrubbed] ?? now)
-              : summary
-                ? `${today.sign}${today.magnitude} today`
-                : ''}
+        <Text style={text.label}>Balance</Text>
+        {portfolio ? (
+          <BigNumber value={portfolio.totals.approxUsd} prefix="$" approx />
+        ) : main ? (
+          <View style={styles.figure}>
+            <BigNumber value={formatAtoms(main.atoms, main.decimals, { group: false })} />
+            <Text style={text.dim}>{main.symbol}</Text>
+          </View>
+        ) : portfolio === undefined || balances === undefined ? (
+          <Text style={[text.dim, styles.balanceNote]}>Reading its balance…</Text>
+        ) : (
+          <Text style={[text.dim, text.danger, styles.balanceNote]}>
+            Couldn’t read its balance right now.
           </Text>
-        </View>
+        )}
         <Text style={[text.caption, text.num]}>
           {portfolio
-            ? `≈ $${portfolio.totals.approxUsd} across its wallet and venues · P&L is realised only`
-            : main
-              ? `${formatHolding(main)} ${main.symbol} in its wallet · P&L is realised only`
-              : balances === null
-                ? 'Reading the chain…'
-                : 'P&L is realised only'}
+            ? 'Across its wallet and venues'
+            : others.length > 0
+              ? `In its wallet, with ${others
+                  .map((holding) => `${formatHolding(holding)} ${holding.symbol}`)
+                  .join(' · ')}`
+              : main
+                ? 'In its wallet'
+                : ''}
         </Text>
-        {!portfolio && others.length > 0 ? (
-          <Text style={[text.caption, text.num]}>
-            {others.map((holding) => `${formatHolding(holding)} ${holding.symbol}`).join(' · ')}
+        <View style={styles.pnlLine}>
+          <Text style={[text.strong, text.num, hasPnl ? toneStyle(pnl.tone) : text.dim]}>
+            {hasPnl
+              ? `${approx ? '≈ ' : ''}${pnl.sign}${pnl.magnitude}${unit ? ` ${unit}` : ''}`
+              : '—'}
           </Text>
-        ) : null}
+          <Text style={[text.dim, text.num]}>
+            {scrubbed !== null && series
+              ? `realised P&L at ${shortDate(series.ats[scrubbed] ?? now)}`
+              : `realised P&L, ${WINDOW_LABEL[range]}`}
+          </Text>
+          {scrubbed === null && summary && range !== '1D' ? (
+            <Text style={[text.dim, text.num, styles.pushRight, toneStyle(today.tone)]}>
+              {today.sign}
+              {today.magnitude} today
+            </Text>
+          ) : null}
+        </View>
       </View>
 
       {series ? (
@@ -522,7 +657,13 @@ function Overview({
       )}
 
       {active ? (
-        <Cadence agent={agent} schedule={schedule} now={now} onScheduled={onScheduled} />
+        <Cadence
+          agent={agent}
+          schedule={schedule}
+          now={now}
+          guard={guard}
+          onScheduled={onScheduled}
+        />
       ) : null}
     </View>
   );
@@ -630,11 +771,13 @@ function Cadence({
   agent,
   schedule,
   now,
+  guard,
   onScheduled,
 }: {
   agent: Agent;
   schedule: AgentScheduleStatusDto | null;
   now: number;
+  guard: (action: () => void) => void;
   onScheduled: (agent: Agent) => void;
 }) {
   const { agents: api } = useSession();
@@ -663,7 +806,12 @@ function Cadence({
             key={option.label}
             label={busy === option.seconds ? '…' : option.label}
             selected={option.seconds === current}
-            onPress={() => void choose(option.seconds)}
+            onPress={() =>
+              // Turning a schedule on spends credits on its own: risks first.
+              option.seconds === null || option.seconds === current
+                ? void choose(option.seconds)
+                : guard(() => void choose(option.seconds))
+            }
           />
         ))}
       </Chips>
@@ -1104,15 +1252,22 @@ function FundSheet({
   visible,
   onClose,
   onSent,
+  initial,
 }: {
   agent: Agent;
   visible: boolean;
   onClose: () => void;
   onSent: (notice: NoticeState) => void;
+  /** Prefill, e.g. a funding retried from the hire screen. */
+  initial?: { token?: string | undefined; amount?: string | undefined };
 }) {
   const { wallet, walletApi, auth } = useSession();
-  const [token, setToken] = useState<Token>(FUNDING_TOKENS[0] as Token);
-  const [amount, setAmount] = useState('');
+  const [token, setToken] = useState<Token>(
+    () =>
+      FUNDING_TOKENS.find((option) => option.symbol === initial?.token) ??
+      (FUNDING_TOKENS[0] as Token),
+  );
+  const [amount, setAmount] = useState(initial?.amount ?? '');
   const [available, setAvailable] = useState<bigint | null>(null);
   const [error, setError] = useState<NoticeState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1145,37 +1300,25 @@ function FundSheet({
     if (atoms === null || atoms === 0n || walletId === undefined) return;
     setError(null);
     setBusy(true);
-    const label = `${formatAtoms(atoms, token.decimals)} ${token.symbol}`;
-    try {
-      const sent = await sendSponsored(
-        walletApi,
-        { walletId, token, to: agent.address, atoms },
-        auth.signPrivyAuthorization,
-      );
-      const status = sent.confirmation?.status ?? sent.status;
-      if (status === 'included') {
-        setAmount('');
-        onSent({ tone: 'ok', title: `Sent ${label} to ${agent.name}` });
-      } else if (status === 'reverted') {
-        // Gotcha 8: the operation reverted inside a transaction that may well
-        // have succeeded. Nothing moved, and saying otherwise would be a lie.
-        setError({
-          tone: 'error',
-          title: 'The transfer reverted',
-          detail: 'It was included on chain but didn’t execute, so nothing moved.',
-        });
-      } else {
-        setAmount('');
-        onSent({
-          tone: 'info',
-          title: `Sending ${label}`,
-          detail: `Submitted, not confirmed yet (${status}). The balance updates once it lands.`,
-        });
-      }
-    } catch (caught) {
-      setError({ tone: 'error', ...describeSendError(caught) });
-    } finally {
-      setBusy(false);
+    // The one funding path, shared with funding at hire (SEN-177). Gotcha 8
+    // lives in `fundingOutcome`: a reverted operation moved nothing.
+    const outcome = await fundAgent(
+      (intent) => sendSponsored(walletApi, intent, auth.signPrivyAuthorization),
+      { walletId, token, to: agent.address, atoms },
+    );
+    setBusy(false);
+    if (outcome.kind === 'sent') {
+      setAmount('');
+      onSent({ tone: 'ok', title: `Sent ${outcome.label} to ${agent.name}` });
+    } else if (outcome.kind === 'submitted') {
+      setAmount('');
+      onSent({
+        tone: 'info',
+        title: `Sending ${outcome.label}`,
+        detail: `Submitted, not confirmed yet (${outcome.status}). The balance updates once it lands.`,
+      });
+    } else {
+      setError({ tone: 'error', title: outcome.title, detail: outcome.detail });
     }
   };
 
@@ -1248,10 +1391,19 @@ function RunSheet({
   agent,
   visible,
   onClose,
+  live,
+  onStarted,
+  onFinished,
 }: {
   agent: Agent;
   visible: boolean;
   onClose: () => void;
+  /** The run open right now, if any (SEN-177). */
+  live: RunSummary | null;
+  /** The API took the run: the page shows it streaming in its terminal. */
+  onStarted: () => void;
+  /** A started run ended; a notice only when there is something to say. */
+  onFinished: (notice: NoticeState | null) => void;
 }) {
   const { agents: api } = useSession();
   const [instruction, setInstruction] = useState('');
@@ -1263,29 +1415,62 @@ function RunSheet({
     onClose();
   };
 
+  const describeRunError = async (error: unknown): Promise<NoticeState> => {
+    if (error instanceof AgentsApiError && error.reason === 'run_in_progress') {
+      const runs = await api?.runs(agent.id).catch(() => null);
+      return { tone: 'info', ...alreadyRunning(agent.name, liveRun(runs), Date.now()) };
+    }
+    return { tone: 'error', ...describeAgentsError(error) };
+  };
+
+  const finished = (result: RunOutcome): NoticeState => {
+    if (result.kind === 'unavailable') {
+      return {
+        tone: 'info',
+        title: 'Not available yet',
+        detail:
+          'This server can’t run agents on demand yet. The button starts working once the agent runner ships.',
+      };
+    }
+    const { iterations, stopReason, costUsd } = result.result;
+    return {
+      tone: 'ok',
+      title: 'Run finished',
+      detail: `${iterations} steps · stopped on ${stopReason}${costUsd !== undefined ? ` · $${costUsd.toFixed(4)}` : ''}`,
+    };
+  };
+
   const run = async () => {
     if (!api) return;
+    if (live) {
+      setOutcome({ tone: 'info', ...alreadyRunning(agent.name, live, Date.now()) });
+      return;
+    }
     setBusy(true);
     setOutcome(null);
+    // `POST /run` answers only when the run has ENDED. Close as soon as it
+    // has started instead, and let the terminal show it (SEN-177).
+    const since = Date.now();
+    const request = api.run(agent.id, instruction.trim() || undefined);
+    const started = await waitForRunStart({
+      since,
+      settled: request,
+      runs: () => api.runs(agent.id),
+    });
+    if (started === 'started') {
+      setBusy(false);
+      setInstruction('');
+      onStarted();
+      request.then(
+        (result) => onFinished(result.kind === 'unavailable' ? finished(result) : null),
+        (error: unknown) => void describeRunError(error).then(onFinished),
+      );
+      return;
+    }
     try {
-      const result = await api.run(agent.id, instruction.trim() || undefined);
-      if (result.kind === 'unavailable') {
-        setOutcome({
-          tone: 'info',
-          title: 'Not available yet',
-          detail:
-            'This server can’t run agents on demand yet. The button starts working once the agent runner ships.',
-        });
-      } else {
-        const { iterations, stopReason, costUsd } = result.result;
-        setOutcome({
-          tone: 'ok',
-          title: 'Run finished',
-          detail: `${iterations} steps · stopped on ${stopReason}${costUsd !== undefined ? ` · $${costUsd.toFixed(4)}` : ''}`,
-        });
-      }
+      setOutcome(finished(await request));
     } catch (error) {
-      setOutcome({ tone: 'error', ...describeAgentsError(error) });
+      setOutcome(await describeRunError(error));
     } finally {
       setBusy(false);
     }
@@ -1558,8 +1743,11 @@ const styles = StyleSheet.create({
   inline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   // Overview
   hero: { marginTop: 18, gap: 4 },
+  running: { marginTop: 8 },
   figure: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 2 },
   pushRight: { marginLeft: 'auto' },
+  pnlLine: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  balanceNote: { marginVertical: 8 },
   chart: { marginTop: 10 },
   chartEmpty: { marginTop: 14, marginBottom: 8 },
   stats: { gap: 8, marginTop: 12 },

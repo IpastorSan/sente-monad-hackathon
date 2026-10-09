@@ -658,7 +658,7 @@ function AskSheet({
 
 /**
  * Your words as a bubble (Geist, you), then what the run added to the log
- * (Newsreader for its thesis, it), newest last. It looks streamed but is
+ * (the agent's mono voice for its thesis, it), newest last. It looks streamed but is
  * polled, so the header says how fresh it is rather than promising a socket.
  */
 function ThisRun({

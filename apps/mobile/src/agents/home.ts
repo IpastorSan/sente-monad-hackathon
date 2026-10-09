@@ -430,12 +430,11 @@ export function atWork(
   const signed = tone === null ? '0.00' : signedPnl(value);
   const venues = agent.mandate.venues;
   const unit = venues.length === 1 ? (venues[0] === 'kuru' ? 'USDC' : 'AUSD') : null;
+  // A flat day has no sign to put the $ after: "≈ $0.00", not "≈ 0$.00".
+  const dollars = tone === null ? '$0.00' : `${signed.slice(0, 1)}$${signed.slice(1)}`;
   return {
     move,
-    pnl: {
-      label: unit !== null ? `${signed} ${unit}` : `≈ ${signed.slice(0, 1)}$${signed.slice(1)}`,
-      tone,
-    },
+    pnl: { label: unit !== null ? `${signed} ${unit}` : `≈ ${dollars}`, tone },
   };
 }
 
