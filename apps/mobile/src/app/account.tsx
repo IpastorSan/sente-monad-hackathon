@@ -12,12 +12,16 @@
  * the focus, so the tabs' redirect would not fire while this is on top. Signing
  * out therefore redirects from here, the moment the session is no longer
  * `ready`.
+ *
+ * It opens on Profile (SEN-172): the user's generated face and name, and the
+ * controls to re-roll the face or rename.
  */
 import Constants from 'expo-constants';
 import { Redirect, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { RP_ID } from '@/auth';
+import { ProfileSection } from '@/profile/ProfileSection';
 import { MONAD_NETWORK, monadChain } from '@/chain';
 import { useSession } from '@/session';
 import { ActionRow, Notice, Row, Screen, Section, TopBar } from '@/ui/kit';
@@ -41,6 +45,8 @@ export default function Account() {
       <View style={styles.head}>
         <Text style={text.display}>Account</Text>
       </View>
+
+      <ProfileSection />
 
       <Section label="Wallet">
         <Row label="Address to fund" value={wallet.wallet?.address ?? '—'} mono />

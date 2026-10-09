@@ -23,7 +23,7 @@
  *
  * On a wide web window (`useWide`, SEN-166) the same TabList is restyled as a
  * left rail — the mark, the four tabs, a full-width Trade stone, and Account at
- * the foot — and the screen beside it reads in a centred column (`Screen`).
+ * the foot, under the user's face and name (SEN-172) — and the screen beside it reads in a centred column (`Screen`).
  * The rail's extras sit inside the TabList: the router ignores children of a
  * TabList that are not triggers, and renders them. The narrow tree is the dock
  * exactly as it was.
@@ -36,6 +36,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSession } from '@/session';
+import { Avatar } from '@/ui/Avatar';
 import { Icon, type IconName } from '@/ui/icons';
 import { Mark } from '@/ui/goban';
 import { DOCK, isHovered, RAIL, useWide } from '@/ui/kit';
@@ -48,7 +49,7 @@ const FAB = 58;
 
 export default function TabsLayout() {
   const router = useRouter();
-  const { auth } = useSession();
+  const { auth, profile } = useSession();
   const insets = useSafeAreaInsets();
   const wide = useWide();
 
@@ -102,10 +103,16 @@ export default function TabsLayout() {
               state.pressed && styles.pressed,
             ]}
           >
-            <View style={styles.avatar} />
-            <View>
-              <Text style={styles.railLabel}>Account</Text>
-              <Text style={styles.railCaption}>Monad testnet</Text>
+            {profile.identity !== null ? (
+              <Avatar seed={profile.identity.avatarSeed} size={32} />
+            ) : (
+              <View style={styles.avatar} />
+            )}
+            <View style={styles.railWho}>
+              <Text style={styles.railLabel} numberOfLines={1}>
+                {profile.identity?.name ?? 'Account'}
+              </Text>
+              <Text style={styles.railCaption}>Account · testnet</Text>
             </View>
           </Pressable>
         </TabList>
@@ -248,6 +255,7 @@ const styles = StyleSheet.create({
   railLabel: { fontFamily: font.medium, fontSize: 14, color: color.text },
   railLabelOff: { color: color.textDim },
   railCaption: { fontFamily: font.regular, fontSize: 12, color: color.textFaint },
+  railWho: { flex: 1, minWidth: 0 },
   railTrade: {
     flexDirection: 'row',
     alignItems: 'center',
