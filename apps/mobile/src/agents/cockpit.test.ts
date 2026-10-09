@@ -373,6 +373,22 @@ test('scheduleLine: next check, pauses, manual, and the record alone without the
     scheduleLine(status({ everySeconds: null, source: null, nextRunAt: null }), null, NOW),
     'Runs only when you run it.',
   );
+  // SEN-182: with watchers, the checks run without the model.
+  const watching = { count: 3, heartbeatSeconds: 4 * 3600 };
+  assert.equal(
+    scheduleLine(status({ everySeconds: 300, watchers: watching }), null, NOW),
+    'Checks its 3 watchers every 5m without the model, and wakes it when one fires or after ' +
+      '4h quiet. Next check in 12m.',
+  );
+  assert.equal(
+    scheduleLine(status({ watchers: { ...watching, count: 1 } }), null, NOW),
+    'Checks its watcher every 15m without the model, and wakes it when one fires or after 4h ' +
+      'quiet. Next check in 12m.',
+  );
+  assert.equal(
+    scheduleLine(status({ watchers: { ...watching, count: 0 } }), null, NOW),
+    'Checks the markets every 15m. Next check in 12m.',
+  );
   assert.equal(scheduleLine(null, { everySeconds: 3600 }, NOW), 'Checks the markets every 1h.');
   assert.equal(scheduleLine(null, null, NOW), 'Runs only when you run it.');
 });
