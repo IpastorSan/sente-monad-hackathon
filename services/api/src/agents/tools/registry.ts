@@ -11,7 +11,7 @@
  * - `intent`: what `checkIntent` (layer 1) judges.
  */
 import { compareDecimal, type Intent, type Mandate } from '@sente/mandate';
-import type { Decimal, Side } from '@sente/venues';
+import type { Decimal, Kline, Side } from '@sente/venues';
 import {
   fromUnits,
   KURU_TESTNET_MARKETS,
@@ -23,16 +23,18 @@ import { divRound, fromScaled, PERPL_COLLATERAL_DECIMALS, toScaled } from '@sent
 import { isAddressEqual } from 'viem';
 import * as z from 'zod/v4';
 
-import type { KlineInterval } from '../../venues/dto/markets.dto';
+import type { KlineDto, KlineInterval } from '../../venues/dto/markets.dto';
 import {
   IntervalNotSupportedError,
   InvalidSizeError,
+  KLINE_WIDTH_MS,
   MarketNotFoundError,
 } from '../../venues/market-data.service';
 import { toMandateDto } from '../dto/agent.dto';
 import type { AgentRecord } from '../store/agent-store';
 import type { KuruToolVenue, ToolContext, ToolVenues } from './context';
-import { isPositiveDecimal, maxDecimal, mulDecimal } from './decimal';
+import { decimalsOf, isPositiveDecimal, maxDecimal, mulDecimal } from './decimal';
+import { summarize, type IndicatorSpec, type SourceCandle } from './indicators';
 import { fetchSmartMoneySignals, NansenClient } from './nansen';
 import { invalidInput, SenteRefusal } from './refusals';
 
@@ -119,6 +121,17 @@ function mandateMarket(venues: ToolVenues, id: ToolVenueId, symbol: string): str
   } catch {
     return symbol;
   }
+}
+
+/**
+ * Whether the mandate lets the agent trade `market`, named as `mandateMarket`
+ * names it (the OrderBook address on Kuru, the symbol on Perpl), on `id`.
+ */
+function marketAllowed(mandate: Mandate, id: ToolVenueId, market: string): boolean {
+  if (!mandate.venues.includes(id)) return false;
+  return id === 'kuru'
+    ? mandate.kuru.markets.some((a) => a.toLowerCase() === market.toLowerCase())
+    : mandate.perpl.markets.includes(market);
 }
 
 /**
@@ -352,13 +365,7 @@ const listMarkets = defineTool({
           venueAllowed: mandate.venues.includes(id),
           markets: markets.map((m) => ({
             ...m,
-            allowed:
-              mandate.venues.includes(id) &&
-              (id === 'kuru'
-                ? mandate.kuru.markets.some(
-                    (a) => a.toLowerCase() === mandateMarket(venues, id, m.symbol).toLowerCase(),
-                  )
-                : mandate.perpl.markets.includes(m.symbol)),
+            allowed: marketAllowed(mandate, id, mandateMarket(venues, id, m.symbol)),
           })),
         };
       }),
@@ -412,6 +419,32 @@ const getDepth = defineTool({
 
 const KLINE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const;
 
+/**
+ * The most recent candles of one market, oldest first: from the shared cached
+ * read path when there is one, else from the agent's own venue. Perpl's 1w is
+ * refused here, not left to the venue, so the model gets a fixable
+ * invalid_input with or without the shared service behind it.
+ */
+function refuseUnsupportedInterval(venue: ToolVenueId, interval: KlineInterval): void {
+  if (venue === 'perpl' && interval === '1w') {
+    throw invalidInput('Perpl has no 1w candles; use 1d or shorter');
+  }
+}
+
+async function readKlines(
+  ctx: ToolContext,
+  venue: ToolVenueId,
+  symbol: string,
+  interval: KlineInterval,
+  limit: number,
+): Promise<readonly (KlineDto | Kline)[]> {
+  refuseUnsupportedInterval(venue, interval);
+  const { marketData } = ctx;
+  return marketData
+    ? (await marketRead(() => marketData.klines(venue, symbol, interval, limit))).klines
+    : venueOf(await ctx.venues(), venue).getKlines({ symbol, interval, limit });
+}
+
 const getKlines = defineTool({
   name: 'get_klines',
   kind: 'read',
@@ -434,20 +467,7 @@ const getKlines = defineTool({
   }),
   async handler(ctx, args) {
     const interval: KlineInterval = args.interval;
-    const limit = args.limit ?? 48;
-    // Refused here, not left to the venue, so the model gets a fixable
-    // invalid_input with or without the shared service behind it.
-    if (args.venue === 'perpl' && interval === '1w') {
-      throw invalidInput('Perpl has no 1w candles; use 1d or shorter');
-    }
-    const { marketData } = ctx;
-    const klines = marketData
-      ? (await marketRead(() => marketData.klines(args.venue, args.market, interval, limit))).klines
-      : await venueOf(await ctx.venues(), args.venue).getKlines({
-          symbol: args.market,
-          interval,
-          limit,
-        });
+    const klines = await readKlines(ctx, args.venue, args.market, interval, args.limit ?? 48);
     return {
       interval,
       // Volumes are estimates on both venues (`KlinesDto.volumeIsEstimate`).
@@ -462,6 +482,195 @@ const getKlines = defineTool({
         qv: k.quoteVolume ?? null,
       })),
     };
+  },
+});
+
+const MAX_INDICATOR_TIMEFRAMES = 4;
+const MAX_INDICATOR_SPECS = 8;
+const MAX_INDICATOR_PERIOD = 200;
+const DEFAULT_INDICATOR_LOOKBACK = 200;
+const MAX_INDICATOR_LOOKBACK = 500;
+const DEFAULT_INDICATOR_SERIES = 5;
+const MAX_INDICATOR_SERIES = 20;
+/** Without a tick size, the closes' own precision, up to this many places. */
+const MAX_INFERRED_PRICE_DECIMALS = 8;
+
+const indicatorPeriod = (fallback: number, min = 2) =>
+  z.number().int().min(min).max(MAX_INDICATOR_PERIOD).default(fallback).describe('Candles.');
+
+const indicatorSpec = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('sma'), period: indicatorPeriod(20) }),
+  z.strictObject({ type: z.literal('ema'), period: indicatorPeriod(20) }),
+  z.strictObject({ type: z.literal('wma'), period: indicatorPeriod(20) }),
+  z.strictObject({
+    type: z.literal('macd'),
+    fast: indicatorPeriod(12),
+    slow: indicatorPeriod(26),
+    signal: indicatorPeriod(9),
+  }),
+  z.strictObject({ type: z.literal('rsi'), period: indicatorPeriod(14) }),
+  z.strictObject({
+    type: z.literal('stochastic'),
+    k: indicatorPeriod(14),
+    d: indicatorPeriod(3, 1),
+    smooth: indicatorPeriod(3, 1).describe('%K smoothing in candles; 1 for fast %K.'),
+  }),
+  z.strictObject({ type: z.literal('atr'), period: indicatorPeriod(14) }),
+  z.strictObject({
+    type: z.literal('bollinger'),
+    period: indicatorPeriod(20),
+    stddev: z.number().min(0.5).max(5).default(2).describe('Band width in σ.'),
+  }),
+  z.strictObject({ type: z.literal('vwap') }),
+  z.strictObject({ type: z.literal('obv') }),
+  z.strictObject({ type: z.literal('adx'), period: indicatorPeriod(14) }),
+  z.strictObject({ type: z.literal('force_index'), period: indicatorPeriod(13) }),
+  z.strictObject({ type: z.literal('elder_ray'), period: indicatorPeriod(13) }),
+]);
+
+/** The one rule the schema cannot state per field. */
+function checkSpec(spec: IndicatorSpec): IndicatorSpec {
+  if (spec.type === 'macd' && spec.fast >= spec.slow) {
+    throw invalidInput(`macd needs fast < slow; got fast ${spec.fast}, slow ${spec.slow}`);
+  }
+  return spec;
+}
+
+/**
+ * Indicators read only markets the mandate lets the agent trade: they are
+ * for deciding a trade, and the run's attention belongs there.
+ */
+async function requireMandateMarket(ctx: ToolContext, venue: ToolVenueId, symbol: string) {
+  const { mandate } = await currentMandate(ctx);
+  if (!mandate.venues.includes(venue)) {
+    throw new SenteRefusal('venue_not_allowed', `your mandate does not include ${venue}`);
+  }
+  // The static table, not `mandateMarket`: that needs the agent's venues
+  // built, and a read should not pay for that.
+  const market =
+    venue === 'kuru'
+      ? (KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol)?.address ?? symbol)
+      : symbol;
+  if (!marketAllowed(mandate, venue, market)) {
+    throw new SenteRefusal(
+      'market_not_allowed',
+      `${symbol} on ${venue} is not in your mandate; get_mandate lists the markets you may use`,
+    );
+  }
+}
+
+/** The market's tick precision, or undefined when the catalog cannot say. */
+async function tickDecimals(
+  ctx: ToolContext,
+  venue: ToolVenueId,
+  symbol: string,
+): Promise<number | undefined> {
+  try {
+    const { marketData } = ctx;
+    const tickSize = marketData
+      ? (await marketData.market(venue, symbol)).tickSize
+      : (await venueOf(await ctx.venues(), venue).getMarkets()).find((m) => m.symbol === symbol)
+          ?.tickSize;
+    return tickSize === undefined ? undefined : decimalsOf(tickSize);
+  } catch {
+    return undefined;
+  }
+}
+
+function toSourceCandle(k: KlineDto | Kline): SourceCandle {
+  return {
+    candle: {
+      t: k.openTime,
+      open: Number(k.open),
+      high: Number(k.high),
+      low: Number(k.low),
+      close: Number(k.close),
+      volume: Number(k.volume),
+    },
+    closeTime: k.closeTime,
+    close: k.close,
+  };
+}
+
+const getIndicators = defineTool({
+  name: 'get_indicators',
+  kind: 'read',
+  description:
+    'Technical indicators computed by Sente on one of your mandate markets, over one or more ' +
+    'timeframes at once (e.g. ["1h","15m","5m"] for a triple screen). Use this instead of ' +
+    'computing indicators from get_klines yourself. Each spec is {type, ...params}; every ' +
+    'param is optional: sma/ema/wma {period=20}; macd {fast=12, slow=26, signal=9} → line, ' +
+    'signal, histogram; rsi {period=14} (Wilder); stochastic {k=14, d=3, smooth=3} → k, d; ' +
+    'atr {period=14} (Wilder); bollinger {period=20, stddev=2} → upper, middle, lower, ' +
+    'percentB, bandwidth; vwap {} and obv {}, both anchored at the first candle of the ' +
+    'window, not the session; adx {period=14} → adx, plusDi, minusDi; force_index ' +
+    '{period=13} (Elder, EMA of Δclose × volume); elder_ray {period=13} → ema, bullPower, ' +
+    'bearPower. Per timeframe: `last` is the candle every value is computed on (closed: ' +
+    'false means it is still forming), `value` the latest, `series` the last few values ' +
+    'oldest first, ending with that latest. An indicator without enough candles shows ' +
+    'value null with how many it needs; warnings flag that, missing candles and a flat ' +
+    'market. Prices are decimal strings to the tick plus two places; oscillators 0-100.',
+  input: z.strictObject({
+    venue,
+    market,
+    timeframes: z
+      .array(z.enum(KLINE_INTERVALS))
+      .min(1)
+      .max(MAX_INDICATOR_TIMEFRAMES)
+      .refine((list) => new Set(list).size === list.length, 'list each timeframe once')
+      .describe(`Candle widths, 1 to ${MAX_INDICATOR_TIMEFRAMES}. Perpl has no 1w.`),
+    indicators: z
+      .array(indicatorSpec)
+      .min(1)
+      .max(MAX_INDICATOR_SPECS)
+      .describe(`1 to ${MAX_INDICATOR_SPECS} specs, e.g. [{"type":"ema","period":13}].`),
+    lookback: z
+      .number()
+      .int()
+      .min(2)
+      .max(MAX_INDICATOR_LOOKBACK)
+      .optional()
+      .describe(
+        `Candles per timeframe to compute over; default ${DEFAULT_INDICATOR_LOOKBACK}. ` +
+          'EMA-based values settle with more history.',
+      ),
+    series: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_INDICATOR_SERIES)
+      .optional()
+      .describe(`Recent values per output; default ${DEFAULT_INDICATOR_SERIES}.`),
+  }),
+  async handler(ctx, args) {
+    const specs = args.indicators.map(checkSpec);
+    // Before the mandate check and any read, so a bad request costs nothing.
+    for (const tf of args.timeframes) refuseUnsupportedInterval(args.venue, tf);
+    await requireMandateMarket(ctx, args.venue, args.market);
+    const lookback = args.lookback ?? DEFAULT_INDICATOR_LOOKBACK;
+    const [ticks, ...frames] = await Promise.all([
+      tickDecimals(ctx, args.venue, args.market),
+      ...args.timeframes.map((tf) => readKlines(ctx, args.venue, args.market, tf, lookback)),
+    ]);
+    const priceDecimals =
+      ticks ??
+      Math.min(
+        MAX_INFERRED_PRICE_DECIMALS,
+        Math.max(0, ...frames.flat().map((k) => decimalsOf(k.close))),
+      );
+    const nowMs = ctx.now() * 1000;
+    const timeframes = Object.fromEntries(
+      args.timeframes.map((tf, i) => [
+        tf,
+        summarize(frames[i]!.map(toSourceCandle), specs, {
+          seriesLength: args.series ?? DEFAULT_INDICATOR_SERIES,
+          priceDecimals,
+          widthMs: KLINE_WIDTH_MS[tf],
+          nowMs,
+        }),
+      ]),
+    );
+    return { venue: args.venue, market: args.market, timeframes };
   },
 });
 
@@ -926,6 +1135,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   listMarkets,
   getDepth,
   getKlines,
+  getIndicators,
   getFunding,
   quoteOrder,
   getBalances,
