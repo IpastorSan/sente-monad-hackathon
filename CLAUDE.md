@@ -507,6 +507,22 @@ agent never waits on the login screen or tries to automate it. It finishes what 
 session and names the page that needs a signed-in human. Headless Playwright is fine for anything
 that needs no session.
 
+## Tests never touch production
+
+`api.sente.lol` is live, and every new wallet registered there is sent a starter kit of real
+testnet funds. On 2026-10-09 a web e2e test built against a cached bundle that still pointed at
+production and registered six throwaway wallets, which cost 1,500 AUSD and 600 USDC. Two rules:
+
+- **Always export the web build with `--clear`** before testing it. Metro's cache ignores
+  `EXPO_PUBLIC_*` changes, so a stale bundle keeps whichever API URL it was last built with.
+- **A browser or e2e test blocks every host except its own page and its stub**, and fails if the
+  bundle names `sente.lol` or `api.sente.lol`. Live runs against production happen only when
+  Ignacio asks for one.
+
+The production box is `sente-eu` (GCP project `plenary-anvil-491607-s6`, zone
+`europe-southwest1-a`, 34.175.150.91). It moved from `us-central1` on 2026-10-09 because
+Perpl testnet answers its trading socket with `451 country is blocked` from US IPs.
+
 ## Conventions
 
 - Strict TypeScript everywhere; every package extends `tsconfig.base.json`.

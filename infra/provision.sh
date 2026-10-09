@@ -18,9 +18,9 @@ PROJECT="${PROJECT:?set PROJECT=your-gcp-project}"
 # Note the instance being free-tier does NOT make the whole thing $0: GCP bills
 # external IPv4 addresses separately. Budget a couple of dollars a month for
 # the static IP and check current pricing rather than trusting this comment.
-ZONE="${ZONE:-us-central1-a}"
+ZONE="${ZONE:-europe-southwest1-a}"
 REGION="${ZONE%-*}"
-NAME="${NAME:-sente-web}"
+NAME="${NAME:-sente-eu}"
 MACHINE="${MACHINE:-e2-micro}"   # do not change without re-reading the free-tier note above
 
 say () { printf '\n\033[1m==> %s\033[0m\n' "$*"; }

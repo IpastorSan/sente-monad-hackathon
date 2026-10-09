@@ -32,8 +32,8 @@ set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
 if [ "$DRY_RUN" = 1 ]; then PROJECT="${PROJECT:-dry-run}"; else PROJECT="${PROJECT:?set PROJECT}"; fi
-ZONE="${ZONE:-us-central1-a}"
-NAME="${NAME:-sente-web}"
+ZONE="${ZONE:-europe-southwest1-a}"
+NAME="${NAME:-sente-eu}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="${1:-$HERE/../.env}"
 ALLOWLIST="$HERE/api-env.allowlist"

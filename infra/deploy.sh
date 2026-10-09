@@ -28,8 +28,8 @@
 set -euo pipefail
 
 PROJECT="${PROJECT:-}"
-ZONE="${ZONE:-us-central1-a}"
-NAME="${NAME:-sente-web}"
+ZONE="${ZONE:-europe-southwest1-a}"
+NAME="${NAME:-sente-eu}"
 SITE_HOST="${SITE_HOST:-sente.lol}"
 API_HOST="${API_HOST:-api.$SITE_HOST}"
 SKIP_API="${SKIP_API:-0}"
