@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { formatUnits, getAddress, isAddressEqual, type Address, type Hash } from 'viem';
 import type { AuthorizationPayload } from '@sente/mandate';
@@ -23,6 +23,12 @@ import {
 } from './send/sponsored-send';
 import { WriteSpacer } from '../spacing/write-spacer';
 import {
+  STARTER_KIT,
+  describe as describeError,
+  type StarterKit,
+  type StarterKitView,
+} from '../starter-kit/starter-kit.service';
+import {
   USER_WALLET_REGISTRY,
   type UserWalletBinding,
   type UserWalletRegistry,
@@ -34,6 +40,8 @@ import { WALLET_CHAIN_ID } from './wallet.service';
 export type UserWalletView = UserWalletBinding & {
   chainId: number;
   balances: TokenBalance[];
+  /** The SEN-170 starter kit's progress for this user. */
+  starterKit: StarterKitView;
 };
 
 /** DI token for the per-wallet spacing between sponsored sends. */
@@ -179,6 +187,11 @@ export class UserWalletService {
      * same `WriteSpacer` the agent runner spaces its signs with.
      */
     @Inject(SEND_SPACER) private readonly spacer: WriteSpacer,
+    /**
+     * The SEN-170 starter kit, kicked off after a register and never awaited.
+     * Optional so a spec that does not care about it leaves it out.
+     */
+    @Optional() @Inject(STARTER_KIT) private readonly starterKit?: StarterKit,
   ) {}
 
   /**
@@ -198,21 +211,49 @@ export class UserWalletService {
       );
     }
 
+    const binding = await this.bindOnce(principal, devicePublicKey);
+    this.kickStarterKit(binding);
+    return this.describe(binding);
+  }
+
+  private async bindOnce(
+    principal: Principal,
+    devicePublicKey: string,
+  ): Promise<UserWalletBinding> {
     const existing = await this.registry.find(principal.userId);
     if (existing) {
-      return this.describe(this.assertSameDevice(existing, devicePublicKey));
+      return this.assertSameDevice(existing, devicePublicKey);
     }
 
     const inflight = this.registering.get(principal.userId);
     if (inflight) {
-      return this.describe(this.assertSameDevice(await inflight, devicePublicKey));
+      return this.assertSameDevice(await inflight, devicePublicKey);
     }
 
     const created = this.provision(principal, devicePublicKey).finally(() => {
       this.registering.delete(principal.userId);
     });
     this.registering.set(principal.userId, created);
-    return this.describe(this.assertSameDevice(await created, devicePublicKey));
+    return this.assertSameDevice(await created, devicePublicKey);
+  }
+
+  /**
+   * Starts the SEN-170 starter kit for a registered wallet, without waiting for
+   * it. On EVERY successful register, not only the one that created the wallet:
+   * the kit's own store is what makes it once per user, and this way a user
+   * the daily cap turned away, or who registered before the kit was switched
+   * on, gets it on their next sign-in. Nothing it does can fail the register:
+   * `grant` promises never to reject, and this does not take its word for it.
+   */
+  private kickStarterKit(binding: UserWalletBinding): void {
+    if (!this.starterKit) return;
+    const report = (error: unknown) =>
+      this.logger.error(`starter kit for user=${binding.userId} failed: ${describeError(error)}`);
+    try {
+      void this.starterKit.grant(binding.userId, binding.address).catch(report);
+    } catch (error) {
+      report(error);
+    }
   }
 
   /** The caller's wallet and its balances, or `account_not_registered`. */
@@ -569,6 +610,18 @@ export class UserWalletService {
       ...binding,
       chainId: WALLET_CHAIN_ID,
       balances: await this.balances.balances(binding.address),
+      starterKit: this.starterKitStatus(binding.userId),
     };
+  }
+
+  /** Never fails the read it rides on: an unanswerable status is `none`. */
+  private starterKitStatus(userId: string): StarterKitView {
+    if (!this.starterKit) return { status: 'disabled' };
+    try {
+      return this.starterKit.status(userId);
+    } catch (error) {
+      this.logger.error(`starter kit status for user=${userId} failed: ${describeError(error)}`);
+      return { status: 'none' };
+    }
   }
 }

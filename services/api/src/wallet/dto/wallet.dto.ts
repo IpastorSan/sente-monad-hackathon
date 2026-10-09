@@ -209,6 +209,18 @@ export interface UserWalletResponseDto {
   createdAt: string;
   /** MON, USDC and AUSD, in that order. */
   balances: TokenBalanceDto[];
+  /**
+   * The one-time AUSD + USDC starter kit (SEN-170). `disabled` when the server
+   * has no starter key, `none` when it has one but this user got no kit (the
+   * daily cap), else the kit's progress and its transfers' hashes.
+   */
+  starterKit: StarterKitDto;
+}
+
+export interface StarterKitDto {
+  status: 'none' | 'pending' | 'sent' | 'failed' | 'disabled';
+  ausdTx?: string;
+  usdcTx?: string;
 }
 
 export interface UserOperationDto {

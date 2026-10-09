@@ -60,6 +60,7 @@ deployment view.
 | `AUTH_SESSION_SECRET`                                                                                     | `/opt/sente/api.env`                     | secret                                                                     |
 | `PRIVY_APP_SECRET`, `PRIVY_AGENT_AUTH_KEY`, `PRIVY_MANDATE_OWNER_KEY`                                     | `/opt/sente/api.env`                     | secret — replacing one orphans every wallet or policy it owns              |
 | `GAS_DRIP_PRIVATE_KEYS`, `ERC8004_REGISTRAR_KEY`, `ERC8004_REVIEWER_KEY`                                  | `/opt/sente/api.env`                     | secret — **real testnet money, unrecoverable**                             |
+| `STARTER_DRIP_PRIVATE_KEY`                                                                                | `/opt/sente/api.env`                     | secret — **real testnet money**; its own key, never a `GAS_DRIP` one       |
 | `PIMLICO_BUNDLER_URL`, `ALCHEMY_RPC_URL`, `MONAD_TESTNET_RPC_URL` if keyed                                | `/opt/sente/api.env`                     | secret — the API key is a **path segment**, so the whole URL is the secret |
 | `ALCHEMY_WEBHOOK_SIGNING_KEY`, `ALCHEMY_NOTIFY_AUTH_TOKEN`, `OPENROUTER_MANAGEMENT_KEY`, `NANSEN_API_KEY` | `/opt/sente/api.env`                     | secret                                                                     |
 | `PRIVY_APP_ID`, `ALCHEMY_NOTIFY_WEBHOOK_ID`, quorum ids                                                   | `/opt/sente/api.env`                     | not secret, useless alone                                                  |
@@ -487,7 +488,35 @@ something else, and this is the shape of it (not yet written for the submission)
   account → register the wallet → hire an agent with a mandate → watch it trade;
 - testnet funds ready, and enough left in the drip's daily cap
   (`GAS_DRIP_DAILY_CAP_MON`) that several judges can each be funded;
+- the starter kit on (SEN-170): `STARTER_DRIP_PRIVATE_KEY` set, and that wallet
+  holding AUSD and USDC for `STARTER_DRIP_DAILY_CAP_USERS` users plus MON for
+  their gas. See "Starter kit" below;
 - a funded demo agent to look at without waiting for one to warm up.
+
+### Starter kit
+
+`services/api/src/starter-kit/` (SEN-170) sends each user's wallet
+`STARTER_DRIP_AUSD` AUSD (default 250) and `STARTER_DRIP_USDC` USDC (default
+100), once, after a successful `POST /wallet/register`. Perpl needs 100 AUSD to
+open an account and Kuru's minimum notional is 10 USDC, so a judge can hire an
+agent straight away. `GET /wallet` reports it as
+`starterKit: { status: 'none' | 'pending' | 'sent' | 'failed' | 'disabled', ausdTx?, usdcTx? }`.
+
+- **Its own key.** Boot refuses a `STARTER_DRIP_PRIVATE_KEY` that is also in
+  `GAS_DRIP_PRIVATE_KEYS` or is an `ERC8004_*` key: two senders on one key share
+  a nonce sequence neither tracks. Unset, the kit is off (`disabled`) and
+  registration is unchanged.
+- **Once per user, across redeploys.** `<STATE_DIR>/starter-kits.json` records
+  every kit. It is kicked off on every successful register, never awaited, and
+  the record makes it once: a user the daily cap turned away (`none`) gets it on
+  a later sign-in after 00:00 UTC.
+- **No retries.** A short starter wallet fails the kit before anything is sent;
+  a reverted or unconfirmed transfer fails it after. A kit a restart caught
+  mid-send loads as `failed`. Re-sending is a manual decision: delete the user's
+  record from the file with the API stopped.
+- **Funding.** Per user: the two token amounts plus gas at the explicit limits,
+  82,000 (AUSD) + 72,000 (USDC). Monad charges the limit, so at ~100 gwei that
+  is about 0.016 MON per user, about 0.8 MON for a full day's cap of 50.
 
 ## Decisions still open
 

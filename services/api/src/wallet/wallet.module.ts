@@ -7,6 +7,7 @@ import { AgentStoreModule } from '../agents/store/agent-store.module';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { statePath } from '../state/json-file';
+import { StarterKitModule } from '../starter-kit/starter-kit.module';
 import { StateDirLease, StateModule } from '../state/state.module';
 import {
   TOKEN_BALANCES,
@@ -239,7 +240,8 @@ const authProvider: Provider = {
   // records — is this address an agent of the caller's? The store lives below
   // both modules precisely so this is not an import of `AgentsModule`, which
   // imports this one.
-  imports: [AgentStoreModule, StateModule],
+  // StarterKitModule: the SEN-170 starter kit a register kicks off.
+  imports: [AgentStoreModule, StateModule, StarterKitModule],
   controllers: [WalletController],
   providers: [
     configProvider,
