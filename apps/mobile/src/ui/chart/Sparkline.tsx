@@ -5,16 +5,16 @@
  *
  * `up` overrides the sign when the row already knows it (the 24h change beside
  * the line), so the colour and the number next to it can never disagree.
+ *
+ * Native only: the web build resolves `Sparkline.web.tsx`, the same model as
+ * DOM SVG, because a list of Skia canvases on web is a list of WebGL contexts
+ * (SEN-173, `docs/web.md`).
  */
 import { Canvas, Circle, Path } from '@shopify/react-native-skia';
 import { useMemo } from 'react';
 
 import { color } from '../theme';
-import { isUp, linePath, pointsXY, scaleFor, toPrice, type Decimal } from './geometry';
-
-const PAD = 3;
-/** Room on the right for the end dot. */
-const PAD_RIGHT = 4;
+import { sparklineModel, type Decimal } from './geometry';
 
 export function Sparkline({
   points,
@@ -28,19 +28,7 @@ export function Sparkline({
   width?: number;
   height?: number;
 }) {
-  const model = useMemo(() => {
-    const closes = points.map(toPrice);
-    if (closes.length === 0) return null;
-    const scale = scaleFor(closes, [], { height, padTop: PAD, padBottom: PAD });
-    const plotWidth = width - PAD_RIGHT;
-    const xy = pointsXY(closes, scale, plotWidth);
-    return {
-      rising: isUp(closes[0] ?? 0, closes[closes.length - 1] ?? 0),
-      path: linePath(closes, scale, plotWidth),
-      end: xy[xy.length - 1] ?? { x: plotWidth, y: height / 2 },
-    };
-  }, [points, width, height]);
-
+  const model = useMemo(() => sparklineModel(points, width, height), [points, width, height]);
   const tone = (up ?? model?.rising ?? true) ? color.mint : color.berry;
 
   return (

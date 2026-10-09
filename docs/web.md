@@ -123,3 +123,30 @@ On a machine with Chrome signed in to the Google account that holds the phone's 
 4. **QR / hybrid:** "Use a phone or tablet", scan with the Android phone, confirm Home.
    The device-salt assertion is a second QR round trip — record whether that is tolerable.
 5. Windows Hello / iCloud Keychain, if a machine is reachable: record PRF yes/no.
+
+## Why icons are SVG on web (SEN-173)
+
+On web, Skia is CanvasKit and **every `<Canvas>` is its own WebGL context**. Chrome keeps
+about 16 live contexts per page; past that it logs `WARNING: Too many active WebGL contexts.
+Oldest context will be lost.` and the oldest canvases turn into broken-image placeholders.
+A desktop Home (rail, header, buttons, sparklines) mounted far more than 16, so after a few
+interactions the icons broke.
+
+**The rule: on web, only the price chart (`ui/chart/Chart.tsx`, one per screen) is a Skia
+canvas.** Every small or repeated drawing has a `.web.tsx` twin that Metro picks for web and
+that draws the same geometry as DOM SVG (or a CSS gradient), sharing its data with the native
+file: `icons` (`iconPaths.ts`), `chart/Sparkline` (`sparklineModel` in `geometry.ts`),
+`SigilBoard` (`sigilBoard` in `sigil.ts`), `joseki`, `GobanHero`, `TickerFade` and
+`ConsensusTrack`. Native keeps Skia unchanged. A new drawing that can appear more than once on
+a screen gets a web twin too.
+
+Measured with headless Chromium against `expo export --platform web`, on a temporary route
+that mounts what a desktop Home does several times over (52 icons, 20 sparklines, 20 sigils,
+5 joseki, the ticker, 6 consensus tracks, a chart, the Welcome board):
+
+| Build                    | `<canvas>` | WebGL contexts created | Lost | "Too many active" warnings |
+| ------------------------ | ---------- | ---------------------- | ---- | -------------------------- |
+| Skia everywhere (before) | 106        | 106                    | 90   | yes                        |
+| SVG twins (after)        | 1          | 1                      | 0    | none                       |
+
+`/welcome` went from 2 contexts to 0, and `/presets/range-trader` from 2 to 0.

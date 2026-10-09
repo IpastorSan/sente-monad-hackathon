@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { SIGIL_LINES, sigilStones } from './sigil.ts';
+import { SIGIL_LINES, sigilBoard, sigilStones } from './sigil.ts';
 
 test('the same seed always places the same stones', () => {
   assert.deepEqual(sigilStones('agent-7f3c'), sigilStones('agent-7f3c'));
@@ -29,4 +29,15 @@ test('three or four stones, on distinct intersections inside the board', () => {
 test('tones alternate, purple first', () => {
   const tones = sigilStones('tengen').map((s) => s.tone);
   tones.forEach((tone, i) => assert.equal(tone, i % 2 === 0 ? 'purple' : 'white'));
+});
+
+test('sigilBoard draws the grid and every stone inside the board', () => {
+  const layout = sigilBoard('range-hunter', 40);
+  assert.equal(layout.board, 30);
+  assert.equal(layout.lines.length, SIGIL_LINES * 2);
+  assert.equal(layout.stones.length, sigilStones('range-hunter').length);
+  for (const s of layout.stones) {
+    assert.ok(s.cx - s.r >= 0 && s.cx + s.r <= layout.board);
+    assert.ok(s.cy - s.r >= 0 && s.cy + s.r <= layout.board);
+  }
 });

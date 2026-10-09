@@ -47,7 +47,9 @@
  * surface: two hairlines in two views can round to different pixel rows at a
  * fractional density and show a seam. Reanimated drives it through Skia's own
  * shared-value binding, which is the pair Expo SDK 57 pins (Skia 2.6.2,
- * Reanimated 4.5.1).
+ * Reanimated 4.5.1). The drawing is `ConsensusTrack.tsx`; on web it is DOM
+ * views instead (`ConsensusTrack.web.tsx`), because a ledger of Skia canvases
+ * is a ledger of WebGL contexts there (SEN-173).
  */
 import {
   createContext,
@@ -60,14 +62,6 @@ import {
   type ReactNode,
 } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import {
-  BlurMask,
-  Canvas,
-  Group,
-  LinearGradient,
-  RoundedRect,
-  vec,
-} from '@shopify/react-native-skia';
 import * as Haptics from '@/platform/haptics';
 import Animated, {
   Easing,
@@ -88,6 +82,7 @@ import {
 import { useSession } from '@/session';
 import { API_URL, type SessionAuth } from '@/wallet/api';
 
+import { ConsensusTrack } from './ConsensusTrack';
 import { color, font, text } from './theme';
 
 // ---------------------------------------------------------------------------
@@ -701,37 +696,7 @@ export function ConsensusRamp({
       accessibilityLabel={accessibilityLabel(phase, stop, blockNumber)}
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      {/* One object, not an array: Skia's web Canvas spreads its style into a <div>. */}
-      <Canvas style={StyleSheet.flatten([styles.canvas, { width }])}>
-        <RoundedRect x={0} y={GLOW} width={width} height={TRACK} r={TRACK / 2} color={color.line} />
-        <RoundedRect
-          x={0}
-          y={GLOW}
-          width={fillWidth}
-          height={TRACK}
-          r={TRACK / 2}
-          color={color.lineStrong}
-        />
-        <Group opacity={lit}>
-          <RoundedRect
-            x={0}
-            y={GLOW}
-            width={fillWidth}
-            height={TRACK}
-            r={TRACK / 2}
-            color={color.purple}
-          >
-            <BlurMask blur={5} style="normal" />
-          </RoundedRect>
-          <RoundedRect x={0} y={GLOW} width={fillWidth} height={TRACK} r={TRACK / 2}>
-            <LinearGradient
-              start={vec(0, 0)}
-              end={vec(Math.max(width, 1), 0)}
-              colors={[color.purple, color.purpleHi]}
-            />
-          </RoundedRect>
-        </Group>
-      </Canvas>
+      <ConsensusTrack width={width} fillWidth={fillWidth} lit={lit} track={TRACK} glow={GLOW} />
 
       <View style={styles.stops}>
         {CONSENSUS_STOPS.map((label, index) => (
@@ -785,7 +750,6 @@ function accessibilityLabel(phase: Phase, stop: number | null, blockNumber: numb
 
 const styles = StyleSheet.create({
   ramp: { marginTop: 10 },
-  canvas: { height: TRACK + GLOW * 2, marginVertical: -GLOW },
   stops: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   stop: {
     fontFamily: font.chain,

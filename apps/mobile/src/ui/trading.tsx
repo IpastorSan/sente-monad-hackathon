@@ -9,7 +9,6 @@
  * a P&L, a side. Purple stays an event (the PERP tag is the only purple, and
  * it marks a leveraged venue, which is a move of its own).
  */
-import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   Pressable,
@@ -34,6 +33,7 @@ import Animated, {
 import { Sparkline } from './chart/Sparkline';
 import type { Decimal } from './chart/geometry';
 import { color, font, RADIUS, text } from './theme';
+import { TickerFade } from './TickerFade';
 import {
   asOfLabel,
   formatPct,
@@ -506,27 +506,7 @@ export function TickerMarquee({
         </Animated.View>
       )}
       {box > 0 ? (
-        // One object, not an array: Skia's web Canvas spreads its style into a
-        // <div>, and an array there throws (SEN-167), blanking Home on the web.
-        <Canvas
-          style={StyleSheet.flatten([styles.tickerFade, { width: box }])}
-          pointerEvents="none"
-        >
-          <Rect x={0} y={0} width={FADE} height={TICKER_HEIGHT}>
-            <LinearGradient
-              start={vec(0, 0)}
-              end={vec(FADE, 0)}
-              colors={[background, `${background}00`]}
-            />
-          </Rect>
-          <Rect x={box - FADE} y={0} width={FADE} height={TICKER_HEIGHT}>
-            <LinearGradient
-              start={vec(box - FADE, 0)}
-              end={vec(box, 0)}
-              colors={[`${background}00`, background]}
-            />
-          </Rect>
-        </Canvas>
+        <TickerFade width={box} height={TICKER_HEIGHT} fade={FADE} background={background} />
       ) : null}
     </View>
   );
@@ -629,5 +609,4 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   tickerSymbol: { fontFamily: font.semibold, color: color.text },
-  tickerFade: { position: 'absolute', top: 0, left: 0, height: TICKER_HEIGHT },
 });

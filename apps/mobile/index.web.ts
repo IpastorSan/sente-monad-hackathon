@@ -8,8 +8,8 @@
 import './src/polyfills';
 
 // Skia on web is CanvasKit (WASM), and nothing Skia draws works until it has
-// loaded: `ui/icons.tsx` builds every icon with `Skia.Path.MakeFromSVGString`,
-// so without this the first `Icon` throws and the page stays blank. Load it
+// loaded: the price chart (`ui/chart/Chart.tsx`, the one web canvas left since
+// SEN-173) builds paths with `Skia.Path`, and without this it throws. Load it
 // BEFORE the router is imported, then import the router dynamically so no
 // route module is evaluated against a missing `global.CanvasKit`.
 //
