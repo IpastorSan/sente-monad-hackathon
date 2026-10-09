@@ -360,6 +360,7 @@ export function Field({
   autoCapitalize = 'sentences',
   onSubmitEditing,
   maxLength,
+  autoFocus,
 }: {
   label: string;
   value: string;
@@ -377,6 +378,8 @@ export function Field({
   onSubmitEditing?: () => void;
   /** A hard cap on input, past the `max` counter's soft one. */
   maxLength?: number;
+  /** Focus on mount: a screen sending someone back to fix this field. */
+  autoFocus?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   const over = max !== undefined && value.length > max;
@@ -408,6 +411,7 @@ export function Field({
           onSubmitEditing={onSubmitEditing}
           returnKeyType={onSubmitEditing ? 'done' : undefined}
           maxLength={maxLength}
+          autoFocus={autoFocus}
           cursorColor={color.purpleHi}
           selectionColor={color.purple}
           textAlignVertical={multiline ? 'top' : 'center'}
@@ -572,6 +576,44 @@ export function Row({
       <Text style={[mono ? text.mono : [text.body, text.num], styles.rowValue]} selectable>
         {value}
       </Text>
+    </View>
+  );
+}
+
+/**
+ * A {@link Row} that opens to show more under it (SEN-177): a long text
+ * summarised by its length, read in full on demand. A button with
+ * `expanded` state, so the web gets `aria-expanded` and Enter / Space.
+ */
+export function DisclosureRow({
+  label,
+  value,
+  children,
+}: {
+  label: string;
+  value: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={open ? styles.disclosureOpen : null}>
+      <Pressable
+        accessibilityRole="button"
+        aria-expanded={open}
+        accessibilityLabel={`${label}, ${value}`}
+        accessibilityHint={open ? 'Hides the full text' : 'Shows the full text'}
+        onPress={() => setOpen(!open)}
+        style={({ pressed }) => [styles.row, open && styles.rowOpen, pressed && styles.pressed]}
+      >
+        <Text style={[text.dim, styles.rowLabel]}>{label}</Text>
+        <View style={styles.disclosureValue}>
+          <Text style={[text.body, text.num, styles.rowValue]}>{value}</Text>
+          <View style={open ? styles.chevronOpen : styles.chevronClosed}>
+            <Icon name="chevron" size={16} color={color.textFaint} />
+          </View>
+        </View>
+      </Pressable>
+      {open ? <View style={styles.disclosureBody}>{children}</View> : null}
     </View>
   );
 }
@@ -905,6 +947,12 @@ const styles = StyleSheet.create({
     borderBottomColor: color.line,
   },
   rowLabel: { flexShrink: 0, maxWidth: '55%' },
+  rowOpen: { borderBottomWidth: 0 },
+  disclosureOpen: { borderBottomWidth: 1, borderBottomColor: color.line },
+  disclosureValue: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
+  chevronClosed: { transform: [{ rotate: '90deg' }] },
+  chevronOpen: { transform: [{ rotate: '-90deg' }] },
+  disclosureBody: { paddingBottom: 12, gap: 8 },
   rowValue: { flexShrink: 1, textAlign: 'right' },
   actionRow: {
     flexDirection: 'row',

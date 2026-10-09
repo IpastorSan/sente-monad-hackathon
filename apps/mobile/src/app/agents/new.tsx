@@ -55,6 +55,7 @@ import { useSession } from '@/session';
 import {
   Button,
   Card,
+  DisclosureRow,
   Field,
   IconButton,
   Loading,
@@ -287,12 +288,21 @@ export default function HireAgentScreen() {
     else setIndex(index - 1);
   };
 
+  /** SEN-177: from the review, back to step 2 with that field focused. */
+  const [editing, setEditing] = useState<'systemPrompt' | 'strategy' | null>(null);
+  const editInstructions = (field: 'systemPrompt' | 'strategy') => {
+    setShowErrors(false);
+    setEditing(field);
+    setIndex(steps.indexOf('instructions'));
+  };
+
   const next = () => {
     if (!stepValid(step)) {
       setShowErrors(true);
       return;
     }
     setShowErrors(false);
+    setEditing(null);
     setIndex(index + 1);
   };
 
@@ -489,6 +499,7 @@ export default function HireAgentScreen() {
             label="System prompt"
             value={systemPrompt}
             onChangeText={setSystemPrompt}
+            autoFocus={editing === 'systemPrompt'}
             multiline
             max={AGENT_LIMITS.systemPrompt}
             placeholder="Who the agent is and how it should behave."
@@ -497,6 +508,7 @@ export default function HireAgentScreen() {
             label="Strategy"
             value={strategy}
             onChangeText={setStrategy}
+            autoFocus={editing === 'strategy'}
             multiline
             max={AGENT_LIMITS.strategy}
             placeholder="What it trades, when it acts, and when it stays out."
@@ -542,14 +554,24 @@ export default function HireAgentScreen() {
               <Card>
                 <Row label="Name" value={name.trim()} />
                 <Row label="Model" value={modelLabel(model)} />
-                <Row
+                <DisclosureRow
                   label="System prompt"
                   value={`${systemPrompt.length.toLocaleString('en-US')} characters`}
-                />
-                <Row
+                >
+                  <Text style={[text.body, styles.readText]} selectable>
+                    {systemPrompt.trim() || 'Empty.'}
+                  </Text>
+                  <SectionLink label="Edit" onPress={() => editInstructions('systemPrompt')} />
+                </DisclosureRow>
+                <DisclosureRow
                   label="Strategy"
                   value={`${strategy.length.toLocaleString('en-US')} characters`}
-                />
+                >
+                  <Text style={[text.body, styles.readText]} selectable>
+                    {strategy.trim() || 'Empty.'}
+                  </Text>
+                  <SectionLink label="Edit" onPress={() => editInstructions('strategy')} />
+                </DisclosureRow>
                 <Row label="Prompt" value={isPublic ? 'Published' : 'Private'} />
               </Card>
             </Section>
@@ -669,6 +691,7 @@ const styles = StyleSheet.create({
   railOn: { backgroundColor: color.purple },
   title: { marginTop: 22 },
   subtitle: { marginTop: 8 },
+  readText: { color: color.textDim },
   explain: { marginTop: 10, alignSelf: 'flex-start' },
   readBack: { fontSize: 15, lineHeight: 22, color: color.textDim },
   token: { color: color.text },

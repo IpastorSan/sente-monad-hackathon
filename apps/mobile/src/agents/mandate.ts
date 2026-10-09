@@ -321,6 +321,22 @@ function groupDigits(whole: string): string {
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+/**
+ * What the order-size cap is counted in: the quote tokens of the markets the
+ * mandate trades — USDC for every Kuru market today — and AUSD on Perpl.
+ */
+export function quoteUnit(mandate: Pick<AgentMandate, 'venues' | 'kuru'>): string {
+  const units: string[] = [];
+  if (mandate.venues.includes('kuru')) {
+    for (const address of mandate.kuru.markets) {
+      const quote = marketFor(address)?.quote.symbol;
+      if (quote && !units.includes(quote)) units.push(quote);
+    }
+  }
+  if (mandate.venues.includes('perpl')) units.push(AUSD.symbol);
+  return units.length > 0 ? units.join(' or ') : 'in quote units';
+}
+
 /** The review: one row per limit, each labelled with who enforces it. */
 export function describeMandate(mandate: AgentMandate): MandateLimit[] {
   const limits: MandateLimit[] = [];
@@ -370,7 +386,7 @@ export function describeMandate(mandate: AgentMandate): MandateLimit[] {
   limits.push({
     id: 'maxOrderNotional',
     label: 'Largest single order',
-    value: `${formatNotional(mandate.maxOrderNotional)} in quote units`,
+    value: `${formatNotional(mandate.maxOrderNotional)} ${quoteUnit(mandate)}`,
     enforcer: 'sente',
   });
 
