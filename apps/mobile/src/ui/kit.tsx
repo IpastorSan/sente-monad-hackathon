@@ -336,6 +336,8 @@ export function Field({
   suffix,
   keyboardType,
   autoCapitalize = 'sentences',
+  onSubmitEditing,
+  maxLength,
 }: {
   label: string;
   value: string;
@@ -349,6 +351,10 @@ export function Field({
   suffix?: string;
   keyboardType?: KeyboardTypeOptions;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  /** Return / Enter in a single-line field: the field's own "done". */
+  onSubmitEditing?: () => void;
+  /** A hard cap on input, past the `max` counter's soft one. */
+  maxLength?: number;
 }) {
   const [focused, setFocused] = useState(false);
   const over = max !== undefined && value.length > max;
@@ -381,6 +387,9 @@ export function Field({
           keyboardType={keyboardType}
           autoCapitalize={autoCapitalize}
           autoCorrect={!numeric && autoCapitalize !== 'none'}
+          onSubmitEditing={onSubmitEditing}
+          returnKeyType={onSubmitEditing ? 'done' : undefined}
+          maxLength={maxLength}
           cursorColor={color.purpleHi}
           selectionColor={color.purple}
           textAlignVertical={multiline ? 'top' : 'center'}

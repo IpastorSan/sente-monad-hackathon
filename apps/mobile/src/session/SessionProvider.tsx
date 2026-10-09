@@ -10,6 +10,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import { AgentsApi } from '@/agents/api';
 import { MarketsApi } from '@/markets/api';
+import { useProfile, type UseProfile } from '@/profile/useProfile';
 import { TradeApi } from '@/trade/api';
 import { useAccount, type UseAccount } from '@/auth';
 import {
@@ -50,6 +51,11 @@ export type Session = {
   readonly markets: MarketsApi | null;
   /** The `/trade` and `/portfolio` client (SEN-102); `null` until signed in, like `agents`. */
   readonly trade: TradeApi | null;
+  /**
+   * The user's name and avatar (SEN-172): defaults from the signer address,
+   * overridden by what they chose in Account. Never waits on the network.
+   */
+  readonly profile: UseProfile;
 };
 
 const SessionContext = createContext<Session | null>(null);
@@ -82,9 +88,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     () => (auth.address ? new TradeApi({ auth: api }) : null),
     [auth.address, api],
   );
+  // The signer address is the API's user id, so it is also the identity's seed.
+  const profile = useProfile(auth.address, api);
   const session = useMemo(
-    () => ({ auth, wallet, walletApi, smart, api, agents, markets, trade }),
-    [auth, wallet, walletApi, smart, api, agents, markets, trade],
+    () => ({ auth, wallet, walletApi, smart, api, agents, markets, trade, profile }),
+    [auth, wallet, walletApi, smart, api, agents, markets, trade, profile],
   );
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }

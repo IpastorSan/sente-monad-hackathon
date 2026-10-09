@@ -5,9 +5,11 @@
  * to generate, store or moderate.
  *
  * Pure so it runs under plain node: `Sigil.tsx` only draws what this returns.
- * The algorithm is the one `docs/design/sigil.js` renders in the mockups (FNV-1a
- * seed, xorshift32 stream), so the mockups and the app agree on every agent.
+ * The algorithm is the one `docs/design/sigil.js` renders in the mockups (the
+ * FNV-1a + xorshift32 stream in `seed.ts`), so the mockups and the app agree on
+ * every agent.
  */
+import { seedStream } from './seed.ts';
 
 export const SIGIL_LINES = 4;
 
@@ -19,20 +21,9 @@ export type SigilStone = {
   readonly tone: 'purple' | 'white';
 };
 
-function stream(seed: string): () => number {
-  let h = 2166136261;
-  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
-  return () => {
-    h ^= h << 13;
-    h ^= h >>> 17;
-    h ^= h << 5;
-    return (h >>> 0) / 4294967296;
-  };
-}
-
 /** Three or four stones on distinct intersections, stable for a given seed. */
 export function sigilStones(seed: string): SigilStone[] {
-  const rand = stream(seed);
+  const rand = seedStream(seed);
   const count = 3 + Math.floor(rand() * 2);
   const taken = new Set<string>();
   const stones: SigilStone[] = [];

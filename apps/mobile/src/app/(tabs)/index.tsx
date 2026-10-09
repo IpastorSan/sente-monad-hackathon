@@ -24,7 +24,8 @@
  *
  * The eye hides every figure for trading in public; the choice is kept on the
  * device and shared with Portfolio (`portfolio/hideBalances.ts`). Account lives behind
- * the avatar. The bell opens Alerts (SEN-156) and carries the count of alerts
+ * the avatar, which since SEN-172 is the user's own face and name (`profile/`).
+ * The address to fund left the header then: it is in Add funds. The bell opens Alerts (SEN-156) and carries the count of alerts
  * this device has not seen; with none it carries nothing, because a purple
  * badge is an event and cannot be decoration.
  *
@@ -94,6 +95,7 @@ import { useSession } from '@/session';
 import { Chart } from '@/ui/chart/Chart';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
 import { formatBalance, shortAddress } from '@/ui/format';
+import { Avatar } from '@/ui/Avatar';
 import { Sigil, Stone } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
 import {
@@ -132,7 +134,8 @@ export default function Home() {
   const wide = useWide();
   // The session lives in <SessionProvider> so the agent screens share it. The
   // tabs layout only renders this once it is signed in.
-  const { wallet } = useSession();
+  const { wallet, profile } = useSession();
+  const identity = profile.identity;
   const overview = useAgentsOverview();
   // One poll of `/agents/activity` feeds the bell, the latest move and the chart.
   const feed = useAlerts();
@@ -244,11 +247,17 @@ export default function Home() {
         onPress={() => router.push('/account')}
         style={({ pressed }) => [styles.me, pressed && styles.pressed]}
       >
-        <View style={styles.avatar} />
+        {identity !== null ? (
+          <Avatar seed={identity.avatarSeed} size={38} />
+        ) : (
+          <View style={styles.avatar} />
+        )}
         <View style={styles.meText}>
-          <Text style={[text.strong, styles.hello]}>{greeting(new Date().getHours())}</Text>
-          <Text style={[text.mono, styles.whoami]} numberOfLines={1}>
-            {address !== null ? `${shortAddress(address)} · testnet` : 'testnet'}
+          <Text style={[text.caption, styles.hello]} numberOfLines={1}>
+            {`${greeting(new Date().getHours())} · testnet`}
+          </Text>
+          <Text style={styles.name} numberOfLines={1}>
+            {identity?.name ?? 'Account'}
           </Text>
         </View>
       </Pressable>
@@ -973,18 +982,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   me: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
-  // The study's `.me`: a white stone, because the avatar is you.
+  // Before sign-in settles: the study's `.me`, a white stone, because the avatar is you.
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#ECE8FB',
     borderWidth: 1,
     borderColor: '#FFFFFF',
   },
   meText: { flexShrink: 1 },
-  hello: { lineHeight: 18 },
-  whoami: { fontSize: 11, lineHeight: 15 },
+  hello: { lineHeight: 15 },
+  // The user's name: the app raising its voice a little, so Bricolage.
+  name: {
+    fontFamily: font.displaySemibold,
+    fontSize: 17,
+    lineHeight: 21,
+    letterSpacing: -0.2,
+    color: color.text,
+  },
   iconButton: {
     width: 36,
     height: 36,
