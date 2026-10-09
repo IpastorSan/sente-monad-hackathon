@@ -53,7 +53,13 @@ import {
   type UserWalletRegistry,
 } from '../wallet/store/user-wallet-registry';
 import { WalletRefusedError, walletRefusalToHttpException } from '../wallet/wallet.errors';
-import { enrollPayloadProblem, PERPL_ENROLL_FIELDS, type EnrollRole } from './perpl-enroll-format';
+import { enrollIdempotencyKey } from './idempotency-key';
+import {
+  enrollPayloadProblem,
+  PERPL_ENROLL_FIELDS,
+  READ_KEY_LABEL,
+  type EnrollRole,
+} from './perpl-enroll-format';
 import { TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { USER_VENUE_SECRETS, type UserVenueSecretStore } from './user-venue-secrets';
 
@@ -70,13 +76,9 @@ export interface EnrollPerpl {
   readonly fetchImpl?: typeof fetch;
 }
 
-/** The label the server's read key is enrolled under; shows in the user's Perpl key list. */
-export const READ_KEY_LABEL = 'sente-portfolio-read';
-
-/** Must equal the phone's key byte for byte: the phone refuses a payload with any other. */
-export function enrollIdempotencyKey(prepareId: string, role: EnrollRole): string {
-  return `sente-enroll:${prepareId}:${role}`;
-}
+// Both live in erasable modules so the phone's contract test runs the real ones.
+export { enrollIdempotencyKey } from './idempotency-key';
+export { READ_KEY_LABEL } from './perpl-enroll-format';
 
 /** What the app shows when Perpl's payload drifted (D4). */
 const FORMAT_CHANGED = 'Perpl changed its sign-up format; update the app';

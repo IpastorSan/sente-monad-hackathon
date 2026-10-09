@@ -29,6 +29,12 @@ import { hexToBytes, isAddressEqual, isHex, type Address, type Hex } from 'viem'
 export type EnrollRole = 'trade' | 'read';
 
 /**
+ * The label the server's read key is enrolled under; shows in the user's Perpl
+ * key list. The phone pins it (`verifyPerpl.ts`), so it lives here, erasable.
+ */
+export const READ_KEY_LABEL = 'sente-portfolio-read';
+
+/**
  * The P5-dependent values, in one place (see the header).
  *
  * - `scopeMask`: what we ASK for. Trade implies read at Perpl; no mask can

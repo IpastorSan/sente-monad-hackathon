@@ -1,3 +1,5 @@
+import type { EnrollRole } from './perpl-enroll-format.ts';
+
 /**
  * The `privy-idempotency-key` of step `stepIndex`. MUST equal the phone's
  * `tradeIdempotencyKey` (`apps/mobile/src/trade/envelope.ts`) byte for byte:
@@ -12,4 +14,13 @@
  */
 export function tradeIdempotencyKey(clientTradeId: string, stepIndex: number): string {
   return `sente-trade:${clientTradeId}:${stepIndex}`;
+}
+
+/**
+ * The `privy-idempotency-key` of one enrollment request. MUST equal the
+ * phone's `enrollIdempotencyKey` (`apps/mobile/src/trade/verifyPerpl.ts`) byte
+ * for byte: the phone refuses a payload with any other.
+ */
+export function enrollIdempotencyKey(prepareId: string, role: EnrollRole): string {
+  return `sente-enroll:${prepareId}:${role}`;
 }
