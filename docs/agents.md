@@ -555,13 +555,16 @@ revoked policy carries no fee rule). Revoked agents trade nothing, fee or not.
 
 **What each fill records.** A Kuru fill event carries `senteFee` and
 `senteFeeAsset` — what AccountCore's `BuilderFeeAccrued` said this agent paid in
-that execution — next to the venue's own `fee`.
+that execution, in the asset it received: the base on a buy, USDC on a sell
+(SEN-195, `docs/kuru.md`) — and `senteFeeQuote`, ≈ that fee in USDC at the fill
+price, next to the venue's own `fee`.
 
 **Creators get 3 of the 10 bps.** When the trading agent was forked from another
 user's agent (`forkedFrom`), the source agent's owner is owed 3/10 of each fill's
-Sente fee, floored to whole atoms. `CreatorFeeEventLog` records that share in
-`<STATE_DIR>/creator-fees.json` as the fill event is appended, once per agent and
-transaction, whichever writer appended it. Forking your own agent accrues
+Sente fee, floored to whole atoms of the fee's own asset (a buy's base, a sell's
+USDC). `CreatorFeeEventLog` records that share in
+`<STATE_DIR>/creator-fees.json` as the fill event is appended, once per agent,
+transaction and asset, whichever writer appended it. Totals are per asset. Forking your own agent accrues
 nothing. The creator reads it at `GET /creators/me/fees`:
 
 ```json
@@ -593,7 +596,8 @@ pnpm --filter @sente/api run creator:payout -- --state-dir services/api/.state \
   --creator <userId> --asset USDC --amount 0.0105 --tx 0x<treasury transfer>
 ```
 
-The first lists what each creator is owed; the second refuses a payout above what
+The first lists what each creator is owed, per asset (cbBTC, WETH, MON… from
+buys, USDC from sells); each payout is one asset; the second refuses a payout above what
 is owed or a transaction hash already recorded. The treasury claims its accrued
 builder fees from AccountCore with `claimBuilderFees(asset)` (by hand, not wired) on Set C;
 on Set D (SEN-185) they credit the treasury's own root and leave by an ordinary
@@ -617,9 +621,9 @@ pnpm --filter @sente/api run agent:venues-live -- --skip-perpl --builder --build
    `KURU_BUILDER_AGENTS=0` (agents trade fee-free through the plain overloads
    while users' trades still pay), see `docs/privy-policy-enforcement.md`.
 2. **What a taker fill is charged.** `--builder-take` buys the minimum as an IOC
-   and prints `senteFee`; check `BuilderFeeAccrued` on that transaction for the
-   side charged (taker), the asset (USDC) and the amount (10 bps of the
-   notional), and compare its `gasUsed` with the plain place's 425,430 to replace
+   and prints `senteFee` and every `BuilderFeeAccrued` of the receipt by asset.
+   The asset is settled — the base a buy receives (tx `0xca084e71…`, SEN-195,
+   `docs/kuru.md`); still check the side charged (taker) and compare its `gasUsed` with the plain place's 425,430 to replace
    `KURU_BUILDER_ORDER_SURCHARGE_GAS`.
 
 ## The runner (SEN-8)

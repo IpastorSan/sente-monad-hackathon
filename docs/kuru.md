@@ -524,24 +524,67 @@ transaction.
   mandate's `expiresAt` (their policy's ceiling) and re-approve only within a
   minute of it lapsing.
 - **What was paid.** `decodeBuilderFees(logs, accountCore, builder, accountId)`
-  reads `BuilderFeeAccrued` off the execution's own logs; a placed order reports
-  it as `Order.builderFee`.
-- **Reserve.** A buy sets the builder rate aside on top of the venue fee
-  (`quoteReserveAtoms` with `feePps + builderPps`, and the phone's
-  `depositCapAtoms(…, builderFeePps)`), so the deposit covers the fee whichever
-  way Kuru takes it.
+  reads `BuilderFeeAccrued` off the execution's own logs and
+  `builderFeesByAsset` totals it per asset; `builderFeeReport` picks the
+  order's entry. A placed order reports it as `Order.builderFee` in
+  `Order.builderFeeAsset`, with `Order.builderFeeQuote` ≈ its value in USDC at
+  the average fill price. Never read it as USDC: see below.
+- **No reserve.** The fee comes out of what the order receives, so neither the
+  planner's `quoteReserveAtoms` nor the phone's `depositCapAtoms` sets anything
+  aside for it (SEN-195 reverted SEN-184/SEN-192's 0.1% USDC headroom on buys).
+
+### Which asset the fee is taken in (SEN-195)
+
+**Kuru charges a taker's builder fee in the asset the taker RECEIVES: the base
+on a buy, the quote (USDC) on a sell.** Observed on Set C, 2026-10-12, tx
+`0xca084e719e56884f684ec37627926e59e9e1212b66b062ba65b618e655f2dbe8`: a taker
+BUY of 0.00012505 cbBTC on cbBTC-USDC with Sente's builder fee at 10,000 pps
+emitted one AccountCore event,
+
+```
+BuilderFeeAccrued(builder        = 0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8,
+                  asset          = cbBTC 0xef2a20a161ac9ed1117d721336226b6399F15b4D,
+                  takerAccountId = 64,
+                  orderBook      = cbBTC-USDC 0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f,
+                  builderFeePps  = 10000,
+                  amount         = 13)
+```
+
+13 cbBTC atoms is 10 bps of the 12,505 atoms bought (12.505, rounded up), and no
+USDC moved for it. Sente had assumed USDC and so reported the fee as "0 USDC".
+The rule, everywhere the fee appears:
+
+| Side | Fee asset         | Amount                 | Extra deposit |
+| ---- | ----------------- | ---------------------- | ------------- |
+| Buy  | the base (cbBTC…) | 10 bps of the base     | none          |
+| Sell | USDC              | 10 bps of the proceeds | none          |
+
+- **Estimates.** The planner's summary carries `senteFee` in `senteFeeAsset`
+  (the base on a buy) and `senteFeeQuote` (≈ in USDC); the ticket shows
+  "Sente fee 0.1% (≈ 0.00000013 cbBTC ≈ $0.02)" on a buy and "(≈ 0.02 USDC)"
+  on a sell, and a sell's "You get at least" nets it off the proceeds.
+- **Results and fill events.** A user trade's result and an agent's fill event
+  carry `senteFee`, `senteFeeAsset` (the real asset) and `senteFeeQuote` (≈).
+- **Creators.** The 3/10 share accrues in the fee's own asset, so a creator is
+  owed several assets: `GET /creators/me/fees` totals each, and
+  `creator:payout` pays one `--asset` at a time.
+- **The treasury** accrues every base the agents buy, plus USDC from sells;
+  `claimBuilderFees(asset)` (Set C) is per asset.
+
+The decoder test pins this transaction's log byte for byte
+(`packages/venues/src/kuru/builder.test.ts`).
 
 ### Not yet observed on chain
 
-No builder order has landed yet. Three things the code assumes and a live
-taker fill must confirm (`agent:venues-live -- --skip-perpl --builder
+A builder taker buy has landed (the asset rule above). Still assumed, for a
+live fill to confirm (`agent:venues-live -- --skip-perpl --builder
 --builder-take`, see `docs/agents.md`):
 
 1. **Taker only.** `BuilderFeeAccrued` names a `takerAccountId`, so a resting
    order's maker fills are taken to pay nothing; the creator ledger and
    `Order.builderFee` only count taker fills.
-2. **Charged in the quote token, on top of Kuru's own fee.** The fee estimate,
-   the ledger's asset and the reserve headroom assume USDC.
+2. ~~Charged in the quote token.~~ Settled by the live buy above: it is
+   charged in the asset received, the base on a buy (SEN-195).
 3. **Gas.** The builder overload costs more than the plain one (an approval read
    and a fee write). `KURU_BUILDER_ORDER_SURCHARGE_GAS` (40,000) is an
    allowance, not a reading: replace it with the measured difference.
