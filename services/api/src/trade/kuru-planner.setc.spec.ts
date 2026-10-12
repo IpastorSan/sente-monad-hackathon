@@ -8,6 +8,7 @@ import {
   KURU_ACCOUNT_CORE_DEPOSIT_ABIS,
   KURU_ACCOUNT_CORE_WITHDRAW_ABIS,
   KURU_DEPLOYMENT,
+  KURU_DEPLOYMENTS,
   KURU_ORDERBOOK_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
@@ -71,7 +72,8 @@ function deps(free: bigint, reads: string[] = []): KuruPlannerDeps {
 }
 
 setC('planKuru on Set C (SEN-189)', () => {
-  const cbBtc = KURU_TESTNET_MARKETS.find((m) => m.symbol === 'cbBTC-USDC')!;
+  // From the table, not the active exports: a skipped describe still runs its body.
+  const cbBtc = KURU_DEPLOYMENTS['set-c'].markets.find((m) => m.symbol === 'cbBTC-USDC')!;
 
   /** Buy 0.0002 cbBTC at 110,000 USDC: 22 USDC notional. */
   const buy: KuruPlaceIntent = {
