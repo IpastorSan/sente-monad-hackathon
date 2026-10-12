@@ -21,6 +21,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { modelLabel, type Agent, type AgentSummary, type LeaderboardRow } from '@/agents/api';
+import { ArchivedAgents } from '@/agents/ArchivedAgents';
 import { signedPnl } from '@/agents/ledger';
 import { MoveLine } from '@/agents/MoveLine';
 import { yourBest } from '@/agents/top';
@@ -268,17 +269,23 @@ function YoursSegment({
       </>
     );
   }
+  const archived = (
+    <ArchivedAgents reloadKey={state} onOpen={onOpen} onRestored={() => void refresh()} />
+  );
   if (state.agents.length === 0) {
     return (
-      <Card style={styles.empty}>
-        <Text style={text.title}>Hire your first agent</Text>
-        <Text style={text.dim}>
-          An agent trades for you inside a mandate you set: which markets, how much per deposit, how
-          large an order, and until when. The enclave won’t sign anything past it.
-        </Text>
-        <Button label="Start from a preset" kind="primary" onPress={onBrowse} />
-        <Button label="Write your own" kind="soft" icon="plus" onPress={onHire} />
-      </Card>
+      <>
+        <Card style={styles.empty}>
+          <Text style={text.title}>Hire your first agent</Text>
+          <Text style={text.dim}>
+            An agent trades for you inside a mandate you set: which markets, how much per deposit,
+            how large an order, and until when. The enclave won’t sign anything past it.
+          </Text>
+          <Button label="Start from a preset" kind="primary" onPress={onBrowse} />
+          <Button label="Write your own" kind="soft" icon="plus" onPress={onHire} />
+        </Card>
+        {archived}
+      </>
     );
   }
 
@@ -321,6 +328,7 @@ function YoursSegment({
           <Text style={text.dim}>Start from a preset, or fork one from Top</Text>
         </View>
       </Pressable>
+      {archived}
     </>
   );
 }

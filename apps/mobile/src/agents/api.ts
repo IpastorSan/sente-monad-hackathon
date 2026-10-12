@@ -184,6 +184,8 @@ type AgentFields = {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /** When the owner archived it (SEN-197); absent while it is not archived. */
+  archivedAt?: string;
   /** When the owner acknowledged the risks (SEN-177); absent if never, or from an older API. */
   riskAcknowledgedAt?: string;
   /**
@@ -722,16 +724,33 @@ export type AgentWatchersDto = {
   watchers: WatcherDto[];
 };
 
+/** One balance an agent still holds, as `agent_has_funds` lists it (SEN-197). */
+export type AgentFundsLeft = { where: 'wallet' | 'kuru' | 'perpl'; asset: string; amount: string };
+
+/** `12.5 USDC in its wallet, 0.1 BTC on Perpl`. */
+export function describeFundsLeft(left: readonly AgentFundsLeft[]): string {
+  const place = { wallet: 'in its wallet', kuru: 'on Kuru', perpl: 'on Perpl' } as const;
+  return left.map((f) => `${f.amount} ${f.asset} ${place[f.where] ?? ''}`.trim()).join(', ');
+}
+
 /** A non-2xx response, carrying the API's stable `reason` when it sent one. */
 export class AgentsApiError extends Error {
   readonly status: number;
   readonly reason: string | undefined;
+  /** Only on `agent_has_funds`: what the agent still holds. */
+  readonly left: AgentFundsLeft[] | undefined;
 
-  constructor(status: number, reason: string | undefined, message: string) {
+  constructor(
+    status: number,
+    reason: string | undefined,
+    message: string,
+    left?: AgentFundsLeft[],
+  ) {
     super(message);
     this.name = 'AgentsApiError';
     this.status = status;
     this.reason = reason;
+    this.left = left;
   }
 }
 
@@ -753,9 +772,31 @@ export class AgentsApi {
     this.fetchImpl = fetchImpl;
   }
 
-  async list(): Promise<Agent[]> {
-    const { agents } = await this.request<{ agents: WireAgent[] }>('GET', '/agents');
+  /** The owner's agents; with `archived`, only the archived ones (SEN-197). */
+  async list(options: { archived?: boolean } = {}): Promise<Agent[]> {
+    const { agents } = await this.request<{ agents: WireAgent[] }>(
+      'GET',
+      options.archived ? '/agents?archived=1' : '/agents',
+    );
     return agents.map(fromWireAgent);
+  }
+
+  /**
+   * `POST /agents/:id/archive` (SEN-197) — put away a revoked (or expired)
+   * agent whose funds are back. Nothing on chain changes and `unarchive`
+   * undoes it. Refused with `agent_not_revoked` or `agent_has_funds` (its
+   * `left` says what remains).
+   */
+  async archive(id: string): Promise<Agent> {
+    return fromWireAgent(
+      await this.request<WireAgent>('POST', `/agents/${encodeURIComponent(id)}/archive`),
+    );
+  }
+
+  async unarchive(id: string): Promise<Agent> {
+    return fromWireAgent(
+      await this.request<WireAgent>('POST', `/agents/${encodeURIComponent(id)}/unarchive`),
+    );
   }
 
   async get(id: string): Promise<Agent> {
@@ -1156,11 +1197,17 @@ export class AgentsApi {
     const parsed: unknown = text ? safeParse(text) : undefined;
 
     if (!response.ok) {
-      const detail = parsed as { reason?: string; message?: string | string[] } | undefined;
+      const detail = parsed as
+        { reason?: string; message?: string | string[]; left?: AgentFundsLeft[] } | undefined;
       const message = Array.isArray(detail?.message)
         ? detail.message.join('; ')
         : (detail?.message ?? (text || response.statusText));
-      throw new AgentsApiError(response.status, detail?.reason, message);
+      throw new AgentsApiError(
+        response.status,
+        detail?.reason,
+        message,
+        Array.isArray(detail?.left) ? detail.left : undefined,
+      );
     }
     return parsed as T;
   }
@@ -1338,6 +1385,21 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
           title: 'Out of AI credits',
           detail:
             'This month’s free tier is spent, so the agent can’t call its model until it refills.',
+        };
+      case 'agent_not_revoked':
+        return {
+          title: 'This agent can still trade',
+          detail: 'Revoke it first. Only a stopped agent can be archived.',
+        };
+      case 'agent_has_funds':
+        return {
+          title: 'Return funds first',
+          detail: `It still holds ${error.left ? describeFundsLeft(error.left) : 'funds'}. Send them home, then archive it.`,
+        };
+      case 'agent_funds_unknown':
+        return {
+          title: 'Couldn’t check the agent’s balances',
+          detail: 'Nothing was archived. Try again in a moment.',
         };
       case 'agent_wallets_unconfigured':
         return {
