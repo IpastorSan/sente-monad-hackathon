@@ -17,16 +17,28 @@
  * needs perps on (`capabilities().venues.perpl`) and the key set up.
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import type { Order } from '@sente/venues';
 import { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { KlineInterval } from '@/markets/api';
 import { useKlines, useTickers } from '@/markets/hooks';
 import { useHideBalances } from '@/portfolio/hideBalances';
+import { recordPerpl } from '@/portfolio/perplOverlay';
 import { HideToggle } from '@/portfolio/parts';
 import { useUserPortfolio } from '@/portfolio/usePortfolio';
 import { useSession } from '@/session';
 import { createAppPerplTrader } from '@/trade/appPerplTrader';
+import {
+  closeOverlay,
+  closeVerdict,
+  describeClose,
+  nothingSent,
+  positionOn,
+  reconcile,
+  RECONCILE_DELAYS_MS,
+  type CloseVerdict,
+} from '@/trade/perpReconcile';
 import { PERP_MAX_SLIPPAGE } from '@/trade/perpTicket';
 import { TxLink } from '@/trade/ticketKit';
 import { usePerplSetup, type PerplSetup } from '@/trade/usePerplSetup';
@@ -76,7 +88,9 @@ function PositionScreen() {
   const [range, setRange] = useState<Range>('1H');
   const { perps } = useTradingCapabilities();
   const setup = usePerplSetup(perps && venue === 'perpl');
-  const [closing, setClosing] = useState(false);
+  // The row being closed, kept so the sheet outlives the row once the close
+  // removes it from the portfolio underneath.
+  const [closing, setClosing] = useState<PerpRow | null>(null);
 
   const held = useMemo(
     () => (user.wallet ? holdings(user.wallet, user.portfolio, tickers.data?.tickers ?? []) : null),
@@ -90,6 +104,7 @@ function PositionScreen() {
 
   const back = () => (router.canGoBack() ? router.back() : router.replace('/portfolio'));
   const waiting = held === null || (venue === 'perpl' && user.trading && user.portfolio === null);
+  const updating = venue === 'perpl' && user.perplUpdating.includes(symbol);
 
   return (
     <Screen
@@ -99,7 +114,7 @@ function PositionScreen() {
             kind={found.kind}
             perps={perps}
             setup={setup}
-            onClose={() => setClosing(true)}
+            onClose={() => setClosing(found.kind === 'perp' ? found.row : null)}
             onSetup={() => router.push({ pathname: '/trade/perpl-setup', params: { symbol } })}
             onAdd={() =>
               found.kind === 'perp'
@@ -136,7 +151,16 @@ function PositionScreen() {
           <Notice tone="error" title={failure.title} detail={failure.detail} />
         </View>
       ) : null}
-      {waiting && found === null ? (
+      {updating && found === null ? (
+        // This device's order filled and Perpl (or the server's cached read
+        // of it) hasn't listed the position yet: not "no open position".
+        <Notice
+          title="Updating…"
+          detail="Your order filled. The position shows here as soon as Perpl lists it."
+        >
+          <Loading />
+        </Notice>
+      ) : waiting && found === null ? (
         <Loading />
       ) : found === null ? (
         // Not "no open position": the venue that would list it didn't answer.
@@ -188,13 +212,16 @@ function PositionScreen() {
           {found.kind === 'spot' ? <SpotBody row={found.row} hidden={hidden} /> : null}
         </>
       )}
-      {found?.kind === 'perp' && setup.kind === 'ready' ? (
+      {closing && setup.kind === 'ready' ? (
         <CloseSheet
-          visible={closing}
-          row={found.row}
+          row={closing}
           apiKey={setup.apiKey}
-          onDismiss={() => setClosing(false)}
-          onClosed={() => user.polled.refresh()}
+          onDismiss={() => setClosing(null)}
+          onFinished={() => {
+            setClosing(null);
+            back();
+          }}
+          onSettled={() => user.polled.refresh()}
         />
       ) : null}
     </Screen>
@@ -205,72 +232,102 @@ function PositionScreen() {
  * The close confirmation: what closes, at what bound, and where the money
  * goes. Closing is `closePosition` on the app's Perpl trader — the whole
  * position, reduce-only, at market within 1% of Perpl's fresh mark.
+ *
+ * What it reports is decided against Perpl's own position, re-read over the
+ * trading socket after the order (SEN-202, `perpReconcile.ts`): a close whose
+ * confirmation never arrived but whose position is gone is "closed", a retry
+ * on a position that no longer exists is "already closed", and an outcome
+ * Perpl has not shown yet is "still checking", never "didn't go through".
+ * The verdict also goes into the portfolio overlay, so this page and
+ * Portfolio stop listing a closed position before the server's cache does.
  */
 function CloseSheet({
-  visible,
   row,
   apiKey,
   onDismiss,
-  onClosed,
+  onFinished,
+  onSettled,
 }: {
-  visible: boolean;
   row: PerpRow;
   apiKey: string;
   onDismiss: () => void;
-  onClosed: () => void;
+  /** Leave the page: the position is gone. */
+  onFinished: () => void;
+  onSettled: () => void;
 }) {
   const session = useSession();
   const [state, setState] = useState<
     | { kind: 'idle' }
     | { kind: 'busy' }
-    | { kind: 'done'; price: string | undefined; filled: string; tx: string | undefined }
+    | { kind: 'checking' }
+    | { kind: 'verdict'; verdict: CloseVerdict }
     | { kind: 'error'; message: string }
   >({ kind: 'idle' });
   const { position } = row;
+  const { symbol } = position;
   const detail = perpDetail(position);
 
-  const close = async () => {
+  /** Sends the close (`send`) or only re-reads Perpl (`check`), then reconciles. */
+  const run = async (mode: 'send' | 'check') => {
     const derive = session.auth.perplTradeKey;
     const wallet = session.wallet.wallet;
     if (derive === null || wallet === null) {
       setState({ kind: 'error', message: 'Sign in with your passkey first.' });
       return;
     }
-    setState({ kind: 'busy' });
+    setState({ kind: mode === 'send' ? 'busy' : 'checking' });
     let trader: ReturnType<typeof createAppPerplTrader> | null = null;
     try {
       const key = derive(wallet.address);
-      trader = createAppPerplTrader({ credentials: { apiKey, secretKey: key.secretKey } });
+      const live = createAppPerplTrader({ credentials: { apiKey, secretKey: key.secretKey } });
+      trader = live;
       key.secretKey.fill(0);
-      const order = await trader.closePosition({
-        symbol: position.symbol,
-        maxSlippage: PERP_MAX_SLIPPAGE,
-      });
+      let order: Order | undefined;
+      let error: unknown;
+      if (mode === 'send') {
+        try {
+          order = await live.closePosition({ symbol, maxSlippage: PERP_MAX_SLIPPAGE });
+        } catch (thrown) {
+          error = thrown;
+        }
+      }
+      const size = position.size;
+      let verdict = closeVerdict({ size, order, error, after: undefined });
+      // Refused before sending, or nothing left to close: Perpl has answered.
+      if (!nothingSent(error)) {
+        if (!order) setState({ kind: 'checking' });
+        verdict = await reconcile({
+          read: async () => positionOn(await live.positions(symbol), symbol),
+          decide: (after) => closeVerdict({ size, order, error, after }),
+          // A settled order needs one read to see what is left; a lost one, a few.
+          delaysMs: order ? [0] : RECONCILE_DELAYS_MS,
+        });
+      }
+      const entry = closeOverlay(verdict, symbol, position, Date.now());
+      if (entry) recordPerpl(entry);
+      setState({ kind: 'verdict', verdict });
+      onSettled();
+    } catch (thrown) {
       setState({
-        kind: 'done',
-        price: order.averageFillPrice,
-        filled: order.filledSize,
-        tx: order.txHash,
+        kind: 'error',
+        message: thrown instanceof Error ? thrown.message : String(thrown),
       });
-      onClosed();
-    } catch (error) {
-      setState({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
     } finally {
       trader?.release();
     }
   };
+
+  const working = state.kind === 'busy' || state.kind === 'checking';
+  const notice =
+    state.kind === 'verdict' ? describeClose(state.verdict, symbol, baseOf(symbol)) : null;
   const dismiss = () => {
-    if (state.kind === 'busy') return;
-    setState({ kind: 'idle' });
-    onDismiss();
+    if (working) return;
+    if (notice?.done) onFinished();
+    else onDismiss();
   };
 
   return (
-    <Sheet
-      visible={visible}
-      title={`Close your ${position.symbol} ${position.side}?`}
-      onClose={dismiss}
-    >
+    <Sheet visible title={`Close your ${symbol} ${position.side}?`} onClose={dismiss}>
       <Row label="Size" value={detail.size} />
       <Row label="Mark" value={position.markPrice} />
       <Row label="Unrealised P&L" value={`${detail.pnl.sign}${detail.pnl.magnitude} AUSD`} />
@@ -278,18 +335,18 @@ function CloseSheet({
         A reduce-only market order for the whole position. It fills within 1% of the mark, or not at
         all. The margin and P&amp;L stay in your Perpl account, less Perpl’s fee.
       </Text>
-      {state.kind === 'done' ? (
+      {state.kind === 'checking' ? (
         <View style={styles.sheetLead}>
           <Notice
-            tone="ok"
-            title={Number(state.filled) > 0 ? 'Position closed' : 'Nothing filled'}
-            detail={
-              Number(state.filled) > 0
-                ? `${state.filled} ${baseOf(position.symbol)}${state.price ? ` at ${state.price}` : ''}. Portfolio catches up within about 30 s.`
-                : 'The book couldn’t fill it within 1% of the mark. The position is still open.'
-            }
+            title="Checking with Perpl…"
+            detail="Reading your position back from Perpl to see what the close did."
           />
-          {state.tx ? <TxLink hash={state.tx} /> : null}
+        </View>
+      ) : null}
+      {notice ? (
+        <View style={styles.sheetLead}>
+          <Notice tone={notice.tone} title={notice.title} detail={notice.detail} />
+          {notice.txHash ? <TxLink hash={notice.txHash} /> : null}
         </View>
       ) : null}
       {state.kind === 'error' ? (
@@ -297,15 +354,25 @@ function CloseSheet({
           <Notice tone="error" title="The close didn’t go through" detail={state.message} />
         </View>
       ) : null}
-      {state.kind === 'done' ? (
+      {notice?.done ? (
         <Button label="Done" kind="primary" onPress={dismiss} style={styles.sheetButton} />
+      ) : state.kind === 'verdict' && state.verdict.kind === 'pending' ? (
+        <>
+          <Button
+            label="Check again"
+            kind="primary"
+            onPress={() => void run('check')}
+            style={styles.sheetButton}
+          />
+          <Button label="Not now" onPress={dismiss} style={styles.keep} />
+        </>
       ) : (
         <>
           <Button
             label="Close position"
             kind="primary"
-            busy={state.kind === 'busy'}
-            onPress={() => void close()}
+            busy={working}
+            onPress={() => void run('send')}
             style={styles.sheetButton}
           />
           <Button label="Keep it open" onPress={dismiss} style={styles.keep} />

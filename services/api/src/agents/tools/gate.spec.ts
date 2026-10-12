@@ -1,3 +1,5 @@
+import { PerplNoPositionError } from '@sente/venues/perpl';
+
 import { EnclaveRefusedError } from '../agents.errors';
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
@@ -648,6 +650,17 @@ describe('gate', () => {
       // which one has to travel with them (SEN-33).
       positionId: '7',
     });
+  });
+
+  it('a close of a position that is already gone tells the agent so, and records no close (SEN-202)', async () => {
+    const h = await harness();
+    h.perpl.onWrite = () => Promise.reject(new PerplNoPositionError(BTC_PERP));
+    const outcome = await h.call('close_position', { market: BTC_PERP });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.message).toMatch(/already closed\. Nothing was sent/);
+    const events = await h.events.list(h.agent.id);
+    expect(events.map((e) => e.kind)).toEqual(['order']);
+    expect(events[0]!.detail).toMatchObject({ status: 'failed' });
   });
 
   it('emits a verdict once a close settles the thesis behind it (SEN-22)', async () => {

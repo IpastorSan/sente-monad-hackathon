@@ -14,6 +14,7 @@ import {
   MT,
   ORDER_STATUS,
   ORDER_TYPE,
+  PerplNoPositionError,
   signInCanonical,
   type PerplContext,
   type WebSocketLike,
@@ -124,6 +125,8 @@ class FakeExchange {
   /** When false, sign-in gets no snapshots — the socket hangs mid-connect. */
   snapshots = true;
   position: object | null = null;
+  /** When set, every order fails with this `fr` (`ORDER_FAILURE_REASON`) instead of filling. */
+  failReason: number | null = null;
   /** The most sockets ever open at once. */
   maxLive = 0;
 
@@ -167,7 +170,8 @@ class FakeExchange {
             mkt: frame['mkt'],
             acc: ACCOUNT,
             oid: 900,
-            st: ORDER_STATUS.Filled,
+            st: this.failReason === null ? ORDER_STATUS.Filled : ORDER_STATUS.Failed,
+            ...(this.failReason === null ? {} : { fr: this.failReason }),
             t: frame['t'],
             p: frame['p'],
             os: frame['s'],
@@ -282,6 +286,37 @@ test('closePosition bounds the close by its own maxSlippage', async () => {
   assert.equal(request?.['p'], 980_000); // $100,000.0 − 2%
   assert.equal(request?.['s'], 1_000);
   assert.equal(request?.['lv'], 500); // the position's own leverage
+});
+
+test('closing a position Perpl no longer lists says it is already closed, and sends nothing (SEN-202)', async () => {
+  const exchange = new FakeExchange();
+  await assert.rejects(
+    trader(exchange).closePosition({ symbol: 'BTC-PERP', maxSlippage: '0.01' }),
+    (error: unknown) => error instanceof PerplNoPositionError && error.symbol === 'BTC-PERP',
+  );
+  const [ws] = exchange.trading();
+  assert.ok(ws?.sent.every((f) => f.mt !== MT.OrderRequest));
+});
+
+test('a close Perpl fails with NoPositionToClose is "already closed" too (SEN-202)', async () => {
+  const exchange = new FakeExchange();
+  exchange.position = {
+    at: { t: 1 },
+    mkt: 16,
+    acc: ACCOUNT,
+    pid: 7,
+    st: 1,
+    sd: 1,
+    c: '1000000000',
+    ep: 1_000_000,
+    s: 1_000,
+    lv: 500,
+  };
+  exchange.failReason = 4; // NoPositionToClose: it closed between the snapshot and the order
+  await assert.rejects(
+    trader(exchange).closePosition({ symbol: 'BTC-PERP', maxSlippage: '0.01' }),
+    PerplNoPositionError,
+  );
 });
 
 test('each action opens its own socket, one at a time, and closes it after', async () => {

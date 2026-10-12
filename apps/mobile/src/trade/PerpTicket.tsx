@@ -19,7 +19,7 @@
  * On the web it goes through Sente's Perpl proxy (`createAppPerplTrader`,
  * SEN-175).
  */
-import type { Order } from '@sente/venues';
+import type { Order, Position } from '@sente/venues';
 import * as Haptics from '@/platform/haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
@@ -28,6 +28,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { MarketDto } from '@/markets/api';
 import { useTicker } from '@/markets/hooks';
+import { perplPositionOn, recordPerpl } from '@/portfolio/perplOverlay';
 import { useUserPortfolio } from '@/portfolio/usePortfolio';
 import { amountText } from '@/portfolio/view';
 import { useSession } from '@/session';
@@ -43,6 +44,14 @@ import {
   type PerpOrderType,
   type PerpSide,
 } from '@/trade/perpTicket';
+import {
+  openOverlay,
+  openVerdict,
+  outcomeUnknown,
+  positionOn,
+  reconcile,
+  RECONCILE_DELAYS_MS,
+} from '@/trade/perpReconcile';
 import { pressKey, QUOTE_MAX_AGE_MS, shortSize, type Key } from '@/trade/ticket';
 import {
   AdvancedPanel,
@@ -89,6 +98,10 @@ type Stage =
   | { kind: 'review'; mark: string; at: number }
   | { kind: 'running' }
   | { kind: 'done'; order: Order }
+  /** The order threw after it may have been sent: reading Perpl's position back (SEN-202). */
+  | { kind: 'checking' }
+  /** Its confirmation was lost, but Perpl lists the position it opened. */
+  | { kind: 'landed'; position: Position }
   | { kind: 'error'; title: string; detail: string };
 
 /** The ticket for one Perpl market, behind the setup gate. */
@@ -322,7 +335,18 @@ function Ticket({
       return;
     }
     setStage({ kind: 'running' });
+    const symbol = market.symbol;
+    // What the portfolio showed on this market before the order: an open is
+    // seen once Perpl lists something different (SEN-202).
+    const before = perplPositionOn(user.portfolio, symbol);
     let trader: ReturnType<typeof createAppPerplTrader> | null = null;
+    // Perpl's position on the market, re-read until it shows what the order did.
+    const readBack = (live: NonNullable<typeof trader>) =>
+      reconcile({
+        read: async () => positionOn(await live.positions(symbol), symbol),
+        decide: (after) => openVerdict(before, after),
+        delaysMs: RECONCILE_DELAYS_MS,
+      });
     try {
       const key = derive(wallet.address);
       // The trader keeps its own copy; this one goes now.
@@ -345,9 +369,27 @@ function Ticket({
             maxSlippage: PERP_MAX_SLIPPAGE,
           });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const filled = Number(order.filledSize) > 0;
+      // The server's portfolio lags Perpl by up to its 30 s cache: until
+      // Perpl's own read is in, the position page says "Updating…", not "none".
+      if (filled) recordPerpl({ kind: 'pending', symbol, at: Date.now(), before });
       setStage({ kind: 'done', order });
+      if (filled) recordPerpl(openOverlay(await readBack(trader), symbol, before, Date.now()));
       user.polled.refresh();
     } catch (error) {
+      // Sent, but its confirmation was lost: Perpl's position says whether it
+      // filled. A limit may rest instead, so only a market order is read back.
+      if (!limit && trader && outcomeUnknown(error)) {
+        setStage({ kind: 'checking' });
+        const verdict = await readBack(trader);
+        if (verdict.kind === 'open') {
+          recordPerpl(openOverlay(verdict, symbol, before, Date.now()));
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setStage({ kind: 'landed', position: verdict.position });
+          user.polled.refresh();
+          return;
+        }
+      }
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       setStage({
         kind: 'error',
@@ -371,6 +413,50 @@ function Ticket({
             Signing in to Perpl with this device’s key, then placing a {limit ? 'limit' : 'market'}{' '}
             order. A few seconds.
           </Text>
+        </View>
+      </Frame>
+    );
+  }
+  if (stage.kind === 'checking') {
+    return (
+      <Frame onClose={onClose} embedded={embedded}>
+        <Text style={[text.display, styles.title]}>Checking with Perpl…</Text>
+        <View style={styles.running}>
+          <ActivityIndicator color={color.purpleHi} />
+          <Text style={text.dim}>
+            The order’s confirmation didn’t arrive. Reading your position back from Perpl to see
+            whether it filled.
+          </Text>
+        </View>
+      </Frame>
+    );
+  }
+  if (stage.kind === 'landed') {
+    const { position } = stage;
+    return (
+      <Frame onClose={onClose} embedded={embedded}>
+        <Text style={[text.display, styles.title]}>
+          {position.side === 'long' ? 'Long opened' : 'Short opened'}
+        </Text>
+        <Text style={[text.body, styles.spaced]}>
+          The order’s own confirmation didn’t arrive, but Perpl lists your position: {position.size}{' '}
+          {market.base} at {position.entryPrice}, {position.leverage}×.
+        </Text>
+        <View style={styles.spaced}>
+          <ButtonRow>
+            <Button kind="soft" label="Done" onPress={onClose} style={styles.grow} />
+            <Button
+              kind="primary"
+              label="View position"
+              onPress={() =>
+                router.push({
+                  pathname: '/positions/[venue]/[symbol]',
+                  params: { venue: 'perpl', symbol: market.symbol },
+                })
+              }
+              style={styles.grow}
+            />
+          </ButtonRow>
         </View>
       </Frame>
     );
@@ -842,7 +928,8 @@ function Filled({
         </ButtonRow>
       </View>
       <Note icon="shield">
-        Your position is in your Perpl account. Portfolio shows it within about 30 s.
+        Your position is in your Perpl account, and it shows on its page and in Portfolio as soon as
+        Perpl lists it.
       </Note>
     </Frame>
   );
