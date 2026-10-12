@@ -108,6 +108,7 @@ import {
   useWebKeys,
 } from '@/trade/ticketKit';
 import { PerpTicket } from '@/trade/PerpTicket';
+import { KURU_DEPLOYMENT_NOTE } from '@/trade/kuruDeployment';
 import { RiskDisclosure, useRiskAck } from '@/trade/RiskDisclosure';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
@@ -1108,6 +1109,9 @@ function Review({
         <Row key={row.label} label={row.label} value={row.value} mono={row.chain} />
       ))}
       <RiskDisclosure venue="kuru" ack={risk} />
+      {KURU_DEPLOYMENT_NOTE ? (
+        <Notice title={KURU_DEPLOYMENT_NOTE.title} detail={KURU_DEPLOYMENT_NOTE.detail} />
+      ) : null}
       <View style={styles.spaced}>
         {!ticket.cta.enabled ? (
           <Button kind="secondary" label={ticket.cta.label} disabled onPress={() => undefined} />

@@ -200,6 +200,12 @@ export type TradeCapabilities = {
    * this equals the build's own pin (`kuruBuilder.ts`).
    */
   readonly kuruBuilder?: { readonly address: Address; readonly feePps: number } | null;
+  /**
+   * The Kuru deployment the API trades (SEN-189). Absent from an older API,
+   * which is Set D. Kuru trading is offered only when this is the build's own
+   * (`kuruDeployment.ts`).
+   */
+  readonly kuruDeployment?: { readonly id: string; readonly accountCore: Address };
 };
 
 export type KuruPlaceResult = {

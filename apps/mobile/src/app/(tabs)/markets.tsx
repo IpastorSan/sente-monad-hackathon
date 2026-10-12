@@ -50,6 +50,7 @@ import {
   type ThemeId,
 } from '@/markets/select';
 import { useSparklines } from '@/markets/useSparklines';
+import { KURU_DEPLOYMENT_NOTE } from '@/trade/kuruDeployment';
 import { Icon } from '@/ui/icons';
 import { Button, Chip, isHovered, Loading, Notice, Screen, Section, useWide } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
@@ -159,6 +160,12 @@ export default function MarketsScreen() {
       >
         <Text style={styles.searchPlaceholder}>Markets and agents</Text>
       </Pressable>
+
+      {KURU_DEPLOYMENT_NOTE ? (
+        <View style={styles.block}>
+          <Notice title={KURU_DEPLOYMENT_NOTE.title} detail={KURU_DEPLOYMENT_NOTE.detail} />
+        </View>
+      ) : null}
 
       {markets.unavailable ? (
         <View style={styles.block}>

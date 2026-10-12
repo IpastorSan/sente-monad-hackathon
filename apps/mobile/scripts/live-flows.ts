@@ -46,6 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import {
   depositCalls,
+  KURU_DEPLOYMENT,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -216,6 +217,14 @@ const atoms = (value: bigint) => formatUnits(value, DECIMALS);
 // The phone
 
 const USDC = KURU_TESTNET_TOKENS.USDC;
+/**
+ * The book the Kuru step and the agent's mandate use: the active deployment's
+ * quoted one (SEN-189) — cbBTC-USDC on Set C, WETH-USDC on Set D — since the
+ * step rests a bid at half the best bid and MON-USDC was empty on both.
+ */
+const KURU_MARKET: KuruMarketConfig = KURU_TESTNET_MARKETS.find(
+  (m) => m.symbol === KURU_DEPLOYMENT.liquidMarket,
+)!;
 const tokenBySymbol = (symbol: string): Token => {
   const token = FUNDING_TOKENS.find((t) => t.symbol === symbol);
   if (!token) throw new Error(`no funding token ${symbol}`);
@@ -386,7 +395,7 @@ async function bootstrap(api: string, existing: LiveSecrets | null): Promise<voi
   if (!secrets.agent) {
     const perpl = await perplMarket(phone);
     const form = agentMandateForm({
-      kuruMarket: KURU_TESTNET_MARKETS[0]!.address,
+      kuruMarket: KURU_MARKET.address,
       maxOrderNotional: agentMaxOrderNotional(perpl.mark, perpl.minSize),
       nowSeconds: Math.floor(Date.now() / 1000),
       returnTo: user.walletAddress,
@@ -420,7 +429,7 @@ async function bootstrap(api: string, existing: LiveSecrets | null): Promise<voi
     console.log(
       `agent        ${agent.id}: wallet ${agent.address} (Privy ${agent.walletId}), ` +
         `policy ${agent.policyId}, maxOrderNotional ${built.mandate.maxOrderNotional}, ` +
-        `market ${KURU_TESTNET_MARKETS[0]!.symbol} + ${PERPL_SYMBOL}`,
+        `market ${KURU_MARKET.symbol} + ${PERPL_SYMBOL}`,
     );
   }
   const agent = secrets.agent!;
@@ -819,7 +828,7 @@ async function runFlows(api: string, secrets: LiveSecrets): Promise<void> {
 
     // 3
     await step('3 kuru', async () => {
-      const market: KuruMarketConfig = KURU_TESTNET_MARKETS[0]!;
+      const market = KURU_MARKET;
       const facts = await readMarketFacts(publicClient, market);
       if (facts.bestBid === null) fail('kuru', `${market.symbol} has no bids`);
       const price = halfOnTick(facts.bestBid!, facts.params.tickSize);

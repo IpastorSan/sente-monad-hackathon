@@ -39,6 +39,7 @@ import { dirname, resolve } from 'node:path';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import {
+  KURU_DEPLOYMENT,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
   type KuruMarketConfig,
@@ -301,8 +302,9 @@ async function kuru(): Promise<void> {
   const usdc = KURU_TESTNET_TOKENS.USDC.address;
   const mon = market('MON-USDC');
   // MON-USDC's book was empty on 2026-10-09, on Set C and again on Set D (SEN-185);
-  // WETH-USDC held ~15 USDC a level on Set D, past the 10 USDC minimum.
-  const ioc = market(option('ioc-market') ?? 'WETH-USDC');
+  // the IOCs default to the active deployment's quoted book (SEN-189): WETH-USDC
+  // on Set D (~15 USDC a level), cbBTC-USDC on Set C.
+  const ioc = market(option('ioc-market') ?? KURU_DEPLOYMENT.liquidMarket);
   let orderId = option('order-id');
 
   if (steps.has('gtc')) {

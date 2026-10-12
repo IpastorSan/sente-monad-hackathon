@@ -35,6 +35,7 @@
  * M-T10 to compare.
  */
 import {
+  KURU_DEPLOYMENT,
   KURU_MAX_BUILDER_FEE_PPS,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
@@ -96,8 +97,12 @@ export type KuruLeg =
   | {
       readonly ok: true;
       readonly kind: 'deposit';
-      /** The Kuru root the deposit credits; must be the user's own wallet. */
-      readonly rootOwner: Address;
+      /**
+       * The Kuru root the deposit credits; must be the user's own wallet.
+       * `null` on Set C (SEN-189), whose `deposit(token, amount)` names no
+       * account and always credits the caller.
+       */
+      readonly rootOwner: Address | null;
       readonly token: Address;
       readonly amount: bigint;
       readonly value: bigint;
@@ -105,12 +110,15 @@ export type KuruLeg =
   | {
       readonly ok: true;
       readonly kind: 'withdraw';
-      /** The root it debits; AccountCore refuses one the caller does not own. */
-      readonly rootAccountId: bigint;
+      /** The root it debits; AccountCore refuses one the caller does not own. `null` on Set C. */
+      readonly rootAccountId: bigint | null;
       readonly token: Address;
       readonly amount: bigint;
-      /** Who is paid; must be the user's own wallet. */
-      readonly recipient: Address;
+      /**
+       * Who is paid; must be the user's own wallet. `null` on Set C, whose
+       * `withdraw(token, amount)` always pays the caller.
+       */
+      readonly recipient: Address | null;
     }
   | {
       readonly ok: true;
@@ -170,7 +178,7 @@ const APPROVE = {
  * The owner-address overload only (SEN-185). It credits the root it NAMES, not
  * the caller's, so the verifier holds `rootOwner` to the user's own wallet.
  */
-const DEPOSIT = {
+const DEPOSIT_ACCOUNT_ID = {
   type: 'function',
   name: 'deposit',
   stateMutability: 'payable',
@@ -183,7 +191,7 @@ const DEPOSIT = {
 } as const satisfies AbiFunction;
 
 /** Pays the recipient it names (SEN-185); the verifier holds it to the user's own wallet. */
-const WITHDRAW = {
+const WITHDRAW_ACCOUNT_ID = {
   type: 'function',
   name: 'withdraw',
   stateMutability: 'nonpayable',
@@ -195,6 +203,39 @@ const WITHDRAW = {
   ],
   outputs: [],
 } as const satisfies AbiFunction;
+
+/** Set C (SEN-189): credits the caller; names no account. */
+const DEPOSIT_ADDRESS_KEYED = {
+  type: 'function',
+  name: 'deposit',
+  stateMutability: 'payable',
+  inputs: [
+    { name: 'token', type: 'address' },
+    { name: 'amount', type: 'uint256' },
+  ],
+  outputs: [],
+} as const satisfies AbiFunction;
+
+/** Set C (SEN-189): pays the caller; names no recipient. */
+const WITHDRAW_ADDRESS_KEYED = {
+  type: 'function',
+  name: 'withdraw',
+  stateMutability: 'nonpayable',
+  inputs: [
+    { name: 'token', type: 'address' },
+    { name: 'amount', type: 'uint256' },
+  ],
+  outputs: [],
+} as const satisfies AbiFunction;
+
+/**
+ * This build's custody calls: its deployment's, and ONLY its deployment's, so
+ * the other deployment's deposit or withdraw lands on the unknown-selector
+ * refusal like any call the app does not sign.
+ */
+const ADDRESS_KEYED = KURU_DEPLOYMENT.custody === 'address-keyed';
+const DEPOSIT: AbiFunction = ADDRESS_KEYED ? DEPOSIT_ADDRESS_KEYED : DEPOSIT_ACCOUNT_ID;
+const WITHDRAW: AbiFunction = ADDRESS_KEYED ? WITHDRAW_ADDRESS_KEYED : WITHDRAW_ACCOUNT_ID;
 
 const BATCH = {
   type: 'function',
@@ -348,10 +389,19 @@ export function classifyKuruCall(call: Erc7579Call): KuruLeg | KuruRefusal {
 
   if (fragment === APPROVE) return classifyApprove(call.to, args as [Address, bigint]);
   if (fragment === DEPOSIT) {
-    return classifyDeposit(call.to, value, args as [Address, Address, bigint]);
+    return classifyDeposit(
+      call.to,
+      value,
+      ADDRESS_KEYED ? [null, ...(args as [Address, bigint])] : (args as [Address, Address, bigint]),
+    );
   }
   if (fragment === WITHDRAW) {
-    return classifyWithdraw(call.to, args as [number, Address, bigint, Address]);
+    return classifyWithdraw(
+      call.to,
+      ADDRESS_KEYED
+        ? [null, ...(args as [Address, bigint]), null]
+        : (args as [number, Address, bigint, Address]),
+    );
   }
   if (fragment === APPROVE_BUILDER) {
     return classifyApproveBuilder(call.to, args as [Address, number, bigint]);
@@ -407,12 +457,14 @@ function classifyApprove(
 function classifyDeposit(
   target: Address,
   value: bigint,
-  [rootOwner, token, amount]: [Address, Address, bigint],
+  [rootOwner, token, amount]: [Address | null, Address, bigint],
 ): KuruLeg | KuruRefusal {
   if (!isAddressEqual(target, ACCOUNT_CORE))
     return refuse(`the deposit goes to ${target}, not AccountCore`);
   if (amount === 0n) return refuse('the deposit is for nothing');
-  if (isAddressEqual(rootOwner, zeroAddress)) return refuse('the deposit credits no account');
+  if (rootOwner !== null && isAddressEqual(rootOwner, zeroAddress)) {
+    return refuse('the deposit credits no account');
+  }
   const native = isAddressEqual(token, NATIVE_TOKEN);
   // AccountCore takes native MON as msg.value; any other value is either an
   // underpaid native deposit or MON sent alongside an ERC-20 one.
@@ -422,7 +474,7 @@ function classifyDeposit(
   return {
     ok: true,
     kind: 'deposit',
-    rootOwner: getAddress(rootOwner),
+    rootOwner: rootOwner === null ? null : getAddress(rootOwner),
     token: getAddress(token),
     amount,
     value,
@@ -431,7 +483,7 @@ function classifyDeposit(
 
 function classifyWithdraw(
   target: Address,
-  [rootAccountId, token, amount, recipient]: [number, Address, bigint, Address],
+  [rootAccountId, token, amount, recipient]: [number | null, Address, bigint, Address | null],
 ): KuruLeg | KuruRefusal {
   if (!isAddressEqual(target, ACCOUNT_CORE))
     return refuse(`the withdrawal goes to ${target}, not AccountCore`);
@@ -440,10 +492,10 @@ function classifyWithdraw(
   return {
     ok: true,
     kind: 'withdraw',
-    rootAccountId: BigInt(rootAccountId),
+    rootAccountId: rootAccountId === null ? null : BigInt(rootAccountId),
     token: getAddress(token),
     amount,
-    recipient: getAddress(recipient),
+    recipient: recipient === null ? null : getAddress(recipient),
   };
 }
 

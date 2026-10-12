@@ -419,7 +419,8 @@ function checkFunding(
   }
   const at = deposit.stepIndex;
   // AccountCore credits the root the deposit NAMES (SEN-185): only your own.
-  if (!isAddressEqual(deposit.rootOwner, wallet)) {
+  // Set C's deposit names no account and credits the caller, the wallet itself (SEN-189).
+  if (deposit.rootOwner !== null && !isAddressEqual(deposit.rootOwner, wallet)) {
     return refuse(`the deposit credits ${deposit.rootOwner}, not your Kuru account`, at);
   }
   if (!isAddressEqual(deposit.token, funding.address)) {
@@ -518,7 +519,8 @@ function verifyWithdraw(
     return refuse('the withdrawal is not the amount you chose', leg.stepIndex);
   }
   // AccountCore pays whoever the call names (SEN-185): only your own wallet.
-  if (!isAddressEqual(leg.recipient, wallet)) {
+  // Set C's withdraw names no recipient and pays the caller, the wallet itself (SEN-189).
+  if (leg.recipient !== null && !isAddressEqual(leg.recipient, wallet)) {
     return refuse(`the withdrawal pays ${leg.recipient}, not your wallet`, leg.stepIndex);
   }
   return PASS;

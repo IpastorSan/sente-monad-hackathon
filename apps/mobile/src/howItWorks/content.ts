@@ -12,7 +12,21 @@
  * the code on main; where the docs disagree the newer one wins. Keep it that
  * way: a claim this page cannot back is worse than no claim.
  */
+import { KURU_DEPLOYMENT } from '@sente/venues/kuru';
+
 import type { IconName } from '../ui/iconPaths.ts';
+
+/**
+ * The Kuru facts that depend on which testnet deployment this build trades
+ * (SEN-189, `EXPO_PUBLIC_KURU_DEPLOYMENT`), read from the same table the
+ * verifier uses so the page cannot disagree with it.
+ */
+const SET_C = KURU_DEPLOYMENT.id === 'set-c';
+const COUNT = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+const KURU_MARKET_COUNT =
+  COUNT[KURU_DEPLOYMENT.markets.length] ?? String(KURU_DEPLOYMENT.markets.length);
+const KURU_BASES = KURU_DEPLOYMENT.markets.map((m) => m.base.symbol);
+const KURU_BASE_LIST = `${KURU_BASES.slice(0, -1).join(', ')} and ${KURU_BASES.at(-1)}`;
 
 export type HelpItem = {
   readonly id: string;
@@ -153,7 +167,12 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'kuru',
         question: 'How does a spot trade on Kuru work?',
         body: [
-          'Kuru is an order book on chain, with five markets on testnet: MON, WETH, WBTC, XAUT and USDT, each against USDC (for example [MON-USDC](/markets/kuru/MON-USDC)). Your wallet first moves USDC or the token you sell into your Kuru account (an approve, then a deposit), then places the order. If the account already holds some, only the shortfall is deposited.',
+          `Kuru is an order book on chain, with ${KURU_MARKET_COUNT} markets on testnet: ${KURU_BASE_LIST}, each against USDC (for example [MON-USDC](/markets/kuru/MON-USDC)). Your wallet first moves USDC or the token you sell into your Kuru account (an approve, then a deposit), then places the order. If the account already holds some, only the shortfall is deposited.`,
+          ...(SET_C
+            ? [
+                'Sente trades Kuru’s previous testnet deployment: its contracts still trade and its test USDC has a public faucet, while the new deployment’s test USDC is invite-only.',
+              ]
+            : []),
           'A limit order rests on the book until it fills or you cancel it. A market order carries a worst price from your slippage setting and fills immediately or not at all, so part of it can fill and the rest is cancelled. Money in your Kuru account can be withdrawn back to your wallet. Every step is a sponsored send from your wallet.',
           'Trading by hand can be switched off on a deployment. When it is, a market points you to an agent instead.',
         ],
@@ -216,7 +235,7 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'markets',
         question: 'Why can an agent trade only some markets?',
         body: [
-          'On Kuru, every market is its own order-book contract, and the policy allows calls only to the order books your mandate names, one rule per market. A market that is not in the policy cannot be traded, whatever the agent asks. Kuru lists four markets on testnet.',
+          `On Kuru, every market is its own order-book contract, and the policy allows calls only to the order books your mandate names, one rule per market. A market that is not in the policy cannot be traded, whatever the agent asks. Kuru lists ${KURU_MARKET_COUNT} markets on testnet${SET_C ? ' on the deployment Sente trades' : ''}.`,
           'On Perpl, the market list is checked by Sente, for the same reason as order size: Perpl orders are not transactions. Changing either list means [amending the mandate](#amend).',
         ],
       },
@@ -233,7 +252,7 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'return-funds',
         question: 'Can an agent send my money somewhere else?',
         body: [
-          'No rule lets it. The only ways out of an agent’s wallet are a Kuru withdraw, which always pays the agent’s own wallet, and token transfers pinned to your wallet’s address. Sente fills in that address from your registered wallet, and the app cannot name another.',
+          `No rule lets it. The only ways out of an agent’s wallet are a Kuru withdraw, which ${SET_C ? 'always pays the agent’s own wallet' : 'can pay only your wallet'}, and token transfers pinned to your wallet’s address. Sente fills in that address from your registered wallet, and the app cannot name another.`,
           'Those two rules have no expiry and survive a revoke, so “Return funds” on an agent’s page works on an expired or revoked agent too. Leftover MON for gas stays with the agent.',
         ],
       },
@@ -292,7 +311,9 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'prices',
         question: 'Where do prices and candles come from?',
         body: [
-          'Kuru: the market list and candles from Kuru’s data source, depth from Kuru’s gateway, and quotes from the order book on chain. The quote reads the chain because its worst price is what your order is sent with, so it has to be the book the order will meet.',
+          SET_C
+            ? 'Kuru: Kuru’s data source and gateway no longer serve the deployment Sente trades, so the market list is Sente’s own, checked against each order book on chain, and depth and quotes come from the order book on chain. Kuru publishes no candles for it, so its charts show no history.'
+            : 'Kuru: the market list and candles from Kuru’s data source, depth from Kuru’s gateway, and quotes from the order book on chain. The quote reads the chain because its worst price is what your order is sent with, so it has to be the book the order will meet.',
           'Perpl: prices from Perpl’s API, cached for 3 seconds, and depth and quotes from a Perpl order-book socket Sente’s API keeps open.',
           'Sente’s API caches each read briefly (from 1.5 seconds for a Kuru quote to 60 seconds for the market list), so a venue sees one request per window however many screens and agents are watching. Charts are the venues’ own candles; there is no live candle streaming yet. See [Markets](/markets).',
         ],

@@ -98,13 +98,17 @@ export function marketFor(address: string): KuruMarketConfig | undefined {
  * agent hired before then moves it to the new books instead of dropping its
  * markets.
  */
-function currentMarket(address: Address): Address {
-  return retiredKuruMarket(address) ? kuruMarketSuccessor(address).address : address;
+function currentMarket(address: Address): Address | undefined {
+  // `undefined` when the active deployment has no counterpart (SEN-189): dropped.
+  return retiredKuruMarket(address) ? kuruMarketSuccessor(address)?.address : address;
 }
 
 /** The token a deposit cap is for, carried to its successor when Kuru retired it. */
 function currentToken(address: string): Token | undefined {
-  return tokenFor(address) ?? (retiredKuruToken(address) ? kuruTokenSuccessor(address) : undefined);
+  return (
+    tokenFor(address) ??
+    (retiredKuruToken(address) ? (kuruTokenSuccessor(address) ?? undefined) : undefined)
+  );
 }
 
 const DAY_SECONDS = 86_400;
@@ -307,7 +311,7 @@ export function formFromMandate(mandate: AgentMandate): MandateForm {
   }
   const kuruMarkets: Address[] = [];
   for (const market of mandate.kuru.markets.map(currentMarket)) {
-    if (!kuruMarkets.some((m) => isAddressEqual(m, market))) kuruMarkets.push(market);
+    if (market && !kuruMarkets.some((m) => isAddressEqual(m, market))) kuruMarkets.push(market);
   }
   const perpl = mandate.venues.includes('perpl');
   return {

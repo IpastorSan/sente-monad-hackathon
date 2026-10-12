@@ -136,8 +136,9 @@ type AgentFields = {
       kind: 'market' | 'token';
       from: string;
       fromSymbol: string;
-      to: string;
-      toSymbol: string;
+      /** `null` when the active deployment has no counterpart: the amend drops it (SEN-189). */
+      to: string | null;
+      toSymbol: string | null;
     }[];
   };
   status: AgentStatus;
