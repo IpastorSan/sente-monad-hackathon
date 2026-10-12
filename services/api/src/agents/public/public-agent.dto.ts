@@ -45,11 +45,15 @@ export type PublicMandateDto = Omit<MandateDto, 'returnTo'>;
  * SEN-194 adds it to the record, and an agent hired before it has none.
  */
 export interface PublicMandateAnchorDto {
-  mandateHash: string | null;
+  mandateHash: string;
+  policyHash?: string;
+  status: 'active' | 'revoked';
   txHash: string;
   chainId: number;
   registry: string;
   agentTokenId: string;
+  /** ISO 8601. */
+  anchoredAt: string;
 }
 
 export interface PublicFillDto {
@@ -263,30 +267,18 @@ export function scrubMessage(
     : out;
 }
 
-/** SEN-194's anchor, if the record carries a well-formed one. */
+/** SEN-194's anchor: every field is already public (it is on chain). */
 function anchorOf(agent: AgentRecord): PublicMandateAnchorDto | null {
-  const record = agent as AgentRecord & {
-    mandateHash?: unknown;
-    mandateAnchor?: unknown;
-  };
-  const anchor = record.mandateAnchor;
-  if (typeof anchor !== 'object' || anchor === null) return null;
-  const a = anchor as Record<string, unknown>;
-  const txHash = a['txHash'];
-  const chainId = a['chainId'];
-  const registry = a['registry'];
-  const tokenId = a['agentTokenId'];
-  if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return null;
-  if (typeof chainId !== 'number' || typeof registry !== 'string') return null;
-  if (typeof tokenId !== 'string' && typeof tokenId !== 'number' && typeof tokenId !== 'bigint') {
-    return null;
-  }
-  const hash = record.mandateHash ?? a['mandateHash'];
+  const anchor = agent.mandateAnchor;
+  if (!anchor) return null;
   return {
-    mandateHash: typeof hash === 'string' ? hash : null,
-    txHash,
-    chainId,
-    registry,
-    agentTokenId: String(tokenId),
+    mandateHash: anchor.mandateHash,
+    ...(anchor.policyHash ? { policyHash: anchor.policyHash } : {}),
+    status: anchor.status,
+    txHash: anchor.txHash,
+    chainId: anchor.chainId,
+    registry: anchor.registry,
+    agentTokenId: anchor.agentTokenId,
+    anchoredAt: anchor.anchoredAt,
   };
 }

@@ -155,6 +155,9 @@ const ALLOWED_DEEP_KEYS = new Set([
   'mandateAnchor.chainId',
   'mandateAnchor.registry',
   'mandateAnchor.agentTokenId',
+  'mandateAnchor.policyHash',
+  'mandateAnchor.status',
+  'mandateAnchor.anchoredAt',
   'prompt.systemPrompt',
   'prompt.strategy',
   'pnl.allTime',
@@ -295,8 +298,15 @@ describe('GET /public/agents/:id', () => {
   it('carries the on-chain mandate anchor when the record has one (SEN-194)', async () => {
     const anchored = {
       ...agent(),
-      mandateHash: `0x${'cd'.repeat(32)}`,
-      mandateAnchor: { txHash: TX, chainId: 10143, registry: AGENT_ADDRESS, agentTokenId: '42' },
+      mandateAnchor: {
+        mandateHash: `0x${'cd'.repeat(32)}`,
+        status: 'active',
+        txHash: TX,
+        chainId: 10143,
+        registry: AGENT_ADDRESS,
+        agentTokenId: '42',
+        anchoredAt: new Date(NOW).toISOString(),
+      },
     } as AgentRecord;
     const { controller } = await setup({ agents: [anchored] });
     expect((await controller.get(ID, 'a')).mandateAnchor).toEqual({
@@ -305,6 +315,8 @@ describe('GET /public/agents/:id', () => {
       chainId: 10143,
       registry: AGENT_ADDRESS,
       agentTokenId: '42',
+      status: 'active',
+      anchoredAt: new Date(NOW).toISOString(),
     });
   });
 
