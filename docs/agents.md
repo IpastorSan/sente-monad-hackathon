@@ -523,6 +523,124 @@ back to the treasury for 0.0201 MON of that agent's own gas. A revoked agent's
 money is reachable as long as anything can address its wallet — which is the
 argument for SEN-48's persistence, not against the exit rules.
 
+## The mandate, anchored on chain (SEN-194)
+
+Every agent's mandate is fingerprinted on its ERC-8004 identity (SEN-27,
+`docs/erc8004.md`), so a third party can check that the policy an agent runs
+under is the mandate it publishes.
+
+**What is hashed** (`packages/mandate/src/anchor.ts`):
+
+- `mandateHash` = keccak256 of the UTF-8 bytes of the canonical mandate: RFC 8785
+  JSON (sorted keys, no whitespace) of the parsed mandate with every spelling
+  choice removed. Addresses are EIP-55 checksummed, atoms are decimal strings,
+  `maxOrderNotional` loses trailing zeros, `venues` and both `markets` lists are
+  sorted, and absent optionals are absent (never `null`). It also carries
+  `schema: "sente.mandate/1"` and a `contracts` block with the pinned contracts
+  the mandate does not name: the Kuru deployment id and its AccountCore
+  (`KURU_DEPLOYMENT`: the same mandate means different custody on Set C and
+  Set D), and Perpl's Exchange and AUSD. Changing any field changes the hash.
+  Reordering a list does not, because it changes nothing the agent may do.
+- `policyHash` = keccak256 of the canonical JSON of the rules the enclave holds:
+  `compileMandate(mandate, { kuruBuilder, agentAddress })` with the builder fee
+  the agent recorded and the deposit pin once it has one (SEN-188), or
+  `compileRevocationRules(mandate)` once revoked.
+
+**Where it lives.** One Identity Registry metadata entry per agent, key
+`sente.mandate`, value 66 bytes:
+`abi.encodePacked(uint8 version=1, uint8 status, bytes32 mandateHash, bytes32 policyHash)`,
+status `1` active and `2` revoked. Packed because the value is both calldata and
+storage, and Monad charges for both by the byte.
+
+**When it is written** (`services/api/src/agents/reputation/mandate-anchor.ts`):
+
+| Event                              | Write                                                                                                         | Signed by                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| Hire (and fork)                    | in the `register(agentURI, [("sente.mandate", value)])` transaction itself, after the server-side deposit pin | `ERC8004_REGISTRAR_KEY`           |
+| Amend (server or phone-signed)     | `setMetadata(agentId, "sente.mandate", value)`, in the background                                             | registrar (it owns the agent NFT) |
+| Revoke (server or phone-signed)    | the same, status `revoked`, revocation policy hash                                                            | registrar                         |
+| A phone's pinning amend after hire | the same: the policy hash changes                                                                             | registrar                         |
+
+None of these blocks or fails the hire, amend or revoke. The hire's anchor
+rides the registration, which never fails a hire and is never retried (a second
+`register` mints a second agent). A rewrite that fails is retried after 30 s,
+2 min and 10 min, then on the next boot: `MandateAnchors.reconcile` re-anchors
+every registered agent whose stored anchor differs from what its record implies.
+Retrying `setMetadata` is safe because it writes a value. A duplicate costs gas
+and changes nothing. Each outcome is an `anchor` event on the Ledger: "Mandate
+anchored on chain", "Amended mandate anchored on chain" or "Revocation anchored
+on chain" with the transaction, or "Mandate not anchored on chain yet: … Retrying
+in 30 s".
+
+The agent record gets `mandateAnchor`, which `GET /agents/:id` returns and the
+public agent page (SEN-193) shows:
+
+```ts
+mandateAnchor?: {
+  mandateHash: '0x…';
+  policyHash?: '0x…';
+  status: 'active' | 'revoked';
+  txHash: '0x…';
+  chainId: 10143;
+  registry: '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+  agentTokenId: string; // the ERC-8004 agentId, decimal
+  anchoredAt: string; // ISO 8601
+}
+```
+
+It is absent until the first anchor lands, and it trails an amend by one
+background transaction.
+
+**Cost** (Monad charges the gas LIMIT, gotcha 4; limits measured 2026-10-12
+against the live registry, see `docs/erc8004.md`): a hire's registration with
+the anchor is limited to 1,000,000 gas, about 0.122 MON at 122 gwei, which is
+about 0.006 MON more than registering without it. Each amend or revoke costs
+160,000 gas, about 0.0195 MON. The registrar pays both. An agent that is amended
+once and revoked costs about 0.16 MON over its life.
+
+### How anyone verifies an agent's mandate
+
+1. Read the anchor: `getMetadata(agentId, "sente.mandate")` on the Identity
+   Registry `0x8004A818BFB912233c491871b3d84c89A494BD9e` (Monad testnet, 10143).
+   Bytes 2–33 are `mandateHash`, bytes 34–65 `policyHash`, and byte 1 the status.
+   With Foundry:
+   `cast call 0x8004A818BFB912233c491871b3d84c89A494BD9e "getMetadata(uint256,string)(bytes)" <agentId> sente.mandate --rpc-url https://testnet-rpc.monad.xyz`.
+2. Take the mandate the agent publishes on its public page (or `GET
+/agents/:id`) and recompute `mandateHash` with `@sente/mandate`
+   (`mandateHash(parseMandate(json))`), under the Kuru deployment it was hired
+   on.
+3. Compare. If they are equal, the agent runs under exactly that mandate. With
+   the agent's address, builder fee and deposit pin, `policyHash` can be
+   recomputed and compared the same way.
+
+The script does all three (read-only, no key):
+
+```bash
+mise exec -- pnpm --filter @sente/api run mandate:verify -- --agent <agentId|uuid>
+mise exec -- pnpm --filter @sente/api run mandate:verify -- --agent 2207 --mandate ./mandate.json
+```
+
+With a token id it finds the agent's uuid in the registration file's `web`
+service and fetches `{--api}/public/agents/<uuid>` (default
+`https://api.sente.lol`, a read). With a uuid it takes the token id from that
+JSON's `mandateAnchor.agentTokenId`. `--mandate <file|url>` overrides the source
+with a bare mandate or an object with a `mandate` field. `--show-canonical`
+prints the exact JSON that was hashed. It exits 0 on a match and 1 on a
+mismatch.
+
+### Live probe: PENDING
+
+Nothing has been sent. The read-only probe (`erc8004:live`, 2026-10-12) measured
+`register` with the anchor at 786,999 gas for an 861-character URI (limit
+1,000,000) and `setMetadata` at 149,248 (limit 160,000). It also showed that
+`setMetadata` from a non-owner reverts `Not authorized` and that the key
+`agentWallet` is reserved. The live run, once the registrar is funded:
+
+```bash
+mise exec -- pnpm --filter @sente/api run erc8004:live -- --register         # mints a probe agent WITH an anchor, reads it back
+mise exec -- pnpm --filter @sente/api run erc8004:live -- --anchor <agentId>  # setMetadata (status revoked), reads it back
+```
+
 ## The Sente fee on agents' Kuru orders (SEN-184)
 
 An agent's Kuru orders pay Sente's builder fee (10 bps, to `KURU_BUILDER_ADDRESS`)
