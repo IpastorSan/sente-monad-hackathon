@@ -5,7 +5,7 @@
  * every run, never an order resting on the venue (Kuru has no stop orders).
  * Promise and parameters from docs/design/trading/agents.html, "The catalog".
  */
-import { formatNumber, marketAssets, num, str } from '../params.ts';
+import { formatNumber, kuruDeploymentFromEnv, marketAssets, num, str } from '../params.ts';
 import type { Params, PresetDefinition } from '../types.ts';
 
 const CADENCE_SECONDS = { '1m': 60, '5m': 300 } as const;
@@ -19,6 +19,17 @@ const EXIT_SLIPPAGE_PCT = 2;
  * worst outcome this preset has.
  */
 const ORDER_CAP_HEADROOM = 2;
+
+/**
+ * What Guardian starts on, per deployment. Set D guards MON. Set C's MON-USDC
+ * book has no asks or bids to sell into (SEN-198), so it starts on cbBTC-USDC,
+ * with an amount and placeholder lines sized for BTC. The configure screen
+ * moves the lines to the live price either way (`guardianLines` in the app).
+ */
+const DEFAULTS = {
+  'set-c': { market: 'cbBTC-USDC', amount: 0.001, sellAbove: 150_000, sellBelow: 50_000 },
+  'set-d': { market: 'MON-USDC', amount: 100, sellAbove: 0.05, sellBelow: 0.01 },
+}[kuruDeploymentFromEnv()];
 
 function render(p: Params): { strategy: string; systemPrompt: string } {
   const market = str(p, 'market');
@@ -70,7 +81,7 @@ export const guardian: PresetDefinition = {
       type: 'market',
       venue: 'kuru',
       multiple: false,
-      default: 'MON-USDC',
+      default: DEFAULTS.market,
     },
     {
       key: 'amount',
@@ -79,7 +90,7 @@ export const guardian: PresetDefinition = {
       min: 0.000001,
       max: 1_000_000,
       step: 0.000001,
-      default: 100,
+      default: DEFAULTS.amount,
       help: 'In units of the asset. It never sells more than this.',
     },
     {
@@ -90,7 +101,7 @@ export const guardian: PresetDefinition = {
       max: 1_000_000,
       step: 0.000001,
       unit: 'USDC',
-      default: 0.05,
+      default: DEFAULTS.sellAbove,
       help: 'Agent-watched: checked every run, not a venue order.',
     },
     {
@@ -101,7 +112,7 @@ export const guardian: PresetDefinition = {
       max: 1_000_000,
       step: 0.000001,
       unit: 'USDC',
-      default: 0.01,
+      default: DEFAULTS.sellBelow,
       help: 'Agent-watched: checked every run, not a venue order.',
     },
     {

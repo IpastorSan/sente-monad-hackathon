@@ -660,8 +660,8 @@ function acceptedNear(spec: ParamSpec | undefined, x: number): number {
 }
 
 /**
- * Guardian's lines from the live price. Its catalog defaults (0.05 / 0.01)
- * are placeholders sized for MON; on any other coin — or MON at another price
+ * Guardian's lines from the live price. Its catalog defaults (0.05 / 0.01 on
+ * Set D) are placeholders sized for MON; on any other coin — or MON at another price
  * — they would sell at once or never. So the lines start 10% either side of
  * the price, at four significant figures on the spec's 0.000001 grid.
  * `null` when the price is unusable: the placeholders then stand, and the

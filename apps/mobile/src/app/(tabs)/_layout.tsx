@@ -29,7 +29,6 @@
  * exactly as it was.
  */
 import { Redirect, useRouter } from 'expo-router';
-import Head from 'expo-router/head';
 import { TabList, Tabs, TabSlot, TabTrigger, type TabTriggerSlotProps } from 'expo-router/ui';
 import { forwardRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -40,6 +39,7 @@ import { Avatar } from '@/ui/Avatar';
 import { Icon, type IconName } from '@/ui/icons';
 import { Mark } from '@/ui/goban';
 import { DOCK, isHovered, RAIL, useWide } from '@/ui/kit';
+import { PageTitle } from '@/ui/PageTitle';
 import { color, font, RADIUS } from '@/ui/theme';
 
 /** Distance from the screen edges, and between the pill and the button. */
@@ -186,7 +186,7 @@ const TabButton = forwardRef<View, TabButtonProps>(function TabButton(
       accessibilityLabel={label}
       style={[styles.tab, isFocused && styles.tabOn]}
     >
-      {isFocused ? <PageTitle label={label} /> : null}
+      {isFocused ? <PageTitle title={label} /> : null}
       <Icon name={icon} size={22} color={isFocused ? color.purpleHi : color.textFaint} />
       <Text style={[styles.tabLabel, isFocused && styles.tabLabelOn]} numberOfLines={1}>
         {label}
@@ -194,15 +194,6 @@ const TabButton = forwardRef<View, TabButtonProps>(function TabButton(
     </Pressable>
   );
 });
-
-/** The browser tab's title on web; `Head` renders nothing on Android. */
-function PageTitle({ label }: { label: string }) {
-  return (
-    <Head>
-      <title>{`${label} · Sente`}</title>
-    </Head>
-  );
-}
 
 /** A tab on the wide rail: icon and label in a row, the page title when focused. */
 const RailButton = forwardRef<View, TabButtonProps>(function RailButton(
@@ -221,7 +212,7 @@ const RailButton = forwardRef<View, TabButtonProps>(function RailButton(
         isFocused ? styles.railItemOn : isHovered(state) && styles.railItemHover,
       ]}
     >
-      {isFocused ? <PageTitle label={label} /> : null}
+      {isFocused ? <PageTitle title={label} /> : null}
       <Icon name={icon} size={20} color={isFocused ? color.purpleHi : color.textFaint} />
       <Text style={[styles.railLabel, !isFocused && styles.railLabelOff]} numberOfLines={1}>
         {label}

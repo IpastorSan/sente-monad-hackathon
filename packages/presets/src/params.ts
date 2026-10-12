@@ -57,6 +57,22 @@ export const KURU_SPOT_MARKETS: readonly string[] =
   KURU_SPOT_MARKETS_BY_DEPLOYMENT[kuruDeploymentFromEnv()];
 
 /**
+ * The market a single-market preset starts on, per deployment (SEN-198): a
+ * book with resting liquidity, so a fresh hire has something to trade. Set C's
+ * MON-USDC book is empty (cbBTC-USDC, WETH-USDC and XAUt-USDC are quoted), so
+ * Set C starts on cbBTC-USDC, its `liquidMarket` in `@sente/venues/kuru`; Set D
+ * keeps MON-USDC.
+ */
+export const KURU_DEFAULT_SPOT_MARKET_BY_DEPLOYMENT: Readonly<Record<'set-c' | 'set-d', string>> = {
+  'set-c': 'cbBTC-USDC',
+  'set-d': 'MON-USDC',
+};
+
+/** The active deployment's default Kuru market. */
+export const KURU_DEFAULT_SPOT_MARKET: string =
+  KURU_DEFAULT_SPOT_MARKET_BY_DEPLOYMENT[kuruDeploymentFromEnv()];
+
+/**
  * Perpl lists its markets at runtime, so only the shape is checked here; the
  * mandate still decides which ones an agent may touch.
  */

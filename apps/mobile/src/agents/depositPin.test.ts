@@ -233,13 +233,13 @@ function hireSteps(agent: Agent, secured: DepositPinState) {
         order.push('hire');
         return { agent, mcpToken: 't' };
       },
-      funding: { token: USDC_TOKEN, atoms: 25_000_000n },
+      funding: [{ token: USDC_TOKEN, atoms: 25_000_000n }],
       fund: async () => {
         order.push('fund');
         return { kind: 'sent', label: '25 USDC' };
       },
       onHired: () => order.push('hired'),
-      onFunding: (state) => funding.push(state),
+      onFunding: (_index, state) => funding.push(state),
       secure: async (hired) => {
         order.push(`secure ${hired.address}`);
         return secured;

@@ -156,16 +156,33 @@ export function expiryUsage(since: number, expiresAt: number, now: number): Gaug
 export const TRADING_WINDOW_MS = 15 * MINUTE;
 
 /**
- * "Trading" rather than "Watching". The summary's `lastEvent` already leaves
- * out run summaries, so a runner that woke up and decided nothing does not
- * count as activity.
+ * The event kinds that are the agent itself acting on a market. The rest of
+ * what `lastEvent` can be happens TO the agent: a `deposit` arriving, Sente's
+ * Perpl `onboarding`, the mandate `anchor` written at hire. A fresh hire has
+ * all three within minutes and has traded nothing (SEN-198).
+ */
+const TRADING_KINDS: ReadonlySet<string> = new Set([
+  'thesis',
+  'order',
+  'fill',
+  'close',
+  'verdict',
+  'refusal',
+]);
+
+/**
+ * "Trading" rather than "Watching": the agent's own move inside the window.
+ * The summary's `lastEvent` already leaves out run summaries, so a runner that
+ * woke up and decided nothing does not count as activity, and neither does
+ * anything that only happened to the agent (`TRADING_KINDS`).
  */
 export function isTrading(
   summary: Pick<AgentSummary, 'lastEvent'> | undefined,
   now: number,
 ): boolean {
-  const at = summary?.lastEvent?.at;
-  return at !== undefined && now - at <= TRADING_WINDOW_MS && now - at >= -MINUTE;
+  const last = summary?.lastEvent;
+  if (!last || !TRADING_KINDS.has(last.kind)) return false;
+  return now - last.at <= TRADING_WINDOW_MS && now - last.at >= -MINUTE;
 }
 
 /** `now`, `4m`, `3h`, `2d`: how long ago, for a line that is already about time. */

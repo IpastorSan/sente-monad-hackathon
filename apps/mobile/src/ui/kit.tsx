@@ -5,7 +5,7 @@
  * lighter (`ink` → `board` → `well`). The pieces with a meaning of their own —
  * stones, sigils, gauges, status pills — are in `goban.tsx`.
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -90,8 +90,14 @@ export function Screen({
   tabbed = false,
   maxWidth = CONTENT_MAX,
   backdrop,
+  scrollKey,
 }: {
   children: ReactNode;
+  /**
+   * A step or page within the same screen: when it changes, the scroll goes
+   * back to the top, so the next step doesn't open where the last was left.
+   */
+  scrollKey?: string | number;
   /**
    * Painted behind the scroll area across the whole pane, not just the
    * centred column, and fixed while the content scrolls (Home's board).
@@ -112,6 +118,10 @@ export function Screen({
   const bottom =
     tabbed && !wide ? insets.bottom + DOCK.lift + DOCK.height + 24 : insets.bottom + 40;
   const column = wide ? { maxWidth, width: '100%' as const, alignSelf: 'center' as const } : null;
+  const scroller = useRef<ScrollView>(null);
+  useEffect(() => {
+    if (scrollKey !== undefined) scroller.current?.scrollTo({ y: 0, animated: false });
+  }, [scrollKey]);
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { paddingTop: insets.top }]}
@@ -125,6 +135,7 @@ export function Screen({
         </View>
       ) : null}
       <ScrollView
+        ref={scroller}
         contentContainerStyle={[styles.content, { paddingBottom: footer ? 24 : bottom }, column]}
         keyboardShouldPersistTaps="handled"
         refreshControl={
@@ -405,6 +416,7 @@ export function Field({
   onSubmitEditing,
   maxLength,
   autoFocus,
+  onEnter,
 }: {
   label: string;
   value: string;
@@ -424,6 +436,12 @@ export function Field({
   maxLength?: number;
   /** Focus on mount: a screen sending someone back to fix this field. */
   autoFocus?: boolean;
+  /**
+   * Web, multiline: Enter runs this instead of breaking the line, as a chat
+   * box does; Shift+Enter still breaks it. The text stays in the field for
+   * the caller to clear once it has used it.
+   */
+  onEnter?: () => void;
 }) {
   const [focused, setFocused] = useState(false);
   const over = max !== undefined && value.length > max;
@@ -453,6 +471,20 @@ export function Field({
           autoCapitalize={autoCapitalize}
           autoCorrect={!numeric && autoCapitalize !== 'none'}
           onSubmitEditing={onSubmitEditing}
+          onKeyPress={
+            onEnter && multiline && Platform.OS === 'web'
+              ? (event) => {
+                  const key = event.nativeEvent as {
+                    key: string;
+                    shiftKey?: boolean;
+                    isComposing?: boolean;
+                  };
+                  if (key.key !== 'Enter' || key.shiftKey || key.isComposing) return;
+                  event.preventDefault();
+                  onEnter();
+                }
+              : undefined
+          }
           returnKeyType={onSubmitEditing ? 'done' : undefined}
           maxLength={maxLength}
           autoFocus={autoFocus}

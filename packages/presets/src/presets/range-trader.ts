@@ -6,6 +6,7 @@
 import {
   type CandleWindow,
   formatNumber,
+  KURU_DEFAULT_SPOT_MARKET,
   klinesHint,
   marketAssets,
   num,
@@ -98,7 +99,7 @@ export const rangeTrader: PresetDefinition = {
       type: 'market',
       venue: 'kuru',
       multiple: false,
-      default: 'MON-USDC',
+      default: KURU_DEFAULT_SPOT_MARKET,
     },
     {
       key: 'lookback',

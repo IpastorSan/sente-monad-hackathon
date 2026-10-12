@@ -13,9 +13,13 @@ import type { HireAgentResult } from './api.ts';
 import {
   checkFunding,
   fundAgent,
+  fundingLayout,
   fundingOutcome,
+  fundingRequests,
   fundingTokensFor,
   hireThenFund,
+  PERPS_FUND_DEFAULT,
+  perpsFundNote,
   type FundingState,
 } from './initialFunding.ts';
 import {
@@ -149,13 +153,13 @@ test('hire comes first, funding goes to the hired wallet, then reports', async (
       order.push('hire');
       return hired();
     },
-    funding: { token: USDC, atoms: 25_000_000n },
+    funding: [{ token: USDC, atoms: 25_000_000n }],
     fund: async (to, token, atoms) => {
       order.push(`fund ${to} ${token.symbol} ${atoms}`);
       return { kind: 'sent', label: '25 USDC' };
     },
     onHired: () => order.push('hired'),
-    onFunding: (state) => states.push(state),
+    onFunding: (_index, state) => states.push(state),
   });
   assert.deepEqual(order, ['hire', 'hired', `fund ${AGENT} USDC 25000000`]);
   assert.deepEqual(states, [
@@ -169,10 +173,10 @@ test('a failed funding leaves the hire standing', async () => {
   const states: FundingState[] = [];
   await hireThenFund({
     hire: async () => hired(),
-    funding: { token: USDC, atoms: 25_000_000n },
+    funding: [{ token: USDC, atoms: 25_000_000n }],
     fund: () => Promise.reject(new Error('network down')),
     onHired: (result) => (hiredResult = result),
-    onFunding: (state) => states.push(state),
+    onFunding: (_index, state) => states.push(state),
   });
   assert.ok(hiredResult);
   assert.equal(states.at(-1)?.kind, 'failed');
@@ -183,13 +187,13 @@ test('no funding asked: hire only, and no funding state at all', async () => {
   const states: FundingState[] = [];
   await hireThenFund({
     hire: async () => hired(),
-    funding: null,
+    funding: [],
     fund: async () => {
       funded = true;
       return { kind: 'sent', label: '' };
     },
     onHired: () => undefined,
-    onFunding: (state) => states.push(state),
+    onFunding: (_index, state) => states.push(state),
   });
   assert.equal(funded, false);
   assert.deepEqual(states, []);
@@ -200,7 +204,7 @@ test('a failed hire throws as before and never funds', async () => {
   await assert.rejects(
     hireThenFund({
       hire: () => Promise.reject(new Error('mandate_invalid')),
-      funding: { token: USDC, atoms: 1n },
+      funding: [{ token: USDC, atoms: 1n }],
       fund: async () => {
         funded = true;
         return { kind: 'sent', label: '' };
@@ -211,4 +215,77 @@ test('a failed hire throws as before and never funds', async () => {
     /mandate_invalid/,
   );
   assert.equal(funded, false);
+});
+
+const PERPS = { perpl: true, perplCollateral: '100', perplMarkets: 'BTC-PERP' } as const;
+
+test('without Perpl, one amount in the spot tokens; with it, AUSD gets its own', () => {
+  const spotOnly = mandate();
+  assert.deepEqual(fundingLayout(spotOnly, fundingTokensFor(spotOnly)), {
+    spot: [USDC],
+    perps: null,
+  });
+  const both = mandate(PERPS);
+  assert.deepEqual(fundingLayout(both, fundingTokensFor(both)), { spot: [USDC], perps: AUSD });
+  const perpsOnly = mandate({ ...PERPS, kuru: false });
+  assert.deepEqual(fundingLayout(perpsOnly, fundingTokensFor(perpsOnly)), {
+    spot: [],
+    perps: AUSD,
+  });
+});
+
+test('AUSD starts at Perpl’s minimum, and the note says perps wait for it', () => {
+  assert.equal(PERPS_FUND_DEFAULT, '100');
+  const note = 'Perps won’t open until the agent holds at least 100 AUSD.';
+  assert.equal(perpsFundNote(checkFunding('100', AUSD, 500_000_000n)), note);
+  assert.equal(perpsFundNote(checkFunding('', AUSD, null)), note);
+  assert.match(perpsFundNote(checkFunding('40', AUSD, null)), /This alone won’t open them/);
+  // Over the balance: the field's own error says so, and the hire is blocked.
+  assert.equal(checkFunding('100', AUSD, 50_000_000n).kind, 'invalid');
+});
+
+test('both amounts are sent, in order, and only the ones that check out', () => {
+  assert.deepEqual(
+    fundingRequests([
+      { token: USDC, check: checkFunding('25', USDC, null) },
+      { token: AUSD, check: checkFunding('100', AUSD, null) },
+    ]),
+    [
+      { token: USDC, atoms: 25_000_000n },
+      { token: AUSD, atoms: 100_000_000n },
+    ],
+  );
+  assert.deepEqual(
+    fundingRequests([
+      { token: USDC, check: checkFunding('', USDC, null) },
+      { token: AUSD, check: checkFunding('100', AUSD, null) },
+    ]),
+    [{ token: AUSD, atoms: 100_000_000n }],
+  );
+});
+
+test('two fundings go one after the other, and a failed first one does not stop the second', async () => {
+  const order: string[] = [];
+  const states: [number, FundingState][] = [];
+  await hireThenFund({
+    hire: async () => hired(),
+    funding: [
+      { token: USDC, atoms: 25_000_000n },
+      { token: AUSD, atoms: 100_000_000n },
+    ],
+    fund: async (_to, token) => {
+      order.push(`start ${token.symbol}`);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      order.push(`end ${token.symbol}`);
+      if (token.symbol === 'USDC') throw new Error('network down');
+      return { kind: 'sent', label: '100 AUSD' };
+    },
+    onHired: () => undefined,
+    onFunding: (index, state) => states.push([index, state]),
+  });
+  assert.deepEqual(order, ['start USDC', 'end USDC', 'start AUSD', 'end AUSD']);
+  assert.deepEqual(
+    states.map(([index, state]) => `${index} ${state.kind}`),
+    ['0 funding', '0 failed', '1 funding', '1 sent'],
+  );
 });

@@ -21,7 +21,7 @@ import { formatAtoms, parseAmount } from './amounts.ts';
 import type { Agent, AgentMandate, HireAgentResult } from './api.ts';
 import { needsDepositPin, type DepositPinState } from './depositPin.ts';
 import { FUNDING_TOKENS, isNativeToken } from './fund.ts';
-import { AUSD, type Token } from './mandate.ts';
+import { AUSD, PERPL_MIN_OPEN_ATOMS, type Token } from './mandate.ts';
 
 /**
  * The tokens this mandate lets the agent put to work: each Kuru token it may
@@ -40,6 +40,39 @@ export function fundingTokensFor(mandate: Pick<AgentMandate, 'venues' | 'kuru'>)
   return FUNDING_TOKENS.filter(
     (token) => !isNativeToken(token) && usable.has(token.address.toLowerCase()),
   );
+}
+
+/**
+ * How "Fund it now" lays the offered tokens out (SEN-198). Without Perpl it
+ * is one amount in one of `spot`'s tokens, as before. With Perpl, AUSD gets
+ * its own amount beside the spot token's, so one hire can fund both venues:
+ * `perps` is AUSD and `spot` is everything else (empty for a Perpl-only
+ * mandate).
+ */
+export type FundingLayout = { spot: Token[]; perps: Token | null };
+
+export function fundingLayout(
+  mandate: Pick<AgentMandate, 'venues'>,
+  tokens: readonly Token[],
+): FundingLayout {
+  const isAusd = (token: Token) => token.address.toLowerCase() === AUSD.address.toLowerCase();
+  const perps = mandate.venues.includes('perpl') ? (tokens.find(isAusd) ?? null) : null;
+  return { spot: perps ? tokens.filter((token) => !isAusd(token)) : [...tokens], perps };
+}
+
+/** What the AUSD amount starts at: Perpl's account-opening minimum, "100". */
+export const PERPS_FUND_DEFAULT = formatAtoms(PERPL_MIN_OPEN_ATOMS, AUSD.decimals);
+
+/**
+ * The line under the AUSD amount. Said plainly whatever is typed, because an
+ * agent hired with perps and less than the minimum just sits there.
+ */
+export function perpsFundNote(check: FundingCheck): string {
+  const rule = `Perps won’t open until the agent holds at least ${PERPS_FUND_DEFAULT} AUSD.`;
+  if (check.kind === 'ok' && check.atoms < PERPL_MIN_OPEN_ATOMS) {
+    return `${rule} This alone won’t open them; you can top it up later.`;
+  }
+  return rule;
 }
 
 export type FundingCheck =
@@ -100,6 +133,18 @@ export function fundingOutcome(sent: SentTransfer, label: string): FundingOutcom
   return { kind: 'submitted', label, status };
 }
 
+/** One transfer to make after the hire. */
+export type FundingRequest = { token: Token; atoms: bigint };
+
+/** The amounts worth sending, in the order given: skipped and invalid ones are left out. */
+export function fundingRequests(
+  entries: readonly { token: Token; check: FundingCheck }[],
+): FundingRequest[] {
+  return entries.flatMap(({ token, check }) =>
+    check.kind === 'ok' ? [{ token, atoms: check.atoms }] : [],
+  );
+}
+
 export type Send = (intent: SendIntent) => Promise<SentTransfer>;
 
 /** Send `atoms` of `token` to `to`, as one outcome: this never throws. */
@@ -123,14 +168,18 @@ export async function fundAgent(
  * The pin (SEN-188) runs only when the API says the agent needs it, and before
  * the funding: it is the step that finishes the hire's policy, and the funding
  * goes to the agent's wallet, which it does not touch either way.
+ *
+ * Each funding request is sent one after the other (SEN-198: USDC, then AUSD),
+ * and reported by its index. One failing does not stop the next: they are
+ * separate transfers of separate tokens.
  */
 export async function hireThenFund(steps: {
   hire: () => Promise<HireAgentResult>;
-  /** `null`: nothing to fund. */
-  funding: { token: Token; atoms: bigint } | null;
+  /** Empty: nothing to fund. */
+  funding: readonly FundingRequest[];
   fund: (to: Address, token: Token, atoms: bigint) => Promise<FundingOutcome>;
   onHired: (result: HireAgentResult) => void;
-  onFunding: (state: FundingState) => void;
+  onFunding: (index: number, state: FundingState) => void;
   /** The pinning amend (`secureDeposits`); never throws. */
   secure?: (agent: Agent) => Promise<DepositPinState>;
   onSecure?: (state: DepositPinState) => void;
@@ -141,13 +190,13 @@ export async function hireThenFund(steps: {
     steps.onSecure?.({ kind: 'securing' });
     steps.onSecure?.(await steps.secure(result.agent));
   }
-  if (!steps.funding) return;
-  const { token, atoms } = steps.funding;
-  const label = fundingLabel(atoms, token);
-  steps.onFunding({ kind: 'funding', label });
-  try {
-    steps.onFunding(await steps.fund(result.agent.address, token, atoms));
-  } catch (caught) {
-    steps.onFunding({ kind: 'failed', label, ...describeSendError(caught) });
+  for (const [index, { token, atoms }] of steps.funding.entries()) {
+    const label = fundingLabel(atoms, token);
+    steps.onFunding(index, { kind: 'funding', label });
+    try {
+      steps.onFunding(index, await steps.fund(result.agent.address, token, atoms));
+    } catch (caught) {
+      steps.onFunding(index, { kind: 'failed', label, ...describeSendError(caught) });
+    }
   }
 }

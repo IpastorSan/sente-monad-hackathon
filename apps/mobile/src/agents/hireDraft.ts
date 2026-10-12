@@ -40,6 +40,12 @@ export type HireDraftFields = {
   /** The chosen fund-at-hire token, by symbol — never the full `Token`, which isn't JSON-stable. */
   fundSymbol: string | null;
   fundAmount: string;
+  /**
+   * The AUSD amount beside it when the mandate trades perps (SEN-198).
+   * `null` (or absent, in a draft from before it existed): untouched, so the
+   * field shows Perpl's minimum.
+   */
+  fundAusdAmount?: string | null;
   risksAccepted: boolean;
 };
 
@@ -59,6 +65,9 @@ export function isHireDraftFields(value: unknown): value is HireDraftFields {
     (d.expiryDays === null || typeof d.expiryDays === 'number') &&
     (d.fundSymbol === null || typeof d.fundSymbol === 'string') &&
     typeof d.fundAmount === 'string' &&
+    (d.fundAusdAmount === undefined ||
+      d.fundAusdAmount === null ||
+      typeof d.fundAusdAmount === 'string') &&
     typeof d.risksAccepted === 'boolean'
   );
 }
@@ -87,6 +96,7 @@ export function isHireDraftEmpty(fields: HireDraftFields): boolean {
     fields.preset === 'standard' &&
     !fields.isPublic &&
     fields.fundAmount.trim() === '' &&
+    (fields.fundAusdAmount ?? null) === null &&
     !fields.risksAccepted
   );
 }

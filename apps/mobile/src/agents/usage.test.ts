@@ -146,6 +146,15 @@ test('isTrading means an event inside the trading window', () => {
   assert.equal(isTrading(summary({ lastEvent: old }), NOW), false);
 });
 
+test('a fresh hire that has only been funded, anchored or onboarded is Watching', () => {
+  for (const kind of ['deposit', 'anchor', 'onboarding']) {
+    assert.equal(isTrading(summary({ lastEvent: event(kind, {}) }), NOW), false, kind);
+  }
+  for (const kind of ['order', 'fill', 'refusal']) {
+    assert.equal(isTrading(summary({ lastEvent: event(kind, {}) }), NOW), true, kind);
+  }
+});
+
 test('relativeAge counts in the largest whole unit', () => {
   assert.equal(relativeAge(NOW - 10_000, NOW), 'now');
   assert.equal(relativeAge(NOW - 4 * 60_000, NOW), '4m');

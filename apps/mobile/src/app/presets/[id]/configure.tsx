@@ -197,7 +197,7 @@ function Configure({
     [def, perps],
   );
 
-  // Guardian's defaults (0.05 / 0.01) are placeholders sized for MON: its
+  // Guardian's default lines are placeholders sized for one coin: its
   // lines start from the live price instead, until the person sets them.
   // Polled only for Guardian; no other preset reads a price here.
   const guardian = def.id === 'guardian';
