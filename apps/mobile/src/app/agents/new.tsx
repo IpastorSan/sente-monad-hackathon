@@ -19,7 +19,7 @@
  * `buildMandate`'s (`presets.ts`, `mandateToSend`).
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import {
@@ -42,7 +42,9 @@ import {
 import { readBalance } from '@/agents/balances';
 import { DepositPinStatus } from '@/agents/DepositPin';
 import { secureDeposits, type DepositPinState } from '@/agents/depositPin';
+import { draftKey } from '@/agents/draftStore';
 import { FundingStatus, FundNow } from '@/agents/FundNow';
+import { HIRE_DRAFT_CODEC, mergeHireDraft, type HireDraftFields } from '@/agents/hireDraft';
 import {
   checkFunding,
   fundAgent,
@@ -61,11 +63,11 @@ import {
   quoteUnit,
   type MandateErrors,
   type MandateForm,
-  type Token,
 } from '@/agents/mandate';
 import { mandateToSend, presetValues, resolveExpiry, type PresetChoice } from '@/agents/presets';
 import { readBack } from '@/agents/readback';
 import { RiskCard } from '@/agents/Risks';
+import { useDraftRestoreBanner, useDraftSync } from '@/agents/useDraftSync';
 import { useSession } from '@/session';
 import { API_URL } from '@/wallet/api';
 import { sendSponsored } from '@/wallet/send';
@@ -192,8 +194,13 @@ export default function HireAgentScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<ErrorCopy | null>(null);
   const [hired, setHired] = useState<HireAgentResult | null>(null);
-  /** SEN-177: "Fund it now" on the review step, and how it went once hired. */
-  const [fundToken, setFundToken] = useState<Token | null>(null);
+  /**
+   * SEN-177: "Fund it now" on the review step, and how it went once hired.
+   * Kept as a symbol rather than the full `Token` (SEN-190): a `Token` isn't
+   * JSON-stable, so a draft can only ever name it this way, and keeping the
+   * same shape here means restoring one needs no extra side channel.
+   */
+  const [fundSymbol, setFundSymbol] = useState<string | null>(null);
   const [fundAmount, setFundAmount] = useState('');
   const [fundBalance, setFundBalance] = useState<bigint | null>(null);
   const [funding, setFunding] = useState<FundingState | null>(null);
@@ -298,7 +305,7 @@ export default function HireAgentScreen() {
   const fundTokens = !amend && mandateResult.ok ? fundingTokensFor(mandateResult.mandate) : [];
   const canFund = fundTokens.length > 0 && wallet.address !== null && walletId !== undefined;
   const chosenToken =
-    fundTokens.find((token) => token.symbol === fundToken?.symbol) ?? fundTokens[0] ?? null;
+    fundTokens.find((token) => token.symbol === fundSymbol) ?? fundTokens[0] ?? null;
   const fundCheck: FundingCheck =
     canFund && chosenToken ? checkFunding(fundAmount, chosenToken, fundBalance) : { kind: 'skip' };
   const startsEmpty = canFund
@@ -319,6 +326,98 @@ export default function HireAgentScreen() {
       cancelled = true;
     };
   }, [step, canFund, chosenToken, fundFrom]);
+
+  /**
+   * SEN-190: the hire/fork draft. Never on an amend — that edits an existing
+   * agent's live mandate, not something typed before the agent exists — and
+   * never before the wallet has signed in, since a draft is scoped to it.
+   * A fork's draft is kept apart from the blank hire's and from every other
+   * source agent's, by `fork`'s own id.
+   */
+  const draftScopeKey =
+    !amend && auth.address
+      ? draftKey(auth.address, fork ? { kind: 'fork', source: fork } : { kind: 'hire' })
+      : null;
+
+  const draftFields: HireDraftFields = useMemo(
+    () => ({
+      step,
+      name,
+      model,
+      systemPrompt,
+      strategy,
+      isPublic,
+      preset,
+      form,
+      expiryDays,
+      fundSymbol,
+      fundAmount,
+      risksAccepted,
+    }),
+    [
+      step,
+      name,
+      model,
+      systemPrompt,
+      strategy,
+      isPublic,
+      preset,
+      form,
+      expiryDays,
+      fundSymbol,
+      fundAmount,
+      risksAccepted,
+    ],
+  );
+
+  const draftSync = useDraftSync(draftScopeKey, draftFields, HIRE_DRAFT_CODEC);
+
+  /** The blank starting point for this mode, used as the merge base and as what Discard resets to. */
+  const freshHireDraftFields = (): HireDraftFields => ({
+    step: steps[0] ?? 'review',
+    name: fork && source ? forkName(source) : '',
+    model: AGENT_MODELS[0].id,
+    systemPrompt: '',
+    strategy: '',
+    isPublic: false,
+    preset: 'standard',
+    form: defaultMandateForm(nowSeconds(), returnTo ?? undefined),
+    expiryDays: 7,
+    fundSymbol: null,
+    fundAmount: '',
+    risksAccepted: false,
+  });
+
+  const applyHireDraft = (fields: HireDraftFields) => {
+    const stepIndex = steps.indexOf(fields.step);
+    setIndex(stepIndex >= 0 ? stepIndex : 0);
+    setName(fields.name);
+    setModel(fields.model);
+    setSystemPrompt(fields.systemPrompt);
+    setStrategy(fields.strategy);
+    setIsPublic(fields.isPublic);
+    setPreset(fields.preset);
+    setForm(fields.form);
+    setExpiryDays(fields.expiryDays);
+    setFundSymbol(fields.fundSymbol);
+    setFundAmount(fields.fundAmount);
+    setRisksAccepted(fields.risksAccepted);
+    setShowErrors(false);
+  };
+
+  const { banner: draftBanner, dismissBanner } = useDraftRestoreBanner(
+    draftScopeKey,
+    draftSync.restored,
+    (restored) => applyHireDraft(mergeHireDraft(freshHireDraftFields(), restored)),
+  );
+
+  /** The banner's "Discard": wipe the restored content and start blank. */
+  const discardDraft = () => {
+    draftSync.discard();
+    dismissBanner();
+    applyHireDraft(freshHireDraftFields());
+  };
+
   /**
    * The name the copy will be stored under: what the user typed, or the same
    * default the API applies to an unnamed fork (`forkName`). Blank is sent as
@@ -420,7 +519,12 @@ export default function HireAgentScreen() {
                   (intent) => sendSponsored(walletApi, intent, auth.signPrivyAuthorization),
                   { walletId, token, to, atoms },
                 ),
-          onHired: setHired,
+          // SEN-190: the agent exists now — a pending debounced save from the
+          // moment before this must never write the draft back afterwards.
+          onHired: (hireResult) => {
+            draftSync.clear();
+            setHired(hireResult);
+          },
           onFunding: setFunding,
           secure: (agent) => secure(agent, result.mandate),
           onSecure: setPin,
@@ -568,6 +672,13 @@ export default function HireAgentScreen() {
       </View>
       <Text style={[text.display, styles.title]}>{copy.title}</Text>
       <Text style={[text.dim, styles.subtitle]}>{copy.subtitle}</Text>
+      {draftBanner ? (
+        <View style={styles.draftBanner}>
+          <Notice title="Draft restored" detail="Picked up where you left off.">
+            <SectionLink label="Discard" onPress={discardDraft} />
+          </Notice>
+        </View>
+      ) : null}
       {step === 'mandate' ? (
         <View style={styles.explain}>
           <SectionLink label="How the limits work" onPress={() => setExplaining(true)} />
@@ -702,7 +813,7 @@ export default function HireAgentScreen() {
             <FundNow
               tokens={fundTokens}
               token={chosenToken}
-              setToken={setFundToken}
+              setToken={(token) => setFundSymbol(token.symbol)}
               amount={fundAmount}
               setAmount={setFundAmount}
               balance={fundBalance}
@@ -901,6 +1012,7 @@ const styles = StyleSheet.create({
   railOn: { backgroundColor: color.purple },
   title: { marginTop: 22 },
   subtitle: { marginTop: 8 },
+  draftBanner: { marginTop: 14 },
   readText: { color: color.textDim },
   explain: { marginTop: 10, alignSelf: 'flex-start' },
   readBack: { fontSize: 15, lineHeight: 22, color: color.textDim },
