@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { parseMandate } from '@sente/mandate';
-import { KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { KURU_DEPLOYMENT, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
 import { toWireMandate, type AgentMandate } from './api.ts';
 import {
@@ -27,6 +27,9 @@ const NOW = 1_789_000_000;
 const DAY = 86_400;
 const OWNER = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const PRESETS: readonly PresetId[] = ['cautious', 'standard', 'wide'];
+/** The market lists differ per Kuru deployment (SEN-198); `test:set-c` runs the Set C ones. */
+const SET_D = { skip: KURU_DEPLOYMENT.id !== 'set-d' };
+const SET_C = { skip: KURU_DEPLOYMENT.id !== 'set-c' };
 
 function built(result: BuildResult): AgentMandate {
   if (!result.ok) assert.fail(`expected a mandate, got ${JSON.stringify(result.errors)}`);
@@ -68,7 +71,7 @@ for (const id of PRESETS) {
   });
 }
 
-test('standard is the default form, so an untouched hire sends what it always did', () => {
+test('standard is the default form, so an untouched hire sends what it always did', SET_D, () => {
   const { form, expiryDays } = presetValues('standard', NOW, OWNER);
   assert.deepEqual(form, defaultMandateForm(NOW, OWNER));
   assert.equal(expiryDays, 7);
@@ -135,7 +138,7 @@ test('a preset keeps no returnTo it was not given', () => {
   assert.equal('returnTo' in presetValues('cautious', NOW).form, false);
 });
 
-test('the explainer describes each preset from the values it fills', () => {
+test('the explainer describes each preset from the values it fills', SET_D, () => {
   assert.deepEqual(describePreset('cautious'), [
     'Kuru: MON-USDC',
     '25 USDC per Kuru deposit',
@@ -156,4 +159,22 @@ test('the explainer describes each preset from the values it fills', () => {
     'Orders up to 250 USDC or AUSD',
     'Ends after 30 days',
   ]);
+});
+
+test('on Set C every preset starts on quoted books, never the empty MON-USDC', SET_C, () => {
+  const symbols = (id: PresetId) =>
+    presetValues(id, NOW).form.kuruMarkets.map(
+      (address) => KURU_MARKETS.find((market) => market.address === address)?.symbol,
+    );
+  assert.deepEqual(symbols('standard'), ['cbBTC-USDC', 'WETH-USDC']);
+  assert.deepEqual(symbols('cautious'), ['cbBTC-USDC', 'WETH-USDC']);
+  assert.deepEqual(symbols('wide'), ['cbBTC-USDC', 'WETH-USDC', 'XAUt-USDC']);
+  assert.deepEqual(describePreset('standard'), [
+    'Kuru: cbBTC-USDC, WETH-USDC',
+    '100 USDC per Kuru deposit',
+    'Orders up to 50 USDC',
+    'Ends after 7 days',
+  ]);
+  // MON-USDC is still a market the picker offers.
+  assert.ok(KURU_MARKETS.some((market) => market.symbol === 'MON-USDC'));
 });

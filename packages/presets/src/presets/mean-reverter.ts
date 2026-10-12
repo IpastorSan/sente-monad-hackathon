@@ -6,6 +6,7 @@
 import {
   type CandleWindow,
   formatNumber,
+  KURU_DEFAULT_SPOT_MARKET,
   klinesHint,
   KURU_SPOT_MARKETS,
   marketAssets,
@@ -126,7 +127,7 @@ export const meanReverter: PresetDefinition = {
       type: 'market',
       venue: 'any',
       multiple: false,
-      default: 'MON-USDC',
+      default: KURU_DEFAULT_SPOT_MARKET,
     },
     {
       key: 'window',

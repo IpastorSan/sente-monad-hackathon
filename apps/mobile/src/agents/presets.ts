@@ -10,19 +10,21 @@
  * `presets.test.ts` pins both halves: every preset builds a mandate the API
  * accepts, and for the same inputs the bytes sent are the bytes sent before.
  *
- * Standard is today's default form, unchanged. Cautious and Wide move the
+ * Standard is the default form (its markets follow the Kuru deployment,
+ * `DEFAULT_KURU_MARKETS`). Cautious and Wide move the
  * three limits people actually reach for — order size, deposit cap, expiry —
  * down and up; Wide also opens Perpl at a modest 2×.
  *
  * Plain node, no React Native, so the spec runs without a device.
  */
+import { KURU_DEPLOYMENT, type KuruDeploymentId } from '@sente/venues/kuru';
 import type { Address } from 'viem';
 
 import {
   buildMandate,
   defaultMandateForm,
   formatNotional,
-  KURU_MARKETS,
+  kuruMarketAddresses,
   marketFor,
   parsePerplMarkets,
   type BuildResult,
@@ -46,11 +48,14 @@ export const PRESET_CHOICES: readonly { value: PresetChoice; label: string }[] =
 /** What a preset sets: the form, and the expiry chip (counted from submitting). */
 export type PresetValues = { form: MandateForm; expiryDays: number };
 
-function marketAddresses(symbols: readonly string[]): Address[] {
-  return KURU_MARKETS.filter((market) => symbols.includes(market.symbol)).map(
-    (market) => market.address,
-  );
-}
+/**
+ * Wide's Kuru markets, per deployment (SEN-198): Set C's quoted books, never
+ * its empty MON-USDC.
+ */
+export const WIDE_KURU_MARKETS: Readonly<Record<KuruDeploymentId, readonly string[]>> = {
+  'set-c': ['cbBTC-USDC', 'WETH-USDC', 'XAUt-USDC'],
+  'set-d': ['MON-USDC', 'WETH-USDC'],
+};
 
 /**
  * The form a preset fills. `returnTo` is the caller's own wallet, carried
@@ -77,7 +82,7 @@ export function presetValues(id: PresetId, now: number, returnTo?: Address): Pre
         form: {
           ...standard,
           perpl: true,
-          kuruMarkets: marketAddresses(['MON-USDC', 'WETH-USDC']),
+          kuruMarkets: kuruMarketAddresses(WIDE_KURU_MARKETS[KURU_DEPLOYMENT.id]),
           depositCaps: { USDC: '500' },
           perplCollateral: '250',
           perplMarkets: 'BTC-PERP, ETH-PERP',

@@ -20,6 +20,7 @@
  * Plain node, no React Native, so `mandate.test.ts` runs without a device.
  */
 import {
+  KURU_DEPLOYMENT,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
   kuruMarketLabel,
@@ -27,6 +28,7 @@ import {
   kuruTokenSuccessor,
   retiredKuruMarket,
   retiredKuruToken,
+  type KuruDeploymentId,
   type KuruMarketConfig,
 } from '@sente/venues/kuru';
 import { getAddress, isAddressEqual, type Address } from 'viem';
@@ -160,17 +162,36 @@ export type BuildResult =
   { ok: true; mandate: AgentMandate } | { ok: false; errors: MandateErrors };
 
 /**
- * A deliberately small starting mandate: one market, one cap, a week.
+ * The Kuru markets a new hire starts with, per deployment (SEN-198). A fresh
+ * agent needs a book with resting orders or it has nothing to do: Set C's
+ * MON-USDC book is empty, so Set C starts on cbBTC-USDC (its `liquidMarket`)
+ * and WETH-USDC. MON-USDC stays in the picker there, just not preselected.
+ */
+export const DEFAULT_KURU_MARKETS: Readonly<Record<KuruDeploymentId, readonly string[]>> = {
+  'set-c': ['cbBTC-USDC', 'WETH-USDC'],
+  'set-d': ['MON-USDC'],
+};
+
+/** The active deployment's markets for these symbols, in the order given. */
+export function kuruMarketAddresses(symbols: readonly string[]): Address[] {
+  return symbols.flatMap((symbol) => {
+    const market = KURU_MARKETS.find((candidate) => candidate.symbol === symbol);
+    return market ? [market.address] : [];
+  });
+}
+
+/**
+ * A deliberately small starting mandate: the deployment's default markets,
+ * one cap, a week.
  *
  * `returnTo` is the caller's own wallet when the screen knows it — the way out
  * is not a choice the user makes, it is the account they signed in with.
  */
 export function defaultMandateForm(now: number, returnTo?: Address): MandateForm {
-  const monUsdc = KURU_MARKETS.find((market) => market.symbol === 'MON-USDC');
   return {
     kuru: true,
     perpl: false,
-    kuruMarkets: monUsdc ? [monUsdc.address] : [],
+    kuruMarkets: kuruMarketAddresses(DEFAULT_KURU_MARKETS[KURU_DEPLOYMENT.id]),
     depositCaps: { USDC: '100' },
     perplCollateral: '',
     perplMarkets: '',

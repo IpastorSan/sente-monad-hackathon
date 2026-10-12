@@ -13,7 +13,7 @@
     "read-block": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/read-block.ts",
     "typecheck": "tsc --noEmit",
     "test": "KURU_DEPLOYMENT=set-d EXPO_PUBLIC_KURU_DEPLOYMENT=set-d node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --test 'src/**/*.test.ts' 'scripts/**/*.test.ts' && pnpm run test:set-c",
-    "test:set-c": "KURU_DEPLOYMENT=set-c EXPO_PUBLIC_KURU_DEPLOYMENT=set-c node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --test src/trade/contract.test.ts src/trade/kuruDeployment.test.ts src/trade/kuruLegs.test.ts src/trade/verifyKuru.test.ts src/trade/flow.test.ts src/agents/approval.test.ts src/agents/approval.flow.test.ts src/agents/depositPin.test.ts scripts/live-flows/plan.test.ts src/howItWorks/content.test.ts",
+    "test:set-c": "KURU_DEPLOYMENT=set-c EXPO_PUBLIC_KURU_DEPLOYMENT=set-c node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --test src/trade/contract.test.ts src/trade/kuruDeployment.test.ts src/trade/kuruLegs.test.ts src/trade/verifyKuru.test.ts src/trade/flow.test.ts src/agents/approval.test.ts src/agents/approval.flow.test.ts src/agents/depositPin.test.ts src/agents/presets.test.ts scripts/live-flows/plan.test.ts src/howItWorks/content.test.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "claim:ausd": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/claim-ausd.ts",

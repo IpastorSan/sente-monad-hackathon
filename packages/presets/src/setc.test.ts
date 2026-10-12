@@ -5,8 +5,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { getPreset } from './index.ts';
+import { getPreset, listPresets } from './index.ts';
 import {
+  KURU_DEFAULT_SPOT_MARKET,
   KURU_SPOT_MARKETS,
   KURU_SPOT_MARKETS_BY_DEPLOYMENT,
   kuruDeploymentFromEnv,
@@ -29,4 +30,31 @@ test('a BTC perp is hedged on cbBTC-USDC, and a Set D book is not a market', SET
   const ranger = getPreset('range-trader')!;
   assert.equal(resolveParams(ranger, { market: 'WBTC-USDC' }).ok, false);
   assert.equal(resolveParams(ranger, { market: 'XAUt-USDC' }).ok, true);
+});
+
+// Set C's quoted books; MON-USDC has none (SEN-198).
+const SET_C_LIQUID = ['cbBTC-USDC', 'WETH-USDC', 'XAUt-USDC'];
+
+test('every Kuru preset starts on a quoted Set C book, never MON-USDC', SET_C, () => {
+  assert.equal(KURU_DEFAULT_SPOT_MARKET, 'cbBTC-USDC');
+  for (const def of listPresets().filter((p) => p.venues.includes('kuru'))) {
+    const spec = def.params.find((s) => s.type === 'market' && s.venue === 'kuru');
+    if (!spec || spec.type !== 'market') continue;
+    const defaults = Array.isArray(spec.default) ? spec.default : [spec.default];
+    assert.ok(
+      defaults.some((m) => SET_C_LIQUID.includes(m)),
+      `${def.id} defaults to ${defaults.join(', ')}`,
+    );
+    const r = resolveParams(def, {});
+    assert.ok(r.ok, def.id);
+  }
+});
+
+test('Guardian starts on cbBTC with BTC-sized placeholders', SET_C, () => {
+  const def = getPreset('guardian')!;
+  const r = resolveParams(def, {});
+  assert.ok(r.ok);
+  assert.equal(r.params['market'], 'cbBTC-USDC');
+  assert.equal(r.params['amount'], 0.001);
+  assert.ok((r.params['sellBelow'] as number) < (r.params['sellAbove'] as number));
 });
