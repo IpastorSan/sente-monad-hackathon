@@ -672,8 +672,8 @@ takes the same pair: `ENVIO_CONFIG=config.setc.yaml ENVIO_KURU_DEPLOYMENT=set-c`
 | Config vs chain             | `mise exec -- npm run verify:topics`  | pass on Set D, 2026-10-09 (`Deposit`, `Withdrawal` unobserved)        |
 | Real blocks → real entities | `scripts/local/live-range.ts <block>` | pass (2026-10-09): Set C block 61406913; Set D block 68588224 (below) |
 | The indexer, from the root  | `mise exec -- pnpm run check:indexer` | pass                                                                  |
-| Live GraphQL query          | `envio dev` + Hasura on :8080         | **not run**                                                           |
-| Envio Cloud, Kuru-only      | `envio-cloud …`                       | **not deployed** (first one hit the cap)                              |
+| Live GraphQL query          | Envio Cloud endpoint                  | pass (2026-10-12)                                                     |
+| Envio Cloud, Kuru-only      | `envio-cloud …`                       | deployed for Set C; served live `Trade` rows on 2026-10-12            |
 
 ## Open work
 

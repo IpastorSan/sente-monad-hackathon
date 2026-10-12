@@ -78,7 +78,7 @@ export const SECTIONS: readonly HelpSection[] = [
         question: 'Why does signing in ask only once?',
         body: [
           'PRF can evaluate two salts in one ceremony (`eval.first` and `eval.second`), and each result depends only on the passkey and its own salt. The passkey library Sente uses, mera 0.2.0, passes only the first, so Sente ships a small patch to it that adds the second. Both keys then come from one prompt.',
-          'A provider that ignores the second salt gets a second prompt for the device key, pinned to the same passkey. Against Chrome’s virtual authenticator, both paths derive byte-identical keys. How many prompts Google Password Manager shows has not been measured yet.',
+          'A provider that ignores the second salt gets a second prompt for the device key, pinned to the same passkey. Against Chrome’s virtual authenticator, both paths derive byte-identical keys. With Google Password Manager on desktop Chrome it is one prompt (measured on production, 2026-10-12).',
         ],
       },
       {
@@ -333,7 +333,7 @@ export const SECTIONS: readonly HelpSection[] = [
         body: [
           'From Kuru fills, indexed by Envio HyperIndex. n is the number of settled trades, win rate is wins ÷ n, and ROI is realised PnL ÷ capital deployed (the stablecoins moved into Kuru, net of withdrawals). Fees are not taken out of PnL. An agent with fewer than 3 settled trades is listed but not ranked. See [Top](/agents?segment=top).',
           'Perpl is not indexed: its exchange emits about 216,000 events an hour, and the indexer’s Envio plan stops at 100,000 events in total. An agent’s Perpl results come from its own event log instead, labelled as such and never added to the ranking.',
-          'The Kuru-only indexer has not been redeployed yet, so the ranking has not been answered by a live index.',
+          'The Kuru-only indexer is deployed and serving live Kuru fills; testnet volume on Kuru is small, so the ranking has few entries.',
         ],
       },
       {
@@ -363,8 +363,8 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'proven',
         question: 'What has been proven live, and what hasn’t?',
         body: [
-          'Proven on testnet, with transaction hashes in the repository: the enclave refusing an agent’s over-mandate deposit with Sente’s check turned off, and the same deposit landing after the owner raised the cap; the agent’s key and Sente’s key both unable to change a policy; Kuru and Perpl trades from an agent’s wallet, including a run a model drove; a revoked agent’s funds going back to its owner; a sponsored send from a wallet holding 0 MON; your own Kuru trades, perps setup, key enrollment and a perp opened and closed through the app’s code; and an agent’s mandate fingerprint written to its ERC-8004 identity on Monad and read back. After every deploy a live check runs from a test wallet against the production server: a Kuru order and a Perpl order (through the [web relay](#relay)) placed and cancelled, a model-driven agent run, and the enclave refusing an over-mandate deposit.',
-          'Not proven yet: that one passkey gives the same wallet on the phone and on the web; how many prompts Google Password Manager shows; Windows Hello and iCloud Keychain; the leaderboard against a live index; ERC-8004 reputation (the registry is read live, but no verdict has been written). The live perp round trip connected to Perpl directly; through the [web relay](#relay) only a resting order has been placed and cancelled. Revoke has not been tapped on a physical phone.',
+          'Proven on testnet, with transaction hashes in the repository: the enclave refusing an agent’s over-mandate deposit with Sente’s check turned off, and the same deposit landing after the owner raised the cap; the agent’s key and Sente’s key both unable to change a policy; Kuru and Perpl trades from an agent’s wallet, including a run a model drove; a revoked agent’s funds going back to its owner; a sponsored send from a wallet holding 0 MON; your own Kuru trades, perps setup, key enrollment and a perp opened and closed through the app’s code; an agent’s mandate fingerprint written to its ERC-8004 identity on Monad and read back; and, through the production web app, a BTC-PERP long opened from a user’s own wallet through the [web relay](#relay). After every deploy a live check runs from a test wallet against the production server: a Kuru order and a Perpl order (through the [web relay](#relay)) placed and cancelled, a model-driven agent run, and the enclave refusing an over-mandate deposit.',
+          'Not proven yet: that one passkey gives the same wallet on the phone and on the web; Windows Hello and iCloud Keychain; ERC-8004 reputation (the registry is read live, but no verdict has been written); limit orders from the perps ticket. Revoke has not been tapped on a physical phone.',
         ],
       },
       {
