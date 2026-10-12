@@ -134,8 +134,11 @@ test('an unknown intent kind gets the full order checks, not a pass', () => {
   refused({ ...odd, market: WBTC_USDC }, 'market_not_allowed');
 });
 
-test('kuru_market_retired: a mandate naming Set-C books says to amend, not market_not_allowed', () => {
-  const setC = KURU_RETIRED_DEPLOYMENT.markets.find((m) => m.symbol === 'cbBTC-USDC')!.address;
+test('kuru_market_retired: a mandate naming retired books says to amend, not market_not_allowed', () => {
+  // The other deployment's BTC book: Set C's cbBTC-USDC, or Set D's WBTC-USDC
+  // while Set C is the one traded (SEN-189).
+  const btc = KURU_RETIRED_DEPLOYMENT.markets.find((m) => /BTC-USDC$/.test(m.symbol))!;
+  const setC = btc.address;
   const stale = { ...mandate, kuru: { ...mandate.kuru, markets: [...mandate.kuru.markets, setC] } };
   // Even an order on a CURRENT book: the live policy pins the retired AccountCore.
   refused(kuruOrder, 'kuru_market_retired', NOW, stale);
@@ -146,8 +149,8 @@ test('kuru_market_retired: a mandate naming Set-C books says to amend, not marke
     stale,
   );
   const refusal = checkIntent(stale, kuruOrder, NOW)!;
-  assert.match(refusal.detail, /^This agent's mandate names markets Kuru retired — amend it/);
-  assert.match(refusal.detail, /cbBTC-USDC → WBTC-USDC/);
+  assert.match(refusal.detail, /^This agent's mandate names .* — amend it/);
+  assert.ok(refusal.detail.includes(`${btc.symbol} → ${btc.successor}`), refusal.detail);
   // Taking risk off is still never blocked, and Perpl is untouched.
   assert.equal(checkIntent(stale, { venue: 'kuru', kind: 'withdraw', market: USDC }, NOW), null);
   assert.equal(checkIntent(stale, perplOrder, NOW), null);

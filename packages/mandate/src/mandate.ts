@@ -33,6 +33,7 @@
  */
 import type { Decimal } from '@sente/venues';
 import {
+  KURU_DEPLOYMENT,
   KURU_RETIRED_DEPLOYMENT,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -183,12 +184,18 @@ function parseVenues(value: unknown): VenueId[] {
   return venues;
 }
 
-/** The rest of a refusal naming a retired Kuru book or token (SEN-185): where it went. */
-function retiredHint(next: { symbol: string; address: Address }): string {
-  return (
-    `Kuru retired on ${KURU_RETIRED_DEPLOYMENT.retiredOn}; ` +
-    `name ${next.symbol} (${next.address}) instead`
-  );
+/**
+ * The rest of a refusal naming a retired Kuru book or token (SEN-185,
+ * SEN-189): where it went, or that the active deployment has none.
+ */
+function retiredHint(next: { symbol: string; address: Address } | null): string {
+  const where =
+    KURU_RETIRED_DEPLOYMENT.id === 'set-c'
+      ? 'Kuru retired on 2026-09-25; '
+      : `on Kuru's ${KURU_RETIRED_DEPLOYMENT.id} deployment, which Sente does not trade; `;
+  return next
+    ? `${where}name ${next.symbol} (${next.address}) instead`
+    : `${where}it has no counterpart on ${KURU_DEPLOYMENT.id}, so leave it out`;
 }
 
 function parseKuru(value: unknown): KuruMandate {

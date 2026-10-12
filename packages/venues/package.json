@@ -30,7 +30,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test 'src/**/*.test.ts'",
+    "test": "KURU_DEPLOYMENT=set-d node --test 'src/**/*.test.ts' && pnpm run test:set-c",
+    "test:set-c": "KURU_DEPLOYMENT=set-c node --test src/kuru/constants.test.ts src/kuru/setc.test.ts",
     "kuru:live": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/kuru-live.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

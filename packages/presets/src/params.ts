@@ -16,18 +16,45 @@ import type {
 } from './types.ts';
 
 /**
- * Kuru's five testnet spot markets (SEN-185: Kuru's 2026-09-25 deployment), mirrored from `KURU_TESTNET_MARKETS` in
- * `@sente/venues/kuru`. Mirrored rather than imported so this package has no
- * dependencies: the phone loads it through Metro, and the venues entry would
- * bundle viem and the Kuru adapter just to read five strings.
+ * Each Kuru testnet deployment's spot markets, mirrored from
+ * `KURU_DEPLOYMENTS` in `@sente/venues/kuru` (SEN-185, SEN-189). Mirrored
+ * rather than imported so this package has no dependencies: the phone loads
+ * it through Metro, and the venues entry would bundle viem and the Kuru
+ * adapter just to read a few strings. `drift:check` and a venues-side test
+ * hold the mirror to the pins.
  */
-export const KURU_SPOT_MARKETS: readonly string[] = [
-  'MON-USDC',
-  'WETH-USDC',
-  'WBTC-USDC',
-  'XAUT-USDC',
-  'USDT-USDC',
-];
+export const KURU_SPOT_MARKETS_BY_DEPLOYMENT: Readonly<
+  Record<'set-c' | 'set-d', readonly string[]>
+> = {
+  'set-c': ['MON-USDC', 'WETH-USDC', 'cbBTC-USDC', 'XAUt-USDC'],
+  'set-d': ['MON-USDC', 'WETH-USDC', 'WBTC-USDC', 'XAUT-USDC', 'USDT-USDC'],
+};
+
+/**
+ * The deployment Sente trades: `KURU_DEPLOYMENT` on the server,
+ * `EXPO_PUBLIC_KURU_DEPLOYMENT` in the app (written out in full so Expo
+ * inlines it), Set D when unset — the same rule as `@sente/venues/kuru`.
+ */
+export function kuruDeploymentFromEnv(): 'set-c' | 'set-d' {
+  let raw: string | undefined;
+  try {
+    raw = process.env.KURU_DEPLOYMENT || undefined;
+  } catch {
+    raw = undefined;
+  }
+  if (!raw) {
+    try {
+      raw = process.env.EXPO_PUBLIC_KURU_DEPLOYMENT || undefined;
+    } catch {
+      raw = undefined;
+    }
+  }
+  return raw?.trim().toLowerCase() === 'set-c' ? 'set-c' : 'set-d';
+}
+
+/** The active deployment's Kuru spot markets. */
+export const KURU_SPOT_MARKETS: readonly string[] =
+  KURU_SPOT_MARKETS_BY_DEPLOYMENT[kuruDeploymentFromEnv()];
 
 /**
  * Perpl lists its markets at runtime, so only the shape is checked here; the

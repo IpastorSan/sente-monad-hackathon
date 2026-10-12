@@ -20,12 +20,14 @@
  * The two RECOVERY rules deliberately carry no expiry (SEN-15), because each
  * can only move money toward the owner:
  *
- * - **Kuru withdraw**: `AccountCore.withdraw(rootAccountId, token, amount,
- *   recipient)` with `withdraw.recipient` pinned to `mandate.returnTo` — the
- *   owner. Kuru's account-id AccountCore (SEN-185) pays whatever recipient the
- *   call names, so the pin is the whole guarantee; Set C's `withdraw(token,
- *   amount)` paid `msg.sender` and needed none. Without a `returnTo` there is
- *   no withdraw rule at all (fail closed). `transferBetweenAccounts` does not
+ * - **Kuru withdraw**, by the active deployment's custody model (SEN-189):
+ *   on Set D, `AccountCore.withdraw(rootAccountId, token, amount, recipient)`
+ *   with `withdraw.recipient` pinned to `mandate.returnTo` — the owner. That
+ *   AccountCore (SEN-185) pays whatever recipient the call names, so the pin
+ *   is the whole guarantee. On Set C, `withdraw(token, amount)` matched by
+ *   name: it can only pay `msg.sender`, the agent's own wallet, from which the
+ *   return rule below is the only way out. Without a `returnTo` there is no
+ *   withdraw rule at all (fail closed). `transferBetweenAccounts` does not
  *   decode against the one-function ABI, so it is refused.
  * - **Return to owner**: ERC-20 `transfer` with `transfer.to` pinned to
  *   `mandate.returnTo`, one rule per token the wallet can hold.
@@ -71,6 +73,7 @@ import {
   KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_ACCOUNT_CORE_WITHDRAW_ABI,
+  KURU_DEPLOYMENT,
   KURU_ORDERBOOK_BATCH_ABI,
   KURU_ORDERBOOK_BUILDER_BATCH_ABI,
   KURU_TESTNET_CONTRACTS,
@@ -165,7 +168,8 @@ export interface CompileOptions {
    * so the agent can only fund its OWN Kuru account. Without it the rule cannot
    * pin the owner and a deposit could credit any account — a widening over Set
    * C's `deposit(token, amount)`, which always credited the caller (SEN-185).
-   * The pinning amend that follows every hire closes it (SEN-188).
+   * The pinning amend that follows every hire closes it (SEN-188). On Set C
+   * there is no such field and this is ignored (SEN-189).
    */
   readonly agentAddress?: Address | null;
 }
@@ -174,11 +178,17 @@ export interface CompileOptions {
  * Whether `compileMandate` emits any Kuru deposit rule for this mandate — that
  * is, whether a policy compiled WITHOUT `agentAddress` (every hire) lets the
  * agent credit an arbitrary Kuru account until it is re-PATCHed with the pin
- * (SEN-188). `false` means there is nothing to pin: no Kuru, or no token the
- * mandate lets it deposit.
+ * (SEN-188). `false` means there is nothing to pin: no Kuru, no token the
+ * mandate lets it deposit, or a deployment whose `deposit(token, amount)`
+ * always credits the caller (Set C, SEN-189) — so there a hire is pinned from
+ * the start.
  */
 export function compilesKuruDeposit(mandate: Mandate): boolean {
-  return mandate.venues.includes('kuru') && Object.keys(mandate.kuru.maxDepositAtoms).length > 0;
+  return (
+    KURU_DEPLOYMENT.custody === 'account-id' &&
+    mandate.venues.includes('kuru') &&
+    Object.keys(mandate.kuru.maxDepositAtoms).length > 0
+  );
 }
 
 /** The approve-the-fee rule's name, so `readBackCaps` and a reader can find it. */
@@ -215,7 +225,8 @@ function kuruRules(mandate: Mandate, tx: TxRule, agentAddress: Address | null): 
     const symbol = kuruTokenSymbol(token);
     const deposit = [
       txToEq(accountCore),
-      ...(agentAddress
+      // Set C's `deposit(token, amount)` names no account: it credits the caller.
+      ...(agentAddress && KURU_DEPLOYMENT.custody === 'account-id'
         ? [calldataAddressEq(KURU_ACCOUNT_CORE_DEPOSIT_ABI, 'deposit.rootOwner', agentAddress)]
         : []),
       calldataAddressEq(KURU_ACCOUNT_CORE_DEPOSIT_ABI, 'deposit.token', token),
@@ -285,6 +296,9 @@ function perplRules(mandate: Mandate, tx: TxRule, expiry: PolicyCondition): Allo
  */
 export const KURU_WITHDRAW_RULE = 'Kuru: withdraw to the owner';
 
+/** The withdraw rule's name on Set C, whose `withdraw` pays the agent's own wallet (SEN-189). */
+export const KURU_WITHDRAW_TO_WALLET_RULE = 'Kuru: withdraw to its own wallet';
+
 /**
  * Every ERC-20 an agent's wallet can come to hold on testnet: Kuru's tokens and
  * Perpl's AUSD.
@@ -315,8 +329,18 @@ function returnRules(returnTo: Address, recovery: TxRule): AllowRule[] {
   );
 }
 
-/** `AccountCore.withdraw` and nothing else, paying `returnTo` and no one else. */
+/**
+ * `AccountCore.withdraw` and nothing else: on Set D paying `returnTo` and no
+ * one else; on Set C, where `withdraw(token, amount)` can only pay the agent's
+ * own wallet, matched by name (the return rules then pin where it goes next).
+ */
 function kuruWithdrawRule(recovery: TxRule, returnTo: Address): AllowRule {
+  if (KURU_DEPLOYMENT.custody === 'address-keyed') {
+    return recovery(KURU_WITHDRAW_TO_WALLET_RULE, [
+      txToEq(KURU_TESTNET_CONTRACTS.accountCore),
+      calldataFunctionEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw'),
+    ]);
+  }
   return recovery(KURU_WITHDRAW_RULE, [
     txToEq(KURU_TESTNET_CONTRACTS.accountCore),
     calldataAddressEq(KURU_ACCOUNT_CORE_WITHDRAW_ABI, 'withdraw.recipient', returnTo),
@@ -482,6 +506,8 @@ export function readBackCaps(rules: readonly Pick<PolicyRule, 'conditions'>[]): 
     }
     const withdrawTo = find('ethereum_calldata', 'withdraw.recipient', 'eq');
     if (withdrawTo && isAddressEqual(to as Address, accountCore)) kuruWithdraw = true;
+    // Set C's withdraw names no recipient: the rule matches it by name (SEN-189).
+    if (fn === 'withdraw' && isAddressEqual(to as Address, accountCore)) kuruWithdraw = true;
 
     const builder = find('ethereum_calldata', 'approveBuilder.builder', 'eq');
     const builderFee = find('ethereum_calldata', 'approveBuilder.maxFeePps', 'lte');
