@@ -20,6 +20,7 @@ import {
 import type { Decimal, Kline, Side } from '@sente/venues';
 import {
   fromUnits,
+  KURU_DEPLOYMENT,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
   toUnits,
@@ -1178,8 +1179,10 @@ const withdraw = defineTool({
   async handler(ctx, args) {
     const token = kuruToken(args.asset);
     atoms(args.amount, token); // precision, before anything is signed
-    // The policy pins `withdraw.recipient` to the owner's `returnTo` (SEN-185):
-    // AccountCore pays whoever the call names, so no other address is signable.
+    // Set D: the policy pins `withdraw.recipient` to the owner's `returnTo`
+    // (SEN-185): AccountCore pays whoever the call names, so no other address is
+    // signable. Set C (SEN-189): `withdraw(token, amount)` pays the agent's own
+    // wallet and names no one; the rule still exists only with a `returnTo`.
     const agent = (await ctx.currentAgent()) ?? ctx.agent;
     const returnTo = agent.mandate.returnTo;
     if (!returnTo) {
@@ -1188,10 +1191,12 @@ const withdraw = defineTool({
           'your owner must amend the mandate first',
       );
     }
+    const recipient = KURU_DEPLOYMENT.custody === 'account-id' ? returnTo : agent.address;
     const { kuru } = await ctx.venues();
-    const execution = await kuru.withdraw(token.symbol, args.amount, returnTo);
+    const execution = await kuru.withdraw(token.symbol, args.amount, recipient);
     return {
       withdrawn: args.amount,
+      to: recipient,
       asset: token.symbol,
       hash: execution.hash,
       transactionHash: execution.transactionHash,
