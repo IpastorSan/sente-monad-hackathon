@@ -37,5 +37,7 @@ const serviceProvider: Provider = {
     SessionAuthGuard,
     { provide: Auth, useClass: RequestContextAuth },
   ],
+  // SEN-193: the public agent page shows an owner's chosen name.
+  exports: [PROFILE_STORE],
 })
 export class ProfileModule {}
