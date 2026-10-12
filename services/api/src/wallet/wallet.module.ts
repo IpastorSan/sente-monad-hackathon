@@ -1,8 +1,9 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
 import { PrivyClient } from '../agents/privy/privy.client';
+import { monadReadTransport } from '../chain/monad-rpc';
 import { AgentStoreModule } from '../agents/store/agent-store.module';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
@@ -69,10 +70,11 @@ function createMonadPublicClient(config: WalletConfig) {
   // Kuru account (~10 calls) and Perpl in one burst on the public RPC (~15
   // req/s), and on 2026-10-12 that burst failed every Kuru section in
   // production with a bare "RPC Request failed" while each read alone passed.
+  // Behind a dedicated `MONAD_TESTNET_RPC_URL`, the public RPC is the fallback.
   return createPublicClient({
     chain: monadTestnet,
     batch: { multicall: true },
-    transport: http(config.rpcUrl, { retryCount: 4, retryDelay: 400 }),
+    transport: monadReadTransport(config.rpcUrl, { retryCount: 2, retryDelay: 400 }),
   });
 }
 

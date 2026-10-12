@@ -1,8 +1,9 @@
 import { Logger, type Provider } from '@nestjs/common';
 import { onboardingParams } from '@sente/venues/perpl';
-import { createPublicClient, http, type PublicClient } from 'viem';
+import { createPublicClient, type PublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
+import { monadReadTransport } from '../../chain/monad-rpc';
 import { statePath } from '../../state/json-file';
 import { StateDirLease } from '../../state/state.module';
 import { cachedPerplContext, type PerplContextSource } from '../../trade/perpl-context';
@@ -59,9 +60,7 @@ export const agentVenuesProviders: Provider[] = [
     useFactory: (): PublicClient =>
       createPublicClient({
         chain: monadTestnet,
-        transport: http(process.env['MONAD_TESTNET_RPC_URL']?.trim() || undefined, {
-          retryCount: 2,
-        }),
+        transport: monadReadTransport(process.env['MONAD_TESTNET_RPC_URL'], { retryCount: 2 }),
       }) as PublicClient,
   },
   {
