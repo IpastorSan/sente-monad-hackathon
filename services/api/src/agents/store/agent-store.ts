@@ -19,6 +19,32 @@ export type AgentStatus = (typeof AGENT_STATUSES)[number];
 export type AgentGasFundingReason =
   AgentDripRefusalReason | 'gas_drip_unavailable' | 'drip_pending';
 
+/**
+ * The agent's mandate as last anchored on chain (SEN-194): the hashes written
+ * to its ERC-8004 identity under the `sente.mandate` metadata key, and the
+ * transaction that wrote them. Absent until the first anchor lands — no
+ * registrar key, a failed registration, or a rewrite still being retried.
+ *
+ * A wire shape as stored (hex strings, an ISO time), because it is published
+ * verbatim on `GET /agents/:id` and on the public agent page (SEN-193).
+ */
+export interface MandateAnchor {
+  /** keccak256 of the canonical mandate (`@sente/mandate` `mandateHash`). */
+  readonly mandateHash: Hash;
+  /** keccak256 of the canonical compiled Privy rules (`policyHash`). */
+  readonly policyHash?: Hash;
+  /** `active`, or `revoked` once the revocation itself has been anchored. */
+  readonly status: 'active' | 'revoked';
+  readonly txHash: Hash;
+  readonly chainId: 10143;
+  /** The ERC-8004 Identity Registry the anchor lives in. */
+  readonly registry: Address;
+  /** The agent's ERC-8004 `agentId`, as a decimal string. */
+  readonly agentTokenId: string;
+  /** ISO 8601. */
+  readonly anchoredAt: string;
+}
+
 /** The MON gas drip at hire (SEN-14). A drip that fails never fails the hire. */
 export interface AgentGasFunding {
   readonly funded: boolean;
@@ -154,6 +180,8 @@ export interface AgentRecord {
    * never fails a hire (SEN-27, the same shape as `gasFunding`).
    */
   readonly erc8004AgentId?: string;
+  /** The mandate as last anchored on chain (SEN-194); see {@link MandateAnchor}. */
+  readonly mandateAnchor?: MandateAnchor;
   /**
    * How often the scheduler runs this agent on its own (SEN-67). Absent means
    * no cadence of its own: the global `AGENT_TICK_SECONDS`, if set, or manual
@@ -211,6 +239,7 @@ export type AgentPatch = Partial<
     | 'revokedAt'
     | 'gasFunding'
     | 'erc8004AgentId'
+    | 'mandateAnchor'
     | 'schedule'
     | 'riskAcknowledgedAt'
   >
