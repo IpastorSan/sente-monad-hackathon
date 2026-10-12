@@ -134,6 +134,10 @@ VALUE_HISTORY_EVERY_SECONDS
 ENVIO_GRAPHQL_URL
 
 # ---------------------------------------------------------------------------
+# SEN-189: which Kuru testnet deployment the API trades (set-c | set-d, default set-d)
+KURU_DEPLOYMENT
+
+# ---------------------------------------------------------------------------
 # SEN-184: the Sente builder fee on Kuru (off when the address is unset)
 KURU_BUILDER_ADDRESS
 KURU_BUILDER_FEE_PPS

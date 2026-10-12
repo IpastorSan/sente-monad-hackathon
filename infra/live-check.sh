@@ -8,9 +8,10 @@
 #
 #   1. verify.sh, then smoke.sh, keeping smoke's throwaway session token;
 #   2. with it, GET /markets: both venues ok, Kuru's symbols equal the pins in
-#      packages/venues/src/kuru/constants.ts, Perpl lists BTC-PERP;
+#      packages/venues/src/kuru/constants.ts for KURU_DEPLOYMENT, Perpl lists BTC-PERP;
 #   3. each pinned Kuru ticker and BTC-PERP's: stale:false, asOf under 60 s;
-#   4. GET /trade/capabilities shows the trading flags this deploy should have;
+#   4. GET /trade/capabilities shows the trading flags and the Kuru deployment
+#      (KURU_DEPLOYMENT) this deploy should have;
 #   5. GET /leaderboard reads a configured, reachable indexer;
 #   6. the drift check (packages/venues/scripts/drift-check.ts).
 #
@@ -26,6 +27,9 @@
 #   API_BASE=…              the API's URL outright (default https://api.<host>)
 #   EXPECT_TRADING=true     /trade/capabilities `enabled` (USER_TRADING)
 #   EXPECT_TRADING_PERPL=true   `venues.perpl` (USER_TRADING_PERPL)
+#   KURU_DEPLOYMENT=set-d   the Kuru deployment the API should trade (SEN-189); also
+#                           what the pins and the drift check are read for. Taken
+#                           from ENV_FILE when unset there, else set-d.
 #   ENV_FILE=…              the laptop .env (default <repo>/.env): the box's
 #                           expected names, and ENVIO_GRAPHQL_URL for the drift check
 #   SKIP_API=1 SKIP_WEB=1   passed to verify.sh; SKIP_API=1 also skips every API check
@@ -39,7 +43,7 @@ HOST=sente.lol
 for arg in "$@"; do
   case "$arg" in
     --box) BOX=1 ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     -*) echo "unknown option $arg" >&2; exit 2 ;;
     *) HOST="$arg" ;;
   esac
@@ -54,6 +58,12 @@ EXPECT_TRADING="${EXPECT_TRADING:-true}"
 EXPECT_TRADING_PERPL="${EXPECT_TRADING_PERPL:-true}"
 export EXPECT_TRADING EXPECT_TRADING_PERPL
 ENV_FILE="${ENV_FILE:-$REPO/.env}"
+# SEN-189: the deployment this deploy trades — the environment's, else the .env's, else set-d.
+if [ -z "${KURU_DEPLOYMENT:-}" ] && [ -f "$ENV_FILE" ]; then
+  KURU_DEPLOYMENT="$(sed -n 's/^KURU_DEPLOYMENT=//p' "$ENV_FILE" | tail -n 1 | tr -d "\"' ")"
+fi
+KURU_DEPLOYMENT="${KURU_DEPLOYMENT:-set-d}"
+export KURU_DEPLOYMENT
 SKIP_API="${SKIP_API:-0}"
 SKIP_WEB="${SKIP_WEB:-0}"
 SKIP_DRIFT="${SKIP_DRIFT:-0}"
@@ -138,7 +148,7 @@ if [ "$SKIP_API" = 1 ]; then
 elif [ -z "$TOKEN" ]; then
   line FAIL "api reads" "smoke.sh minted no session token, so nothing authenticated can be checked"
 else
-  # The pinned Kuru symbols, from the constants themselves.
+  # The pinned Kuru symbols, from the constants themselves (KURU_DEPLOYMENT's set).
   PINS="$(cd "$REPO/packages/venues" && "$NODE_BIN" --no-warnings --input-type=module -e \
     "const m = await import('./src/kuru/constants.ts'); console.log(m.KURU_TESTNET_MARKETS.map((x) => x.symbol).join(' '))" 2>"$TMP/pins.err")"
   if [ -z "$PINS" ]; then
@@ -185,10 +195,12 @@ else:
 want_on=os.environ["EXPECT_TRADING"]=="true"
 want_perpl=os.environ["EXPECT_TRADING_PERPL"]=="true" and want_on
 got_on=d.get("enabled"); got_perpl=d.get("venues",{}).get("perpl")
-if got_on==want_on and got_perpl==want_perpl:
-    print("PASS\tenabled=%s perpl=%s" % (got_on, got_perpl))
+want_kuru=os.environ["KURU_DEPLOYMENT"]
+got_kuru=(d.get("kuruDeployment") or {}).get("id","set-d")
+if got_on==want_on and got_perpl==want_perpl and got_kuru==want_kuru:
+    print("PASS\tenabled=%s perpl=%s kuru=%s" % (got_on, got_perpl, got_kuru))
 else:
-    print("FAIL\tenabled=%s perpl=%s, expected enabled=%s perpl=%s" % (got_on, got_perpl, want_on, want_perpl))'
+    print("FAIL\tenabled=%s perpl=%s kuru=%s, expected enabled=%s perpl=%s kuru=%s" % (got_on, got_perpl, got_kuru, want_on, want_perpl, want_kuru))'
 
   # 5. Leaderboard source.
   check_get "/leaderboard source" /leaderboard '
