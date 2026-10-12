@@ -58,7 +58,7 @@ import {
 } from './public.ts';
 import { PerplRest } from './rest.ts';
 import { ServerClock, type PerplCredentials } from './signing.ts';
-import { PerplTradingSocket, OPEN_ORDER_STATUSES } from './trading.ts';
+import { PerplOrderRejectedError, PerplTradingSocket, OPEN_ORDER_STATUSES } from './trading.ts';
 import {
   ORDER_FLAGS,
   ORDER_STATUS,
@@ -241,6 +241,32 @@ export function toPosition(p: PerplPosition, m: ResolvedMarket, markPrice: bigin
     updatedAt: p.at.t ?? Date.now(),
   };
 }
+
+/**
+ * `closePosition` found nothing to close (SEN-202): the account holds no open
+ * position on `symbol`, or the exchange failed the close with
+ * `NoPositionToClose` because it closed in between. Typed so a caller can tell
+ * "already closed" — usually a retry after a close that did execute — from a
+ * close that failed. Either way nothing moved; `sent` says whether an order
+ * reached Perpl at all.
+ */
+export class PerplNoPositionError extends Error {
+  readonly symbol: MarketSymbol;
+  readonly sent: boolean;
+
+  constructor(symbol: MarketSymbol, sent = false) {
+    super(
+      `There is no open Perpl position on ${symbol} to close: it is already closed. ` +
+        (sent ? 'Perpl refused the close with NoPositionToClose.' : 'Nothing was sent.'),
+    );
+    this.sent = sent;
+    this.name = 'PerplNoPositionError';
+    this.symbol = symbol;
+  }
+}
+
+/** `fr` 4 in `ORDER_FAILURE_REASON`. */
+const NO_POSITION_TO_CLOSE = 4;
 
 /** A Perpl fill with where it landed on chain, which the shared `Fill` has no field for. */
 export type PerplFillRecord = Fill & { blockNumber?: number; txHash?: string };
@@ -497,7 +523,7 @@ export class PerplVenue implements PerpsVenue {
     const m = await this.market(symbol, 0);
     await this.connectTrading();
     const position = this.trading.openPositions().find((p) => p.mkt === m.raw.id);
-    if (!position) throw new Error(`no open Perpl position on ${symbol}`);
+    if (!position) throw new PerplNoPositionError(symbol);
 
     const long = position.sd === POSITION_SIDE.Long;
     const full = BigInt(position.s);
@@ -517,7 +543,13 @@ export class PerplVenue implements PerpsVenue {
         lv: position.lv,
       },
       isTerminal,
-    );
+    ).catch((error: unknown) => {
+      // Closed between the snapshot and the order: already closed, not a failure.
+      if (error instanceof PerplOrderRejectedError && error.order?.fr === NO_POSITION_TO_CLOSE) {
+        throw new PerplNoPositionError(symbol, true);
+      }
+      throw error;
+    });
     // A full close moves the position to the retained final frame; a partial
     // one stays live with an updated dpnl (SEN-20). Either frame carries the
     // realised PnL the close produced, once it has arrived.
