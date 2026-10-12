@@ -33,11 +33,14 @@ import {
   formatCost,
   formatEntries,
   formatTokens,
+  formatWait,
   pollRun,
   stopLabel,
+  waitingFor,
   type LineTone,
   type RunView,
   type TerminalLine,
+  type Waiting,
 } from '@/agents/terminal';
 import { useSession } from '@/session';
 import { Pill } from '@/ui/goban';
@@ -75,6 +78,7 @@ export function AgentTerminal({
   const run = view.run;
   const lines = useMemo(() => formatEntries(view.entries, run?.startedAt), [view.entries, run]);
   const live = run?.status === 'running';
+  const waiting = useMemo(() => waitingFor(view), [view]);
 
   const status = !run
     ? null
@@ -119,6 +123,7 @@ export function AgentTerminal({
           lines={lines}
           height={wide ? 420 : 300}
           live={live}
+          waiting={waiting}
           placeholder={
             view.gone
               ? 'This run is no longer kept. The server holds the last ten runs.'
@@ -143,12 +148,15 @@ function Tail({
   lines,
   height,
   live,
+  waiting,
   placeholder,
   error,
 }: {
   lines: TerminalLine[];
   height: number;
   live: boolean;
+  /** SEN-198: what the run is doing between entries; `null` when nothing. */
+  waiting: Waiting | null;
   placeholder: string | null;
   error: string | null;
 }) {
@@ -190,7 +198,13 @@ function Tail({
         {lines.map((line) => (
           <Line key={line.key} line={line} />
         ))}
-        {live && !placeholder ? <Text style={[styles.line, styles.cursor]}>▍</Text> : null}
+        {live && !placeholder ? (
+          waiting ? (
+            <WaitingRow waiting={waiting} />
+          ) : (
+            <Text style={[styles.line, styles.cursor]}>▍</Text>
+          )
+        ) : null}
       </ScrollView>
       {error ? (
         <Text style={styles.status} numberOfLines={1}>
@@ -208,6 +222,41 @@ function Tail({
           </Text>
         </Pressable>
       ) : null}
+    </View>
+  );
+}
+
+/** How often the waiting line's dots step and its seconds count. */
+const WAIT_TICK_MS = 500;
+
+/**
+ * "Kimi K2.6 is thinking…  12s" while a model turn runs (SEN-198), so the
+ * 25-40 s before it returns doesn't read as a hung terminal. Plain text that
+ * re-renders on a timer: no Skia or WebGL, so it is safe on web (SEN-173).
+ * The poll replaces it with the next entry, or drops it when the run ends.
+ */
+function WaitingRow({ waiting }: { waiting: Waiting }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), WAIT_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
+  const dots = '.'.repeat(1 + (Math.floor(now / WAIT_TICK_MS) % 3)).padEnd(3, ' ');
+  return (
+    <View
+      style={styles.row}
+      accessible
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={`${waiting.label}, ${formatWait(now - waiting.since)}`}
+    >
+      <Text style={styles.gutter}> </Text>
+      <Text style={[styles.glyph, styles.waiting]}>{waiting.kind === 'tool' ? '→' : '∴'}</Text>
+      <Text style={styles.body}>
+        <Text style={[styles.line, styles.waiting]}>{`${waiting.label}${dots}`}</Text>
+        <Text
+          style={[styles.line, styles.waitingTime]}
+        >{`  ${formatWait(now - waiting.since)}`}</Text>
+      </Text>
     </View>
   );
 }
@@ -290,6 +339,8 @@ const styles = StyleSheet.create({
   line: { fontFamily: font.chain, fontSize: 12, lineHeight: 18 },
   placeholder: { paddingLeft: 12, color: color.textFaint },
   cursor: { paddingLeft: 72, color: color.purpleHi },
+  waiting: { color: color.textDim },
+  waitingTime: { color: color.textFaint, fontVariant: ['tabular-nums'] },
   status: {
     fontFamily: font.chain,
     fontSize: 11,

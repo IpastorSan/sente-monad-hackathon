@@ -10,6 +10,7 @@ import {
   formatEntries,
   formatEntry,
   formatElapsed,
+  formatWait,
   IDLE_POLL_MS,
   LIVE_POLL_MS,
   nextPollDelay,
@@ -20,6 +21,7 @@ import {
   type RunTranscriptPage,
   type Scheduler,
   type TranscriptEntry,
+  waitingFor,
 } from './terminal.ts';
 
 const RUN: RunSummary = {
@@ -351,4 +353,108 @@ test('describeRun: a row for the history list', () => {
     'cut off by a server restart',
   );
   assert.equal(describeRun(RUN, 1_000).live, true);
+});
+
+// ─── Waiting (SEN-198) ─────────────────────────────────────────────────────
+
+const at = (seq: number) => 1_000 + seq * 100;
+const start: TranscriptEntry = {
+  kind: 'start',
+  trigger: 'manual',
+  model: RUN.model,
+  thinkingRequested: false,
+  seq: 1,
+  at: at(1),
+};
+const call = (seq: number, tool: string, id = `tu-${seq}`): TranscriptEntry => ({
+  kind: 'tool_call',
+  turn: 1,
+  toolUseId: id,
+  tool,
+  input: '{}',
+  seq,
+  at: at(seq),
+});
+const usage = (seq: number, stopReason = 'tool_use'): TranscriptEntry => ({
+  kind: 'usage',
+  turn: 1,
+  inputTokens: 10,
+  outputTokens: 5,
+  stopReason,
+  seq,
+  at: at(seq),
+});
+const result = (seq: number, tool: string, id?: string): TranscriptEntry => ({
+  kind: 'tool_result',
+  tool,
+  ...(id ? { toolUseId: id } : {}),
+  status: 'ok',
+  summary: 'ok',
+  seq,
+  at: at(seq),
+});
+const waiting = (entries: TranscriptEntry[], run: Partial<RunSummary> = {}) =>
+  waitingFor({ run: { ...RUN, ...run }, entries });
+
+test('the model is thinking after the snapshot, and after its tools answer', () => {
+  assert.deepEqual(waiting([start]), {
+    kind: 'thinking',
+    label: 'Kimi K2.6 is thinking',
+    since: at(1),
+  });
+  const snapshot = note(2, 'Snapshot sent: balances and open orders (no market books)');
+  assert.deepEqual(waiting([start, snapshot]), {
+    kind: 'thinking',
+    label: 'Kimi K2.6 is thinking',
+    since: at(2),
+  });
+  const answered = [
+    start,
+    snapshot,
+    call(3, 'get_depth', 'a'),
+    usage(4),
+    result(5, 'get_depth', 'a'),
+  ];
+  assert.equal(waiting(answered)?.kind, 'thinking');
+  assert.equal(waiting(answered)?.since, at(5));
+});
+
+test('between a turn and its results, the tools are what runs', () => {
+  const turn = [start, call(2, 'get_depth', 'a'), call(3, 'get_balances', 'b'), usage(4)];
+  assert.deepEqual(waiting(turn), {
+    kind: 'tool',
+    label: 'Running get_depth, get_balances',
+    since: at(4),
+  });
+  assert.deepEqual(waiting([...turn, result(5, 'get_depth', 'a')])?.label, 'Running get_balances');
+  // A result with no id still counts against the calls, oldest first.
+  assert.deepEqual(waiting([...turn, result(5, 'get_depth')])?.label, 'Running get_balances');
+});
+
+test('no waiting line once the run ends, when it is not live, or mid-write', () => {
+  const end: TranscriptEntry = {
+    kind: 'end',
+    stopReason: 'end_turn',
+    iterations: 1,
+    toolCalls: 0,
+    inputTokens: 1,
+    outputTokens: 1,
+    durationMs: 30_000,
+    thinkingTurns: 0,
+    seq: 3,
+    at: at(3),
+  };
+  assert.equal(waiting([start, end]), null);
+  assert.equal(waiting([start], { status: 'ended' }), null);
+  assert.equal(waiting([start], { status: 'interrupted' }), null);
+  assert.equal(waiting([]), null);
+  assert.equal(waitingFor({ run: null, entries: [start] }), null);
+  // A turn that ended without calls: the end entry is next, not another wait.
+  assert.equal(waiting([start, usage(2, 'end_turn')]), null);
+});
+
+test('formatWait counts whole seconds and never goes negative', () => {
+  assert.equal(formatWait(-2_000), '0s');
+  assert.equal(formatWait(12_900), '12s');
+  assert.equal(formatWait(65_000), '1m05s');
 });

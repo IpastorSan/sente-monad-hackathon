@@ -417,6 +417,63 @@ export function formatEntry(entry: TranscriptEntry, elapsed = ''): TerminalLine[
   }
 }
 
+// ─── Waiting ────────────────────────────────────────────────────────────────
+
+/**
+ * What a live run is doing between transcript entries (SEN-198). A model turn
+ * takes 25-40 s and writes nothing until it returns, so without this the
+ * terminal sits blank after "Snapshot sent". `since` is the server time of the
+ * last entry, the moment the wait began.
+ *
+ * - After the start, a note (the snapshot) or a tool's result: the model has
+ *   the floor, so it is thinking.
+ * - After a turn that called tools, until their results are in: the tools run.
+ * - Otherwise (a turn that ended without calls, the end itself): nothing; the
+ *   end entry is moments away, and a finished run waits on nothing.
+ */
+export type Waiting = { kind: 'thinking' | 'tool'; label: string; since: number };
+
+export function waitingFor(view: Pick<RunView, 'run' | 'entries'>): Waiting | null {
+  const run = view.run;
+  if (!run || run.status !== 'running') return null;
+  const last = view.entries.at(-1);
+  if (!last) return null;
+  const pending = pendingTools(view.entries);
+  if (pending.length > 0) {
+    return { kind: 'tool', label: `Running ${pending.join(', ')}`, since: last.at };
+  }
+  if (last.kind === 'start' || last.kind === 'note' || last.kind === 'tool_result') {
+    return { kind: 'thinking', label: `${modelLabel(run.model)} is thinking`, since: last.at };
+  }
+  return null;
+}
+
+/**
+ * The tools the latest turn called whose results have not come back yet. A
+ * turn is written as `tool_call…, usage`, and its results follow it.
+ */
+function pendingTools(entries: readonly TranscriptEntry[]): string[] {
+  let i = entries.length - 1;
+  const answered = new Set<string>();
+  let unkeyed = 0;
+  for (let entry = entries[i]; entry?.kind === 'tool_result'; entry = entries[--i]) {
+    if (entry.toolUseId) answered.add(entry.toolUseId);
+    else unkeyed += 1;
+  }
+  if (entries[i]?.kind !== 'usage') return [];
+  const calls: string[] = [];
+  for (let entry = entries[--i]; entry?.kind === 'tool_call'; entry = entries[--i]) {
+    if (!answered.has(entry.toolUseId)) calls.unshift(entry.tool);
+  }
+  return [...new Set(calls.slice(unkeyed))];
+}
+
+/** "12s", "1m05s": how long the wait has run, never negative (clock skew). */
+export function formatWait(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1_000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+}
+
 /**
  * A refusal's message without the prefix the head already says: "Refused by
  * Sente mandate: <code>. " and "Refused by the Privy enclave (<code>): ".
