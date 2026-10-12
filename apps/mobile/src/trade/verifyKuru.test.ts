@@ -676,13 +676,11 @@ const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
 const PIN = { address: SENTE, feePps: 10_000 } as const;
 const NOW = 1_800_000_000;
 const YEAR = 365 * 86_400;
-/** The phone's cap with the pinned fee as headroom, as `flow.ts` sizes it. */
-const BUILDER_BUY_CAP = depositCapAtoms(
-  { side: 'buy', price: LIMIT_PRICE, quantity: SIZE, tif: 'gtc' },
-  PARAMS,
-  { quote: 6, base: 18 },
-  PIN.feePps,
-);
+/**
+ * A builder buy's cap is a plain buy's: Kuru takes the Sente fee out of the
+ * base it buys, so the deposit needs no room for it (SEN-195).
+ */
+const BUILDER_BUY_CAP = BUY_CAP;
 const BUILDER_BUY: KuruPlaceIntent = { ...BUY_LIMIT, maxDepositAtoms: BUILDER_BUY_CAP.toString() };
 
 const builderPlace = (fee: { address: Address; feePps: number } = PIN): Erc7579Call =>
@@ -767,20 +765,19 @@ test('builder: an approval with a plain order, or out of place, is refused', () 
   refused(verifyKuruTrade(first, builderCtx()), /where the order should be/);
 });
 
-test('builder: a deposit sized for the fee passes only with the fee as headroom', () => {
-  // The pinned fee widens the buy's cap by exactly its rate, nothing more.
+test('builder: the deposit gets no headroom for the Sente fee, which Kuru takes in the base (SEN-195)', () => {
   const steps = (amount: bigint) =>
     unbatched([...usdcFunding(amount), builderPlace()], ['approve', 'deposit', 'place']);
-  accepted(verifyKuruTrade(steps(BUILDER_BUY_CAP), builderCtx()));
-  refused(verifyKuruTrade(steps(BUILDER_BUY_CAP + 1n), builderCtx()), /more than the order needs/);
-  // A plain order gets no such headroom, whatever the intent says.
-  const plain = unbatched(
-    [...usdcFunding(BUILDER_BUY_CAP), place()],
-    ['approve', 'deposit', 'place'],
+  accepted(verifyKuruTrade(steps(BUY_CAP), builderCtx()));
+  // A deposit with the old 0.1% USDC headroom (SEN-192) is more than it needs.
+  const withFee = depositCapAtoms(
+    { side: 'buy', price: LIMIT_PRICE, quantity: SIZE, tif: 'gtc' },
+    { ...PARAMS, makerFeePps: PARAMS.makerFeePps + BigInt(PIN.feePps) },
+    { quote: 6, base: 18 },
   );
-  refused(verifyKuruTrade(plain, builderCtx()), /more than the order needs/);
+  refused(verifyKuruTrade(steps(withFee), builderCtx()), /more than the order needs/);
+  refused(verifyKuruTrade(steps(BUY_CAP + 1n), builderCtx()), /more than the order needs/);
 });
-
 test('builder: a cancel never carries a builder approval', () => {
   const cancel = unbatched(
     [cancelOrderCall(MON_USDC.address, 7), approval()],

@@ -3,7 +3,7 @@
 //
 //   pnpm --filter @sente/api run creator:payout -- --state-dir <dir>
 //   pnpm --filter @sente/api run creator:payout -- --state-dir <dir> \
-//     --creator <userId> --asset USDC --amount 1.25 --tx 0x<treasury transfer> [--note "..."]
+//     --creator <userId> --asset USDC|cbBTC|… --amount 1.25 --tx 0x<treasury transfer> [--note "..."]
 //
 // The share accrues on its own: every Kuru fill of a forked agent that paid
 // Sente's builder fee owes 3 of the 10 bps to the source agent's owner
@@ -11,9 +11,14 @@
 // amount from the treasury to the creator's wallet, then run this with that
 // transaction's hash so the ledger stops counting it as owed.
 //
-// Without `--creator` it only lists what each creator is owed. With it, it
-// records ONE payout and refuses one larger than what is owed in that asset,
-// or a tx hash already recorded. It sends nothing on chain.
+// The fee is taken in the asset each fill RECEIVED (SEN-195): the base on a
+// buy (cbBTC, WETH, MON…), USDC on a sell. So a creator is owed several
+// assets, each listed, sent and recorded on its own: one `--asset` per payout.
+//
+// Without `--creator` it only lists what each creator is owed, per asset.
+// With it, it records ONE payout in ONE asset and refuses one larger than what
+// is owed in that asset, or a tx hash already recorded. It sends nothing on
+// chain.
 //
 // The API loads `creator-fees.json` once and rewrites it from memory, so a
 // payout written while it runs would be overwritten by its next save. This
@@ -51,9 +56,10 @@ function main(): number {
     const creators = ledger.creators();
     if (creators.length === 0) console.log('nothing accrued yet');
     for (const userId of creators) {
+      console.log(userId);
       for (const t of ledger.totals(userId)) {
         console.log(
-          `${userId}  ${t.asset}  owed ${fromUnits(t.owedAtoms, t.decimals)}  ` +
+          `  ${t.asset.padEnd(6)} owed ${fromUnits(t.owedAtoms, t.decimals)}  ` +
             `(accrued ${fromUnits(t.accruedAtoms, t.decimals)}, paid ${fromUnits(t.paidAtoms, t.decimals)})`,
         );
       }
@@ -65,9 +71,17 @@ function main(): number {
   const amount = flag('amount');
   const tx = flag('tx');
   const note = flag('note');
-  const token = Object.values(KURU_TESTNET_TOKENS).find((t) => t.symbol === asset);
+  // The asset as the ledger recorded it (its decimals included), so a fee
+  // accrued on the other Kuru deployment can still be paid; else a live token.
+  const owedIn = ledger.totals(creator).find((t) => t.asset === asset);
+  const token =
+    (owedIn ? { symbol: owedIn.asset, decimals: owedIn.decimals } : undefined) ??
+    Object.values(KURU_TESTNET_TOKENS).find((t) => t.symbol === asset);
   if (!token || !amount || !tx) {
-    console.error('a payout needs --asset <Kuru symbol, e.g. USDC> --amount <decimal> --tx <hash>');
+    console.error(
+      'a payout needs --asset <a symbol the creator is owed, e.g. USDC or cbBTC> ' +
+        '--amount <decimal> --tx <hash>',
+    );
     return 1;
   }
   const payout = ledger.payout({

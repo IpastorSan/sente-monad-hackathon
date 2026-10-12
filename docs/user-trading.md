@@ -338,17 +338,27 @@ an app release, in either direction — `isTradingEnabled` turns manual Kuru
 trading off rather than letting the user confirm a trade the phone would then
 refuse. Perps stay on: they carry no Sente fee.
 
+**Which asset it is paid in (SEN-195).** Kuru takes the fee out of what the
+order RECEIVES: the base on a buy, USDC on a sell. A taker buy of 0.00012505
+cbBTC on Set C (tx
+`0xca084e719e56884f684ec37627926e59e9e1212b66b062ba65b618e655f2dbe8`) paid 13
+cbBTC atoms and no USDC (`docs/kuru.md`, "Which asset the fee is taken in"). So
+the fee needs no extra deposit either way: a buy's deposit cap is the notional
+plus Kuru's own fee only, and a sell deposits only its base.
+
 **What the ticket can show.** A prepared Kuru place's `summary` carries
 `senteFeeBps` (`"10"`), `senteFeePps` (`"10000"`), `senteFee` (the estimate on the
-whole notional, rounded up) and `senteFeeAsset` (`"USDC"`): "Sente fee 0.10% (≈
-0.02 USDC)". `senteFeeOf(summary)` reads them; before preparing, the ticket can
-compute the same estimate with `senteFeeEstimateAtoms(notional, KURU_BUILDER_PIN)`.
-A completed place's `result.senteFee` is what AccountCore's `BuilderFeeAccrued`
-says was actually charged (`"0"` for an order that only rested).
-
-**Not yet adjusted:** the ticket's "spend all" sizing (`trade/ticket.ts`) inverts
-`depositCapAtoms` without the fee headroom, so with the fee on a max-size buy can
-ask to deposit up to 0.10% more quote than the wallet holds.
+whole order, rounded up) in `senteFeeAsset` (the base on a buy, `"USDC"` on a
+sell) and `senteFeeQuote` (≈ the fee in USDC). The ticket reads "Sente fee 0.1%
+(≈ 0.00000013 cbBTC ≈ $0.02)" on a buy and "Sente fee 0.1% (≈ 0.02 USDC)" on a
+sell, whose "You get at least" also nets the fee off the proceeds.
+`senteFeeOf(summary)` reads the keys; before preparing, the ticket computes the
+same estimate with `senteFeeEstimateAtoms(received, KURU_BUILDER_PIN)` on the
+atoms the order receives. A completed place's `result.senteFee` is what
+AccountCore's `BuilderFeeAccrued` says was actually charged, in
+`result.senteFeeAsset`, with `result.senteFeeQuote` ≈ its USDC value at the fill
+price (`"0"` for an order that only rested). An API older than SEN-195 sends no
+`senteFeeAsset`; its `senteFee` counted USDC only, so a buy read `"0"`.
 
 ## Known gaps
 

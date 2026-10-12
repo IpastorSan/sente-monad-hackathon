@@ -654,11 +654,15 @@ export function builderApprovalCovers(
 }
 
 /**
- * The builder fee on `notionalAtoms` of quote, rounded UP: what the app shows
- * as "≈" and what a buy's reserve sets aside, so neither understates it.
+ * The builder fee on `amountAtoms` of the token Kuru takes it in — the base
+ * received on a buy, the quote proceeds on a sell (SEN-195) — rounded UP so an
+ * estimate never understates it. AccountCore charged 13 cbBTC atoms on a
+ * 12,505-atom buy at 10,000 pps (tx 0xca084e71…), which is this rounding.
+ * Nothing extra is deposited for it either way: it comes out of what the
+ * taker receives.
  */
-export function builderFeeAtoms(notionalAtoms: bigint, feePps: number | bigint): bigint {
-  return (notionalAtoms * BigInt(feePps) + PPS_DENOMINATOR - 1n) / PPS_DENOMINATOR;
+export function builderFeeAtoms(amountAtoms: bigint, feePps: number | bigint): bigint {
+  return (amountAtoms * BigInt(feePps) + PPS_DENOMINATOR - 1n) / PPS_DENOMINATOR;
 }
 
 /** `batch(0, [], [slotIdx])`: cancel one resting order of the calling account. */
@@ -805,17 +809,102 @@ export function decodeBuilderFees(
   return paid;
 }
 
-/** The total of {@link decodeBuilderFees} in one asset (the market's quote), in its atoms. */
-export function builderFeePaidAtoms(
+/**
+ * {@link decodeBuilderFees} totalled per asset, in the order each asset first
+ * appears (SEN-195). Kuru takes a taker's builder fee in the asset the taker
+ * RECEIVES — the base on a buy, the quote on a sell — so a caller reads the
+ * asset off the event rather than assume the quote: a buy pays nothing in
+ * USDC (tx 0xca084e71…, docs/kuru.md "Which asset the fee is taken in").
+ */
+export function builderFeesByAsset(
   logs: readonly KuruLog[],
   accountCore: Address,
   builder: Address,
   takerAccountId: bigint,
-  asset: Address,
+): KuruBuilderFeePaid[] {
+  const totals: KuruBuilderFeePaid[] = [];
+  for (const fee of decodeBuilderFees(logs, accountCore, builder, takerAccountId)) {
+    const index = totals.findIndex((t) => isAddressEqual(t.asset, fee.asset));
+    if (index < 0) totals.push(fee);
+    else totals[index] = { asset: fee.asset, amount: totals[index]!.amount + fee.amount };
+  }
+  return totals;
+}
+
+/**
+ * The token Kuru charges a taker's builder fee in: the one the taker
+ * receives, base on a buy and quote on a sell (SEN-195).
+ */
+export function builderFeeToken<T>(side: Side, pair: { readonly base: T; readonly quote: T }): T {
+  return side === 'buy' ? pair.base : pair.quote;
+}
+
+/**
+ * The quote atoms `baseAtoms` are worth at `price` (a decimal, quote per
+ * whole base), rounded up: the "≈ $" shown beside a fee taken in the base.
+ */
+export function baseValueInQuoteAtoms(
+  baseAtoms: bigint,
+  baseDecimals: number,
+  price: Decimal,
+  quoteDecimals: number,
 ): bigint {
-  return decodeBuilderFees(logs, accountCore, builder, takerAccountId)
-    .filter((fee) => isAddressEqual(fee.asset, asset))
-    .reduce((sum, fee) => sum + fee.amount, 0n);
+  const priceDecimals = price.split('.')[1]?.length ?? 0;
+  const priceUnits = toUnits(price, priceDecimals, 'price');
+  const numerator = baseAtoms * priceUnits * 10n ** BigInt(quoteDecimals);
+  const denominator = 10n ** BigInt(baseDecimals + priceDecimals);
+  return (numerator + denominator - 1n) / denominator;
+}
+
+/** One order's builder fee as an `Order` and a fill event report it (SEN-195). */
+export type KuruBuilderFeeReport = {
+  /** The fee, in `asset`. */
+  readonly fee: Decimal;
+  /** The symbol of the token Kuru took it in. */
+  readonly asset: string;
+  /**
+   * ≈ the fee in the quote: `fee` itself when it was taken in the quote, its
+   * value at the average fill price (rounded up) when taken in the base.
+   * Absent when a base fee has no fill price to value it at.
+   */
+  readonly quoteEstimate?: Decimal;
+};
+
+/**
+ * One order's builder fee from {@link builderFeesByAsset}: the amount in
+ * whichever of the pair's tokens AccountCore named (the received one should
+ * both ever appear), or `"0"` of the received token when the order took
+ * nothing.
+ */
+export function builderFeeReport(
+  paid: readonly KuruBuilderFeePaid[],
+  side: Side,
+  pair: { readonly base: KuruToken; readonly quote: KuruToken },
+  averagePrice?: Decimal,
+): KuruBuilderFeeReport {
+  const amountIn = (token: KuruToken) =>
+    paid.find((p) => isAddressEqual(p.asset, token.address))?.amount;
+  const received = builderFeeToken(side, pair);
+  const other = received === pair.base ? pair.quote : pair.base;
+  const otherAmount = amountIn(other);
+  const [token, amount] =
+    amountIn(received) === undefined && otherAmount !== undefined
+      ? [other, otherAmount]
+      : [received, amountIn(received) ?? 0n];
+  let quoteEstimate: Decimal | undefined;
+  if (token === pair.quote || amount === 0n) {
+    quoteEstimate = fromUnits(amount, pair.quote.decimals);
+  } else if (averagePrice !== undefined) {
+    quoteEstimate = fromUnits(
+      baseValueInQuoteAtoms(amount, token.decimals, averagePrice, pair.quote.decimals),
+      pair.quote.decimals,
+    );
+  }
+  return {
+    fee: fromUnits(amount, token.decimals),
+    asset: token.symbol,
+    ...(quoteEstimate !== undefined ? { quoteEstimate } : {}),
+  };
 }
 
 /** Where a resting order lives. */

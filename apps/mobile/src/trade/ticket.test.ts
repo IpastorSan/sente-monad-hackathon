@@ -19,6 +19,7 @@ import {
   pressKey,
   resultView,
   reviewRows,
+  senteFeePaidText,
   shortSize,
   sizeForSpend,
   slippageFraction,
@@ -106,29 +107,6 @@ test('sizeForSpend never produces an order whose deposit cap exceeds the spend',
   }
 });
 
-test('sizeForSpend leaves room for Sente’s builder fee too, when one is pinned (SEN-192)', () => {
-  const decimals = { quote: 6, base: 18 };
-  for (const builderFeePps of [0n, 10_000n]) {
-    for (const spend of ['1', '200', '500', '0.37', '12345.67']) {
-      for (const price of [986_106n, 1n, 999_999n, 123_456n]) {
-        const atoms = USDC(spend);
-        const size = sizeForSpend(atoms, price, MON.takerFeePps + builderFeePps, MON);
-        if (size === 0n) continue;
-        const cap = depositCapAtoms(
-          { side: 'buy', price, quantity: size, tif: 'ioc' },
-          MON,
-          decimals,
-          Number(builderFeePps),
-        );
-        assert.ok(
-          cap <= atoms,
-          `${spend} at ${price}, builder ${builderFeePps}pps: cap ${cap} > ${atoms}`,
-        );
-      }
-    }
-  }
-});
-
 test('spendable counts the Kuru account and keeps the chain reserve', () => {
   assert.equal(spendable(USDC('300'), USDC('200')), USDC('500'));
   assert.equal(spendable(MON_ATOMS('12'), MON_ATOMS('1'), MON_ATOMS('10')), MON_ATOMS('3'));
@@ -184,7 +162,7 @@ test('presets: a sell splits the base, a limit buy converts at the limit with th
   );
 });
 
-test('presets: a Max limit buy also leaves room for Sente’s builder fee (SEN-192)', () => {
+test('presets: a Max limit buy sizes the same with Sente’s fee on: Kuru takes it in MON (SEN-195)', () => {
   const input = {
     pct: 100 as const,
     side: 'buy' as const,
@@ -193,17 +171,12 @@ test('presets: a Max limit buy also leaves room for Sente’s builder fee (SEN-1
     limitPriceUnits: 950_000n,
     market: MON,
   };
-  const off = presetAmount(input);
-  const on = presetAmount({ ...input, builderFeePps: 10_000 });
-  assert.equal(off, '149.97000599');
-  // A smaller size than fee-off, so the deposit cap still fits `available`.
-  assert.ok(on !== null && off !== null && Number(on) < Number(off));
-  const sizeUnits = toUnits(on!, MON.sizePrecision)!;
+  assert.equal(presetAmount(input), '149.97000599');
+  const sizeUnits = toUnits(presetAmount(input)!, MON.sizePrecision)!;
   const cap = depositCapAtoms(
     { side: 'buy', price: input.limitPriceUnits, quantity: sizeUnits, tif: 'gtc' },
     MON,
     { quote: 6, base: 18 },
-    10_000,
   );
   assert.ok(cap <= input.available, `cap ${cap} > available ${input.available}`);
 });
@@ -264,44 +237,42 @@ test('a market buy is sized against the worst price, and says so', () => {
   ]);
 });
 
-test('a market buy with Sente’s builder fee on sizes smaller, so the real deposit cap still fits (SEN-192)', () => {
+test('a market buy with Sente’s fee on sizes and caps as without it, and shows the fee in MON (SEN-195)', () => {
   const off = evaluateTicket(marketBuy());
   const on = evaluateTicket(marketBuy({ builderFeePps: 10_000 }));
-  // Same typed spend either way: "Max" never asks for more than was typed.
+  // Kuru takes the fee out of the MON bought, so it needs no USDC: same
+  // spend, same size, same deposit cap as fee-off.
   assert.equal(on.needAtoms, USDC('200'));
-  assert.equal(on.needAtoms, off.needAtoms);
-  // …but a smaller size, because this one also sets aside Sente's 0.1%.
-  assert.ok(on.sizeUnits !== null && off.sizeUnits !== null && on.sizeUnits < off.sizeUnits);
-  assert.equal(on.sizeUnits, 20_253_440_446n);
-  // The real order's deposit cap (what `flow.ts` sends) never exceeds what
-  // was typed — the bug this fixes: sizing against the venue fee alone left
-  // a fee-on order's real cap over the typed amount.
+  assert.equal(on.sizeUnits, off.sizeUnits);
+  assert.equal(on.sizeUnits, 20_273_685_789n);
   const cap = depositCapAtoms(
     { side: 'buy', price: on.priceUnits!, quantity: on.sizeUnits!, tif: 'ioc' },
     MON,
     { quote: 6, base: 18 },
-    10_000,
   );
   assert.ok(cap <= on.needAtoms!, `cap ${cap} > needAtoms ${on.needAtoms}`);
-  // The fee-unaware size (the old behaviour) would have asked for more than
-  // was typed, once the real order carried the builder fee too.
-  const overspendCap = depositCapAtoms(
-    { side: 'buy', price: off.priceUnits!, quantity: off.sizeUnits!, tif: 'ioc' },
-    MON,
-    { quote: 6, base: 18 },
-    10_000,
-  );
-  assert.ok(overspendCap > off.needAtoms!);
   assert.deepEqual(on.disclosure, [
     'Market · est. fill 0.9812 · fee 0.04 USDC',
     'Max slippage 0.5%',
-    'Sente fee 0.1% (≈ 0.20 USDC)',
+    // 0.1% of 202.73685789 MON, and of its 198.93 USDC at the est. fill.
+    'Sente fee 0.1% (≈ 0.2027 MON ≈ $0.20)',
   ]);
   // Off (the default): no Sente line at all.
   assert.deepEqual(off.disclosure, [
     'Market · est. fill 0.9812 · fee 0.04 USDC',
     'Max slippage 0.5%',
   ]);
+});
+
+test('a market sell with Sente’s fee on shows it in the USDC proceeds and deposits only MON (SEN-195)', () => {
+  const sell = { side: 'sell' as const, amount: '100', worstUnits: 976_000n };
+  const off = evaluateTicket(marketBuy({ ...sell, available: MON_ATOMS('412') }));
+  const on = evaluateTicket(
+    marketBuy({ ...sell, available: MON_ATOMS('412'), builderFeePps: 10_000 }),
+  );
+  assert.equal(on.needAtoms, MON_ATOMS('100'));
+  assert.equal(on.needAtoms, off.needAtoms);
+  assert.deepEqual(on.disclosure.at(-1), 'Sente fee 0.1% (≈ 0.10 USDC)'); // 98.12 × 0.1%
 });
 
 test('a market sell is typed in the base and needs that much base', () => {
@@ -339,7 +310,7 @@ test('a limit buy: price first, on the tick, then the total with the maker fee',
   assert.equal(ticket.needAtoms, 142_528_500n);
 });
 
-test('a limit buy reserves Sente’s builder fee too, on top of the maker fee (SEN-192)', () => {
+test('a limit buy reserves only the maker fee: Sente’s is taken in MON (SEN-195)', () => {
   const on = evaluateTicket(
     marketBuy({
       orderType: 'limit',
@@ -351,19 +322,18 @@ test('a limit buy reserves Sente’s builder fee too, on top of the maker fee (S
   );
   assert.deepEqual(on.disclosure, [
     'Limit · may fill in parts · fee on fill ≈ 0.03 USDC',
-    'Sente fee 0.1% (≈ 0.15 USDC)', // 142.5 × 0.1% = 0.1425, rounded up
+    // 0.1% of 150 MON, worth 142.5 × 0.1% = 0.1425 USDC, rounded up.
+    'Sente fee 0.1% (≈ 0.15 MON ≈ $0.15)',
   ]);
-  // The maker fee alone (142.5 × 1.0002, from the test above) plus 0.1%
-  // builder fee on the same notional — bigger than the fee-off cap, and
-  // still the exact bound the real order (`flow.ts`) will send.
-  assert.equal(on.needAtoms, 142_671_000n);
+  // The maker fee alone (142.5 × 1.0002, as fee-off), the exact bound the
+  // real order (`flow.ts`) will send.
+  assert.equal(on.needAtoms, 142_528_500n);
   assert.equal(
     on.needAtoms,
     depositCapAtoms(
       { side: 'buy', price: on.priceUnits!, quantity: on.sizeUnits!, tif: 'gtc' },
       MON,
       { quote: 6, base: 18 },
-      10_000,
     ),
   );
 });
@@ -394,15 +364,15 @@ test('review rows carry the bound the order is signed with', () => {
   assert.equal(got?.value, '97.56 USDC');
 });
 
-test('review rows carry a Sente fee row when the builder fee is on, and omit it when off (SEN-192)', () => {
+test('review rows carry the Sente fee in what the order receives, and omit it when off (SEN-195)', () => {
   const on = marketBuy({ builderFeePps: 10_000 });
   const rows = reviewRows(on, evaluateTicket(on)).map((r) => [r.label, r.value]);
-  assert.deepEqual(rows[2], ['Sente fee', '0.1% (≈ 0.20 USDC)']);
+  assert.deepEqual(rows[2], ['Sente fee', '0.1% (≈ 0.2027 MON ≈ $0.20)']);
   assert.equal(
     reviewRows(marketBuy(), evaluateTicket(marketBuy())).some((r) => r.label === 'Sente fee'),
     false,
   );
-  // A sell pays no Sente fee (it's a buy-side extra, SEN-184).
+  // A sell pays it out of its USDC proceeds: a row, and a lower "at least".
   const sellOn = marketBuy({
     side: 'sell',
     amount: '100',
@@ -410,10 +380,30 @@ test('review rows carry a Sente fee row when the builder fee is on, and omit it 
     available: MON_ATOMS('412'),
     builderFeePps: 10_000,
   });
+  const sellRows = reviewRows(sellOn, evaluateTicket(sellOn));
+  assert.equal(sellRows.find((r) => r.label === 'Sente fee')?.value, '0.1% (≈ 0.10 USDC)');
+  // 100 × 0.976 = 97.6, less 0.04% Kuru and 0.1% Sente = 97.46336 → 97.46
+  assert.equal(sellRows.find((r) => r.label === 'You get at least')?.value, '97.46 USDC');
+});
+
+test('the result says the Sente fee in the asset it was paid in (SEN-195)', () => {
+  const result = { feeAsset: 'USDC' as const };
   assert.equal(
-    reviewRows(sellOn, evaluateTicket(sellOn)).some((r) => r.label === 'Sente fee'),
-    false,
+    senteFeePaidText({
+      ...result,
+      senteFee: '0.00000013',
+      senteFeeAsset: 'cbBTC',
+      senteFeeQuote: '0.0143',
+    }),
+    '0.00000013 cbBTC (≈ $0.01)',
   );
+  assert.equal(
+    senteFeePaidText({ ...result, senteFee: '0.0143', senteFeeAsset: 'USDC' }),
+    '0.01 USDC',
+  );
+  // An older API: no asset, so its (USDC-only) figure reads as USDC.
+  assert.equal(senteFeePaidText({ ...result, senteFee: '0.02' }), '0.02 USDC');
+  assert.equal(senteFeePaidText(result), null);
 });
 
 test('slippage goes to the quote as a fraction', () => {

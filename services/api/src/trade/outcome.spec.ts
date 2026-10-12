@@ -7,7 +7,7 @@ import {
   type KuruMarketParams,
 } from '@sente/venues/kuru';
 import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
-import { encodeAbiParameters, encodeEventTopics, getAddress, type Hex } from 'viem';
+import { encodeAbiParameters, encodeEventTopics, getAddress, type Address, type Hex } from 'viem';
 
 import { fundsAfter, placeResult, revertedPlaceResult, TradeOutcomes } from './outcome';
 import type { KuruPlaceContext, StepKind, StepStatus, Trade, TradeStep } from './trade-store';
@@ -67,12 +67,16 @@ describe('placeResult', () => {
   describe('with the Sente builder fee (SEN-184)', () => {
     const SENTE = getAddress('0x93e6b8d57DCa7B72fAe80ADAa5c9D7308f7E33b8');
     const builder = { address: SENTE, feePps: 10_000 };
-    const accrued = (taker: bigint, amount: bigint): KuruLog => ({
+    const accrued = (
+      taker: bigint,
+      amount: bigint,
+      asset: Address = MON_USDC.base.address,
+    ): KuruLog => ({
       address: KURU_TESTNET_CONTRACTS.accountCore,
       topics: encodeEventTopics({
         abi: kuruAbi.accountCoreAbi,
         eventName: 'BuilderFeeAccrued',
-        args: { builder: SENTE, asset: MON_USDC.quote.address, takerAccountId: Number(taker) },
+        args: { builder: SENTE, asset, takerAccountId: Number(taker) },
       }) as Hex[],
       data: encodeAbiParameters(
         [{ type: 'address' }, { type: 'uint24' }, { type: 'uint256' }],
@@ -80,19 +84,37 @@ describe('placeResult', () => {
       ),
     });
 
-    it('reports what this account paid the builder, from AccountCore’s events', () => {
+    it('reports a buy’s fee in the base it bought, with ≈ USDC at the fill price (SEN-195)', () => {
       const logs = [
         ...RECEIPTS.placeMarket.logs,
-        accrued(RECEIPT_ACCOUNT_ID, 9_842n),
+        // 10 bps of the 317.73742494 MON bought.
+        accrued(RECEIPT_ACCOUNT_ID, 317_737_425n * 10n ** 9n),
         accrued(RECEIPT_ACCOUNT_ID + 1n, 5n),
       ];
-      expect(placeResult(logs, RECEIPT_ACCOUNT_ID, context({ builder })).senteFee).toBe('0.009842');
+      expect(placeResult(logs, RECEIPT_ACCOUNT_ID, context({ builder }))).toMatchObject({
+        feeAsset: 'USDC',
+        senteFee: '0.317737425',
+        senteFeeAsset: 'MON',
+        // 0.317737425 MON at the 0.030974 average, rounded up.
+        senteFeeQuote: '0.009842',
+      });
+    });
+
+    it('reports a sell’s fee in the USDC it received', () => {
+      const usdc = KURU_RETIRED_DEPLOYMENT.tokens.find((t) => t.symbol === 'USDC')!.address;
+      const logs = [...RECEIPTS.placeLimit.logs, accrued(RECEIPT_ACCOUNT_ID, 9_842n, usdc)];
+      const sell = { ...GTC, side: 'sell' as const, builder };
+      expect(placeResult(logs, RECEIPT_ACCOUNT_ID, sell)).toMatchObject({
+        senteFee: '0.009842',
+        senteFeeAsset: 'USDC',
+        senteFeeQuote: '0.009842',
+      });
     });
 
     it('says 0 for a builder order that took nothing, and nothing without a builder', () => {
       expect(
-        placeResult(RECEIPTS.placeLimit.logs, RECEIPT_ACCOUNT_ID, { ...GTC, builder }).senteFee,
-      ).toBe('0');
+        placeResult(RECEIPTS.placeLimit.logs, RECEIPT_ACCOUNT_ID, { ...GTC, builder }),
+      ).toMatchObject({ senteFee: '0', senteFeeAsset: 'MON', senteFeeQuote: '0' });
       expect(
         placeResult(RECEIPTS.placeLimit.logs, RECEIPT_ACCOUNT_ID, GTC).senteFee,
       ).toBeUndefined();

@@ -174,6 +174,7 @@ export class FakeKuruVenue extends FakeVenue implements KuruToolVenue {
         feeAsset?: string;
         builderFee?: string;
         builderFeeAsset?: string;
+        builderFeeQuote?: string;
       }
     | undefined;
 

@@ -231,20 +231,20 @@ function verifyPlace(
     facts,
     expected.order,
     maxDeposit,
-    builder.feePps,
     ctx.wallet,
   );
 }
 
 /**
- * The Sente fee, held to this build's pin. Answers the rate the order pays
- * (0 without a builder) for the deposit cap.
+ * The Sente fee, held to this build's pin. It needs no room in the deposit
+ * cap: Kuru takes it from what the order receives, the base on a buy and the
+ * USDC proceeds on a sell (SEN-195).
  */
 function checkBuilder(
   place: Extract<Leg, { kind: 'place' }>,
   approval: Leg | undefined,
   ctx: KuruVerifyContext,
-): { readonly ok: true; readonly feePps: number } | Refusal {
+): { readonly ok: true } | Refusal {
   const pin = ctx.builder ?? null;
   const paid = place.builder;
   if (paid === undefined) {
@@ -252,7 +252,7 @@ function checkBuilder(
     if (approval !== undefined) {
       return refuse('the builder approval is not followed by a builder order', approval.stepIndex);
     }
-    return { ok: true, feePps: 0 };
+    return { ok: true };
   }
   if (pin === null)
     return refuse('the order pays a builder fee this app does not allow', place.stepIndex);
@@ -265,8 +265,7 @@ function checkBuilder(
       place.stepIndex,
     );
   }
-  if (approval === undefined || approval.kind !== 'approveBuilder')
-    return { ok: true, feePps: pin.feePps };
+  if (approval === undefined || approval.kind !== 'approveBuilder') return { ok: true };
 
   const at = approval.stepIndex;
   if (!isAddressEqual(approval.builder, pin.address)) {
@@ -285,7 +284,7 @@ function checkBuilder(
   if (approval.expiry > BigInt(Math.floor(now) + BUILDER_APPROVAL_MAX_SECONDS)) {
     return refuse('the builder approval lasts more than a year', at);
   }
-  return { ok: true, feePps: pin.feePps };
+  return { ok: true };
 }
 
 type ExpectedOrder = {
@@ -405,7 +404,6 @@ function checkFunding(
   facts: MarketFacts,
   order: ExpectedOrder,
   maxDeposit: bigint,
-  builderFeePps: number,
   wallet: Address,
 ): KuruVerifyResult {
   const funding = intent.side === 'buy' ? market.quote : market.base;
@@ -456,7 +454,6 @@ function checkFunding(
       },
       facts.params,
       { quote: market.quote.decimals, base: market.base.decimals },
-      builderFeePps,
     );
   } catch (error) {
     return refuse(error instanceof Error ? error.message : 'the deposit cap does not compute');

@@ -182,8 +182,16 @@ export interface Order {
    * carried a builder fee; `"0"` when it took nothing.
    */
   builderFee?: Decimal;
-  /** The asset `builderFee` is denominated in. */
+  /**
+   * The asset `builderFee` is denominated in: the one the taker received, the
+   * base on a buy and the quote on a sell (SEN-195).
+   */
   builderFeeAsset?: string;
+  /**
+   * ≈ `builderFee` in the quote asset: the fee itself on a sell, its value at
+   * `averageFillPrice` (rounded up) on a buy. An estimate for display only.
+   */
+  builderFeeQuote?: Decimal;
   /**
    * Perps only, set by `closePosition`: the position's realised price PnL at
    * the close (Perpl's `dpnl`), in collateral units. Cumulative over the

@@ -70,13 +70,13 @@ import {
   feePpsOf,
   fundsLines,
   MON_RESERVE_ATOMS,
-  moneyText,
   presetAmount,
   PRESETS,
   pressKey,
   QUOTE_MAX_AGE_MS,
   resultView,
   reviewRows,
+  senteFeePaidText,
   shortSize,
   SLIPPAGE_CHOICES_BPS,
   slippageFraction,
@@ -413,7 +413,6 @@ function Ticket({
       available,
       limitPriceUnits: limitPrice === '' ? null : toUnits(limitPrice, tm.pricePrecision),
       market: tm,
-      builderFeePps,
     });
     if (next !== null) {
       void Haptics.selectionAsync();
@@ -1435,8 +1434,8 @@ function Result({
         </View>
       ) : null}
       {money.length > 0 ? <MoneyRows label="Money" lines={money} /> : null}
-      {result.senteFee ? (
-        <Row label="Sente fee paid" value={`${moneyText(result.senteFee)} ${result.feeAsset}`} />
+      {senteFeePaidText(result) !== null ? (
+        <Row label="Sente fee paid" value={senteFeePaidText(result)!} />
       ) : null}
       {result.orderId ? <Row label="Order" value={result.orderId} mono /> : null}
       {cancel.done ? <Notice tone="ok" title="Order cancelled" detail={cancel.done} /> : null}

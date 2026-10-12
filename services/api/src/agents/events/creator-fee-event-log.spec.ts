@@ -90,6 +90,34 @@ describe('CreatorFeeEventLog (SEN-184)', () => {
     });
   });
 
+  it('accrues each fee in its own asset: the base a buy received, USDC on a sell (SEN-195)', async () => {
+    const { ledger, log } = await harness();
+    // The live Set C buy (tx 0xca084e71…): 13 atoms of cbBTC to the builder.
+    await log.append(
+      fillEvent('fork', {
+        symbol: 'cbBTC-USDC',
+        side: 'buy',
+        txHash: `0x${'01'.repeat(32)}`,
+        senteFee: '0.00000013',
+        senteFeeAsset: 'cbBTC',
+        senteFeeQuote: '0.0143',
+      }),
+    );
+    await log.append(
+      fillEvent('fork', {
+        symbol: 'cbBTC-USDC',
+        side: 'sell',
+        txHash: `0x${'02'.repeat(32)}`,
+        senteFee: '0.0143',
+        senteFeeAsset: 'USDC',
+      }),
+    );
+    expect(ledger.totals('creator')).toEqual([
+      { asset: 'cbBTC', decimals: 8, accruedAtoms: 3n, paidAtoms: 0n, owedAtoms: 3n },
+      { asset: 'USDC', decimals: 6, accruedAtoms: 4_290n, paidAtoms: 0n, owedAtoms: 4_290n },
+    ]);
+  });
+
   it('owes nothing for an agent that is no fork, a fork of one’s own agent, or no fee', async () => {
     const { ledger, log } = await harness();
     await log.append(fillEvent('original'));

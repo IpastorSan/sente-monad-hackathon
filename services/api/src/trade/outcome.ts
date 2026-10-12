@@ -23,11 +23,11 @@
  */
 
 import {
-  builderFeePaidAtoms,
+  builderFeeReport,
+  builderFeesByAsset,
   decodeOrderOutcome,
+  KURU_DEPLOYMENTS,
   KURU_TESTNET_CONTRACTS,
-  KURU_TESTNET_MARKETS,
-  KURU_TESTNET_TOKENS,
   formatOrderId,
   fromUnits,
   precisionDecimals,
@@ -48,25 +48,36 @@ import type {
 /** Every allowed Kuru market is quoted in USDC, and Kuru charges fees in the quote. */
 const FEE_ASSET = 'USDC';
 
-/** What this place paid Sente's builder, in the quote token, from AccountCore's events (SEN-184). */
+/**
+ * What this place paid Sente's builder, from AccountCore's events (SEN-184),
+ * in the asset Kuru took it in — the base on a buy, the quote on a sell
+ * (SEN-195) — with ≈ its value in the quote at the average fill price.
+ */
 function senteFeePaid(
   logs: readonly KuruLog[],
   accountId: bigint,
   place: KuruPlaceContext,
-): string {
+  averagePrice: string | undefined,
+): Pick<KuruPlaceResult, 'senteFee' | 'senteFeeAsset' | 'senteFeeQuote'> {
   // A trade recorded on a book Kuru has since retired (SEN-185) is still read:
-  // every market, retired or current, is quoted in USDC.
-  const quote =
-    KURU_TESTNET_MARKETS.find((m) => isAddressEqual(m.address, place.market))?.quote ??
-    KURU_TESTNET_TOKENS.USDC;
-  const paid = builderFeePaidAtoms(
+  // the book is looked up in both deployments.
+  const market = Object.values(KURU_DEPLOYMENTS)
+    .flatMap((d) => d.markets)
+    .find((m) => isAddressEqual(m.address, place.market));
+  // Every planned place names a known book; reading no fee beats failing the result.
+  if (!market) return {};
+  const paid = builderFeesByAsset(
     logs,
     KURU_TESTNET_CONTRACTS.accountCore,
     place.builder!.address,
     accountId,
-    quote.address,
   );
-  return fromUnits(paid, place.quoteDecimals);
+  const fee = builderFeeReport(paid, place.side, market, averagePrice);
+  return {
+    senteFee: fee.fee,
+    senteFeeAsset: fee.asset,
+    ...(fee.quoteEstimate !== undefined ? { senteFeeQuote: fee.quoteEstimate } : {}),
+  };
 }
 
 /** A step whose user operation runs the place leg: the place itself, or a packed batch. */
@@ -129,7 +140,7 @@ export function placeResult(
       tradeId: fill.tradeId.toString(),
     })),
     ...(rested ? { orderId: formatOrderId(rested) } : {}),
-    ...(place.builder ? { senteFee: senteFeePaid(logs, accountId, place) } : {}),
+    ...(place.builder ? senteFeePaid(logs, accountId, place, order.averageFillPrice) : {}),
   } as const;
   const discarded = { unfilledCancelled: fromUnits(remainder, sizeDecimals) };
 
