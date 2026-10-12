@@ -14,6 +14,7 @@ import {
   KURU_DEPLOYMENT,
   KURU_DEPLOYMENT_SEEDS,
   KURU_MARKET_SEEDS,
+  DEFAULT_KURU_DEPLOYMENT,
   kuruDeploymentFromEnv,
   kuruMarketByAddress,
   kuruTokenDecimals,
@@ -59,8 +60,9 @@ test('config.setc.yaml declares AccountRegistered in Set C’s shape, config.yam
   );
 });
 
-test('the deployment comes from ENVIO_KURU_DEPLOYMENT, then KURU_DEPLOYMENT, else set-d', () => {
-  assert.equal(kuruDeploymentFromEnv({}), 'set-d');
+test('the deployment comes from ENVIO_KURU_DEPLOYMENT, then KURU_DEPLOYMENT, else the committed default', () => {
+  assert.equal(kuruDeploymentFromEnv({}), DEFAULT_KURU_DEPLOYMENT);
+  assert.equal(kuruDeploymentFromEnv({ KURU_DEPLOYMENT: 'set-d' }), 'set-d');
   assert.equal(kuruDeploymentFromEnv({ KURU_DEPLOYMENT: 'set-c' }), 'set-c');
   assert.equal(
     kuruDeploymentFromEnv({ ENVIO_KURU_DEPLOYMENT: 'SET-C', KURU_DEPLOYMENT: 'set-d' }),

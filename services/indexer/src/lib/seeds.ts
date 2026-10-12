@@ -60,11 +60,20 @@ export type KuruMarketSeed = {
  */
 export type KuruDeploymentId = 'set-c' | 'set-d';
 
+/**
+ * The deployment when no variable says otherwise. Envio Cloud's free plan has
+ * no environment variables, so the hosted indexer follows this constant: keep
+ * it equal to the deployment production trades (`KURU_DEPLOYMENT` on the API)
+ * and to the config file the Envio project builds. Set C since 2026-10-12.
+ */
+export const DEFAULT_KURU_DEPLOYMENT: KuruDeploymentId = 'set-c';
+
 export function kuruDeploymentFromEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): KuruDeploymentId {
   const raw = (env['ENVIO_KURU_DEPLOYMENT'] || env['KURU_DEPLOYMENT'] || '').trim().toLowerCase();
-  if (raw === '' || raw === 'set-d') return 'set-d';
+  if (raw === '') return DEFAULT_KURU_DEPLOYMENT;
+  if (raw === 'set-d') return 'set-d';
   if (raw === 'set-c') return 'set-c';
   throw new Error(`ENVIO_KURU_DEPLOYMENT must be set-c or set-d, got ${raw}`);
 }
