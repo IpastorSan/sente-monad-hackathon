@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 
 import { AgentsModule } from './agents/agents.module';
 import { LeaderboardModule } from './agents/leaderboard/leaderboard.module';
+import { PublicAgentModule } from './agents/public/public-agent.module';
 import { AuthModule } from './auth/auth.module';
 import { ChainModule } from './chain/chain.module';
 import { CreditsModule } from './credits/credits.module';
@@ -39,6 +40,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     // The agent leaderboard (SEN-26): registered performance, read from the
     // SEN-25 indexer and the agents' own verdicts.
     LeaderboardModule,
+    // GET /public/agents/:id (SEN-193): an agent's public page, no session.
+    PublicAgentModule,
     // The preset catalog and its cohort stats (SEN-76).
     PresetsModule,
     // GET/PATCH /profile: the user's chosen name and avatar (SEN-172).

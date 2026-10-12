@@ -76,6 +76,7 @@ import { fundAgent } from '@/agents/initialFunding';
 import { perpsFundHint } from '@/agents/perps';
 import { PerpsStatus } from '@/agents/PerpsStatus';
 import { RiskConfirm } from '@/agents/Risks';
+import { ShareLinkButton } from '@/agents/ShareLink';
 import { alreadyRunning, liveRun, runningLine, waitForRunStart } from '@/agents/runState';
 import type { RunSummary } from '@/agents/terminal';
 import { clockTime, type LedgerEntry } from '@/agents/ledger';
@@ -366,6 +367,7 @@ export default function AgentScreen() {
                 onPress={() => setSheet('fund')}
               />
             ) : null}
+            <ShareLinkButton agentId={agent.id} agentName={agent.name} label="Public link" />
             <IconButton icon="more" label="Details" onPress={() => setSheet('details')} />
           </View>
         }
