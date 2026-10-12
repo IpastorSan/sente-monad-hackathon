@@ -39,11 +39,14 @@ import {
 import { readBalance } from '@/agents/balances';
 import { DepositPinStatus } from '@/agents/DepositPin';
 import { needsDepositPin, secureDeposits, type DepositPinState } from '@/agents/depositPin';
+import { draftKey } from '@/agents/draftStore';
 import { FUNDING_TOKENS } from '@/agents/fund';
 import { MandateStep } from '@/agents/MandateStep';
 import { defaultMandateForm, type MandateErrors, type MandateForm } from '@/agents/mandate';
 import { mandateToSend, resolveExpiry, type PresetChoice } from '@/agents/presets';
+import { mergePresetDraft, PRESET_DRAFT_CODEC, type PresetDraftFields } from '@/agents/presetDraft';
 import { readBack } from '@/agents/readback';
+import { useDraftRestoreBanner, useDraftSync } from '@/agents/useDraftSync';
 import { usePolling } from '@/markets/usePolling';
 import { useMarkets } from '@/markets/hooks';
 import { cadenceLabel } from '@/presets/cards';
@@ -87,6 +90,7 @@ import {
   Row,
   Screen,
   Section,
+  SectionLink,
   Segmented,
   ToggleRow,
   TopBar,
@@ -313,6 +317,71 @@ function Configure({
   const [pin, setPin] = useState<DepositPinState | null>(null);
   const [hiredMandate, setHiredMandate] = useState<AgentMandate | null>(null);
 
+  /**
+   * SEN-190: this preset's own draft, kept apart from the blank hire's draft
+   * and every other preset's by `def.id` (`draftStore.ts`).
+   */
+  const draftScopeKey = auth.address
+    ? draftKey(auth.address, { kind: 'preset', presetId: def.id })
+    : null;
+
+  const draftFields: PresetDraftFields = useMemo(
+    () => ({ step, draft, form, expiryDays, tier, name, model, fundSymbol, fundAmount }),
+    [step, draft, form, expiryDays, tier, name, model, fundSymbol, fundAmount],
+  );
+
+  const draftSync = useDraftSync(draftScopeKey, draftFields, PRESET_DRAFT_CODEC);
+
+  /** The blank starting point for this preset — the merge base, and what Discard resets to. */
+  const freshPresetDraftFields = (): PresetDraftFields => ({
+    step: STEPS[0] ?? 'review',
+    draft: prefillDraft(def, initialDraft(def), prefill),
+    form: defaultMandateForm(nowSeconds(), returnTo ?? undefined),
+    expiryDays: 7,
+    tier: 'standard',
+    name: defaultAgentName(def.id, def.name),
+    model: AGENT_MODELS[0].id,
+    fundSymbol: null,
+    fundAmount: null,
+  });
+
+  const applyPresetDraft = (fields: PresetDraftFields) => {
+    const stepIndex = STEPS.indexOf(fields.step);
+    setIndex(stepIndex >= 0 ? stepIndex : 0);
+    setDraft(fields.draft);
+    setForm(fields.form);
+    setExpiryDays(fields.expiryDays);
+    setTier(fields.tier);
+    setName(fields.name);
+    setModel(fields.model);
+    setFundSymbol(fields.fundSymbol);
+    setFundAmount(fields.fundAmount);
+    setShowErrors(false);
+  };
+
+  const { banner: draftBanner, dismissBanner } = useDraftRestoreBanner(
+    draftScopeKey,
+    draftSync.restored,
+    (restored) => {
+      const merged = mergePresetDraft(freshPresetDraftFields(), restored);
+      applyPresetDraft(merged);
+      // So a later "Draw the lines" (strategy -> mandate) doesn't re-run
+      // `prefillMandate` and stomp the mandate/tier the draft just restored.
+      const restoredParams = checkParams(def, merged.draft);
+      if (restoredParams.ok) setPrefilledFor(JSON.stringify(restoredParams.params));
+    },
+  );
+
+  /** The banner's "Discard": wipe the restored content and start blank. */
+  const discardDraft = () => {
+    draftSync.discard();
+    dismissBanner();
+    touched.current.clear();
+    setLinesFrom(null);
+    setPrefilledFor(null);
+    applyPresetDraft(freshPresetDraftFields());
+  };
+
   const stepValid = (id: StepId): boolean => {
     switch (id) {
       case 'strategy':
@@ -414,7 +483,9 @@ function Configure({
         presetHireRequest(def, draft, params, { name, model, mandate }),
       );
       // The agent exists from here on; a failed pin or transfer is reported on
-      // the hired screen, never as a failed hire.
+      // the hired screen, never as a failed hire. SEN-190: a pending debounced
+      // save from the moment before this must never write the draft back now.
+      draftSync.clear();
       setHiredMandate(mandate);
       if (needsDepositPin(result.agent)) {
         // SEN-188: pin its Kuru deposits to its own wallet before anything else.
@@ -514,6 +585,13 @@ function Configure({
           </Text>
         ))}
       </View>
+      {draftBanner ? (
+        <View style={styles.draftBanner}>
+          <Notice title="Draft restored" detail="Picked up where you left off.">
+            <SectionLink label="Discard" onPress={discardDraft} />
+          </Notice>
+        </View>
+      ) : null}
 
       {step === 'strategy' ? (
         <>
@@ -1037,6 +1115,7 @@ const styles = StyleSheet.create({
   stepNameOn: { color: color.purpleHi },
   title: { marginTop: 16, fontSize: 28, lineHeight: 32 },
   subtitle: { marginTop: 8 },
+  draftBanner: { marginTop: 14 },
   after: { marginTop: 10 },
   readBack: { fontSize: 15, lineHeight: 22, color: color.textDim },
   disclose: { textAlign: 'center' },
