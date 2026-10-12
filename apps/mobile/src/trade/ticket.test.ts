@@ -351,7 +351,7 @@ test('a limit buy reserves Sente’s builder fee too, on top of the maker fee (S
   );
   assert.deepEqual(on.disclosure, [
     'Limit · may fill in parts · fee on fill ≈ 0.03 USDC',
-    'Sente fee 0.1% (≈ 0.14 USDC)',
+    'Sente fee 0.1% (≈ 0.15 USDC)', // 142.5 × 0.1% = 0.1425, rounded up
   ]);
   // The maker fee alone (142.5 × 1.0002, from the test above) plus 0.1%
   // builder fee on the same notional — bigger than the fee-off cap, and

@@ -23,7 +23,7 @@
  * All money is bigint atoms or decimal strings; nothing here goes through a
  * float except the display-only fill percentage.
  */
-import { fromUnits, precisionDecimals, ratioToDecimal } from '@sente/venues/kuru';
+import { builderFeeAtoms, fromUnits, precisionDecimals, ratioToDecimal } from '@sente/venues/kuru';
 
 import { formatPrice } from '../ui/tradingFormat.ts';
 import { groupThousands, normalizeDecimal } from '../agents/amounts.ts';
@@ -492,11 +492,13 @@ function senteFeeAmount(
   side: Side,
   builderFeePps: number | undefined,
   notional: string,
-  q: string,
+  quote: TicketMarket['quote'],
 ): string | null {
   if (side !== 'buy' || !builderFeePps) return null;
-  const fee = mulDecimal(notional, unitsToDecimal(BigInt(builderFeePps), PPS));
-  return `${feePpsToPercent(builderFeePps)}% (≈ ${moneyText(fee)} ${q})`;
+  // Rounded up, as the planner's `senteFee` estimate is: never understated.
+  const notionalAtoms = toUnits(notional, 10n ** BigInt(quote.decimals)) ?? 0n;
+  const fee = builderFeeAtoms(notionalAtoms, builderFeePps);
+  return `${feePpsToPercent(builderFeePps)}% (≈ ${moneyCeil(fee, quote.decimals)} ${quote.symbol})`;
 }
 
 function disclosureFor(input: TicketInput, size: string | null): string[] {
@@ -509,7 +511,7 @@ function disclosureFor(input: TicketInput, size: string | null): string[] {
       return ['Limit · may fill in parts'];
     const notional = mulDecimal(size, unitsToDecimal(priceUnits, market.pricePrecision));
     const fee = mulDecimal(notional, unitsToDecimal(market.makerFeePps, PPS));
-    const sente = senteFeeAmount(side, builderFeePps, notional, q);
+    const sente = senteFeeAmount(side, builderFeePps, notional, market.quote);
     return [
       `Limit · may fill in parts · fee on fill ≈ ${moneyText(fee)} ${q}`,
       ...(sente !== null ? [`Sente fee ${sente}`] : []),
@@ -520,7 +522,7 @@ function disclosureFor(input: TicketInput, size: string | null): string[] {
     return [`Market · ${slip.toLowerCase()}`];
   }
   const notional = mulDecimal(size, quote.averagePrice);
-  const sente = senteFeeAmount(side, builderFeePps, notional, q);
+  const sente = senteFeeAmount(side, builderFeePps, notional, market.quote);
   return [
     `Market · est. fill ${priceText(quote.averagePrice)} · fee ${moneyText(quote.estimatedFee)} ${q}`,
     slip,
@@ -577,7 +579,7 @@ export function reviewRows(input: TicketInput, ticket: Ticket): ReviewRow[] {
     side,
     input.builderFeePps,
     mulDecimal(size, orderType === 'market' ? (quote?.averagePrice ?? price) : price),
-    q,
+    market.quote,
   );
   if (sente !== null) rows.push({ label: 'Sente fee', value: sente });
   rows.push({ label: 'Size', value: `${shortSize(size)} ${b}` });
