@@ -6,8 +6,9 @@
  * full); the throw becomes a rejected promise, which every caller already
  * handles because the native store rejects on Keystore failures too.
  *
- * Hints and UI flags only — see `kv.ts`. Never key material, never the token
- * (the sealed reload copy is in sessionStorage, not here).
+ * Hints, UI flags and drafts only — see `kv.ts`. Never key material, never
+ * the session token (the sealed reload copy is in sessionStorage, not here),
+ * never the MCP token.
  */
 
 function storage(): Storage {
