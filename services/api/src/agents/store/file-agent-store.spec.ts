@@ -100,6 +100,19 @@ describe.each([
     expect((await store.listActive()).map((a) => a.id)).toEqual([second().id]);
   });
 
+  it('leaves archived agents out of listActive, and brings them back on unarchive (SEN-197)', async () => {
+    const store = create();
+    await store.insert(testAgent());
+    await store.update(testAgent().id, { archivedAt: new Date('2026-10-12T00:00:00Z') });
+    expect(await store.listActive()).toEqual([]);
+    expect((await store.listByUser('alice')).map((a) => a.archivedAt)).toEqual([
+      new Date('2026-10-12T00:00:00Z'),
+    ]);
+
+    await store.update(testAgent().id, { archivedAt: undefined });
+    expect((await store.listActive()).map((a) => a.id)).toEqual([testAgent().id]);
+  });
+
   it('lists nothing when there are no agents', async () => {
     expect(await create().listAll()).toEqual([]);
   });

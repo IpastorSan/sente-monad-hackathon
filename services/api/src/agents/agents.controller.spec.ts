@@ -1181,10 +1181,16 @@ describe('AgentsController', () => {
       const theirs = (await hire('0x' + 'b'.repeat(40))).agent;
 
       const reads: string[] = [];
+      const state = { kuruUp: false };
       const portfolios = {
         portfolio: (agent: { id: string; address: string }) => {
           reads.push(agent.id);
-          return Promise.resolve(portfolioOf(agent.id, agent.address));
+          const read = portfolioOf(agent.id, agent.address);
+          return Promise.resolve(
+            state.kuruUp
+              ? { ...read, kuru: { ok: true, accountId: null, balances: [], openOrders: [] } }
+              : read,
+          );
         },
       };
 
@@ -1211,8 +1217,41 @@ describe('AgentsController', () => {
         });
         return { status: response.status, body: (await response.json()) as unknown };
       };
-      return { get, mine, revoked, theirs, reads };
+      const post = async (path: string) => {
+        const response = await fetch(new URL(path, base), {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        return { status: response.status, body: (await response.json()) as unknown };
+      };
+      return { get, post, mine, revoked, theirs, reads, state };
     }
+
+    it('archives a revoked, emptied agent out of GET /agents and back (SEN-197)', async () => {
+      const h = await boot();
+      expect(await h.post(`/agents/${h.mine.id}/archive`)).toMatchObject({
+        status: 409,
+        body: { reason: 'agent_not_revoked' },
+      });
+      expect(await h.post(`/agents/${h.revoked.id}/archive`)).toMatchObject({
+        status: 503,
+        body: { reason: 'agent_funds_unknown' },
+      });
+      expect(await h.post(`/agents/${h.theirs.id}/archive`)).toMatchObject({ status: 404 });
+
+      h.state.kuruUp = true;
+      const archived = await h.post(`/agents/${h.revoked.id}/archive`);
+      expect(archived).toMatchObject({ status: 200, body: { id: h.revoked.id } });
+      expect((archived.body as { archivedAt?: string }).archivedAt).toEqual(expect.any(String));
+
+      const ids = async (path: string) =>
+        ((await h.get(path)).body as { agents: { id: string }[] }).agents.map((a) => a.id);
+      expect(await ids('/agents')).toEqual([h.mine.id]);
+      expect(await ids('/agents?archived=1')).toEqual([h.revoked.id]);
+
+      expect(await h.post(`/agents/${h.revoked.id}/unarchive`)).toMatchObject({ status: 200 });
+      expect(await ids('/agents')).toEqual([h.mine.id, h.revoked.id]);
+    });
 
     it("answers the owner with the service's portfolio, a failed section and all", async () => {
       const h = await boot();

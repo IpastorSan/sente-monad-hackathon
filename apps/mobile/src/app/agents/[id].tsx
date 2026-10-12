@@ -97,6 +97,7 @@ import { describeMandate, type Enforcer, type Token } from '@/agents/mandate';
 import { expiryUsage, formatHolding, isTrading, mainHolding } from '@/agents/usage';
 import { LiveRunSection, RunHistorySection, useAgentRuns } from '@/agents/AgentRuns';
 import { AgentWatchers } from '@/agents/AgentWatchers';
+import { ArchiveAgent } from '@/agents/ArchiveAgent';
 import { useAgentEvents } from '@/agents/useAgentEvents';
 import { toHoldings } from '@/agents/useWalletHoldings';
 import { CreditsLink } from '@/credits/CreditsLink';
@@ -435,7 +436,14 @@ export default function AgentScreen() {
               : 'It can’t trade, deposit or approve anything again — revoking is permanent. Its ' +
                 'policy keeps only the way out, so you can still send its funds back to your wallet.'
           }
-        />
+        >
+          <ArchiveAgent
+            agent={agent}
+            portfolio={portfolio}
+            onReturn={() => setSheet('return')}
+            onDone={finish}
+          />
+        </Notice>
       )}
 
       <View style={styles.tabs}>

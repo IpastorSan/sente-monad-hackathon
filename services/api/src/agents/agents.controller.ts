@@ -19,6 +19,7 @@ import { creditsRefusalToHttpException } from '../credits/credits.errors';
 import { ConsensusService } from '../chain/consensus.service';
 import { Auth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import { fundsLeft } from './archive/funds-left';
 import { agentErrorStatus, agentErrorToHttpBody } from './agents.errors';
 import { AgentsService } from './agents.service';
 import {
@@ -124,10 +125,15 @@ export class AgentsController {
     });
   }
 
+  /** `?archived=1` lists the archived agents instead (SEN-197); they are left out otherwise. */
   @Get()
-  async list(): Promise<AgentListResponseDto> {
+  async list(@Query('archived') archived?: string): Promise<AgentListResponseDto> {
     return this.guard(async () => ({
-      agents: (await this.agents.list(this.auth.principal())).map(toAgentResponse),
+      agents: (
+        await this.agents.list(this.auth.principal(), {
+          archived: archived === '1' || archived === 'true',
+        })
+      ).map(toAgentResponse),
     }));
   }
 
@@ -561,6 +567,36 @@ export class AgentsController {
           ...(body.amount !== undefined ? { amount: body.amount } : {}),
         }),
       ),
+    );
+  }
+
+  /**
+   * Puts away a revoked (or expired) agent whose funds are back (SEN-197).
+   * Soft: nothing on chain is touched, the public page still answers, and
+   * `/unarchive` undoes it. Refusals: 404 `agent_not_found`, 409
+   * `agent_not_revoked`, 409 `agent_has_funds` (with `left`), 503
+   * `agent_funds_unknown`.
+   */
+  @Post(':id/archive')
+  @HttpCode(HttpStatus.OK)
+  async archive(@Param() params: AgentIdParamDto): Promise<AgentResponseDto> {
+    return this.guard(async () => {
+      const portfolios = this.portfolios;
+      if (!portfolios) throw new Error('AgentPortfolioService is not provided');
+      return toAgentResponse(
+        await this.agents.archive(this.auth.principal(), params.id, async (agent) =>
+          fundsLeft(await portfolios.portfolio(agent)),
+        ),
+      );
+    });
+  }
+
+  /** Brings an archived agent back to the owner's list (SEN-197). */
+  @Post(':id/unarchive')
+  @HttpCode(HttpStatus.OK)
+  async unarchive(@Param() params: AgentIdParamDto): Promise<AgentResponseDto> {
+    return this.guard(async () =>
+      toAgentResponse(await this.agents.unarchive(this.auth.principal(), params.id)),
     );
   }
 

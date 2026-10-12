@@ -531,6 +531,8 @@ export interface AgentResponseDto {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  /** ISO 8601. When the owner archived it (SEN-197); absent while it is not archived. */
+  archivedAt?: string;
   /** ISO 8601. When the owner acknowledged the risks (SEN-177); absent if never. */
   riskAcknowledgedAt?: string;
   /** The agent's own run cadence (SEN-67); `null` when it has none. */
@@ -891,6 +893,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     ...(agent.revokedAt ? { revokedAt: agent.revokedAt.toISOString() } : {}),
+    ...(agent.archivedAt ? { archivedAt: agent.archivedAt.toISOString() } : {}),
     ...(agent.riskAcknowledgedAt
       ? { riskAcknowledgedAt: agent.riskAcknowledgedAt.toISOString() }
       : {}),

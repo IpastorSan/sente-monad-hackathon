@@ -16,7 +16,13 @@
 // a script can load it under node's type stripping (CLAUDE.md gotcha 10).
 
 import { JsonRecordFile } from '../../state/json-file.ts';
-import { addressKey, type AgentPatch, type AgentRecord, type AgentStore } from './agent-store.ts';
+import {
+  addressKey,
+  isListedActive,
+  type AgentPatch,
+  type AgentRecord,
+  type AgentStore,
+} from './agent-store.ts';
 
 export class FileAgentStore implements AgentStore {
   readonly #file: JsonRecordFile<AgentRecord>;
@@ -78,7 +84,7 @@ export class FileAgentStore implements AgentStore {
   }
 
   listActive(): Promise<AgentRecord[]> {
-    return Promise.resolve(this.#sorted((record) => record.status === 'active'));
+    return Promise.resolve(this.#sorted(isListedActive));
   }
 
   listAll(): Promise<AgentRecord[]> {
