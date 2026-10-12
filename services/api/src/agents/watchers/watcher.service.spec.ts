@@ -11,8 +11,10 @@ import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { ServerMandateOwners } from '../mandate-owner';
 import { InMemoryAgentStore } from '../store/agent-store';
 import { FakeAgentWalletProvider } from '../testing/fake-agent-wallet.provider';
+import { cadenceSecondsOf } from '../runner/runner.config';
 import { AgentTools } from '../tools/context';
 import { GATED_TOOLS, type ToolOutcome } from '../tools/gate';
+import { MANUAL_WATCHERS_WARNING } from '../tools/registry';
 import { testAgent, testMandateInput } from '../tools/testing/agent-fixture';
 import { fakeVenues } from '../tools/testing/fake-venues';
 import { parseMandate } from '@sente/mandate';
@@ -259,7 +261,7 @@ describe('WatcherService (SEN-182)', () => {
 });
 
 describe('watcher tools (SEN-182)', () => {
-  async function harness() {
+  async function harness(tickSeconds?: number) {
     const store = new InMemoryAgentStore();
     const agent = testAgent();
     await store.insert(agent);
@@ -272,6 +274,7 @@ describe('watcher tools (SEN-182)', () => {
       precheck: true,
       venuesFor: () => Promise.resolve(venues.venues),
       watchers,
+      cadenceSeconds: (a) => cadenceSecondsOf(a, tickSeconds),
     });
     const ctx = tools.context(agent);
     const call = (name: string, args: unknown): Promise<ToolOutcome> =>
@@ -306,6 +309,33 @@ describe('watcher tools (SEN-182)', () => {
     expect(h.watchers.has(h.agent.id)).toBe(false);
     // Setting watchers is not trading: nothing lands on the agent's record of account.
     expect(await h.events.list(h.agent.id)).toEqual([]);
+  });
+
+  it('warns the agent when its watchers are saved on Manual, without touching the schedule (SEN-200)', async () => {
+    const h = await harness();
+    expect(h.agent.schedule).toBeUndefined();
+    const set = await h.call('set_watchers', { watchers: [CHEAP] });
+    expect(set).toMatchObject({ ok: true, result: { set: 1, warning: MANUAL_WATCHERS_WARNING } });
+    expect(MANUAL_WATCHERS_WARNING).toMatch(/schedule is Manual/);
+    expect(MANUAL_WATCHERS_WARNING).toMatch(/owner picks a cadence/);
+    // Saved all the same, and the owner's schedule is left as it was.
+    expect(h.watchers.has(h.agent.id)).toBe(true);
+    expect((await h.store.get(h.agent.id))?.schedule).toBeUndefined();
+    // Clearing them on Manual needs no warning.
+    const cleared = await h.call('set_watchers', { watchers: [] });
+    expect(cleared.ok && 'warning' in (cleared.result as object)).toBe(false);
+  });
+
+  it('says nothing of the schedule when a cadence will check them', async () => {
+    const own = await harness();
+    await own.store.update(own.agent.id, { schedule: { everySeconds: 900 } });
+    const scheduled = await own.call('set_watchers', { watchers: [CHEAP] });
+    expect(scheduled.ok && 'warning' in (scheduled.result as object)).toBe(false);
+
+    // No schedule of its own, but Sente's global tick checks it.
+    const global = await harness(300);
+    const ticked = await global.call('set_watchers', { watchers: [CHEAP] });
+    expect(ticked.ok && 'warning' in (ticked.result as object)).toBe(false);
   });
 
   it('refuses a market outside the mandate as Sente, and changes nothing', async () => {

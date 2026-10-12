@@ -26,6 +26,18 @@ export interface AgentRunnerConfig {
   readonly thinking: boolean;
 }
 
+/**
+ * The seconds between an agent's scheduled runs (or watcher checks): its own
+ * schedule, else the global tick, else null — it runs only when its owner
+ * runs it, and its watchers are never checked (SEN-200).
+ */
+export function cadenceSecondsOf(
+  agent: { readonly schedule?: { readonly everySeconds: number } | undefined },
+  tickSeconds: number | undefined,
+): number | null {
+  return agent.schedule?.everySeconds ?? tickSeconds ?? null;
+}
+
 export const AGENT_RUNNER_DEFAULTS = {
   // Twelve model turns and a few spaced writes fit comfortably; a hung
   // upstream does not hold the agent's run slot for the SDK's 10 minutes.

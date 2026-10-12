@@ -71,7 +71,15 @@ export interface ToolContext {
   readonly marketData?: ToolMarketData;
   /** The agent's watchers (SEN-182). Absent: the watcher tools answer that they are unavailable. */
   readonly watchers?: ToolWatchers;
+  /**
+   * Seconds between the scheduler's checks of this agent, null when it runs
+   * only by hand (SEN-200). Absent: unknown, and the tools say nothing of it.
+   */
+  readonly cadenceSeconds?: CadenceOf;
 }
+
+/** The agent's cadence in seconds, or null for manual-only: the scheduler's `cadenceOf`. */
+export type CadenceOf = (agent: Pick<AgentRecord, 'schedule'>) => number | null;
 
 /** What the watcher tools reach (SEN-182). */
 export type ToolWatchers = Pick<WatcherService, 'replace' | 'view' | 'clear'>;
@@ -84,6 +92,7 @@ export interface AgentToolsOptions {
   readonly now?: () => number;
   readonly marketData?: ToolMarketData;
   readonly watchers?: ToolWatchers;
+  readonly cadenceSeconds?: CadenceOf;
 }
 
 /**
@@ -112,7 +121,8 @@ export class AgentTools {
   }
 
   context(agent: AgentRecord, options: { runId?: string } = {}): ToolContext {
-    const { store, venuesFor, events, precheck, marketData, watchers } = this.#options;
+    const { store, venuesFor, events, precheck, marketData, watchers, cadenceSeconds } =
+      this.#options;
     return {
       agent,
       runId: options.runId ?? `run-${randomUUID()}`,
@@ -125,6 +135,7 @@ export class AgentTools {
       now: this.#options.now ?? (() => Math.floor(Date.now() / 1000)),
       ...(marketData ? { marketData } : {}),
       ...(watchers ? { watchers } : {}),
+      ...(cadenceSeconds ? { cadenceSeconds } : {}),
     };
   }
 }
