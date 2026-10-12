@@ -23,10 +23,11 @@
  * All money is bigint atoms or decimal strings; nothing here goes through a
  * float except the display-only fill percentage.
  */
-import { fromUnits, precisionDecimals, ratioToDecimal } from '@sente/venues/kuru';
+import { builderFeeAtoms, fromUnits, precisionDecimals, ratioToDecimal } from '@sente/venues/kuru';
 
 import { formatPrice } from '../ui/tradingFormat.ts';
 import { groupThousands, normalizeDecimal } from '../agents/amounts.ts';
+import { feePpsToPercent } from './kuruBuilder.ts';
 import { depositCapAtoms } from './kuruMarket.ts';
 import type { KuruPlaceResult, StepStatus, TradeFunds } from './types.ts';
 
@@ -262,8 +263,10 @@ export function presetAmount(input: {
   available: bigint | null;
   limitPriceUnits: bigint | null;
   market: TicketMarket;
+  /** The Sente builder fee this build pins (pps), 0 when it's off (SEN-192). */
+  builderFeePps?: number;
 }): string | null {
-  const { pct, side, orderType, available, limitPriceUnits, market } = input;
+  const { pct, side, orderType, available, limitPriceUnits, market, builderFeePps = 0 } = input;
   if (available === null) return null;
   const share = (available * BigInt(pct)) / 100n;
   if (amountAsset(side, orderType) === 'quote') {
@@ -276,7 +279,7 @@ export function presetAmount(input: {
   }
   if (limitPriceUnits === null || limitPriceUnits <= 0n) return null;
   return unitsToDecimal(
-    sizeForSpend(share, limitPriceUnits, market.makerFeePps, market),
+    sizeForSpend(share, limitPriceUnits, market.makerFeePps + BigInt(builderFeePps), market),
     market.sizePrecision,
   );
 }
@@ -302,6 +305,13 @@ export type TicketInput = {
   readonly available: bigint | null;
   /** Market orders only; `null` until one arrives. */
   readonly quote: TicketQuote | null;
+  /**
+   * The Sente builder fee this build pins on Kuru (pps, `kuruBuilder.ts`),
+   * `undefined` or 0 when it's off (SEN-192). A buy's size and deposit cap
+   * reserve room for it, same as the venue's own fee, so "Max" never asks to
+   * deposit more than `available`.
+   */
+  readonly builderFeePps?: number;
 };
 
 export type TicketProblem =
@@ -332,6 +342,7 @@ const SIDE_WORD: Record<Side, string> = { buy: 'Buy', sell: 'Sell' };
  */
 export function evaluateTicket(input: TicketInput): Ticket {
   const { market, side, orderType, quote } = input;
+  const builderFeePps = BigInt(input.builderFeePps ?? 0);
   const base = market.base.symbol;
   const quoteSym = market.quote.symbol;
   const funding = side === 'buy' ? market.quote : market.base;
@@ -369,21 +380,26 @@ export function evaluateTicket(input: TicketInput): Ticket {
     priceUnits = input.worstUnits;
   }
 
-  // Size and what it locks, per the four ticket shapes.
+  // Size and what it locks, per the four ticket shapes. A buy leaves room for
+  // Sente's Kuru builder fee (SEN-192) on top of the venue's own fee, same as
+  // the real order's deposit cap (`flow.ts`'s `placeIntent`) will: otherwise
+  // "Max" could size an order whose actual cap exceeds what was typed.
   let sizeUnits: bigint;
   let needAtoms: bigint;
   if (side === 'buy' && orderType === 'market') {
     needAtoms = typed;
-    sizeUnits = sizeForSpend(typed, priceUnits, market.takerFeePps, market);
+    sizeUnits = sizeForSpend(typed, priceUnits, market.takerFeePps + builderFeePps, market);
   } else {
     sizeUnits = typed;
     needAtoms =
       side === 'sell'
         ? baseAtomsFor(sizeUnits, market)
-        : depositCapAtoms({ side, price: priceUnits, quantity: sizeUnits, tif: 'gtc' }, market, {
-            quote: market.quote.decimals,
-            base: market.base.decimals,
-          });
+        : depositCapAtoms(
+            { side, price: priceUnits, quantity: sizeUnits, tif: 'gtc' },
+            market,
+            { quote: market.quote.decimals, base: market.base.decimals },
+            input.builderFeePps ?? 0,
+          );
   }
 
   const size = unitsToDecimal(sizeUnits, market.sizePrecision);
@@ -467,8 +483,26 @@ function subLine(input: TicketInput, size: string, fillPrice: string | null): st
   return `≈ ${moneyText(mulDecimal(size, fillPrice))} ${market.quote.symbol} · at ${priceText(fillPrice)}`;
 }
 
+/**
+ * "0.1% (≈ 0.02 USDC)" on `notional`, or `null` with the fee off (SEN-192) or
+ * on a sell (Sente's Kuru builder fee is a buy-side extra, never taken off a
+ * sell's proceeds).
+ */
+function senteFeeAmount(
+  side: Side,
+  builderFeePps: number | undefined,
+  notional: string,
+  quote: TicketMarket['quote'],
+): string | null {
+  if (side !== 'buy' || !builderFeePps) return null;
+  // Rounded up, as the planner's `senteFee` estimate is: never understated.
+  const notionalAtoms = toUnits(notional, 10n ** BigInt(quote.decimals)) ?? 0n;
+  const fee = builderFeeAtoms(notionalAtoms, builderFeePps);
+  return `${feePpsToPercent(builderFeePps)}% (≈ ${moneyCeil(fee, quote.decimals)} ${quote.symbol})`;
+}
+
 function disclosureFor(input: TicketInput, size: string | null): string[] {
-  const { market, orderType, quote, slippageBps } = input;
+  const { market, side, orderType, quote, slippageBps, builderFeePps } = input;
   const q = market.quote.symbol;
   if (orderType === 'limit') {
     const priceUnits =
@@ -477,15 +511,22 @@ function disclosureFor(input: TicketInput, size: string | null): string[] {
       return ['Limit · may fill in parts'];
     const notional = mulDecimal(size, unitsToDecimal(priceUnits, market.pricePrecision));
     const fee = mulDecimal(notional, unitsToDecimal(market.makerFeePps, PPS));
-    return [`Limit · may fill in parts · fee on fill ≈ ${moneyText(fee)} ${q}`];
+    const sente = senteFeeAmount(side, builderFeePps, notional, market.quote);
+    return [
+      `Limit · may fill in parts · fee on fill ≈ ${moneyText(fee)} ${q}`,
+      ...(sente !== null ? [`Sente fee ${sente}`] : []),
+    ];
   }
   const slip = `Max slippage ${slippageText(slippageBps)}`;
   if (quote === null || quote.averagePrice === null || size === null) {
     return [`Market · ${slip.toLowerCase()}`];
   }
+  const notional = mulDecimal(size, quote.averagePrice);
+  const sente = senteFeeAmount(side, builderFeePps, notional, market.quote);
   return [
     `Market · est. fill ${priceText(quote.averagePrice)} · fee ${moneyText(quote.estimatedFee)} ${q}`,
     slip,
+    ...(sente !== null ? [`Sente fee ${sente}`] : []),
     // Said before the confirm, not discovered on the result screen.
     ...(quote.partial ? ['The book is thin: only part may fill; the rest is cancelled'] : []),
   ];
@@ -534,6 +575,13 @@ export function reviewRows(input: TicketInput, ticket: Ticket): ReviewRow[] {
   } else {
     rows.push({ label: 'Limit price', value: `${priceText(price)} ${q}` });
   }
+  const sente = senteFeeAmount(
+    side,
+    input.builderFeePps,
+    mulDecimal(size, orderType === 'market' ? (quote?.averagePrice ?? price) : price),
+    market.quote,
+  );
+  if (sente !== null) rows.push({ label: 'Sente fee', value: sente });
   rows.push({ label: 'Size', value: `${shortSize(size)} ${b}` });
 
   if (side === 'buy') {

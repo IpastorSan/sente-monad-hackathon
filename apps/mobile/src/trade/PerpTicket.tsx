@@ -81,6 +81,8 @@ import { BigNumber, PerpTag, SideTag, TokenGlyph } from '@/ui/trading';
 
 const TONE: Record<PerpSide, string> = { long: SIDE_TONE.buy, short: SIDE_TONE.sell };
 const DEFAULT_LEVERAGE = 2;
+/** Said on the ticket and again on review: Sente's Kuru builder fee (SEN-184) never touches Perpl. */
+const NO_SENTE_FEE = 'No Sente fee on perps';
 
 type Stage =
   | { kind: 'ticket' }
@@ -611,6 +613,7 @@ function Ticket({
                 ? 'Limit order · rests on the book until filled or cancelled'
                 : 'Market order · fills within 1% of the mark, or not at all'}
             </Text>
+            <Text style={[text.caption, styles.center]}>{NO_SENTE_FEE}</Text>
           </>
         )}
       </ScrollView>
@@ -687,6 +690,7 @@ function Review({
       />
       {limit?.warning ? <Text style={[text.caption, styles.warn]}>{limit.warning}</Text> : null}
       <Row label="Liquidation" value="Shown on your position once it opens" />
+      <Text style={[text.caption, styles.center]}>{NO_SENTE_FEE}</Text>
       <RiskDisclosure venue="perpl" ack={risk} />
       <View style={styles.spaced}>
         {!ticket.cta.enabled ? (
