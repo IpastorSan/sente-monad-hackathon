@@ -28,6 +28,8 @@
  * /welcome with nothing left in sessionStorage.
  *
  *   mise exec -- pnpm --filter @sente/mobile run e2e:web-reload
+ *
+ * With `SCREENSHOT_DIR` set it also saves signed-in Home at 1440 and 2000 px.
  */
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
@@ -236,6 +238,23 @@ try {
   const raw = await page.evaluate(() => JSON.stringify(sessionStorage));
   expect(!/stub-token-/.test(raw), 'no plaintext token in sessionStorage');
   const sessionsBefore = api.sessions;
+
+  // Optional: a look at signed-in Home on a desktop (`SCREENSHOT_DIR`), for
+  // layout changes no other harness can see without a real passkey. The stub
+  // API answers 503, so the figures are the app's unreachable state.
+  const shots = process.env['SCREENSHOT_DIR'];
+  if (shots) {
+    for (const [width, height] of [
+      [1440, 900],
+      [2000, 1010],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto('https://sente.lol/');
+      await page.waitForTimeout(2500);
+      await page.screenshot({ path: join(shots, `home-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1280, height: 860 });
+  }
 
   // 2. Reload (a full page load of /account): no ceremony, still signed in,
   // same address, the sealed token reused.

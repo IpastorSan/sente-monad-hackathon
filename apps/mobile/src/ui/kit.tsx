@@ -89,8 +89,14 @@ export function Screen({
   onRefresh,
   tabbed = false,
   maxWidth = CONTENT_MAX,
+  backdrop,
 }: {
   children: ReactNode;
+  /**
+   * Painted behind the scroll area across the whole pane, not just the
+   * centred column, and fixed while the content scrolls (Home's board).
+   */
+  backdrop?: ReactNode;
   /** Pinned below the scroll area: the step's primary actions. */
   footer?: ReactNode;
   refreshing?: boolean;
@@ -111,6 +117,13 @@ export function Screen({
       style={[styles.screen, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      {backdrop ? (
+        // zIndex 0 contains a backdrop's own negative index here; the scroll
+        // view comes later in the DOM, so it paints above at the same level.
+        <View style={styles.screenBackdrop} pointerEvents="none">
+          {backdrop}
+        </View>
+      ) : null}
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: footer ? 24 : bottom }, column]}
         keyboardShouldPersistTaps="handled"
@@ -844,6 +857,7 @@ const BUTTON_INK: Record<ButtonKind, string> = {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.ink },
+  screenBackdrop: { ...StyleSheet.absoluteFill, zIndex: 0 },
   content: { paddingHorizontal: GUTTER, paddingTop: 8 },
   footer: {
     paddingHorizontal: GUTTER,

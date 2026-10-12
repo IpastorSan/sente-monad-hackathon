@@ -8,22 +8,13 @@
  * resolve through a style object with camelCase keys (the same trick as
  * `TickerFade.web.tsx` and `ConsensusTrack.web.tsx`).
  *
- * `zIndex: -1` so it paints behind its siblings instead of above them:
- * react-native-web otherwise stacks a `position: absolute`, `z-index: auto`
- * element above normal-flow content regardless of DOM order. Its parent (the
- * board wrapper in `index.tsx`) sets `position: relative, zIndex: 0` so that
- * negative index is contained there, not escaped behind the screen's own ink
- * ground.
- *
- * Height is fixed rather than filling its wrapper: the wrapper sizes to the
- * header alone, and this overflows into the hero below it (allowed —
- * `overflow` is never set to `hidden` on the wrapper), far enough that the
- * mask has already faded to clear before the total-value figure, never
- * lowering its contrast.
+ * It fills the Screen's backdrop layer (`Screen`'s `backdrop` prop), which
+ * spans the whole pane right of the rail on a desktop, not just the centred
+ * column, and stays put while the content scrolls. The mask fades it from
+ * the top right, so at the total-value figure, top left, it is already faint.
  */
 const CELL = 44;
 const STAR = CELL * 6;
-const HEIGHT = 520;
 
 export function HomeBoard() {
   return (
@@ -34,8 +25,7 @@ export function HomeBoard() {
         top: 0,
         left: 0,
         right: 0,
-        height: HEIGHT,
-        zIndex: -1,
+        bottom: 0,
         pointerEvents: 'none',
         backgroundImage: [
           'radial-gradient(circle, rgba(168,152,255,.55) 0 2.2px, transparent 3px)',

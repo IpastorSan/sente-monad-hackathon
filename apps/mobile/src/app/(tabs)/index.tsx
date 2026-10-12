@@ -43,8 +43,8 @@
  * they trade, the latest move, the nudge). A phone keeps the single column in
  * the order above.
  *
- * `HomeBoard` (SEN-191) sits behind the header and bleeds into the hero: the
- * goban grid of the mark, fading out before it reaches the total value. Web
+ * `HomeBoard` (SEN-191) is the Screen's backdrop, across the whole pane on a
+ * desktop: the goban grid of the mark, fading out from the top right. Web
  * only — `ui/HomeBoard.tsx`'s native twin draws nothing.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -414,11 +414,14 @@ export default function Home() {
     ) : null;
 
   return (
-    <Screen tabbed refreshing={refreshing} onRefresh={() => void refresh()} maxWidth={WIDE_MAX}>
-      <View style={styles.boardArea}>
-        <HomeBoard />
-        {header}
-      </View>
+    <Screen
+      tabbed
+      refreshing={refreshing}
+      onRefresh={() => void refresh()}
+      maxWidth={WIDE_MAX}
+      backdrop={<HomeBoard />}
+    >
+      {header}
       {wide ? (
         <>
           {ticker}
@@ -986,11 +989,6 @@ const styles = StyleSheet.create({
   between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   grow: { flex: 1 },
   aside: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  // SEN-191: HomeBoard overflows below the header into the hero on purpose
-  // (it fades out before the total-value figure); `zIndex: 0` gives it a
-  // stacking context of its own, so its negative z-index is contained here
-  // rather than escaping behind the screen's own ink ground (web only).
-  boardArea: { position: 'relative', zIndex: 0 },
   hero: { marginTop: 14 },
   // Wide (SEN-167): two columns under the ticker, tops level with each other.
   columns: { flexDirection: 'row', alignItems: 'flex-start', gap: 48 },
