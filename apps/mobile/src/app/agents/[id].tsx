@@ -283,6 +283,9 @@ export default function AgentScreen() {
 
   const active = agent.status === 'active';
   const now = Date.now();
+  // SEN-197: an expired mandate leaves the agent `active` but unable to sign
+  // anything, so it can be archived like a revoked one.
+  const expired = active && agent.mandate.expiresAt * 1000 <= now;
   const trading = active && isTrading(summary, now);
   const open = liveRun(runs);
   const guarded = (action: () => void) => {
@@ -386,6 +389,8 @@ export default function AgentScreen() {
             <Text style={text.caption}>{modelLabel(agent.model)}</Text>
             {active && open ? (
               <Pill label="Running…" tone="live" />
+            ) : expired ? (
+              <Pill label="Mandate expired" tone="idle" />
             ) : active ? (
               <Pill label={trading ? 'Trading' : 'Watching'} tone={trading ? 'live' : 'idle'} />
             ) : (
@@ -425,6 +430,20 @@ export default function AgentScreen() {
             setSheet('fund');
           }}
         />
+      ) : null}
+
+      {expired ? (
+        <Notice
+          title={`Mandate expired on ${shortDate(agent.mandate.expiresAt * 1000)}`}
+          detail="It can’t trade any more: the enclave refuses to sign anything past the expiry. Amend it with a new expiry to put it back to work, or archive it."
+        >
+          <ArchiveAgent
+            agent={agent}
+            portfolio={portfolio}
+            onReturn={() => setSheet('return')}
+            onDone={finish}
+          />
+        </Notice>
       ) : null}
 
       {active ? null : (

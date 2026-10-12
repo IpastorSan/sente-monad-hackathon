@@ -1,6 +1,6 @@
 /**
  * Archive a stopped agent from its page (SEN-197), or bring an archived one
- * back. Sits under the revoked notice. Archiving is soft: it only takes the
+ * back. Sits under the revoked or mandate-expired notice. Archiving is soft: it only takes the
  * agent off the owner's lists, so the sheet says plainly that nothing on chain
  * goes away. While funds remain, the sheet turns into "Return funds first" and
  * hands over to the page's own return sheet.
