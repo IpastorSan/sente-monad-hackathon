@@ -46,6 +46,7 @@ import {
   isKuruDepositPinned,
   type AgentRecord,
   type AgentStatus,
+  type MandateAnchor,
 } from '../store/agent-store';
 
 export const AGENT_NAME_MAX_LENGTH = 64;
@@ -471,6 +472,15 @@ export interface AgentResponseDto {
    */
   erc8004AgentId?: string;
   /**
+   * The mandate as last anchored on chain (SEN-194): `mandateHash` and
+   * `policyHash` as written under the `sente.mandate` metadata key of the
+   * agent's ERC-8004 identity (`agentTokenId` on `registry`), and the
+   * transaction that wrote them. Absent until the first anchor lands; it lags
+   * an amend by one background transaction. `docs/agents.md` says how to
+   * verify it.
+   */
+  mandateAnchor?: MandateAnchorDto;
+  /**
    * PRESENT ONLY WHEN THE MANDATE NAMES KURU'S RETIRED DEPLOYMENT (SEN-185).
    * Kuru moved testnet to new books, tokens and AccountCore on 2026-09-25; this
    * agent's live policy still pins the old ones, so it cannot trade Kuru until
@@ -826,6 +836,36 @@ export function toMandateDto(mandate: Mandate): MandateDto {
   };
 }
 
+/** The on-chain mandate anchor on the wire (SEN-194); `toMandateAnchorDto`. */
+export interface MandateAnchorDto {
+  mandateHash: string;
+  policyHash?: string;
+  status: 'active' | 'revoked';
+  txHash: string;
+  chainId: number;
+  registry: string;
+  agentTokenId: string;
+  /** ISO 8601. */
+  anchoredAt: string;
+}
+
+/**
+ * Public by construction — every field is on chain — so the public agent page
+ * (SEN-193) sends it as is.
+ */
+export function toMandateAnchorDto(anchor: MandateAnchor): MandateAnchorDto {
+  return {
+    mandateHash: anchor.mandateHash,
+    ...(anchor.policyHash ? { policyHash: anchor.policyHash } : {}),
+    status: anchor.status,
+    txHash: anchor.txHash,
+    chainId: anchor.chainId,
+    registry: anchor.registry,
+    agentTokenId: anchor.agentTokenId,
+    anchoredAt: anchor.anchoredAt,
+  };
+}
+
 /** Never includes `mcpTokenHash` or `userId`: the caller is the owner. */
 export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
   return {
@@ -842,6 +882,7 @@ export function toAgentResponse(agent: AgentRecord): AgentResponseDto {
     walletId: agent.walletId,
     policyId: agent.policyId,
     ...(agent.erc8004AgentId !== undefined ? { erc8004AgentId: agent.erc8004AgentId } : {}),
+    ...(agent.mandateAnchor ? { mandateAnchor: toMandateAnchorDto(agent.mandateAnchor) } : {}),
     ...toKuruRetiredField(agent),
     status: agent.status,
     kuruDepositPinned: isKuruDepositPinned(agent),

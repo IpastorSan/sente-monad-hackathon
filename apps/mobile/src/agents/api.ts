@@ -123,6 +123,21 @@ type AgentFields = {
    */
   erc8004AgentId?: string;
   /**
+   * The mandate as last anchored on chain (SEN-194): the hashes written to the
+   * agent's ERC-8004 identity and the transaction that wrote them. Absent until
+   * the first anchor lands; it trails an amend by one background transaction.
+   */
+  mandateAnchor?: {
+    mandateHash: string;
+    policyHash?: string;
+    status: 'active' | 'revoked';
+    txHash: string;
+    chainId: number;
+    registry: string;
+    agentTokenId: string;
+    anchoredAt: string;
+  };
+  /**
    * Only when the mandate names the Kuru books Kuru retired on 2026-09-25
    * (SEN-185): its policy still pins them, so the agent cannot trade Kuru until
    * it is amended. `message` is what to show. The API also sends the moved

@@ -41,9 +41,9 @@ import {
   ReputationEventLog,
   ZERO_FEEDBACK_HASH,
   type Erc8004Client,
-  type Erc8004FeedbackWrite,
   type Erc8004ReputationOptions,
 } from './erc8004';
+import { FakeErc8004Client } from './testing/fake-erc8004-client';
 
 /** The registration file inside a `data:` agentURI, decoded. */
 function registrationJson(uri: string): Record<string, unknown> {
@@ -54,32 +54,6 @@ function registrationJson(uri: string): Record<string, unknown> {
 
 const REGISTRAR = `0x${'11'.repeat(32)}`;
 const REVIEWER = `0x${'22'.repeat(32)}`;
-
-/**
- * The chain, as a spec sees it: what was written, and a way to make the next
- * write fail.
- */
-class FakeErc8004Client implements Erc8004Client {
-  readonly registrations: string[] = [];
-  readonly feedback: Erc8004FeedbackWrite[] = [];
-  nextAgentId = 1874n;
-  registerError: Error | undefined;
-  feedbackError: Error | undefined;
-
-  register(agentUri: string): Promise<{ agentId: bigint; txHash: `0x${string}` }> {
-    if (this.registerError) return Promise.reject(this.registerError);
-    this.registrations.push(agentUri);
-    return Promise.resolve({ agentId: this.nextAgentId, txHash: `0x${'ab'.repeat(32)}` });
-  }
-
-  giveFeedback(
-    feedback: Erc8004FeedbackWrite,
-  ): Promise<{ txHash: `0x${string}`; blockNumber: bigint }> {
-    if (this.feedbackError) return Promise.reject(this.feedbackError);
-    this.feedback.push(feedback);
-    return Promise.resolve({ txHash: `0x${'cd'.repeat(32)}`, blockNumber: 42n });
-  }
-}
 
 function reputation(
   client: Erc8004Client | undefined,

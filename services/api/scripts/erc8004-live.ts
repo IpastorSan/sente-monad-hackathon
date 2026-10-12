@@ -4,6 +4,7 @@
 //   pnpm --filter @sente/api run erc8004:live                       # read-only
 //   pnpm --filter @sente/api run erc8004:live -- --register          # writes
 //   pnpm --filter @sente/api run erc8004:live -- --feedback 1874 --bps 250
+//   pnpm --filter @sente/api run erc8004:live -- --anchor 1874          # SEN-194
 //
 // WHAT EACH MODE DOES
 //
@@ -21,7 +22,9 @@
 //
 //   --register  real write. Signs with ERC8004_REGISTRAR_KEY at the fixed gas
 //     limit, waits for the receipt, prints the agentId and the tx hash, and
-//     prints the command that writes feedback for it. Refuses to send when the
+//     prints the command that writes feedback for it. Since SEN-194 the
+//     registration carries a probe mandate anchor (`sente.mandate`), exactly as
+//     a hire does, and the anchor is read back with `getMetadata`. Refuses to send when the
 //     registrar's balance cannot cover `gas * maxFeePerGas`, so the failure is a
 //     message rather than a revert charged at the limit.
 //
@@ -31,11 +34,19 @@
 //     landed, not merely that a transaction was sent. Refuses when the reviewer
 //     key owns the agent, since the registry rejects self-feedback.
 //
+//   --anchor <agentId>  real write (SEN-194). Rewrites the probe agent's
+//     `sente.mandate` metadata with `setMetadata` — the amend/revoke path, here
+//     with status `revoked` — signed by the registrar, which must own the agent,
+//     then reads it back and decodes it. Refuses when the registrar is not the
+//     owner (the registry reverts with "Not authorized").
+//
 // SECRETS: no private key is ever printed, not even part of one. What is printed
 // is addresses, gas, hashes and contract state.
 
 import { existsSync } from 'node:fs';
 
+import { parseMandate } from '@sente/mandate';
+import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { createPublicClient, http, isAddressEqual, type Address, type Hex } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
@@ -53,10 +64,19 @@ import {
   ERC8004_VALUE_DECIMALS,
   encodeFeedback,
   encodeRegister,
+  encodeSetMetadata,
   loadErc8004Config,
   ZERO_FEEDBACK_HASH,
   type Erc8004Client,
 } from '../src/agents/reputation/erc8004.ts';
+import {
+  decodeMandateAnchor,
+  desiredAnchor,
+  MANDATE_METADATA_KEY,
+  mandateMetadataEntry,
+  type AnchorStatus,
+} from '../src/agents/reputation/mandate-anchor.ts';
+import type { AgentRecord } from '../src/agents/store/agent-store.ts';
 import { envFileFromArgs } from './env-file.ts';
 
 /** A registration file an operator can recognise on a block explorer. */
@@ -76,6 +96,29 @@ const PROBE_AGENT = {
 };
 
 const failures: string[] = [];
+
+/** The anchor a hire of the probe agent would register: a small real mandate, hashed. */
+function probeAnchorEntry(status: AnchorStatus = 'active') {
+  const mandate = parseMandate({
+    version: 1,
+    chainId: 10143,
+    expiresAt: PROBE_AGENT.mandate.expiresAt,
+    venues: ['kuru', 'perpl'],
+    kuru: {
+      markets: [KURU_TESTNET_MARKETS[0]!.address],
+      maxDepositAtoms: { [KURU_TESTNET_TOKENS.USDC.address]: '1000000' },
+    },
+    perpl: { maxCollateralAtoms: '1000000', maxLeverage: 5, markets: ['BTC-PERP'] },
+    maxOrderNotional: PROBE_AGENT.mandate.maxOrderNotional,
+  });
+  const want = desiredAnchor({
+    mandate,
+    address: PROBE_AGENT.address,
+    status,
+    kuruDepositPinned: true,
+  } as unknown as AgentRecord);
+  return { want, entry: mandateMetadataEntry(want) };
+}
 
 /**
  * The public testnet RPC answers 15 requests a second, and this probe makes a
@@ -145,13 +188,18 @@ async function main(): Promise<void> {
   show('reputation registry', ERC8004_REPUTATION_REGISTRY);
   show('registrar', registrar ?? 'unset (ERC8004_REGISTRAR_KEY)');
   show('reviewer', reviewer ?? 'unset (ERC8004_REVIEWER_KEY)');
-  show('gas limits', `register=${config.registerGas} feedback=${config.feedbackGas}`);
+  show(
+    'gas limits',
+    `register=${config.registerGas} feedback=${config.feedbackGas} metadata=${config.metadataGas}`,
+  );
   show('simulation sender', funded ?? 'none (set ERC8004_REGISTRAR_KEY or TREASURY_PRIVATE_KEY)');
 
   const agents = await step('minted agents', () => mintedAgents());
 
   if (flag('register')) {
     await register();
+  } else if (arg('anchor') !== undefined) {
+    await anchor();
   } else if (arg('feedback') !== undefined) {
     await feedback();
   } else {
@@ -205,8 +253,9 @@ async function probe(agents: { agentId: bigint; owner: Address }[] | undefined):
   });
 
   const agentUri = probeAgentUri();
-  const registerData = encodeRegister(agentUri);
+  const registerData = encodeRegister(agentUri, [probeAnchorEntry().entry]);
   show('probe agentURI chars', agentUri.length, `bound ${ERC8004_MAX_AGENT_URI_CHARS}`);
+  show('probe mandateHash', probeAnchorEntry().want.mandateHash);
   show('register calldata bytes', (registerData.length - 2) / 2);
 
   if (funded) {
@@ -264,6 +313,22 @@ async function probe(agents: { agentId: bigint; owner: Address }[] | undefined):
     });
   }
   if (last) {
+    // SEN-194: the anchor rewrite, simulated from the agent's real owner (only
+    // the owner may set metadata) — a first write, the expensive case.
+    await step('metadata gas', async () => {
+      const gas = await chain.estimateGas({
+        account: last.owner,
+        to: ERC8004_IDENTITY_REGISTRY,
+        data: encodeSetMetadata(last.agentId, probeAnchorEntry('revoked').entry),
+      });
+      show(
+        'measured setMetadata gas',
+        gas,
+        gas <= config.metadataGas
+          ? `within limit ${config.metadataGas}`
+          : `EXCEEDS ${config.metadataGas}`,
+      );
+    });
     await step('self-feedback rule', async () => {
       try {
         await chain.call({
@@ -303,8 +368,12 @@ async function register(): Promise<void> {
     return;
   }
   const agentUri = probeAgentUri();
+  const probe = probeAnchorEntry();
   show('agentURI chars', agentUri.length);
-  const registered = await step('register (live write)', () => client.register(agentUri));
+  show('anchor mandateHash', probe.want.mandateHash);
+  const registered = await step('register (live write)', () =>
+    client.register(agentUri, [probe.entry]),
+  );
   if (!registered) {
     console.log(
       '\nNo agentId. A transaction that was broadcast but never confirmed may still mint:\n' +
@@ -315,9 +384,73 @@ async function register(): Promise<void> {
   show('agentId', registered.agentId);
   show('tx', registered.txHash);
   show('ledger', agentLedgerUrl(config.agentBaseUrl, PROBE_AGENT.id));
+  await readAnchor(registered.agentId, probe.want.mandateHash, 'active');
   console.log(
-    `\nFeedback: pnpm --filter @sente/api run erc8004:live -- --feedback ${registered.agentId}`,
+    `\nFeedback: pnpm --filter @sente/api run erc8004:live -- --feedback ${registered.agentId}` +
+      `\nAnchor:   pnpm --filter @sente/api run erc8004:live -- --anchor ${registered.agentId}`,
   );
+}
+
+/** SEN-194: rewrite the anchor (status revoked) and read it back. */
+async function anchor(): Promise<void> {
+  const client = createErc8004Client(config);
+  const raw = arg('anchor');
+  if (!/^\d+$/.test(raw ?? '')) throw new Error(`--anchor needs an agentId, got ${raw}`);
+  const agentId = BigInt(raw!);
+  if (!client || !registrar) {
+    show('anchor', 'skipped: ERC8004_REGISTRAR_KEY is unset');
+    return;
+  }
+  const owner = await ownerOf(agentId);
+  show('agentId', agentId, owner ? `owned by ${owner}` : '(unregistered)');
+  if (owner === undefined) return;
+  if (!isAddressEqual(owner, registrar)) {
+    show('anchor', 'REFUSED: the registrar does not own this agent; setMetadata would revert');
+    return;
+  }
+  const balance = await chain.getBalance({ address: registrar });
+  const fees = await chain.estimateFeesPerGas();
+  const needed = config.metadataGas * (fees.maxFeePerGas ?? 0n);
+  show('registrar balance', balance);
+  show('worst-case cost', needed, `at maxFeePerGas ${fees.maxFeePerGas ?? 0n}`);
+  if (balance < needed) {
+    show('anchor', 'REFUSED: fund the registrar, then run again');
+    return;
+  }
+  await readAnchor(agentId, undefined, undefined);
+  const probe = probeAnchorEntry('revoked');
+  const receipt = await step('setMetadata (live write)', () =>
+    client.setMetadata(agentId, probe.entry),
+  );
+  if (!receipt) return;
+  show('tx', receipt.txHash, `block ${receipt.blockNumber}`);
+  await readAnchor(agentId, probe.want.mandateHash, 'revoked');
+}
+
+/** Reads `sente.mandate` back off the registry; checks it when expectations are given. */
+async function readAnchor(
+  agentId: bigint,
+  mandateHash: Hex | undefined,
+  status: AnchorStatus | undefined,
+): Promise<void> {
+  await step('anchor read-back', async () => {
+    const value = (await chain.readContract({
+      address: ERC8004_IDENTITY_REGISTRY,
+      abi: ERC8004_IDENTITY_ABI,
+      functionName: 'getMetadata',
+      args: [agentId, MANDATE_METADATA_KEY],
+    })) as Hex;
+    const decoded = decodeMandateAnchor(value);
+    show(
+      `#${agentId} sente.mandate`,
+      decoded ? `${decoded.status} ${decoded.mandateHash}` : value,
+      'read back from the registry',
+    );
+    if (mandateHash === undefined) return;
+    if (decoded?.mandateHash !== mandateHash || decoded.status !== status) {
+      throw new Error(`expected ${status} ${mandateHash} on chain`);
+    }
+  });
 }
 
 async function feedback(): Promise<void> {

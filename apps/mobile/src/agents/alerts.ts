@@ -87,7 +87,9 @@ export function toAlerts(events: readonly ActivityEvent[]): Alert[] {
     .filter((event) => !(event.kind === 'close' && settled.has(runKey(event))))
     .flatMap((event) => {
       const [entry] = toLedgerEntries([event]);
-      if (!entry || entry.kind === 'thesis') return [];
+      // A thesis is not news yet; a mandate anchor (SEN-194) is bookkeeping, and
+      // stays on the Ledger.
+      if (!entry || entry.kind === 'thesis' || entry.kind === 'anchor') return [];
       return [
         {
           key: `${event.agentId}:${event.seq}`,
@@ -110,7 +112,7 @@ function runKey(event: Pick<ActivityEvent, 'agentId' | 'runId'>): string {
 
 type Sentence = Pick<Alert, 'lead' | 'figure' | 'detail' | 'held'>;
 
-function sentence(entry: Exclude<LedgerEntry, { kind: 'thesis' }>): Sentence {
+function sentence(entry: Exclude<LedgerEntry, { kind: 'thesis' | 'anchor' }>): Sentence {
   const plain = { figure: null, held: null };
   switch (entry.kind) {
     case 'trade':

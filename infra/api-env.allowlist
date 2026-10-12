@@ -117,6 +117,7 @@ ERC8004_MCP_ENDPOINT
 ERC8004_IMAGE_URL
 ERC8004_REGISTER_GAS
 ERC8004_FEEDBACK_GAS
+ERC8004_METADATA_GAS
 
 # --- Alchemy Notify webhook (SEN-30) ---
 # The signing key proves a delivery came FROM Alchemy; the auth token

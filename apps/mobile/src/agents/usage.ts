@@ -279,6 +279,7 @@ export function describeMove(event: WireAgentEvent): Move | null {
       };
     }
     case 'account':
+    case 'anchor':
       return { stone: stoneFor(entry), line: entry.message, at };
   }
 }

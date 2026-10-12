@@ -38,9 +38,23 @@
  *
  * | call | measured | limit here |
  * | --- | --- | --- |
- * | `register(string)`, typical 833-char URI | 685,052 | 950,000 |
- * | `register(string)`, largest this module builds (1,125-char URI) | 849,887 | 950,000 |
+ * | `register(string)`, typical 833-char URI | 685,052 | — |
+ * | `register(string)`, largest this module builds (1,125-char URI) | 849,887 | — |
  * | `giveFeedback(...)`, across agent ids and clients | 278,412 – 295,694 | 350,000 |
+ *
+ * SEN-194 added the mandate anchor (`mandate-anchor.ts`): `register` now carries
+ * one `sente.mandate` metadata entry (66 bytes), and amend/revoke rewrite it with
+ * `setMetadata`. Re-measured 2026-10-12 the same way, against the live registry:
+ *
+ * | call | measured | limit here |
+ * | --- | --- | --- |
+ * | `register(string,(string,bytes)[])`, 833-char URI + anchor | 786,658 | 1,000,000 |
+ * | `register(string,(string,bytes)[])`, 1,125-char URI + anchor | 962,465 | 1,000,000 |
+ * | `setMetadata(uint256,string,bytes)`, first write of the anchor | 149,248 | 160,000 |
+ *
+ * `setMetadata`'s calldata is fixed-size (the value is always 66 bytes), and a
+ * first write is its most expensive case (fresh storage slots), so its limit is
+ * tight; a rewrite costs less.
  *
  * Almost all of that is calldata: Monad prices it high, and the registration
  * file is a base64 data URI. The description and the name are therefore capped
@@ -121,6 +135,9 @@ export const ERC8004_IDENTITY_ABI = parseAbi([
   'function register(string agentURI) returns (uint256 agentId)',
   'function register(string agentURI, (string metadataKey, bytes metadataValue)[] metadata) returns (uint256 agentId)',
   'function register() returns (uint256 agentId)',
+  'function setMetadata(uint256 agentId, string metadataKey, bytes metadataValue)',
+  'function getMetadata(uint256 agentId, string metadataKey) view returns (bytes)',
+  'function tokenURI(uint256 tokenId) view returns (string)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function getAgentWallet(uint256 agentId) view returns (address)',
   'event Registered(uint256 indexed agentId, string agentURI, address indexed owner)',
@@ -150,8 +167,9 @@ export const ERC8004_REPUTATION_ABI = parseAbi([
  * every write.
  */
 export const ERC8004_GAS = {
-  register: 950_000n,
+  register: 1_000_000n,
   feedback: 350_000n,
+  metadata: 160_000n,
 } as const;
 
 /**
@@ -227,6 +245,8 @@ export interface Erc8004Config {
   readonly imageUrl?: string;
   readonly registerGas: bigint;
   readonly feedbackGas: bigint;
+  /** `setMetadata`, the mandate anchor's rewrite on amend and revoke (SEN-194). */
+  readonly metadataGas: bigint;
 }
 
 export interface Erc8004Logger {
@@ -259,6 +279,11 @@ export function loadErc8004Config(env: NodeJS.ProcessEnv = process.env): Erc8004
       ERC8004_GAS.feedback,
       'ERC8004_FEEDBACK_GAS',
     ),
+    metadataGas: positiveBigInt(
+      env['ERC8004_METADATA_GAS'],
+      ERC8004_GAS.metadata,
+      'ERC8004_METADATA_GAS',
+    ),
   };
 }
 
@@ -277,7 +302,8 @@ export function describeErc8004Config(config: Erc8004Config, logger: Erc8004Logg
     `ERC-8004 enabled: registrar ${registrar} owns each agent NFT; reviewer ` +
       `${reviewer ?? 'unset'}; identity ${ERC8004_IDENTITY_REGISTRY} ` +
       `reputation ${ERC8004_REPUTATION_REGISTRY} ` +
-      `gas register=${config.registerGas} feedback=${config.feedbackGas}`,
+      `gas register=${config.registerGas} feedback=${config.feedbackGas} ` +
+      `metadata=${config.metadataGas}`,
   );
   if (!reviewer) {
     logger.warn(
@@ -523,14 +549,27 @@ export interface Erc8004Receipt {
   readonly blockNumber: bigint;
 }
 
+/** One `(metadataKey, metadataValue)` entry of the Identity Registry. */
+export interface Erc8004MetadataEntry {
+  readonly metadataKey: string;
+  readonly metadataValue: Hex;
+}
+
 /**
- * The two registry writes and nothing else, so a spec substitutes a fake of a
- * few lines instead of a chain. Both methods may throw; the callers
- * ({@link Erc8004Reputation}) are the ones that promise never to.
+ * The registry writes and nothing else, so a spec substitutes a fake of a few
+ * lines instead of a chain. Every method may throw; the callers
+ * ({@link Erc8004Reputation}, `MandateAnchors`) are the ones that promise never
+ * to.
  */
 export interface Erc8004Client {
-  register(agentUri: string): Promise<Erc8004AgentRegistration>;
+  /** With `metadata`, the registration sets those entries in the same transaction. */
+  register(
+    agentUri: string,
+    metadata?: readonly Erc8004MetadataEntry[],
+  ): Promise<Erc8004AgentRegistration>;
   giveFeedback(feedback: Erc8004FeedbackWrite): Promise<Erc8004Receipt>;
+  /** Signed by the registrar, which owns every agent it registered. */
+  setMetadata(agentId: bigint, entry: Erc8004MetadataEntry): Promise<Erc8004Receipt>;
 }
 
 export interface Erc8004ChainOptions {
@@ -539,6 +578,7 @@ export interface Erc8004ChainOptions {
   readonly rpcUrl?: string;
   readonly registerGas: bigint;
   readonly feedbackGas: bigint;
+  readonly metadataGas?: bigint;
   readonly identity?: Address;
   readonly reputation?: Address;
   /** How long a broadcast transaction gets to be mined. Default 30 s. */
@@ -562,6 +602,7 @@ export class Erc8004ChainClient implements Erc8004Client {
   readonly #reputation: Address;
   readonly #registerGas: bigint;
   readonly #feedbackGas: bigint;
+  readonly #metadataGas: bigint;
   readonly #receiptTimeoutMs: number;
   readonly #chain: PublicClient;
   readonly #registrarSender?: RoleSender;
@@ -572,6 +613,7 @@ export class Erc8004ChainClient implements Erc8004Client {
     this.#reputation = options.reputation ?? ERC8004_REPUTATION_REGISTRY;
     this.#registerGas = options.registerGas;
     this.#feedbackGas = options.feedbackGas;
+    this.#metadataGas = options.metadataGas ?? ERC8004_GAS.metadata;
     this.#receiptTimeoutMs = options.receiptTimeoutMs ?? 30_000;
     this.#chain = createPublicClient({
       chain: monadTestnet,
@@ -587,14 +629,13 @@ export class Erc8004ChainClient implements Erc8004Client {
     }
   }
 
-  async register(agentUri: string): Promise<Erc8004AgentRegistration> {
+  async register(
+    agentUri: string,
+    metadata: readonly Erc8004MetadataEntry[] = [],
+  ): Promise<Erc8004AgentRegistration> {
     const sender = this.#registrarSender;
     if (!sender) throw new Error('no ERC8004_REGISTRAR_KEY is configured');
-    const data = encodeFunctionData({
-      abi: ERC8004_IDENTITY_ABI,
-      functionName: 'register',
-      args: [agentUri],
-    });
+    const data = encodeRegister(agentUri, metadata);
     const txHash = await this.#send(sender, this.#identity, data, this.#registerGas);
     const receipt = await this.#receipt(txHash);
     const agentId = agentIdFromLogs(receipt.logs, this.#identity, sender.address);
@@ -609,6 +650,15 @@ export class Erc8004ChainClient implements Erc8004Client {
     if (!sender) throw new Error('no ERC8004_REVIEWER_KEY is configured');
     const data = encodeFeedback(feedback);
     const txHash = await this.#send(sender, this.#reputation, data, this.#feedbackGas);
+    const receipt = await this.#receipt(txHash);
+    return { txHash, blockNumber: receipt.blockNumber };
+  }
+
+  async setMetadata(agentId: bigint, entry: Erc8004MetadataEntry): Promise<Erc8004Receipt> {
+    const sender = this.#registrarSender;
+    if (!sender) throw new Error('no ERC8004_REGISTRAR_KEY is configured');
+    const data = encodeSetMetadata(agentId, entry);
+    const txHash = await this.#send(sender, this.#identity, data, this.#metadataGas);
     const receipt = await this.#receipt(txHash);
     return { txHash, blockNumber: receipt.blockNumber };
   }
@@ -722,15 +772,37 @@ export function createErc8004Client(config: Erc8004Config): Erc8004Client | unde
     rpcUrl: config.rpcUrl,
     registerGas: config.registerGas,
     feedbackGas: config.feedbackGas,
+    metadataGas: config.metadataGas,
   });
 }
 
-/** The `register(string)` calldata for one agent URI: what the live script measures. */
-export function encodeRegister(agentUri: string): Hex {
+/**
+ * The `register` calldata for one agent URI: what the live script measures.
+ * With metadata it is the `register(string,(string,bytes)[])` overload.
+ */
+export function encodeRegister(
+  agentUri: string,
+  metadata: readonly Erc8004MetadataEntry[] = [],
+): Hex {
+  return metadata.length > 0
+    ? encodeFunctionData({
+        abi: ERC8004_IDENTITY_ABI,
+        functionName: 'register',
+        args: [agentUri, metadata.map((m) => ({ ...m }))],
+      })
+    : encodeFunctionData({
+        abi: ERC8004_IDENTITY_ABI,
+        functionName: 'register',
+        args: [agentUri],
+      });
+}
+
+/** The `setMetadata(...)` calldata for one entry: what the live script measures. */
+export function encodeSetMetadata(agentId: bigint, entry: Erc8004MetadataEntry): Hex {
   return encodeFunctionData({
     abi: ERC8004_IDENTITY_ABI,
-    functionName: 'register',
-    args: [agentUri],
+    functionName: 'setMetadata',
+    args: [agentId, entry.metadataKey, entry.metadataValue],
   });
 }
 
@@ -851,6 +923,11 @@ export class Erc8004Reputation {
     this.#logger = options.logger;
   }
 
+  /** The registry client, shared with `MandateAnchors`; absent when unconfigured. */
+  get client(): Erc8004Client | undefined {
+    return this.#client;
+  }
+
   /** The URI a hired agent is registered under. Public for specs and the live script. */
   agentUri(agent: AgentRecord): string {
     return agentUriFor({
@@ -871,14 +948,19 @@ export class Erc8004Reputation {
    *
    * The URI is built from the record AS HIRED: the mandate summary is the one
    * the user wrote, and a later amend does not rewrite it (an on-chain URI edit
-   * is another transaction; see `docs/erc8004.md`).
+   * is another transaction; see `docs/erc8004.md`). What DOES follow every
+   * amend is the mandate anchor, passed here as `metadata` so the hire sets it
+   * in the same transaction (SEN-194, `mandate-anchor.ts`).
    */
-  async registerOnHire(agent: AgentRecord): Promise<Erc8004Registration> {
+  async registerOnHire(
+    agent: AgentRecord,
+    metadata: readonly Erc8004MetadataEntry[] = [],
+  ): Promise<Erc8004Registration> {
     const client = this.#client;
     if (!client) return refusal('not_configured', 'ERC-8004 is not configured');
     const agentUri = this.agentUri(agent);
     try {
-      const { agentId, txHash } = await client.register(agentUri);
+      const { agentId, txHash } = await client.register(agentUri, metadata);
       this.#logger?.log?.(
         `registered agent ${agent.id} as ERC-8004 #${agentId} (${txHash}, ${agentUri.length}-char URI)`,
       );
@@ -1000,7 +1082,7 @@ function formatBps(value: bigint): string {
   return `${negative ? '-' : ''}${digits.slice(0, -2)}.${digits.slice(-2)}`;
 }
 
-function describeError(error: unknown): string {
+export function describeError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const details = (error as { details?: unknown }).details;
   return `${error.name}: ${error.message}${typeof details === 'string' ? ` (${details})` : ''}`;

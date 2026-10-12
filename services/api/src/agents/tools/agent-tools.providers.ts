@@ -26,6 +26,7 @@ import {
   loadErc8004Config,
   ReputationEventLog,
 } from '../reputation/erc8004';
+import { MANDATE_ANCHORS, MandateAnchors } from '../reputation/mandate-anchor';
 import { AGENT_STORE, type AgentStore } from '../store/agent-store';
 import { AgentVenues } from '../venues/agent-venues';
 import { WatcherService } from '../watchers/watcher.service';
@@ -99,6 +100,32 @@ const agentEventsProvider: Provider = {
 };
 
 /**
+ * The on-chain mandate anchor (SEN-194), on the registrar's client. With no
+ * registrar key it is a no-op, like the rest of ERC-8004. Once enabled it
+ * re-anchors, shortly after boot, every registered agent whose anchor is stale
+ * — the durable half of the retry, since a pending in-process retry does not
+ * survive a restart.
+ */
+const mandateAnchorsProvider: Provider = {
+  provide: MANDATE_ANCHORS,
+  inject: [ERC8004_WRITER, AGENT_STORE, AGENT_EVENTS],
+  useFactory: (
+    reputation: Erc8004Reputation,
+    store: AgentStore,
+    events: AgentEventLog,
+  ): MandateAnchors => {
+    const anchors = new MandateAnchors({
+      ...(reputation.client ? { client: reputation.client } : {}),
+      agents: store,
+      events,
+      logger: new Logger('MandateAnchors'),
+    });
+    if (anchors.enabled) setTimeout(() => void anchors.reconcile(), 10_000).unref();
+    return anchors;
+  },
+};
+
+/**
  * Nest wiring for the agent tools and `/mcp` (SEN-7), kept out of
  * `agents.module.ts` so that file only spreads these in.
  */
@@ -114,6 +141,7 @@ export const agentToolsProviders: Provider[] = [
   },
   erc8004Provider,
   agentEventsProvider,
+  mandateAnchorsProvider,
   {
     provide: AgentTools,
     inject: [

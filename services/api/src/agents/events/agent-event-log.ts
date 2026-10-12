@@ -26,6 +26,10 @@ export const AGENT_EVENTS = Symbol('AGENT_EVENTS');
  * the Perpl account opened, its key enrolled, or why that could not happen yet
  * (a gas shortfall, a refusal). No tool produces it either, so no `tool`; its
  * `detail` is `venues/perpl-onboarding.ts#OnboardingEventDetail`.
+ * `anchor`: the agent's mandate hash written to (or not yet written to) its
+ * ERC-8004 identity on chain, at hire and after every amend and revoke
+ * (SEN-194). No tool produces it; its `detail` is
+ * `reputation/mandate-anchor.ts#AnchorEventDetail`.
  */
 export const AGENT_EVENT_KINDS = [
   'thesis',
@@ -37,6 +41,7 @@ export const AGENT_EVENT_KINDS = [
   'run',
   'deposit',
   'onboarding',
+  'anchor',
 ] as const;
 export type AgentEventKind = (typeof AGENT_EVENT_KINDS)[number];
 

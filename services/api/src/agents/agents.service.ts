@@ -52,6 +52,7 @@ import {
 } from './store/agent-store';
 import { generateMcpToken, hashMcpToken, MCP_TOKEN_PREFIX } from './store/mcp-token';
 import { ERC8004_WRITER, type Erc8004Reputation } from './reputation/erc8004';
+import { MANDATE_ANCHORS, type MandateAnchors } from './reputation/mandate-anchor';
 import {
   AGENT_PERPL_CONTEXT,
   perplOpeningMinimum,
@@ -344,6 +345,14 @@ export class AgentsService {
     @Optional()
     @Inject(AGENT_PERPL_CONTEXT)
     private readonly perplContext?: PerplContextSource,
+    /**
+     * The on-chain mandate anchor (SEN-194). Optional like the rest: without
+     * it a hire registers no anchor and amends rewrite none. Never awaited on
+     * an amend or revoke — the rewrite lands in the background.
+     */
+    @Optional()
+    @Inject(MANDATE_ANCHORS)
+    private readonly anchors?: MandateAnchors,
   ) {}
 
   /**
@@ -597,19 +606,23 @@ export class AgentsService {
     mcpToken: string,
   ): Promise<HiredAgent> {
     const pinned = await this.pinKuruDeposit(agent);
-    const registration = await this.registerIdentity(agent);
+    // The anchor hashes the policy as it now stands, so after the pin.
+    const registration = await this.registerIdentity({ ...agent, ...pinned });
     const gasFunding = await this.fundGas(principal, agent);
     // AFTER the drip, deliberately: the drip is our own MON and is normally
     // already mined by now, so it does not show up as a user deposit.
     await this.watchForDeposits(agent);
-    return {
-      agent: await this.store.update(agent.id, {
-        ...pinned,
-        gasFunding,
-        ...(registration.agentId !== undefined ? { erc8004AgentId: registration.agentId } : {}),
-      }),
-      mcpToken,
-    };
+    const stored = await this.store.update(agent.id, {
+      ...pinned,
+      gasFunding,
+      ...(registration.agentId !== undefined ? { erc8004AgentId: registration.agentId } : {}),
+      ...(registration.mandateAnchor ? { mandateAnchor: registration.mandateAnchor } : {}),
+    });
+    // A phone's pinning amend can commit while the registration is in flight,
+    // before there is an id to anchor against; this catches it up (a no-op
+    // when the anchor is current).
+    if (registration.agentId !== undefined) this.anchorInBackground(agent.id);
+    return { agent: stored, mcpToken };
   }
 
   /**
@@ -651,11 +664,21 @@ export class AgentsService {
    * hired, runs, and simply has no public track record yet. The registrar key
    * signs, not the agent's wallet, so the mandate's policy is untouched.
    */
-  private async registerIdentity(agent: AgentRecord): Promise<{ agentId?: string }> {
+  private async registerIdentity(
+    agent: AgentRecord,
+  ): Promise<{ agentId?: string; mandateAnchor?: AgentRecord['mandateAnchor'] }> {
     if (!this.reputation) return {};
     try {
-      const outcome = await this.reputation.registerOnHire(agent);
-      if (outcome.ok) return { agentId: outcome.agentId };
+      // SEN-194: the mandate anchor rides the registration transaction.
+      const anchor = this.anchors?.hireMetadata(agent) ?? null;
+      const outcome = await this.reputation.registerOnHire(agent, anchor ? [anchor.entry] : []);
+      const mandateAnchor =
+        anchor && (outcome.ok || outcome.reason !== 'not_configured')
+          ? await this.anchors?.recordHire(agent, anchor.want, outcome)
+          : undefined;
+      if (outcome.ok) {
+        return { agentId: outcome.agentId, ...(mandateAnchor ? { mandateAnchor } : {}) };
+      }
       this.logger.warn(
         `agent ${agent.id} not registered with ERC-8004: ${outcome.reason} (${outcome.message})`,
       );
@@ -668,6 +691,16 @@ export class AgentsService {
       );
       return {};
     }
+  }
+
+  /**
+   * Rewrites the agent's on-chain mandate anchor after an amend or revoke
+   * (SEN-194). Not awaited and never throws: the change is already committed,
+   * and the anchor follows it — a failed write is retried by `MandateAnchors`.
+   */
+  private anchorInBackground(id: string): void {
+    if (!this.anchors) return;
+    void this.anchors.sync(id);
   }
 
   /**
@@ -802,7 +835,9 @@ export class AgentsService {
         );
       }
       this.logger.log(`amended agent ${id}: policy ${agent.policyId} now ${rules.length} rules`);
-      return this.store.update(id, mandateChange(mandate, kuruBuilder));
+      const amended = await this.store.update(id, mandateChange(mandate, kuruBuilder));
+      this.anchorInBackground(id);
+      return amended;
     });
   }
 
@@ -856,7 +891,9 @@ export class AgentsService {
         `revoked agent ${id}: policy ${agent.policyId} now ${rules.length} rule(s), ` +
           `${this.describeExit(agent.mandate)}`,
       );
-      return this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+      const revoked = await this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+      this.anchorInBackground(id);
+      return revoked;
     });
   }
 
@@ -973,7 +1010,12 @@ export class AgentsService {
       this.logger.log(
         `amended agent ${id} with an owner signature: policy ${agent.policyId} replaced`,
       );
-      return this.store.update(id, mandateChange(mandate, prepared.context.kuruBuilder));
+      const amended = await this.store.update(
+        id,
+        mandateChange(mandate, prepared.context.kuruBuilder),
+      );
+      this.anchorInBackground(id);
+      return amended;
     });
   }
 
@@ -1006,7 +1048,9 @@ export class AgentsService {
       this.logger.log(
         `revoked agent ${id} with an owner signature: policy ${agent.policyId} emptied`,
       );
-      return this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+      const revoked = await this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+      this.anchorInBackground(id);
+      return revoked;
     });
   }
 
