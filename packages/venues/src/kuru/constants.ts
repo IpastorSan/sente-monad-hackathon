@@ -126,6 +126,12 @@ export type KuruDeployment = {
    * chain; there are no candles and no catalog to compare the pins against.
    */
   readonly catalogListed: boolean;
+  /**
+   * For a deployment Kuru serves no candles for, the Perpl perp whose candles
+   * stand in as a labelled price REFERENCE, by Kuru symbol (SEN-199). Never
+   * Kuru fills: {@link kuruCandleReference} carries the reason with it.
+   */
+  readonly candleReferences?: Readonly<Record<string, string>>;
   readonly contracts: {
     /** Custody, account ids, signer permissions. ERC-1967 proxy. */
     readonly accountCore: Address;
@@ -258,6 +264,13 @@ export const KURU_DEPLOYMENTS: Readonly<Record<KuruDeploymentId, KuruDeployment>
     label: "Kuru's previous testnet deployment (Set C)",
     custody: 'address-keyed',
     catalogListed: false,
+    // Perpl's open perps on 2026-10-12: BTC, ETH, SOL, MON, ZEC, LIT, PUMP,
+    // NEAR. No gold, so XAUt-USDC has no reference.
+    candleReferences: {
+      'cbBTC-USDC': 'BTC-PERP',
+      'WETH-USDC': 'ETH-PERP',
+      'MON-USDC': 'MON-PERP',
+    },
     contracts: {
       accountCore: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22',
       spotRouter: '0xba24a1042701f06e8F7edCF04389260D1Fa4c697',
@@ -381,6 +394,32 @@ export const KURU_DEPLOYMENT: KuruDeployment =
 /** A deployment by id; the active one without an argument. */
 export function kuruDeployment(id?: KuruDeploymentId): KuruDeployment {
   return id === undefined ? KURU_DEPLOYMENT : KURU_DEPLOYMENTS[id];
+}
+
+/** A Perpl perp's candles standing in for a Kuru market that has none (SEN-199). */
+export type KuruCandleReference = {
+  readonly venue: 'perpl';
+  readonly symbol: string;
+  /** Why the series is not the market's own, for whoever reads it. */
+  readonly reason: string;
+};
+
+/**
+ * The reference series for `symbol` on `deployment`, or `null` when Kuru
+ * serves the market's own candles (Set D) or no perp matches it.
+ */
+export function kuruCandleReference(
+  symbol: string,
+  deployment: KuruDeployment = KURU_DEPLOYMENT,
+): KuruCandleReference | null {
+  if (deployment.catalogListed) return null;
+  const perp = deployment.candleReferences?.[symbol];
+  if (perp === undefined) return null;
+  return {
+    venue: 'perpl',
+    symbol: perp,
+    reason: `Kuru ${deployment.id} has no candle history`,
+  };
 }
 
 /** The deployment this process does NOT trade. */

@@ -148,6 +148,75 @@ describe('WatcherService (SEN-182)', () => {
     expect(s.get(agent.id)!.watchers[0]!.lastError).toMatch(/no longer in the mandate/);
   });
 
+  it('evaluates a Kuru indicator on the reference series when Kuru has no candles (SEN-199)', async () => {
+    const agent = testAgent();
+    const reads: unknown[] = [];
+    const s = new WatcherService({
+      store: new InMemoryWatcherStore(),
+      marketData: {
+        ticker: () => Promise.reject(new Error('not read here')),
+        klines: (venue, symbol, interval, limit, endTime, options) => {
+          reads.push([venue, symbol, interval, limit, endTime, options]);
+          // Only a read that asks for the reference gets candles, as on Set C.
+          const width = 300_000;
+          const klines = options?.reference
+            ? Array.from({ length: 30 }, (_, i) => {
+                const close = String(1 - i * 0.01);
+                const openTime = T0 - (30 - i) * width;
+                return {
+                  openTime,
+                  closeTime: openTime + width - 1,
+                  open: close,
+                  high: close,
+                  low: close,
+                  close,
+                  volume: '1',
+                  quoteVolume: null,
+                };
+              })
+            : [];
+          return Promise.resolve({
+            venue,
+            symbol,
+            interval,
+            klines,
+            volumeIsEstimate: true as const,
+            asOf: T0,
+          });
+        },
+      },
+    });
+    s.replace(
+      agent,
+      {
+        watchers: [
+          {
+            label: 'MON oversold',
+            clauses: [
+              {
+                type: 'indicator',
+                venue: 'kuru',
+                market: 'MON-USDC',
+                timeframe: '5m',
+                indicator: { type: 'rsi', period: 14 },
+                op: 'below',
+                value: 30,
+              },
+            ],
+          },
+        ],
+      },
+      'agent',
+      T0,
+    );
+    const fired = await s.check(agent, T0 + 1);
+    expect(reads).toEqual([['kuru', 'MON-USDC', '5m', 200, undefined, { reference: true }]]);
+    // Falling closes: RSI 0, so it fires instead of waiting for candles that never come.
+    expect(fired).toEqual([
+      expect.objectContaining({ observed: 'MON-USDC 5m rsi(14) 0 is below 30' }),
+    ]);
+  });
+
   it('reads funding as % per 8 h, and P&L as a % of the position margin', async () => {
     const agent = testAgent();
     const s = service({

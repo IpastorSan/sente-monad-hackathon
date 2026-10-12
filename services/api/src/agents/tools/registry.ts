@@ -30,7 +30,7 @@ import { divRound, fromScaled, PERPL_COLLATERAL_DECIMALS, toScaled } from '@sent
 import { isAddressEqual } from 'viem';
 import * as z from 'zod/v4';
 
-import type { KlineDto, KlineInterval } from '../../venues/dto/markets.dto';
+import type { KlineDto, KlineInterval, KlinesReferenceDto } from '../../venues/dto/markets.dto';
 import {
   IntervalNotSupportedError,
   InvalidSizeError,
@@ -454,18 +454,39 @@ function refuseUnsupportedInterval(venue: ToolVenueId, interval: KlineInterval):
   }
 }
 
+/**
+ * A tool's candles, and where they really come from when that is not the
+ * market itself (SEN-199): Kuru Set C keeps no candle history, so its books
+ * read the matching Perpl perp's, and `source` says so in every answer that
+ * carries them, so the model never takes perp prices for Kuru fills.
+ */
+type ToolKlines = { klines: readonly (KlineDto | Kline)[]; source?: string };
+
 async function readKlines(
   ctx: ToolContext,
   venue: ToolVenueId,
   symbol: string,
   interval: KlineInterval,
   limit: number,
-): Promise<readonly (KlineDto | Kline)[]> {
+): Promise<ToolKlines> {
   refuseUnsupportedInterval(venue, interval);
   const { marketData } = ctx;
-  return marketData
-    ? (await marketRead(() => marketData.klines(venue, symbol, interval, limit))).klines
-    : venueOf(await ctx.venues(), venue).getKlines({ symbol, interval, limit });
+  if (!marketData) {
+    return {
+      klines: await venueOf(await ctx.venues(), venue).getKlines({ symbol, interval, limit }),
+    };
+  }
+  const page = await marketRead(() =>
+    marketData.klines(venue, symbol, interval, limit, undefined, { reference: true }),
+  );
+  return page.reference
+    ? { klines: page.klines, source: klinesSourceLabel(page.reference) }
+    : { klines: page.klines };
+}
+
+/** E.g. `perpl:BTC-PERP (reference: Kuru set-c has no candle history)`. */
+export function klinesSourceLabel(reference: KlinesReferenceDto): string {
+  return `${reference.venue}:${reference.symbol} (reference: ${reference.reason})`;
 }
 
 const getKlines = defineTool({
@@ -475,7 +496,8 @@ const getKlines = defineTool({
     'Price candles (klines) for one market, oldest first: t is the open time (Unix ms), then ' +
     'open, high, low, close, and qv the quote-unit volume (null when the venue does not ' +
     'report it; volumes are estimates). Use them for ranges, averages and highs/lows over ' +
-    'time. Perpl has no 1w candles.',
+    'time. Perpl has no 1w candles. When `source` is present the candles are NOT this ' +
+    "market's own but the named reference market's (a price proxy, not fills here).",
   input: z.strictObject({
     venue,
     market,
@@ -490,9 +512,16 @@ const getKlines = defineTool({
   }),
   async handler(ctx, args) {
     const interval: KlineInterval = args.interval;
-    const klines = await readKlines(ctx, args.venue, args.market, interval, args.limit ?? 48);
+    const { klines, source } = await readKlines(
+      ctx,
+      args.venue,
+      args.market,
+      interval,
+      args.limit ?? 48,
+    );
     return {
       interval,
+      ...(source ? { source } : {}),
       // Volumes are estimates on both venues (`KlinesDto.volumeIsEstimate`).
       volumeIsEstimate: true,
       // Short keys: a 48-candle answer is read on every run, so it is priced in tokens.
@@ -598,7 +627,9 @@ const getIndicators = defineTool({
     'false means it is still forming), `value` the latest, `series` the last few values ' +
     'oldest first, ending with that latest. An indicator without enough candles shows ' +
     'value null with how many it needs; warnings flag that, missing candles and a flat ' +
-    'market. Prices are decimal strings to the tick plus two places; oscillators 0-100.',
+    'market. Prices are decimal strings to the tick plus two places; oscillators 0-100. ' +
+    "When `source` is present the indicators are computed on that reference market's " +
+    'candles, not on this market (it keeps no candle history).',
   input: z.strictObject({
     venue,
     market,
@@ -637,10 +668,12 @@ const getIndicators = defineTool({
     for (const tf of args.timeframes) refuseUnsupportedInterval(args.venue, tf);
     await requireMandateMarket(ctx, args.venue, args.market);
     const lookback = args.lookback ?? DEFAULT_INDICATOR_LOOKBACK;
-    const [ticks, ...frames] = await Promise.all([
+    const [ticks, ...reads] = await Promise.all([
       tickDecimals(ctx, args.venue, args.market),
       ...args.timeframes.map((tf) => readKlines(ctx, args.venue, args.market, tf, lookback)),
     ]);
+    const frames = reads.map((read) => read.klines);
+    const source = reads.find((read) => read.source)?.source;
     const priceDecimals =
       ticks ??
       Math.min(
@@ -659,7 +692,12 @@ const getIndicators = defineTool({
         }),
       ]),
     );
-    return { venue: args.venue, market: args.market, timeframes };
+    return {
+      venue: args.venue,
+      market: args.market,
+      ...(source ? { source } : {}),
+      timeframes,
+    };
   },
 });
 

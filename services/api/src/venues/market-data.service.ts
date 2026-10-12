@@ -21,6 +21,8 @@
  * chain: the catalog is the pinned markets checked against their own
  * `getMarketParams()` (never "missing"), depth is `getL2Book`, and there are
  * no candles — `last` and the 24h fields are null and a chart has no history.
+ * Agent reads (`klines(…, { reference: true })`, SEN-199) instead get the
+ * matching Perpl perp's candles, flagged by `KlinesDto.reference`.
  *
  * Perpl's reads and TTLs live in `PerplMarketReader` (SEN-75): one 3 s
  * `/pub/context` for every price, the held book socket for depth and quotes.
@@ -35,6 +37,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Decimal, Depth, DepthQuery, Kline, KlineQuery, Market, Side } from '@sente/venues';
 import {
   fromUnits,
+  type KuruCandleReference,
   KuruCatalogError,
   KuruUnitsError,
   kuruSlippageBound,
@@ -77,6 +80,8 @@ export interface KuruReader {
   getDepth(query: DepthQuery): Promise<Depth>;
   /** Data Source candles. */
   getKlines(query: KlineQuery): Promise<Kline[]>;
+  /** The Perpl perp standing in for a market Kuru has no candles for (SEN-199). No network. */
+  candleReference(symbol: string): KuruCandleReference | null;
   /** Live on-chain book plus market params. */
   bookSnapshot(symbol: string): Promise<KuruBookSnapshot>;
 }
@@ -351,12 +356,20 @@ export class MarketDataService {
     });
   }
 
+  /**
+   * Candles, oldest first. With `reference`, a Kuru market Kuru keeps no
+   * candles for (Set C) answers with the matching Perpl perp's, and
+   * `KlinesDto.reference` says so (SEN-199) — for the agents' indicators and
+   * watchers, which have no other series. Without it, as for the app's chart,
+   * such a market has no candles.
+   */
   klines(
     venue: VenueId,
     symbol: string,
     interval: KlineInterval,
     limit: number,
     endTime?: number,
+    options: { reference?: boolean } = {},
   ): Promise<KlinesDto> {
     if (!(interval in KLINE_WIDTH_MS)) {
       return Promise.reject(new IntervalNotSupportedError(venue, interval));
@@ -365,6 +378,8 @@ export class MarketDataService {
     if (venue === 'perpl') return this.perpl.klines(symbol, interval, count, endTime);
     return this.#kuru(async () => {
       const market = this.#kuruMarket(symbol);
+      const reference = options.reference ? this.kuru.candleReference(market.symbol) : null;
+      if (reference) return this.#referenceKlines(market, reference, interval, count, endTime);
       // Candles open on interval boundaries and `endTime` is exclusive, so
       // rounding it UP to a boundary selects exactly the same klines — and
       // lets every caller inside one interval share a cache entry.
@@ -394,6 +409,40 @@ export class MarketDataService {
         asOf: loadedAt,
       };
     });
+  }
+
+  /**
+   * A Perpl perp's candles under the Kuru market's name, flagged as a
+   * reference. A Perpl failure is reported as Kuru's candles being
+   * unavailable, never as "you asked for a market that does not exist".
+   */
+  async #referenceKlines(
+    market: KuruMarketConfig,
+    reference: KuruCandleReference,
+    interval: KlineInterval,
+    count: number,
+    endTime: number | undefined,
+  ): Promise<KlinesDto> {
+    let page: KlinesDto;
+    try {
+      page = await this.perpl.klines(reference.symbol, interval, count, endTime);
+    } catch (error) {
+      if (error instanceof IntervalNotSupportedError) {
+        throw new IntervalNotSupportedError('kuru', interval);
+      }
+      throw new VenueUnavailableError(
+        'kuru',
+        `${reference.reason}, and its reference ${reference.venue}:${reference.symbol} ` +
+          `could not be read: ${errorMessage(error)}`,
+        error instanceof VenueUnavailableError ? error.retryAfterMs : undefined,
+      );
+    }
+    return {
+      ...page,
+      venue: 'kuru',
+      symbol: market.symbol,
+      reference,
+    };
   }
 
   quote(venue: VenueId, symbol: string, request: QuoteRequestDto): Promise<QuoteDto> {

@@ -116,6 +116,19 @@ export interface KlinesDto {
   klines: KlineDto[]; // oldest first
   volumeIsEstimate: true;
   asOf: number;
+  /**
+   * Set when the candles are NOT this market's own but another venue's,
+   * standing in as a price reference (SEN-199: Kuru Set C has no candle
+   * history, so its books borrow the matching Perpl perp's). Only reads that
+   * ask for it get one; `/markets/:venue/:symbol/klines` never does.
+   */
+  reference?: KlinesReferenceDto;
+}
+export interface KlinesReferenceDto {
+  venue: VenueId;
+  symbol: string;
+  /** Why the series is borrowed, e.g. `Kuru set-c has no candle history`. */
+  reason: string;
 }
 
 // GET /markets/:venue/:symbol/quote?side=buy&size=1.5&maxSlippage=0.005

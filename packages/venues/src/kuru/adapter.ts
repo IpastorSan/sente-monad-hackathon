@@ -53,6 +53,8 @@ import type { Venue } from '../venue.ts';
 import { createKuruApi, type KuruApi, type KuruApiConfig } from './api.ts';
 import {
   KURU_DEPLOYMENT,
+  kuruCandleReference,
+  type KuruCandleReference,
   type KuruDeployment,
   type KuruMarketConfig,
   type KuruToken,
@@ -290,6 +292,15 @@ export class KuruVenue implements Venue {
   /** The deployment this venue trades (SEN-189). */
   get deployment(): KuruDeployment {
     return this.#deployment;
+  }
+
+  /**
+   * The Perpl perp whose candles stand in for `symbol`'s when this deployment
+   * has none (Set C), or `null` (SEN-199). `getKlines` itself stays honestly
+   * empty; the caller decides where a labelled reference belongs.
+   */
+  candleReference(symbol: MarketSymbol): KuruCandleReference | null {
+    return kuruCandleReference(this.market(symbol).symbol, this.#deployment);
   }
 
   market(symbol: MarketSymbol): KuruMarketConfig {
