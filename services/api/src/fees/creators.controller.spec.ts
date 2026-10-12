@@ -112,4 +112,15 @@ describe('CreatorsController (SEN-184)', () => {
     });
     expect((await get(FORKER)).body).toEqual({ share: '0.3', totals: [], recent: [] });
   });
+
+  it('totals each asset the fees were paid in: the base of a buy, USDC of a sell (SEN-195)', async () => {
+    const accrual = { creatorUserId: CREATOR, agentId: 'fork', sourceAgentId: 'source' };
+    ledger.accrue({ ...accrual, asset: 'cbBTC', decimals: 8, feeAtoms: 13n, txHash: TX(1) });
+    ledger.accrue({ ...accrual, asset: 'USDC', decimals: 6, feeAtoms: 14_300n, txHash: TX(2) });
+    const { body } = (await get(CREATOR)) as { body: { totals: unknown } };
+    expect(body.totals).toEqual([
+      { asset: 'cbBTC', accrued: '0.00000003', paid: '0', owed: '0.00000003' },
+      { asset: 'USDC', accrued: '0.00429', paid: '0', owed: '0.00429' },
+    ]);
+  });
 });

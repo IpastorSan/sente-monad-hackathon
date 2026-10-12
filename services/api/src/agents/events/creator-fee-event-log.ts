@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { KURU_TESTNET_TOKENS, toUnits } from '@sente/venues/kuru';
+import { KURU_DEPLOYMENTS, toUnits, type KuruToken } from '@sente/venues/kuru';
 
 import type { CreatorFeeLedger } from '../../fees/creator-fees';
 import type { AgentStore } from '../store/agent-store';
@@ -17,6 +17,9 @@ import type { AgentEvent, AgentEventLog } from './agent-event-log';
  * is the creator. Like `ReputationEventLog`, it never fails the append: the
  * fill happened whether or not the ledger took the share, and the miss is
  * logged with what is needed to enter it by hand.
+ *
+ * The share accrues in the asset the fee was paid in, which is the asset the
+ * fill RECEIVED (SEN-195): the base on a buy, USDC on a sell.
  */
 export class CreatorFeeEventLog implements AgentEventLog {
   readonly #inner: AgentEventLog;
@@ -60,8 +63,12 @@ export class CreatorFeeEventLog implements AgentEventLog {
   async #accrue(fill: AgentEvent): Promise<void> {
     const { venue, senteFee, senteFeeAsset, txHash } = fill.detail;
     if (venue !== 'kuru' || typeof senteFee !== 'string' || typeof txHash !== 'string') return;
-    const token = Object.values(KURU_TESTNET_TOKENS).find((t) => t.symbol === senteFeeAsset);
-    if (!token) return;
+    // The fee is in whatever the fill received: the base on a buy (cbBTC,
+    // WETH, MON…), USDC on a sell (SEN-195). Each asset accrues on its own.
+    const token = feeToken(senteFeeAsset);
+    if (!token) {
+      throw new Error(`Sente fee asset ${String(senteFeeAsset)} is not a Kuru token`);
+    }
     const feeAtoms = toUnits(senteFee, token.decimals, 'senteFee');
     if (feeAtoms === 0n) return;
 
@@ -88,4 +95,11 @@ export class CreatorFeeEventLog implements AgentEventLog {
       );
     }
   }
+}
+
+/** A Kuru token by symbol, from either deployment (a symbol has the same decimals on both). */
+function feeToken(symbol: unknown): KuruToken | undefined {
+  return Object.values(KURU_DEPLOYMENTS)
+    .flatMap((d) => Object.values(d.tokens))
+    .find((t) => t.symbol === symbol);
 }

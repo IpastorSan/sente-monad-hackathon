@@ -13,9 +13,11 @@
  * kinds of record:
  *
  * - `accrued`: one per fee-paying fill of a forked agent, keyed by the fill's
- *   transaction and agent so a replayed event cannot count twice. The share is
- *   floored to whole atoms of the fee's asset: the treasury never owes more
- *   than it took.
+ *   transaction, agent and asset so a replayed event cannot count twice. The
+ *   share is floored to whole atoms of the fee's asset: the treasury never
+ *   owes more than it took. The asset is the one Kuru took the fee in — the
+ *   base a buy received (cbBTC, WETH, MON…), USDC on a sell (SEN-195) — so a
+ *   creator is owed several assets, each totalled and paid on its own.
  * - `payout`: one per treasury transfer to a creator, with its tx hash.
  *
  * Owed = accrued - paid, per asset. A forker who forks their own agent is not
@@ -46,7 +48,7 @@ export interface CreatorFeeAccrual {
   /** The forked agent whose fill paid the fee. */
   readonly agentId: string;
   readonly sourceAgentId: string;
-  /** The fee's asset, e.g. `USDC`. */
+  /** The fee's asset: the base on a buy (e.g. `cbBTC`), `USDC` on a sell. */
   readonly asset: string;
   readonly decimals: number;
   /** The whole Sente fee of the fill, in atoms. */
@@ -124,6 +126,7 @@ export class CreatorFeeLedger {
       (r) =>
         r.kind === 'accrued' &&
         r.agentId === input.agentId &&
+        r.asset === input.asset &&
         r.txHash.toLowerCase() === input.txHash.toLowerCase(),
     );
     if (seen) return null;

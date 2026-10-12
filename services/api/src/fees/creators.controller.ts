@@ -8,7 +8,11 @@ import { CREATOR_FEES, CREATOR_SHARE, type CreatorFeeLedger } from './creator-fe
 /** How many of the caller's records `GET /creators/me/fees` lists. */
 export const RECENT_CREATOR_FEES = 50;
 
-/** One asset's totals, as decimal strings in that asset. */
+/**
+ * One asset's totals, as decimal strings in that asset. A creator is owed in
+ * every asset the forks' fees were paid in: the base a buy received (cbBTC,
+ * WETH, MON…) and USDC from sells (SEN-195), one entry each.
+ */
 export interface CreatorFeeTotalsDto {
   asset: string;
   accrued: string;

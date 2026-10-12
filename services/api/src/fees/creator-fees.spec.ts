@@ -78,6 +78,33 @@ describe('CreatorFeeLedger', () => {
     expect(ledger.creators().sort()).toEqual(['creator', 'other']);
   });
 
+  it('keeps each asset apart: a buy’s base fee and a sell’s USDC fee (SEN-195)', () => {
+    const ledger = new CreatorFeeLedger();
+    // 13 cbBTC atoms, the live Set C buy's fee (tx 0xca084e71…): 3 atoms owed.
+    ledger.accrue(fill({ asset: 'cbBTC', decimals: 8, feeAtoms: 13n, txHash: TX(1) }));
+    ledger.accrue(fill({ txHash: TX(2) }));
+    // The same fill reporting a second asset is a second entry, not a replay.
+    ledger.accrue(fill({ asset: 'cbBTC', decimals: 8, feeAtoms: 10n, txHash: TX(2) }));
+    expect(ledger.totals('creator')).toEqual([
+      { asset: 'cbBTC', decimals: 8, accruedAtoms: 6n, paidAtoms: 0n, owedAtoms: 6n },
+      { asset: 'USDC', decimals: 6, accruedAtoms: 10_500n, paidAtoms: 0n, owedAtoms: 10_500n },
+    ]);
+    const cbBtcPayout = {
+      creatorUserId: 'creator',
+      asset: 'cbBTC',
+      decimals: 8,
+      amountAtoms: 7n,
+      txHash: TX(100),
+    };
+    // USDC owed does not cover a cbBTC payout.
+    expect(() => ledger.payout(cbBtcPayout)).toThrow(/owed 6 cbBTC/);
+    ledger.payout({ ...cbBtcPayout, amountAtoms: 6n });
+    expect(ledger.totals('creator')).toEqual([
+      { asset: 'cbBTC', decimals: 8, accruedAtoms: 6n, paidAtoms: 6n, owedAtoms: 0n },
+      { asset: 'USDC', decimals: 6, accruedAtoms: 10_500n, paidAtoms: 0n, owedAtoms: 10_500n },
+    ]);
+  });
+
   it('refuses a payout above what is owed, a repeated tx, or a malformed hash', () => {
     const ledger = new CreatorFeeLedger();
     ledger.accrue(fill());
