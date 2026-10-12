@@ -42,6 +42,10 @@
  * the watchlist, the biggest moves), your agents on the right (at work, what
  * they trade, the latest move, the nudge). A phone keeps the single column in
  * the order above.
+ *
+ * `HomeBoard` (SEN-191) sits behind the header and bleeds into the hero: the
+ * goban grid of the mark, fading out before it reaches the total value. Web
+ * only — `ui/HomeBoard.tsx`'s native twin draws nothing.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -96,6 +100,7 @@ import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
 import { formatBalance, shortAddress } from '@/ui/format';
 import { Avatar } from '@/ui/Avatar';
 import { Sigil, Stone } from '@/ui/goban';
+import { HomeBoard } from '@/ui/HomeBoard';
 import { Icon } from '@/ui/icons';
 import {
   Button,
@@ -410,7 +415,10 @@ export default function Home() {
 
   return (
     <Screen tabbed refreshing={refreshing} onRefresh={() => void refresh()} maxWidth={WIDE_MAX}>
-      {header}
+      <View style={styles.boardArea}>
+        <HomeBoard />
+        {header}
+      </View>
       {wide ? (
         <>
           {ticker}
@@ -978,6 +986,11 @@ const styles = StyleSheet.create({
   between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   grow: { flex: 1 },
   aside: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  // SEN-191: HomeBoard overflows below the header into the hero on purpose
+  // (it fades out before the total-value figure); `zIndex: 0` gives it a
+  // stacking context of its own, so its negative z-index is contained here
+  // rather than escaping behind the screen's own ink ground (web only).
+  boardArea: { position: 'relative', zIndex: 0 },
   hero: { marginTop: 14 },
   // Wide (SEN-167): two columns under the ticker, tops level with each other.
   columns: { flexDirection: 'row', alignItems: 'flex-start', gap: 48 },
