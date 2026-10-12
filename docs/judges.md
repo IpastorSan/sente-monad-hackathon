@@ -116,8 +116,8 @@ wallet approves and deposits into your Kuru account, then places the order; each
 step is a sponsored send. Before your device key signs any step, the app checks
 it against what it computed itself (the contract, the function, the amounts, the
 worst price) and refuses anything it does not recognise. Resting orders cancel
-from **Portfolio → Orders**. <!-- SEN-185: name a Kuru market that has a
-two-sided book after the market migration. --> <!-- MEASURE: the dry run's Kuru
+from **Portfolio → Orders**. cbBTC-USDC and XAUt-USDC have bids and asks; MON-USDC
+and WETH-USDC were empty on 2026-10-12. <!-- MEASURE: the dry run's Kuru
 order, with its tx hash. -->
 
 **Perpl perps.** Open a Perpl market (for example BTC-PERP); the ticket sends
@@ -156,9 +156,12 @@ phone and on the web. That has not been confirmed on a real device pair yet.
 
 - **Testnet only.** Monad testnet, with the Kuru and Perpl testnet deployments.
   One server, in Madrid.
-- **Kuru changed its testnet markets on 2026-10-09.** <!-- SEN-185: what a judge
-  sees after the migration (which markets are listed, whether older agents must
-  be amended). -->
+- **Kuru testnet: Sente trades Kuru's previous testnet deployment while the new
+  one's test USDC is invite-only.** Its four markets (MON, WETH, cbBTC and XAUt
+  against USDC) are read from the chain, since Kuru's APIs list only the new
+  deployment: they have no price history, and resting orders show as locked
+  balance rather than in **Portfolio → Orders**. An agent hired on the other
+  deployment says so on its page and moves over with **Amend**.
 - **Perps in the browser go through Sente's relay** (above).
 - **No stop-loss or take-profit orders** on either venue.
 - **Credits end at the free tier.** Paid credits are not open on this deployment.

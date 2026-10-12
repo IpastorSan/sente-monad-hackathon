@@ -438,6 +438,41 @@ docker stop sente-caddy-test
 `SITE_BASE` points `verify.sh` at the local Caddy; the `.curlrc` makes every curl
 in it trust the internal CA and resolve `sente.lol` to localhost.
 
+## Switching the Kuru deployment (SEN-189)
+
+Kuru runs two testnet deployments (`docs/kuru.md`): Set D, the one it lists, whose
+USDC only Kuru can mint, and Set C, the previous one, whose faucet still pays.
+`KURU_DEPLOYMENT` (set-d by default) decides which one the API, the policy
+compiler, the scripts, the drift check and the live check use; the app is built
+with the same `EXPO_PUBLIC_KURU_DEPLOYMENT` and turns manual Kuru trading off when
+`/trade/capabilities` names the other. To move production to Set C:
+
+```bash
+# 1. Fund the senders with Set C USDC (10,000 a claim, 12 h cooldown per key).
+mise exec -- pnpm run kuru:faucet -- --key starter --dry-run   # then without --dry-run
+mise exec -- pnpm run kuru:faucet -- --key treasury
+
+# 2. The server switch. In the repo .env:
+#      KURU_DEPLOYMENT=set-c
+#      STARTER_DRIP_USDC=100            # back on: the starter key now holds Set C USDC
+#      ENVIO_GRAPHQL_URL=<the Set C indexer's endpoint>   # docs/indexer.md
+cd infra
+DRY_RUN=1 ./push-secrets.sh                      # KURU_DEPLOYMENT must be listed as sent
+PROJECT=… ZONE=… ./push-secrets.sh
+
+# 3. Build the web app for the same deployment and ship it with the API.
+#    deploy.sh passes KURU_DEPLOYMENT through as EXPO_PUBLIC_KURU_DEPLOYMENT.
+KURU_DEPLOYMENT=set-c EXPO_PUBLIC_USER_TRADING=1 PROJECT=… ZONE=… ./deploy.sh
+
+# 4. Read it back: capabilities must say set-c, the pins are Set C's.
+KURU_DEPLOYMENT=set-c ./live-check.sh --box
+```
+
+An APK is built the same way, with `EXPO_PUBLIC_KURU_DEPLOYMENT=set-c` in the
+bundling step's environment. Agents hired on the other deployment show
+`kuruRetired` until amended; Amend moves their books over (USDT-USDC has no
+Set C counterpart and is dropped). Switching back is the same with `set-d`.
+
 ## Turning user trading on
 
 Manual Buy/Sell (the `/trade` routes, `services/api/src/trade/`) is off by

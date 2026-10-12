@@ -450,9 +450,15 @@ claimed until a real delivery has been seen.
   deployments. Android and desktop web; iOS is out of scope. One API process on
   one server (Madrid, `europe-southwest1`), with no failover. It moved from the
   US on 2026-10-09 because Perpl testnet's trading socket refuses US addresses.
-- **Kuru changed its testnet market set on 2026-10-09.** <!-- SEN-185: what
-  Sente now pins, which markets the app lists, and what an agent hired before
-  the change must do (amend), once the migration is merged. -->
+- **Kuru testnet: Sente trades Kuru's previous testnet deployment while the new
+  one's test USDC is invite-only** (SEN-189). Kuru redeployed its testnet on
+  2026-09-25 with a USDC only Kuru can mint; the previous deployment ("Set C")
+  still trades and its faucet still pays. `KURU_DEPLOYMENT=set-c|set-d` switches
+  the API, the app build (`EXPO_PUBLIC_KURU_DEPLOYMENT`), the policy compiler and
+  the indexer (`config.setc.yaml`) together. On Set C the four markets come from
+  the chain (Kuru's catalog and gateway list only the new deployment), so there
+  are no candles and no open-orders list; an agent hired on the other deployment
+  is told to amend, and **Amend** moves its markets over (`docs/kuru.md`).
 - **Passkey providers.** Measured to work: Google Chrome on desktop with Google
   Password Manager (2026-10-09, on production: sign-in, wallet registered,
   starter kit sent). Measured not to: Chromium (no Google Password Manager
