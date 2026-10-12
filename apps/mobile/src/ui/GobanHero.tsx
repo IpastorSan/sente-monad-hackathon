@@ -44,9 +44,10 @@ const MAX_SIZE = 300;
 const BREATH_MS = 3_000;
 const LINES = Array.from({ length: 9 }, (_, i) => 20 + i * 20);
 
-export function GobanHero() {
+/** `maxSize`: the largest side it grows to (300 on Welcome; the wide landing draws it larger). */
+export function GobanHero({ maxSize = MAX_SIZE }: { maxSize?: number } = {}) {
   const [width, setWidth] = useState(0);
-  const size = Math.min(width, MAX_SIZE);
+  const size = Math.min(width, maxSize);
   const reduced = useReducedMotion();
 
   const breath = useSharedValue(0);
