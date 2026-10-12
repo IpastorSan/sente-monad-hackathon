@@ -313,6 +313,14 @@ if [ "$SKIP_API" != 1 ]; then
        Still booting? Re-run the checks alone: ./live-check.sh --box
        Roll back: SENTE_API_TAG=<previous tag> ./deploy.sh"
   fi
+  # Docker can report healthy before Caddy reaches the new container: on
+  # 2026-10-12 it said healthy at 3 s and the public /health answered 503 for
+  # the next ~10 s, failing verify.sh. Wait for the public answer too.
+  until curl -fsS --max-time 5 "${API_URL:-https://api.sente.lol}/health" 2>/dev/null | grep -q '"status":"ok"'; do
+    [ $((SECONDS - start)) -ge "$HEALTH_TIMEOUT" ] && die "the public /health never answered ok within ${HEALTH_TIMEOUT}s"
+    sleep 2
+  done
+  echo "    public /health ok ($((SECONDS - start))s)"
 fi
 
 # live-check.sh runs verify.sh and smoke.sh itself, then the reads that need a
