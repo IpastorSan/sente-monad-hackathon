@@ -46,6 +46,8 @@ export function stoneFor(entry: LedgerEntry): LedgerStone {
     // Money placed on the venue is a stone; a step still waiting is an open ring.
     case 'account':
       return accountOpened(entry) ? 'deposit' : 'thesis';
+    case 'anchor':
+      return entry.status === 'anchored' ? 'deposit' : 'thesis';
   }
 }
 

@@ -1063,6 +1063,7 @@ function SpineEntry({ entry }: { entry: LedgerEntry }) {
       break;
     }
     case 'account':
+    case 'anchor':
       head = <Text style={text.strong}>{entry.message}</Text>;
       break;
   }

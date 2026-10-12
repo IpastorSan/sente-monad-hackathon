@@ -257,6 +257,15 @@ export const SECTIONS: readonly HelpSection[] = [
         ],
       },
       {
+        id: 'verify-mandate',
+        aliases: ['mandate-hash', 'anchor'],
+        question: 'Can I verify an agent’s mandate?',
+        body: [
+          'Yes. When an agent is hired, Sente writes a fingerprint of its mandate to the agent’s on-chain identity on Monad (the ERC-8004 identity registry): a hash of the mandate, and a hash of the [policy](#limits) compiled from it. Every amend and revoke writes the new ones, and each write appears on the agent’s Ledger with its transaction.',
+          'Anyone can read those hashes from the registry, compute the mandate hash again from the mandate the agent publishes, and compare. If they match, the agent runs under exactly the mandate you see. Sente’s `mandate:verify` script does all three steps in one command. Right after an amend the hash on chain can trail by one transaction.',
+        ],
+      },
+      {
         id: 'runs',
         aliases: ['schedule'],
         question: 'When does an agent run, and what does a run do?',

@@ -161,12 +161,20 @@ function describe(
         detail: null,
       };
     case 'account':
+    case 'anchor':
       return { stone: stoneFor(entry), title: entry.message, detail: null };
   }
 }
 
 function blockOf(entry: LedgerEntry): LatestMove['block'] {
-  if (entry.kind === 'thesis' || entry.kind === 'refusal' || entry.kind === 'account') return null;
+  if (
+    entry.kind === 'thesis' ||
+    entry.kind === 'refusal' ||
+    entry.kind === 'account' ||
+    entry.kind === 'anchor'
+  ) {
+    return null;
+  }
   if (entry.blockNumber === null) return null;
   return { number: entry.blockNumber, consensus: entry.consensus };
 }

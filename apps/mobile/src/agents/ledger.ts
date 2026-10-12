@@ -27,7 +27,8 @@ import { BALANCE_PLACES } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 
 /** The things the Ledger shows: five the agent's trading produces, and the account Sente opened for it. */
-export type LedgerEntryKind = 'thesis' | 'trade' | 'refusal' | 'verdict' | 'deposit' | 'account';
+export type LedgerEntryKind =
+  'thesis' | 'trade' | 'refusal' | 'verdict' | 'deposit' | 'account' | 'anchor';
 
 /** Which way the agent is positioned. */
 export type Direction = 'long' | 'short';
@@ -226,8 +227,28 @@ export type AccountEntry = Base & {
   txHash: string | null;
 };
 
+/**
+ * The agent's mandate hash written to its ERC-8004 identity on chain (SEN-194),
+ * at hire and after every amend and revoke — or why not yet. The API's
+ * `anchor` event; no tool produced it.
+ */
+export type AnchorEntry = Base & {
+  kind: 'anchor';
+  /** `anchored`, or `failed` while a retry is pending. */
+  status: string;
+  /** The API's sentence: "Mandate anchored on chain". */
+  message: string;
+  txHash: string | null;
+};
+
 export type LedgerEntry =
-  ThesisEntry | TradeEntry | RefusalEntry | VerdictEntry | DepositEntry | AccountEntry;
+  | ThesisEntry
+  | TradeEntry
+  | RefusalEntry
+  | VerdictEntry
+  | DepositEntry
+  | AccountEntry
+  | AnchorEntry;
 
 /**
  * The event trail -> the Ledger, oldest first.
@@ -266,6 +287,9 @@ function toLedgerEntry(event: LedgerEvent): LedgerEntry | null {
     // Sente opening the agent's venue account (SEN-187).
     case 'onboarding':
       return accountEntry(event);
+    // The mandate hash anchored on chain (SEN-194).
+    case 'anchor':
+      return anchorEntry(event);
     default:
       // `run` is a summary, and the Ledger shows what happened, not that the
       // runner woke up.
@@ -400,6 +424,17 @@ function accountEntry(event: LedgerEvent): AccountEntry {
     status: text(detail, 'status') ?? 'failed',
     message: text(detail, 'message') ?? '',
     txHash: first ?? text(detail, 'txHash'),
+  };
+}
+
+function anchorEntry(event: LedgerEvent): AnchorEntry {
+  return {
+    kind: 'anchor',
+    seq: event.seq,
+    at: event.at,
+    status: text(event.detail, 'status') ?? 'failed',
+    message: text(event.detail, 'message') ?? '',
+    txHash: text(event.detail, 'txHash'),
   };
 }
 

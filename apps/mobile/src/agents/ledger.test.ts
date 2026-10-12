@@ -88,6 +88,34 @@ test('Sente opening the agent’s Perpl account is a Ledger row, and so is why i
   assert.equal(gas.txHash, null);
 });
 
+test('the mandate anchored on chain is a Ledger row, and so is why not yet (SEN-194)', () => {
+  const anchored = only('anchor', [
+    event(3, 'anchor', {
+      status: 'anchored',
+      message: 'Mandate anchored on chain',
+      txHash: `0x${'ab'.repeat(32)}`,
+      mandateHash: `0x${'01'.repeat(32)}`,
+      agentTokenId: '1874',
+    }),
+  ]);
+  assert.deepEqual(anchored, {
+    kind: 'anchor',
+    seq: 3,
+    at: AT + 3_000,
+    status: 'anchored',
+    message: 'Mandate anchored on chain',
+    txHash: `0x${'ab'.repeat(32)}`,
+  });
+  const failed = only('anchor', [
+    event(4, 'anchor', {
+      status: 'failed',
+      message: 'Mandate not anchored on chain yet: RPC is down. Retrying in 30 s.',
+    }),
+  ]);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.txHash, null);
+});
+
 test('a thesis keeps the agent’s own words, its direction and its invalidation', () => {
   const entry = only('thesis', [
     event(

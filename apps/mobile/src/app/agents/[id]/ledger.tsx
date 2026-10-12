@@ -51,6 +51,7 @@ import {
   heldLabel,
   shortHash,
   type AccountEntry,
+  type AnchorEntry,
   type DepositEntry,
   type LedgerEntry,
   type RefusalEntry,
@@ -314,6 +315,8 @@ function bodyFor(entry: LedgerEntry): ReactNode {
       return <DepositBody entry={entry} />;
     case 'account':
       return <AccountBody entry={entry} />;
+    case 'anchor':
+      return <AnchorBody entry={entry} />;
   }
 }
 
@@ -414,6 +417,22 @@ function AccountBody({ entry }: { entry: AccountEntry }) {
       {accountOpened(entry) ? null : (
         <Text style={[text.body, styles.tight]}>{entry.message || '—'}</Text>
       )}
+      <Hash hash={entry.txHash} />
+    </>
+  );
+}
+
+/** The mandate's hash on chain (SEN-194), with the transaction that wrote it — or why not yet. */
+function AnchorBody({ entry }: { entry: AnchorEntry }) {
+  const anchored = entry.status === 'anchored';
+  return (
+    <>
+      <Meta at={entry.at}>
+        <Text style={anchored ? text.strong : [text.strong, text.dim]}>
+          {anchored ? entry.message : 'Mandate not on chain yet'}
+        </Text>
+      </Meta>
+      {anchored ? null : <Text style={[text.body, styles.tight]}>{entry.message || '—'}</Text>}
       <Hash hash={entry.txHash} />
     </>
   );
