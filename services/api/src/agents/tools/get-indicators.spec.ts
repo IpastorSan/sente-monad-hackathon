@@ -4,7 +4,12 @@
  */
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore } from '../store/agent-store';
-import type { KlineDto, KlineInterval, MarketDto } from '../../venues/dto/markets.dto';
+import type {
+  KlineDto,
+  KlineInterval,
+  KlinesReferenceDto,
+  MarketDto,
+} from '../../venues/dto/markets.dto';
 import { KLINE_WIDTH_MS, MarketNotFoundError } from '../../venues/market-data.service';
 import { toRunnerTools } from './anthropic';
 import { AgentTools, type ToolMarketData } from './context';
@@ -35,11 +40,13 @@ function klines(interval: KlineInterval, count: number): KlineDto[] {
   });
 }
 
-function fakeMarketData(options: { count?: number; tickSize?: string | null } = {}) {
+function fakeMarketData(
+  options: { count?: number; tickSize?: string | null; reference?: KlinesReferenceDto } = {},
+) {
   const calls: unknown[][] = [];
   const unused = () => Promise.reject(new Error('not read by get_indicators'));
   const marketData: ToolMarketData = {
-    klines: (venue, symbol, interval, limit) => {
+    klines: (venue, symbol, interval, limit, _endTime, read) => {
       calls.push(['klines', venue, symbol, interval, limit]);
       if (symbol === 'NOPE') return Promise.reject(new MarketNotFoundError(venue, symbol));
       return Promise.resolve({
@@ -49,6 +56,8 @@ function fakeMarketData(options: { count?: number; tickSize?: string | null } = 
         klines: klines(interval, Math.min(limit, options.count ?? limit)),
         volumeIsEstimate: true,
         asOf: NOW * 1000,
+        // Like the service: only a read that asks for a reference gets one.
+        ...(read?.reference && options.reference ? { reference: options.reference } : {}),
       });
     },
     market: (venue, symbol) => {
@@ -286,5 +295,60 @@ describe('get_indicators', () => {
       indicators: [{ type: 'rsi' }],
     });
     expect(refusal(outcome)).toBe('invalid_input');
+  });
+
+  describe('a Kuru market with no candle history (SEN-199)', () => {
+    const reference: KlinesReferenceDto = {
+      venue: 'perpl',
+      symbol: 'MON-PERP',
+      reason: 'Kuru set-c has no candle history',
+    };
+    const label = 'perpl:MON-PERP (reference: Kuru set-c has no candle history)';
+
+    it('computes on the reference series and names it as the source', async () => {
+      const md = fakeMarketData({ reference });
+      const h = await harness(md.marketData);
+      const out = result(
+        await h.call({
+          venue: 'kuru',
+          market: MON_USDC,
+          timeframes: ['1h'],
+          indicators: [{ type: 'ema', period: 50 }],
+        }),
+      ) as ReturnType<typeof result> & { source?: string };
+      expect(out.source).toBe(label);
+      expect(out.timeframes['1h']!.indicators['ema(50)']).toMatchObject({
+        value: expect.any(String),
+      });
+    });
+
+    it('get_klines labels the borrowed candles too', async () => {
+      const md = fakeMarketData({ reference, count: 3 });
+      const h = await harness(md.marketData);
+      const getKlines = GATED_TOOLS.find((t) => t.name === 'get_klines')!;
+      const outcome = await getKlines.invoke(h.ctx, {
+        venue: 'kuru',
+        market: MON_USDC,
+        interval: '1h',
+        limit: 3,
+      });
+      if (!outcome.ok) throw new Error(outcome.message);
+      expect(outcome.result).toMatchObject({ interval: '1h', source: label });
+      expect((outcome.result as { candles: unknown[] }).candles).toHaveLength(3);
+    });
+
+    it('carries no source when the candles are the market’s own', async () => {
+      const md = fakeMarketData();
+      const h = await harness(md.marketData);
+      const out = result(
+        await h.call({
+          venue: 'kuru',
+          market: MON_USDC,
+          timeframes: ['1h'],
+          indicators: [{ type: 'rsi' }],
+        }),
+      );
+      expect(out).not.toHaveProperty('source');
+    });
   });
 });

@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import { decodeFunctionData, toFunctionSelector, type Address, type PublicClient } from 'viem';
 
 import { KuruOpenOrdersUnavailableError, KuruVenue, type KuruSubmitter } from './adapter.ts';
-import { KURU_DEPLOYMENTS, NATIVE_TOKEN } from './constants.ts';
+import { KURU_DEPLOYMENTS, kuruCandleReference, NATIVE_TOKEN } from './constants.ts';
 import {
   depositCalls,
   KURU_ACCOUNT_CORE_APPROVE_BUILDER_ABI,
@@ -209,6 +209,31 @@ test('depth comes from getL2Book; candles are honestly empty', async () => {
   assert.deepEqual(depth.asks, [{ price: '110100', size: '0.02' }]);
   assert.ok(reads.some((r) => r.functionName === 'getL2Book' && r.address === CBBTC.address));
   assert.deepEqual(await venue.getKlines({ symbol: 'cbBTC-USDC', interval: '1h', limit: 24 }), []);
+});
+
+test('candle references: Set C maps each book to its Perpl perp, labelled; Set D has none', () => {
+  const reason = 'Kuru set-c has no candle history';
+  assert.deepEqual(kuruCandleReference('cbBTC-USDC', SET_C), {
+    venue: 'perpl',
+    symbol: 'BTC-PERP',
+    reason,
+  });
+  assert.equal(kuruCandleReference('WETH-USDC', SET_C)?.symbol, 'ETH-PERP');
+  assert.equal(kuruCandleReference('MON-USDC', SET_C)?.symbol, 'MON-PERP');
+  // Perpl lists no gold perp.
+  assert.equal(kuruCandleReference('XAUt-USDC', SET_C), null);
+  // Every reference names a pinned Set C book.
+  for (const symbol of Object.keys(SET_C.candleReferences ?? {})) {
+    assert.ok(
+      SET_C.markets.some((m) => m.symbol === symbol),
+      symbol,
+    );
+  }
+  // Kuru serves Set D's own candles, so nothing stands in for them.
+  const SET_D = KURU_DEPLOYMENTS['set-d'];
+  for (const m of SET_D.markets) assert.equal(kuruCandleReference(m.symbol, SET_D), null);
+  assert.equal(setCVenue([]).candleReference('cbBTC-USDC')?.symbol, 'BTC-PERP');
+  assert.throws(() => setCVenue([]).candleReference('NOPE-USDC'), KuruOrderError);
 });
 
 test('open orders: refused with a reason, not an empty list that reads as "none"', async () => {

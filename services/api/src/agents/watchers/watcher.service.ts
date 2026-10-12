@@ -237,11 +237,16 @@ export class WatcherService {
         return { last: num(ticker.last) ?? mark, mark };
       },
       async candles(venue, market, timeframe) {
+        // `reference`: a Kuru Set C book has no candles of its own, so its
+        // indicators run on the matching Perpl perp's, exactly as
+        // `get_indicators` computes them (SEN-199).
         const page = await scoped(venue, market).klines(
           venue,
           market,
           timeframe as KlineInterval,
           DEFAULT_INDICATOR_LOOKBACK,
+          undefined,
+          { reference: true },
         );
         return page.klines.map((k) => toSourceCandle(k).candle);
       },

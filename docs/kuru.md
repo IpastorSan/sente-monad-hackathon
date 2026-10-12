@@ -39,7 +39,9 @@ fee (SEN-184) work unchanged on Set C. What differs with Set C active:
 - **No catalog.** `KuruVenue` lists the pinned books from their own
   `getMarketParams()` (a book whose precisions differ from its pin is left out),
   reads depth from `getL2Book`, returns no candles (the app says the chart has no
-  history) and refuses `getOpenOrders` with `KuruOpenOrdersUnavailableError`:
+  history; agents' `get_klines`, `get_indicators` and indicator watchers read the
+  matching Perpl perp instead, labelled `source: "perpl:BTC-PERP (reference: …)"`
+  — cbBTC → BTC-PERP, WETH → ETH-PERP, MON → MON-PERP, none for XAUt; SEN-199) and refuses `getOpenOrders` with `KuruOpenOrdersUnavailableError`:
   nothing on chain lists an account's orders. The portfolio shows Set C resting
   orders as locked balance only; they cancel by the id the placement returned.
 - **Custody names no third party.** The policy compiler pins neither

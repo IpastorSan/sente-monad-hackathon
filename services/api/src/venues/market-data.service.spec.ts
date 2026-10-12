@@ -10,11 +10,14 @@ import {
   KuruOrderError,
   type BookLevel,
   type KuruBookSnapshot,
+  type KuruCandleReference,
   type KuruVenue,
 } from '@sente/venues/kuru';
 
+import type { KlinesDto } from './dto/markets.dto';
 import {
   fillableWithin,
+  IntervalNotSupportedError,
   InvalidSizeError,
   MarketDataService,
   MarketNotFoundError,
@@ -140,6 +143,8 @@ function fakeKuru() {
       ),
     ),
     bookSnapshot: jest.fn(() => Promise.resolve(BOOK)),
+    // Kuru serves this market's candles (Set D) unless a spec says otherwise.
+    candleReference: jest.fn((_symbol: string): KuruCandleReference | null => null),
   } satisfies KuruReader;
   return reader;
 }
@@ -330,6 +335,97 @@ describe('MarketDataService (Kuru)', () => {
       });
       expect(a).toMatchObject({ venue: 'kuru', interval: '1m', volumeIsEstimate: true });
       expect(a.klines[0]).toMatchObject({ close: '1.004', quoteVolume: '1' });
+    });
+  });
+
+  describe('klines: a Kuru market with no candle history (SEN-199)', () => {
+    const REFERENCE: KuruCandleReference = {
+      venue: 'perpl',
+      symbol: 'MON-PERP',
+      reason: 'Kuru set-c has no candle history',
+    };
+    const perpPage = (interval: '1h' | '1w'): KlinesDto => ({
+      venue: 'perpl',
+      symbol: 'MON-PERP',
+      interval,
+      klines: [
+        {
+          openTime: NOW - HOUR,
+          closeTime: NOW - 1,
+          open: '0.025',
+          high: '0.026',
+          low: '0.024',
+          close: '0.0255',
+          volume: '100',
+          quoteVolume: null,
+        },
+      ],
+      volumeIsEstimate: true,
+      asOf: NOW - 500,
+    });
+    let perpl: UnavailablePerplReader & { klines: jest.Mock };
+
+    beforeEach(() => {
+      kuru.candleReference.mockImplementation(() => REFERENCE);
+      kuru.getKlines.mockResolvedValue([]);
+      perpl = Object.assign(new UnavailablePerplReader(), {
+        klines: jest.fn((_s: string, interval: '1h' | '1w') => Promise.resolve(perpPage(interval))),
+      });
+      service = new MarketDataService(kuru, perpl);
+    });
+
+    it("answers a reference read with the perp's candles under the Kuru name, labelled", async () => {
+      const page = await service.klines('kuru', 'MON-USDC', '1h', 50, undefined, {
+        reference: true,
+      });
+      expect(perpl.klines).toHaveBeenCalledWith('MON-PERP', '1h', 50, undefined);
+      expect(kuru.getKlines).not.toHaveBeenCalled();
+      expect(page).toMatchObject({
+        venue: 'kuru',
+        symbol: 'MON-USDC',
+        interval: '1h',
+        reference: REFERENCE,
+        asOf: NOW - 500,
+      });
+      expect(page.klines.map((k) => k.close)).toEqual(['0.0255']);
+    });
+
+    it('never substitutes without being asked: the chart route still sees no candles', async () => {
+      const page = await service.klines('kuru', 'MON-USDC', '1h', 50);
+      expect(perpl.klines).not.toHaveBeenCalled();
+      expect(page.klines).toEqual([]);
+      expect(page.reference).toBeUndefined();
+    });
+
+    it("leaves a market Kuru serves alone (Set D's candleReference is null)", async () => {
+      kuru.candleReference.mockImplementation(() => null);
+      kuru.getKlines.mockResolvedValue([kline(NOW - HOUR, '1', '1', '1', '1.005', '1')]);
+      const page = await service.klines('kuru', 'MON-USDC', '1h', 5, undefined, {
+        reference: true,
+      });
+      expect(perpl.klines).not.toHaveBeenCalled();
+      expect(page.reference).toBeUndefined();
+      expect(page.klines[0]).toMatchObject({ close: '1.005' });
+    });
+
+    it("reports a Perpl failure as Kuru's candles being unavailable, naming the reference", async () => {
+      perpl.klines.mockRejectedValue(new VenueUnavailableError('perpl', 'candles 500', 9_000));
+      const read = service.klines('kuru', 'MON-USDC', '1h', 5, undefined, { reference: true });
+      await expect(read).rejects.toMatchObject({
+        name: 'VenueUnavailableError',
+        venue: 'kuru',
+        retryAfterMs: 9_000,
+      });
+      await expect(read).rejects.toThrow(/perpl:MON-PERP could not be read: perpl is unavailable/);
+    });
+
+    it("refuses an interval the reference lacks as Kuru's, not Perpl's", async () => {
+      perpl.klines.mockRejectedValue(new IntervalNotSupportedError('perpl', '1w'));
+      const read = service.klines('kuru', 'MON-USDC', '1w', 5, undefined, { reference: true });
+      await expect(read).rejects.toMatchObject({
+        name: 'IntervalNotSupportedError',
+        venue: 'kuru',
+      });
     });
   });
 
