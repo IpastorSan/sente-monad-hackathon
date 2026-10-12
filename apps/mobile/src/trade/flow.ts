@@ -19,8 +19,9 @@
  *   user's slippage, and must equal the price the user confirmed on screen —
  *   if the book moved in between, the user reviews again (never a silent
  *   retry at a new price);
- * - the deposit cap is `depositCapAtoms(...)` from the same facts, with this
- *   build's Sente fee pin (`kuruBuilder.ts`, SEN-184) as extra headroom;
+ * - the deposit cap is `depositCapAtoms(...)` from the same facts, with no
+ *   room for the Sente fee: Kuru takes it from what the order receives, the
+ *   base on a buy and the USDC proceeds on a sell (SEN-195);
  * - the Sente fee the order may pay is that pin, never the server's.
  *
  * Following a committed trade never reports a failure it has not seen: a
@@ -207,7 +208,7 @@ export async function runTrade(
     onUpdate({ phase: 'reading_market' });
     const readFacts = opts.readFacts ?? ((m) => readMarketFacts(publicClient, m));
     facts = await readFacts(market);
-    intent = placeIntent(draft, clientTradeId, market, facts, ctx.slippageBps, builder);
+    intent = placeIntent(draft, clientTradeId, market, facts, ctx.slippageBps);
   } else {
     intent = { ...draft, clientTradeId };
   }
@@ -249,7 +250,6 @@ function placeIntent(
   market: KuruMarketConfig,
   facts: MarketFacts,
   slippageBps: number | undefined,
-  builder: KuruBuilderPin | null,
 ): KuruPlaceIntent {
   let price: bigint;
   try {
@@ -277,7 +277,6 @@ function placeIntent(
     },
     facts.params,
     { quote: market.quote.decimals, base: market.base.decimals },
-    builder?.feePps ?? 0,
   );
   return { ...draft, clientTradeId, maxDepositAtoms: cap.toString() };
 }

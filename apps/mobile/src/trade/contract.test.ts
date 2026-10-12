@@ -1048,6 +1048,8 @@ for (const side of ['buy', 'sell'] as const) {
         const legs = [...funding, 'approveBuilder', 'place'];
         assert.deepEqual(kinds, atomic ? ['batch'] : legs);
         assert.equal(run.plan!.summary['senteFeeBps'], '10');
+        // In what the order receives: MON on a buy, USDC on a sell (SEN-195).
+        assert.equal(run.plan!.summary['senteFeeAsset'], side === 'buy' ? 'MON' : 'USDC');
       });
     }
   }
@@ -1057,7 +1059,8 @@ test('builder on both sides: an approval still in force is not asked for again',
   const covered = { maxFeePps: 10_000, expiry: BigInt(NOW_MS / 1000 + 200 * 86_400), active: true };
   const base = world({ builderApproval: covered });
   const draft = await draftPlace(base, 'buy', 'limit', SIZES['MON-USDC']!);
-  // Funded at the phone's builder-aware cap: the planner reserves the same.
+  // Funded at the phone's cap, which (like the planner's reserve) sets
+  // nothing aside for the Sente fee: Kuru takes it in the base (SEN-195).
   const cap = depositCapAtoms(
     {
       side: 'buy',
@@ -1071,7 +1074,6 @@ test('builder on both sides: an approval still in force is not asked for again',
       ...fees(base),
     },
     { quote: 6, base: 18 },
-    SENTE_FEE.feePps,
   );
   const w = { ...base, kuruFree: { [key(USDC)]: cap } };
   const run = await trade(draft, w, { atomic: false, builder: SENTE_FEE }, TRADE_ID, SENTE_FEE);

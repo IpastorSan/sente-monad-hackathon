@@ -56,10 +56,13 @@ test('server and pin agree only on the same builder at the same rate, or both of
   assert.equal(kuruBuilderAgrees({ ...pin, address: 'not an address' }, pin), false);
 });
 
-test('the ticket’s estimate: 0.10% of 20 USDC is 0.02 USDC, rounded up', () => {
+test('the ticket’s estimate: 0.10% of what the order receives, rounded up', () => {
   const pin = { address: TREASURY, feePps: 10_000 } as const;
+  // A sell of 20 USDC proceeds.
   assert.equal(senteFeeEstimateAtoms(20_000_000n, pin), 20_000n);
   assert.equal(senteFeeEstimateAtoms(1_001n, pin), 2n);
+  // A buy of 0.00012505 cbBTC: 13 atoms, as AccountCore charged (tx 0xca084e71…).
+  assert.equal(senteFeeEstimateAtoms(12_505n, pin), 13n);
   assert.equal(feePpsToPercent(10_000), '0.1');
 });
 
@@ -73,6 +76,17 @@ test('senteFeeOf reads the planner’s summary keys, or nothing', () => {
       senteFeeAsset: 'USDC',
     }),
     { bps: '10', pps: '10000', estimate: '0.02', asset: 'USDC' },
+  );
+  // A buy's fee is in the base, with ≈ USDC beside it (SEN-195).
+  assert.deepEqual(
+    senteFeeOf({
+      senteFeeBps: '10',
+      senteFeePps: '10000',
+      senteFee: '0.00000013',
+      senteFeeAsset: 'cbBTC',
+      senteFeeQuote: '0.0143',
+    }),
+    { bps: '10', pps: '10000', estimate: '0.00000013', asset: 'cbBTC', quoteEstimate: '0.0143' },
   );
   assert.equal(senteFeeOf({ market: 'MON-USDC' }), null);
 });

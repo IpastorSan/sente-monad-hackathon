@@ -477,7 +477,7 @@ describe('planKuru with the Sente builder fee (SEN-184)', () => {
     }
   });
 
-  it('the approval sits after the deposit, and a buy reserves the Sente fee too', async () => {
+  it('the approval sits after the deposit, and a buy deposits nothing for the Sente fee (SEN-195)', async () => {
     const plan = await planKuru(buy(), withBuilder());
     expect(plan.steps.map((s) => s.kind)).toEqual([
       'approve',
@@ -485,8 +485,10 @@ describe('planKuru with the Sente builder fee (SEN-184)', () => {
       'approveBuilder',
       'place',
     ]);
-    // 10 USDC notional * (1 + 0.0004 maker + 0.001 Sente) = 10.014 USDC.
-    expect(plan.summary['deposit']).toBe('10.014');
+    // 10 USDC notional * (1 + 0.0004 maker) = 10.004 USDC: Kuru takes the
+    // Sente fee out of the MON bought, not the USDC deposited.
+    expect(plan.summary['deposit']).toBe('10.004');
+    expect(plan.summary['deposit']).toBe((await planKuru(buy(), deps())).summary['deposit']);
   });
 
   it('atomic batch: one execute carrying all four legs', async () => {
@@ -495,13 +497,26 @@ describe('planKuru with the Sente builder fee (SEN-184)', () => {
     expect(plan.steps[0]!.calls).toHaveLength(4);
   });
 
-  it('the summary carries the fee for the ticket: 0.10% of 10 USDC is 0.01 USDC', async () => {
+  it('a buy’s summary carries the fee in the base it buys: 0.1% of 500 MON ≈ 0.01 USDC (SEN-195)', async () => {
     const plan = await planKuru(buy(), withBuilder(funded));
     expect(plan.summary).toMatchObject({
       senteFeeBps: '10',
       senteFeePps: '10000',
+      senteFee: '0.5',
+      senteFeeAsset: 'MON',
+      senteFeeQuote: '0.01',
+    });
+  });
+
+  it('a sell’s summary carries the fee in its USDC proceeds, and deposits only the base', async () => {
+    const sell = buy({ side: 'sell', maxDepositAtoms: (500n * 10n ** 18n).toString() });
+    const plan = await planKuru(sell, withBuilder({ walletMon: parseEther('1000') }));
+    expect(plan.summary).toMatchObject({
+      fundingToken: 'MON',
+      deposit: '500',
       senteFee: '0.01',
       senteFeeAsset: 'USDC',
+      senteFeeQuote: '0.01',
     });
   });
 

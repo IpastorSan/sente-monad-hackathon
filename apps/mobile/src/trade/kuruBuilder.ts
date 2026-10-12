@@ -79,12 +79,13 @@ export function kuruBuilderAgrees(
 }
 
 /**
- * The Sente fee on `notionalAtoms` of quote, rounded up — what the ticket
- * shows as "≈" before anything is prepared. A resting order that never takes
- * may pay less.
+ * The Sente fee on `amountAtoms` of what the order receives, rounded up —
+ * base atoms on a buy, quote atoms on a sell, since Kuru takes it in that
+ * asset (SEN-195). What the ticket shows as "≈" before anything is prepared;
+ * a resting order that never takes may pay less.
  */
-export function senteFeeEstimateAtoms(notionalAtoms: bigint, pin: KuruBuilderPin): bigint {
-  return builderFeeAtoms(notionalAtoms, pin.feePps);
+export function senteFeeEstimateAtoms(amountAtoms: bigint, pin: KuruBuilderPin): bigint {
+  return builderFeeAtoms(amountAtoms, pin.feePps);
 }
 
 /** `pps` as a percentage for copy: 10000 → "0.1". */
@@ -98,7 +99,10 @@ export type SenteFeeView = {
   readonly pps: string;
   /** Estimated amount, a decimal string in `asset`. */
   readonly estimate: string;
+  /** What the order receives: the base on a buy (`cbBTC`), the quote on a sell (SEN-195). */
   readonly asset: string;
+  /** ≈ `estimate` in the quote (USDC), when the planner sent one. */
+  readonly quoteEstimate?: string;
 };
 
 /**
@@ -107,7 +111,13 @@ export type SenteFeeView = {
  * user pays is bounded by the verifier against {@link KURU_BUILDER_PIN}.
  */
 export function senteFeeOf(summary: Readonly<Record<string, string>>): SenteFeeView | null {
-  const { senteFeeBps, senteFeePps, senteFee, senteFeeAsset } = summary;
+  const { senteFeeBps, senteFeePps, senteFee, senteFeeAsset, senteFeeQuote } = summary;
   if (!senteFeeBps || !senteFeePps || !senteFee || !senteFeeAsset) return null;
-  return { bps: senteFeeBps, pps: senteFeePps, estimate: senteFee, asset: senteFeeAsset };
+  return {
+    bps: senteFeeBps,
+    pps: senteFeePps,
+    estimate: senteFee,
+    asset: senteFeeAsset,
+    ...(senteFeeQuote ? { quoteEstimate: senteFeeQuote } : {}),
+  };
 }

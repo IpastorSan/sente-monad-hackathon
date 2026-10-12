@@ -34,6 +34,7 @@
 import {
   BUILDER_APPROVAL_SECONDS,
   builderFeeAtoms,
+  builderFeeToken,
   depositCalls,
   encodeNativeOrder,
   fromUnits,
@@ -274,14 +275,14 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
   // Maker rate for a resting GTC (Kuru locks maker-fee headroom: the
   // 10 -> 10.004 USDC observation in docs/kuru.md), taker for an IOC. The
   // phone's deposit cap (M-T8) is sized the same way, so both agree.
-  // The Sente fee is headroom on top (SEN-184): a buy sets it aside too, and
-  // the phone's cap adds the same pinned rate, so the two still agree.
+  // The Sente fee needs no headroom on either side: Kuru takes it from what
+  // the order receives, the base on a buy and the USDC on a sell (SEN-195).
   const venueFeePps = intent.orderType === 'market' ? params.takerFeePps : params.makerFeePps;
-  const feePps = venueFeePps + BigInt(builder?.feePps ?? 0);
+  const baseAtoms = baseReserveAtoms(quantity, params, market.base.decimals);
   const reserve =
     intent.side === 'buy'
-      ? quoteReserveAtoms(order, params, market.quote.decimals, feePps)
-      : baseReserveAtoms(quantity, params, market.base.decimals);
+      ? quoteReserveAtoms(order, params, market.quote.decimals, venueFeePps)
+      : baseAtoms;
 
   const free = await kuruFree(deps, token);
   const shortfall = reserve > free ? reserve - free : 0n;
@@ -344,7 +345,9 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
       kuruFree: fromUnits(free, token.decimals),
       deposit: fromUnits(shortfall, token.decimals),
       feePps: venueFeePps.toString(),
-      ...(builder ? senteFeeSummary(builder, notional, market.quote) : {}),
+      ...(builder
+        ? senteFeeSummary(builder, intent.side, { base: baseAtoms, notional }, market)
+        : {}),
     },
     place: {
       market: market.address,
@@ -363,20 +366,33 @@ async function planPlace(intent: KuruPlaceIntent, deps: KuruPlannerDeps): Promis
 }
 
 /**
- * The Sente fee as the ticket shows it (SEN-184): "Sente fee 0.10% (≈ 0.02
- * USDC)". An estimate on the whole notional, rounded up: a resting order that
- * never takes may pay less, never more.
+ * The Sente fee as the ticket shows it (SEN-184), in the asset Kuru takes it
+ * in: what the order receives (SEN-195). A buy pays it in the base it buys —
+ * "Sente fee 0.1% (≈ 0.00000013 cbBTC ≈ $0.02)" — and a sell in its USDC
+ * proceeds — "(≈ 0.02 USDC)". `senteFeeQuote` is ≈ the fee in the quote
+ * either way. An estimate on the whole order, rounded up: a resting order
+ * that never takes may pay less, never more.
  */
 export function senteFeeSummary(
   builder: KuruBuilderConfig,
-  notionalAtoms: bigint,
-  quote: Pick<KuruToken, 'symbol' | 'decimals'>,
+  side: 'buy' | 'sell',
+  amounts: { readonly base: bigint; readonly notional: bigint },
+  pair: {
+    readonly base: Pick<KuruToken, 'symbol' | 'decimals'>;
+    readonly quote: Pick<KuruToken, 'symbol' | 'decimals'>;
+  },
 ): Record<string, string> {
+  const token = builderFeeToken(side, pair);
+  const received = side === 'buy' ? amounts.base : amounts.notional;
   return {
     senteFeeBps: feePpsToBps(builder.feePps),
     senteFeePps: String(builder.feePps),
-    senteFee: fromUnits(builderFeeAtoms(notionalAtoms, builder.feePps), quote.decimals),
-    senteFeeAsset: quote.symbol,
+    senteFee: fromUnits(builderFeeAtoms(received, builder.feePps), token.decimals),
+    senteFeeAsset: token.symbol,
+    senteFeeQuote: fromUnits(
+      builderFeeAtoms(amounts.notional, builder.feePps),
+      pair.quote.decimals,
+    ),
   };
 }
 

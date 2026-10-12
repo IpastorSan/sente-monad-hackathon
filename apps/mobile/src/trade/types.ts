@@ -82,8 +82,10 @@ export type PreparedTrade = {
   /**
    * Render only: never an input to a check. A Kuru place with Sente's builder
    * fee on (SEN-184) adds `senteFeeBps` ("10"), `senteFeePps` ("10000"),
-   * `senteFee` (the estimate on the whole notional, rounded up, e.g. "0.02")
-   * and `senteFeeAsset` ("USDC"); `senteFeeOf` in `kuruBuilder.ts` reads them.
+   * `senteFee` (the estimate on the whole order, rounded up, in
+   * `senteFeeAsset`: the base a buy receives, e.g. "0.00000013" cbBTC, or the
+   * USDC a sell receives, SEN-195) and `senteFeeQuote` (≈ it in USDC);
+   * `senteFeeOf` in `kuruBuilder.ts` reads them.
    */
   readonly summary: Record<string, string>;
 };
@@ -222,8 +224,16 @@ export type KuruPlaceResult = {
     readonly tradeId: string;
   }[];
   readonly unfilledCancelled?: string;
-  /** Sente's builder fee these fills paid, in `feeAsset` (SEN-184). Absent without one. */
+  /** Sente's builder fee these fills paid, in `senteFeeAsset` (SEN-184). Absent without one. */
   readonly senteFee?: string;
+  /**
+   * The asset `senteFee` is in: what the order received, the base on a buy
+   * and USDC on a sell (SEN-195). Absent from an API older than that, whose
+   * `senteFee` was the USDC part only.
+   */
+  readonly senteFeeAsset?: string;
+  /** ≈ `senteFee` in USDC at the average fill price; display only. */
+  readonly senteFeeQuote?: string;
 };
 
 export type TradeFunds = readonly {
