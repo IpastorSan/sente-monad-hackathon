@@ -2,7 +2,7 @@ import { ToolError } from '@anthropic-ai/sdk/resources/beta/messages';
 
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore } from '../store/agent-store';
-import { toRunnerTools } from './anthropic';
+import { inlineInputSchema, toRunnerTools } from './anthropic';
 import { AgentTools } from './context';
 import { GATED_TOOLS } from './gate';
 import { MON_USDC, testAgent } from './testing/agent-fixture';
@@ -78,5 +78,17 @@ describe('toRunnerTools', () => {
     expect(error).toBeInstanceOf(ToolError);
     expect((error as ToolError).content).toMatch(/^Refused by Sente mandate: thesis_required/);
     expect(kuru.writes()).toEqual([]);
+  });
+});
+
+describe('tool schemas sent to the model (2026-10-12: Kimi rejects $ref)', () => {
+  it('inline every reused piece, so no tool schema carries a $ref or $defs', () => {
+    for (const tool of GATED_TOOLS) {
+      const json = JSON.stringify(inlineInputSchema(tool.name, tool.input));
+      expect({ tool: tool.name, ref: /"\$ref"|"\$defs"|"definitions"/.test(json) }).toEqual({
+        tool: tool.name,
+        ref: false,
+      });
+    }
   });
 });

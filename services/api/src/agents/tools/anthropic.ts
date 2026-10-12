@@ -8,6 +8,7 @@
  * loop carries on.
  */
 import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
+import { z } from 'zod';
 import { ToolError } from '@anthropic-ai/sdk/resources/beta/messages';
 
 import type { ToolContext } from './context';
@@ -44,6 +45,11 @@ export function toRunnerTools(
         return toResultText(outcome.result);
       },
     });
+    // The SDK converts with `reused: 'ref'`, so a schema piece used twice (an
+    // indicator period, a market enum) becomes a `$ref`. Moonshot's Kimi
+    // rejects any `$ref` as "infinite recursion" and fails the whole request
+    // (every run, 2026-10-12), so the schema sent is inlined instead.
+    (runnable as { input_schema: unknown }).input_schema = inlineInputSchema(tool.name, tool.input);
     if (!observe) return runnable;
     const parse = runnable.parse.bind(runnable);
     return {
@@ -66,4 +72,15 @@ export function toRunnerTools(
       },
     };
   });
+}
+
+/** A tool's input as JSON Schema with every reused piece written out in full (no `$ref`). */
+export function inlineInputSchema(name: string, input: z.ZodType): Record<string, unknown> {
+  const schema = z.toJSONSchema(input, { reused: 'inline' }) as Record<string, unknown>;
+  if (schema['type'] !== 'object') {
+    throw new Error(
+      `Zod schema for tool "${name}" must be an object, got ${String(schema['type'])}`,
+    );
+  }
+  return schema;
 }
