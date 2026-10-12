@@ -55,6 +55,7 @@ import {
   type TradeFlowState,
   type TradeOutcome,
 } from '@/trade/flow';
+import { KURU_BUILDER_PIN } from '@/trade/kuruBuilder';
 import {
   readKuruFree,
   readMarketFacts,
@@ -69,6 +70,7 @@ import {
   feePpsOf,
   fundsLines,
   MON_RESERVE_ATOMS,
+  moneyText,
   presetAmount,
   PRESETS,
   pressKey,
@@ -349,6 +351,11 @@ function Ticket({
     return best === null ? null : worstPriceUnits(best, slippageBps, facts.params.tickSize, side);
   }, [facts, side, slippageBps]);
 
+  // `Ticket` only renders once `trading` is on (see `TicketScreen` below),
+  // which already means this build's pin agrees with the server's
+  // `capabilities.kuruBuilder` (`isTradingEnabled`, `kuruBuilderAgrees`) — so
+  // the pin IS the fee this order will actually carry, on or off (SEN-192).
+  const builderFeePps = KURU_BUILDER_PIN?.feePps ?? 0;
   const base: TicketInput = {
     market: tm,
     side,
@@ -359,6 +366,7 @@ function Ticket({
     worstUnits,
     available,
     quote: null,
+    builderFeePps,
   };
   const sized = evaluateTicket(base);
   // The quote is asked for the size this ticket would place, to four
@@ -404,6 +412,7 @@ function Ticket({
       available,
       limitPriceUnits: limitPrice === '' ? null : toUnits(limitPrice, tm.pricePrecision),
       market: tm,
+      builderFeePps,
     });
     if (next !== null) {
       void Haptics.selectionAsync();
@@ -1422,6 +1431,9 @@ function Result({
         </View>
       ) : null}
       {money.length > 0 ? <MoneyRows label="Money" lines={money} /> : null}
+      {result.senteFee ? (
+        <Row label="Sente fee paid" value={`${moneyText(result.senteFee)} ${result.feeAsset}`} />
+      ) : null}
       {result.orderId ? <Row label="Order" value={result.orderId} mono /> : null}
       {cancel.done ? <Notice tone="ok" title="Order cancelled" detail={cancel.done} /> : null}
       {cancel.error ? <Notice tone="error" title="Couldn't cancel" detail={cancel.error} /> : null}
