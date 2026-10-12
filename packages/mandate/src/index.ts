@@ -2,6 +2,7 @@
  * `@sente/mandate` — the trading mandate, its compilation to Privy policy
  * rules (layer 2, enclave-enforced), and the pre-sign intent check (layer 1).
  */
+export * from './anchor.ts';
 export * from './decimal.ts';
 export * from './enforce.ts';
 export * from './mandate.ts';
