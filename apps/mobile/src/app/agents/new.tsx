@@ -93,6 +93,7 @@ import {
   ToggleRow,
   TopBar,
 } from '@/ui/kit';
+import { PageTitle } from '@/ui/PageTitle';
 import { color, text } from '@/ui/theme';
 
 type StepId = 'identity' | 'instructions' | 'mandate' | 'review';
@@ -156,7 +157,27 @@ const SUBMIT_LABEL: Record<Mode, string> = {
   fork: 'Fork agent',
 };
 
+/** The flow under a browser-tab title that says which one it is (SEN-198). */
 export default function HireAgentScreen() {
+  const { amend, fork, from } = useLocalSearchParams<{
+    amend?: string;
+    fork?: string;
+    from?: string;
+  }>();
+  const title = amend
+    ? 'Amend mandate'
+    : fork
+      ? `Fork ${from?.trim() || 'an agent'}`
+      : 'Hire an agent';
+  return (
+    <>
+      <PageTitle title={title} />
+      <HireAgentFlow />
+    </>
+  );
+}
+
+function HireAgentFlow() {
   const router = useRouter();
   const { amend, fork, from } = useLocalSearchParams<{
     amend?: string;
@@ -696,7 +717,7 @@ export default function HireAgentScreen() {
     );
 
   return (
-    <Screen footer={footer}>
+    <Screen footer={footer} scrollKey={step}>
       <View style={styles.stepBar}>
         <IconButton
           icon={index === 0 ? 'close' : 'back'}

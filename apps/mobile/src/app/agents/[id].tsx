@@ -127,6 +127,7 @@ import {
   TopBar,
   type NoticeTone,
 } from '@/ui/kit';
+import { PageTitle } from '@/ui/PageTitle';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
 
@@ -182,6 +183,8 @@ export default function AgentScreen() {
   /** `undefined` while reading; `null` when the chain read failed (SEN-177: said, never a 0). */
   const [balances, setBalances] = useState<Record<string, bigint> | null | undefined>(undefined);
   const [sheet, setSheet] = useState<SheetId | null>(null);
+  /** The run sheet was opened from the Ask field: its instruction takes the typing (SEN-198). */
+  const [askFocus, setAskFocus] = useState(false);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<CockpitTab>(() => tabFrom(askedTab));
@@ -269,6 +272,7 @@ export default function AgentScreen() {
   if (!agent) {
     return (
       <Screen>
+        <PageTitle title="Agent" />
         <TopBar back={{ label: 'Agents', onPress: backToList }} />
         {!api ? (
           <Notice title="Sign in first" detail="Agents belong to your passkey account." />
@@ -353,11 +357,23 @@ export default function AgentScreen() {
           <AskBar
             agent={agent}
             running={open !== null}
-            onOpen={() => guarded(() => setSheet('run'))}
+            onRun={() =>
+              guarded(() => {
+                setAskFocus(false);
+                setSheet('run');
+              })
+            }
+            onAsk={() =>
+              guarded(() => {
+                setAskFocus(true);
+                setSheet('run');
+              })
+            }
           />
         ) : undefined
       }
     >
+      <PageTitle title={agent.name} />
       <TopBar
         back={{ label: 'Agents', onPress: backToList }}
         right={
@@ -523,6 +539,7 @@ export default function AgentScreen() {
       <RunSheet
         agent={agent}
         visible={sheet === 'run'}
+        focusInstruction={askFocus}
         onClose={close}
         live={open}
         onStarted={runStarted}
@@ -547,17 +564,20 @@ export default function AgentScreen() {
 /**
  * The foot of every tab: Run now (a run with no instruction) beside the ask
  * field. Both open the run sheet, whose instruction field is the ask — the
- * full Ask sheet with suggestions is U-11's.
+ * full Ask sheet with suggestions is U-11's. The ask field looks like an
+ * input, so it opens the sheet with the instruction focused (SEN-198).
  */
 function AskBar({
   agent,
   running,
-  onOpen,
+  onRun,
+  onAsk,
 }: {
   agent: Agent;
   /** A run is open (SEN-177): Run now waits for it rather than meeting a 409. */
   running: boolean;
-  onOpen: () => void;
+  onRun: () => void;
+  onAsk: () => void;
 }) {
   return (
     <View style={styles.askBar}>
@@ -567,12 +587,12 @@ function AskBar({
         size="sm"
         icon="bolt"
         disabled={running}
-        onPress={onOpen}
+        onPress={onRun}
       />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Ask ${agent.name} to do something`}
-        onPress={onOpen}
+        onPress={onAsk}
         style={({ pressed }) => [styles.askField, pressed && styles.pressed]}
       >
         <Text style={[text.dim, styles.grow]} numberOfLines={1}>
@@ -1497,6 +1517,7 @@ function FundSheet({
 function RunSheet({
   agent,
   visible,
+  focusInstruction,
   onClose,
   live,
   onStarted,
@@ -1504,6 +1525,8 @@ function RunSheet({
 }: {
   agent: Agent;
   visible: boolean;
+  /** Opened from the Ask field: the instruction is focused, so typing goes straight in. */
+  focusInstruction: boolean;
   onClose: () => void;
   /** The run open right now, if any (SEN-177). */
   live: RunSummary | null;
@@ -1598,6 +1621,10 @@ function RunSheet({
         value={instruction}
         onChangeText={setInstruction}
         multiline
+        autoFocus={focusInstruction}
+        onEnter={() => {
+          if (!busy) void run();
+        }}
         placeholder="e.g. Only rebalance, no new positions."
       />
       {outcome ? (
