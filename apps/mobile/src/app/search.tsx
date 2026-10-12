@@ -52,6 +52,7 @@ import {
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { ChangeText, PerpTag, TokenGlyph } from '@/ui/trading';
 import { formatPrice } from '@/ui/tradingFormat';
+import { PageTitle } from '@/ui/PageTitle';
 
 type Scope = 'all' | 'markets' | 'agents';
 
@@ -63,7 +64,17 @@ const SCOPES: readonly { value: Scope; label: string }[] = [
 
 const NO_SUMMARIES: ReadonlyMap<string, AgentSummary> = new Map();
 
-export default function SearchScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function SearchScreenRoute() {
+  return (
+    <>
+      <PageTitle title="Search" />
+      <SearchScreen />
+    </>
+  );
+}
+
+function SearchScreen() {
   const router = useRouter();
   const { agents: agentsApi } = useSession();
   const markets = useMarkets();

@@ -88,6 +88,7 @@ import {
 } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { AsOf, BigNumber, Levels, PerpTag, SideTag } from '@/ui/trading';
+import { PageTitle, symbolTitle } from '@/ui/PageTitle';
 
 type NoticeState = { tone: NoticeTone; title: string; detail?: string };
 
@@ -110,7 +111,18 @@ type AskIntent = 'ask' | 'close' | 'levels';
 /** One ask in flight or finished: its words, where the log stood, and how it ended. */
 type AskedRun = { words: string; at: number; afterSeq: number; outcome: NoticeState | null };
 
-export default function AgentPositionScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function AgentPositionScreenRoute() {
+  const { symbol } = useLocalSearchParams<{ symbol?: string }>();
+  return (
+    <>
+      <PageTitle title={`${symbolTitle(symbol)} position`} />
+      <AgentPositionScreen />
+    </>
+  );
+}
+
+function AgentPositionScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string; symbol: string; venue?: string }>();
   const id = params.id;

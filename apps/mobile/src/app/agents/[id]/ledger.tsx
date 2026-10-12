@@ -81,6 +81,7 @@ import { useSession } from '@/session';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
 import { Pill, Stat, Stone } from '@/ui/goban';
 import { Button, Chip, Chips, Loading, Notice, Screen, TopBar } from '@/ui/kit';
+import { PageTitle } from '@/ui/PageTitle';
 import { color, font, text } from '@/ui/theme';
 
 /** The plan's number: long enough to read as construction, short enough not to wait. */
@@ -179,6 +180,7 @@ export default function LedgerScreen() {
 
   return (
     <Screen footer={fork}>
+      <PageTitle title={agent ? `${agent.name} ledger` : 'Ledger'} />
       <TopBar
         back={{ label: agent?.name ?? 'Agent', onPress: back }}
         right={

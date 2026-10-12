@@ -21,20 +21,32 @@ import { getPreset } from '@sente/presets';
 
 import { PresetsApi, type PresetStatsDto } from '@/presets/api';
 import { cadenceLabel, defaultMarkets, riskOf, statsLine, venueLine } from '@/presets/cards';
-import { presetToDto } from '@/presets/catalog';
+import { presetTitle, presetToDto } from '@/presets/catalog';
 import { cantDo, decisionSteps } from '@/presets/params';
 import { useHirePreset } from '@/presets/usePresets';
 import { useSession } from '@/session';
 import { Joseki } from '@/ui/joseki';
 import { Button, Notice, Screen, Section, TopBar } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 
 /** Lines of the strategy shown before "Show all". */
 const COLLAPSED_LINES = 3;
 
 type StatsState = { kind: 'loading' } | { kind: 'ready'; stats: PresetStatsDto } | { kind: 'none' };
 
-export default function PresetDetailScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function PresetDetailScreenRoute() {
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  return (
+    <>
+      <PageTitle title={presetTitle(id)} />
+      <PresetDetailScreen />
+    </>
+  );
+}
+
+function PresetDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const bundled = useMemo(() => {

@@ -37,8 +37,19 @@ import { readSeen, useAlerts } from '@/agents/useAlerts';
 import { Pill, Stone } from '@/ui/goban';
 import { Chip, Chips, Loading, Notice, Screen, TopBar } from '@/ui/kit';
 import { color, font, text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 
-export default function Alerts() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function AlertsRoute() {
+  return (
+    <>
+      <PageTitle title="Alerts" />
+      <Alerts />
+    </>
+  );
+}
+
+function Alerts() {
   const router = useRouter();
   const feed = useAlerts();
   const [filter, setFilter] = useState<AlertFilter>('all');
