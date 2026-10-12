@@ -69,10 +69,17 @@ export type KuruPlaceResult = {
   unfilledCancelled?: string;
   /**
    * Sente's builder fee these fills paid (SEN-184), read from AccountCore's
-   * `BuilderFeeAccrued`, in `feeAsset`. Present only when the order carried a
-   * builder fee; `"0"` when it took nothing.
+   * `BuilderFeeAccrued`, in `senteFeeAsset`. Present only when the order
+   * carried a builder fee; `"0"` when it took nothing.
    */
   senteFee?: string;
+  /**
+   * The asset `senteFee` is in: the one the order received, the base on a buy
+   * (`cbBTC`) and the quote on a sell (`USDC`) — not `feeAsset` (SEN-195).
+   */
+  senteFeeAsset?: string;
+  /** ≈ `senteFee` in USDC at the average fill price; for display only. */
+  senteFeeQuote?: string;
 };
 
 /**

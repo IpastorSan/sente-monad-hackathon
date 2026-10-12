@@ -585,13 +585,14 @@ describe('gate', () => {
     expect(fill!.detail).not.toHaveProperty('senteFee');
   });
 
-  it('a Kuru fill that paid Sente’s builder fee records it (SEN-184)', async () => {
+  it('a Kuru fill that paid Sente’s builder fee records it, in the base a buy received (SEN-195)', async () => {
     const h = await harness();
     h.kuru.fillRecord = {
       fee: '0.0108',
       feeAsset: 'USDC',
-      builderFee: '0.035',
-      builderFeeAsset: 'USDC',
+      builderFee: '0.01',
+      builderFeeAsset: 'MON',
+      builderFeeQuote: '0.035',
     };
     await h.thesis();
     await h.call('place_market', {
@@ -602,7 +603,13 @@ describe('gate', () => {
       slippageLimitPrice: '3.6',
     });
     const [fill] = await h.events.list(h.agent.id, { kind: 'fill' });
-    expect(fill!.detail).toMatchObject({ fee: '0.0108', senteFee: '0.035', senteFeeAsset: 'USDC' });
+    expect(fill!.detail).toMatchObject({
+      fee: '0.0108',
+      feeAsset: 'USDC',
+      senteFee: '0.01',
+      senteFeeAsset: 'MON',
+      senteFeeQuote: '0.035',
+    });
   });
 
   it('a Perpl fill carries its leverage', async () => {

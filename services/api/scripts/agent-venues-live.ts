@@ -9,7 +9,8 @@
 // Kuru bid through `approveBuilder` + the builder `batch` overload: the live
 // proof that Privy accepts the new ABIs and matches the tuple overloads by
 // name. `--builder-take` then buys the market's minimum as an IOC, the one
-// order that should pay the fee, and prints what `BuilderFeeAccrued` said.
+// order that should pay the fee, and prints what `BuilderFeeAccrued` said, per
+// asset: a buy pays it in the base it receives, not USDC (SEN-195).
 //
 // What it does, in order, with every hash printed:
 //   1. Reuses the probe agent wallet recorded in .env as PRIVY_AGENT_VENUES_*,
@@ -37,6 +38,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { compileMandate, parseMandate } from '@sente/mandate';
 import {
+  builderFeesByAsset,
   KURU_DEPLOYMENT,
   KURU_MEASURED_GAS,
   KURU_TESTNET_MARKETS,
@@ -50,7 +52,9 @@ import {
   formatUnits,
   getAddress,
   http,
+  isAddressEqual,
   type Address,
+  type Hex,
   type PublicClient,
 } from 'viem';
 import { monadTestnet } from 'viem/chains';
@@ -397,18 +401,38 @@ async function main(): Promise<number> {
         size: takeSize,
         maxSlippage: '0.02',
       });
+      // Every BuilderFeeAccrued this account paid in the take, by asset, off
+      // the receipt itself (SEN-195): a buy pays in the base it received.
+      const receipt = await pub.getTransactionReceipt({ hash: taken.txHash as Hex });
+      const tokens = [market.base, market.quote].map((symbol) =>
+        Object.values(KURU_TESTNET_TOKENS).find((t) => t.symbol === symbol),
+      );
+      const byAsset = builderFeesByAsset(
+        receipt.logs,
+        KURU_DEPLOYMENT.contracts.accountCore,
+        builder!.address,
+        BigInt(String(kuruResult['accountId'])),
+      ).map(({ asset, amount }) => {
+        const token = tokens.find((t) => t && isAddressEqual(t.address, asset));
+        return token
+          ? `${formatUnits(amount, token.decimals)} ${token.symbol}`
+          : `${amount} atoms of ${asset}`;
+      });
       Object.assign(kuruResult, {
         takeTx: taken.txHash,
         takeFilled: taken.filledSize,
         takeVenueFee: taken.fee,
         takeSenteFee: taken.builderFee,
         takeSenteFeeAsset: taken.builderFeeAsset,
+        takeSenteFeeQuote: taken.builderFeeQuote,
+        takeSenteFeeByAsset: byAsset,
       });
       show('kuru take (Sente fee)', {
         tx: taken.txHash,
         filled: taken.filledSize,
-        venueFee: taken.fee,
-        senteFee: `${taken.builderFee} ${taken.builderFeeAsset}`,
+        venueFee: `${taken.fee} ${taken.feeAsset}`,
+        senteFee: `${taken.builderFee} ${taken.builderFeeAsset} (≈ ${taken.builderFeeQuote ?? '?'} ${market.quote})`,
+        senteFeeByAsset: byAsset.length > 0 ? byAsset : 'none accrued',
       });
     }
   });

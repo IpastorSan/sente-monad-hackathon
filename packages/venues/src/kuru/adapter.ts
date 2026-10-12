@@ -76,7 +76,8 @@ import {
   approveBuilderCall,
   builderApprovalCovers,
   cancelOrderCall,
-  builderFeePaidAtoms,
+  builderFeeReport,
+  builderFeesByAsset,
   decodeMakerFills,
   decodeOrderOutcome,
   depositCalls,
@@ -878,16 +879,16 @@ export class KuruVenue implements Venue {
     });
     const builder = this.#builder;
     if (!builder) return order;
-    // What the builder was actually paid, from AccountCore's own events.
-    const quote = prepared.market.quote;
-    const paid = builderFeePaidAtoms(
-      execution.logs,
-      this.#accountCore,
-      builder.address,
-      accountId,
-      quote.address,
-    );
-    return { ...order, builderFee: fromUnits(paid, quote.decimals), builderFeeAsset: quote.symbol };
+    // What the builder was actually paid, from AccountCore's own events, in
+    // the asset it was taken in: the base on a buy, the quote on a sell (SEN-195).
+    const paid = builderFeesByAsset(execution.logs, this.#accountCore, builder.address, accountId);
+    const fee = builderFeeReport(paid, prepared.side, prepared.market, order.averageFillPrice);
+    return {
+      ...order,
+      builderFee: fee.fee,
+      builderFeeAsset: fee.asset,
+      ...(fee.quoteEstimate !== undefined ? { builderFeeQuote: fee.quoteEstimate } : {}),
+    };
   }
 
   async #submit(calls: readonly KuruCall[]): Promise<KuruExecution> {
