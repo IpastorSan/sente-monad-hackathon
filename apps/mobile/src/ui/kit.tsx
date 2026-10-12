@@ -386,20 +386,49 @@ export function ButtonRow({ children }: { children: ReactNode }) {
  * field showed two rings. The box is the indicator — a purple border and a
  * soft glow — and every TextInput sets {@link BARE_INPUT} so the browser's
  * outline goes. Removing it is only safe because the box takes over: a
- * TextInput that sets BARE_INPUT must put {@link FOCUS_RING} on its container
- * while focused.
+ * TextInput that sets BARE_INPUT must sit in a {@link FocusBox}.
  *
  * `outlineStyle: 'none'` is valid CSS that React Native's types don't list.
  */
 export const BARE_INPUT = (Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) as TextStyle;
 
-export const FOCUS_RING: ViewStyle = {
+const FOCUS_RING: ViewStyle = {
   borderColor: color.purple,
   shadowColor: color.purple,
   shadowOpacity: 0.45,
   shadowRadius: 10,
   shadowOffset: { width: 0, height: 0 },
 };
+
+/**
+ * The box around a TextInput, wearing {@link FOCUS_RING} while `focused`.
+ *
+ * `collapsable={false}` is what keeps the field typeable on Android (SEN-201).
+ * Fabric mounts the children of a view that does not form a stacking context
+ * in its nearest ancestor that does, and a `shadowColor` makes one. Toggling
+ * the ring therefore moved the focused EditText to another native parent on
+ * every focus; Android drops focus from a view it detaches, so the keyboard
+ * closed within milliseconds of opening and the blur took the ring off again.
+ * Pinned as a stacking context, the box keeps its children in both states.
+ */
+export function FocusBox({
+  focused,
+  style,
+  overlay,
+  children,
+}: {
+  focused: boolean;
+  style: StyleProp<ViewStyle>;
+  /** Drawn over the ring: an error border still shows while focused. */
+  overlay?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  return (
+    <View collapsable={false} style={[style, focused && FOCUS_RING, overlay]}>
+      {children}
+    </View>
+  );
+}
 
 export function Field({
   label,
@@ -456,8 +485,10 @@ export function Field({
           </Text>
         ) : null}
       </View>
-      <View
-        style={[styles.inputRow, focused && FOCUS_RING, (error || over) && styles.inputRowError]}
+      <FocusBox
+        focused={focused}
+        style={styles.inputRow}
+        overlay={(error || over) && styles.inputRowError}
       >
         <TextInput
           value={value}
@@ -499,7 +530,7 @@ export function Field({
           ]}
         />
         {suffix ? <Text style={styles.suffix}>{suffix}</Text> : null}
-      </View>
+      </FocusBox>
       {error ? <Text style={[text.dim, text.danger]}>{error}</Text> : null}
       {hint && !error ? <Text style={text.caption}>{hint}</Text> : null}
     </View>

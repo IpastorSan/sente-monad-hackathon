@@ -31,7 +31,7 @@ import { ComingNext } from '@/ui/ComingNext';
 import { Icon } from '@/ui/icons';
 import {
   BARE_INPUT,
-  FOCUS_RING,
+  FocusBox,
   Button,
   Chip,
   Chips,
@@ -144,7 +144,7 @@ function Picker() {
 
   return (
     <View>
-      <View style={[styles.search, focused && FOCUS_RING]}>
+      <FocusBox focused={focused} style={styles.search}>
         <Icon name="markets" size={16} color={color.textFaint} />
         <TextInput
           value={query}
@@ -161,7 +161,7 @@ function Picker() {
           style={[styles.input, BARE_INPUT]}
           accessibilityLabel="Search markets"
         />
-      </View>
+      </FocusBox>
 
       {markets.data === null ? (
         markets.error ? (
