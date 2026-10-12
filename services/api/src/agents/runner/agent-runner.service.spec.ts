@@ -91,7 +91,7 @@ describe('AgentRunnerService', () => {
     expect(first.headers).not.toHaveProperty('x-api-key');
 
     // The request: the agent's model, the bounds, the gated tools, no extras.
-    expect(first.body).toMatchObject({ model: 'anthropic/claude-sonnet-5', max_tokens: 4096 });
+    expect(first.body).toMatchObject({ model: 'anthropic/claude-sonnet-5', max_tokens: 16_384 });
     expect(first.body).not.toHaveProperty('thinking');
     expect(first.body).not.toHaveProperty('provider');
     expect(first.body).not.toHaveProperty('max_iterations');

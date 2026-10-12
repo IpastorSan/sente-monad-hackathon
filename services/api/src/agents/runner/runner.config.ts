@@ -43,7 +43,10 @@ export const AGENT_RUNNER_DEFAULTS = {
   // upstream does not hold the agent's run slot for the SDK's 10 minutes.
   timeoutMs: 180_000,
   maxIterations: 12,
-  maxTokens: 4096,
+  // Kimi K2.6 reasons before it answers, and the reasoning counts here: on
+  // 2026-10-12 a watcher-woken run spent all of 4096 thinking about watcher
+  // edges and ended on max_tokens. Only what is generated is billed.
+  maxTokens: 16_384,
   // SEN-3: a second sign 5 s after the first was refused by the rolling cap;
   // one straight after was not. Not tied to GAS_DRIP_SENDER_SPACING_MS (2 s, Monad's reserve window, SEN-16); this one covers Privy's lag.
   writeSpacingMs: 5_000,

@@ -12,7 +12,7 @@ describe('loadAgentRunnerConfig', () => {
       tickSeconds: undefined,
       timeoutMs: AGENT_RUNNER_DEFAULTS.timeoutMs,
       maxIterations: 12,
-      maxTokens: 4096,
+      maxTokens: 16_384,
       writeSpacingMs: 5_000,
       thinking: false,
     });
