@@ -380,13 +380,14 @@ JavaScript every browser downloads: public by construction, and fixed until the
 next build. `deploy.sh` sets them explicitly rather than trusting whatever `.env`
 the machine has:
 
-| Variable                    | Value                                               |
-| --------------------------- | --------------------------------------------------- |
-| `EXPO_PUBLIC_API_URL`       | `https://$API_HOST` — always, not overridable       |
-| `EXPO_PUBLIC_MONAD_NETWORK` | `testnet` unless set in the environment             |
-| `EXPO_PUBLIC_MONAD_RPC_URL` | empty (viem's default public RPC) unless set        |
-| `EXPO_PUBLIC_BUNDLER_URL`   | `https://public.pimlico.io/v2/10143/rpc` unless set |
-| `EXPO_PUBLIC_USER_TRADING`  | empty (manual trading off) unless set               |
+| Variable                        | Value                                                   |
+| ------------------------------- | ------------------------------------------------------- |
+| `EXPO_PUBLIC_API_URL`           | `https://$API_HOST` — always, not overridable           |
+| `EXPO_PUBLIC_MONAD_NETWORK`     | `testnet` unless set in the environment                 |
+| `EXPO_PUBLIC_MONAD_RPC_URL`     | empty (viem's default public RPC) unless set            |
+| `EXPO_PUBLIC_BUNDLER_URL`       | `https://public.pimlico.io/v2/10143/rpc` unless set     |
+| `EXPO_PUBLIC_USER_TRADING`      | empty (manual trading off) unless set                   |
+| `EXPO_PUBLIC_SHOWCASE_AGENT_ID` | empty (no "See a live agent" on the landing) unless set |
 
 Two refusals before anything reaches the network: the bundle must contain
 `https://api.sente.lol` (the APK's inlining check, same reasoning: do not test
