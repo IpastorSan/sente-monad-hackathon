@@ -98,6 +98,8 @@ build_web () {
     EXPO_PUBLIC_BUNDLER_URL="${EXPO_PUBLIC_BUNDLER_URL:-https://public.pimlico.io/v2/10143/rpc}" \
     EXPO_PUBLIC_USER_TRADING="${EXPO_PUBLIC_USER_TRADING:-}" \
     EXPO_PUBLIC_KURU_DEPLOYMENT="${EXPO_PUBLIC_KURU_DEPLOYMENT:-${KURU_DEPLOYMENT:-}}" \
+    EXPO_PUBLIC_KURU_BUILDER_ADDRESS="${EXPO_PUBLIC_KURU_BUILDER_ADDRESS:-${KURU_BUILDER_ADDRESS:-}}" \
+    EXPO_PUBLIC_KURU_BUILDER_FEE_PPS="${EXPO_PUBLIC_KURU_BUILDER_FEE_PPS:-${KURU_BUILDER_FEE_PPS:-}}" \
       mise exec -- pnpm --filter @sente/mobile run export:web --clear
   ) || die "the web export failed"
 
