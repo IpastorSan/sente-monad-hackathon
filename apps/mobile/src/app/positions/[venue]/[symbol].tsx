@@ -47,13 +47,25 @@ import { Chart } from '@/ui/chart/Chart';
 import { Button, ButtonRow, Card, Loading, Notice, Row, Screen, Sheet, TopBar } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { AsOf, BigNumber, Levels, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
+import { PageTitle, symbolTitle } from '@/ui/PageTitle';
 
 const RANGES = ['15M', '1H', '4H', '1D'] as const;
 type Range = (typeof RANGES)[number];
 const INTERVAL: Record<Range, KlineInterval> = { '15M': '15m', '1H': '1h', '4H': '4h', '1D': '1d' };
 const CANDLES = 48;
 
-export default function PositionScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function PositionScreenRoute() {
+  const { symbol } = useLocalSearchParams<{ symbol?: string }>();
+  return (
+    <>
+      <PageTitle title={`${symbolTitle(symbol)} position`} />
+      <PositionScreen />
+    </>
+  );
+}
+
+function PositionScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ venue: string; symbol: string }>();
   const venue = params.venue === 'perpl' ? 'perpl' : 'kuru';

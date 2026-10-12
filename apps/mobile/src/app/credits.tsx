@@ -45,13 +45,24 @@ import { useSession } from '@/session';
 import { Icon } from '@/ui/icons';
 import { Button, Card, Loading, Notice, Screen, Section, TopBar } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 
 type State =
   | { kind: 'loading' }
   | { kind: 'ready'; overview: CreditsOverview; plans: CreditPlans }
   | { kind: 'failed'; title: string; detail: string };
 
-export default function Credits() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function CreditsRoute() {
+  return (
+    <>
+      <PageTitle title="Credits" />
+      <Credits />
+    </>
+  );
+}
+
+function Credits() {
   const router = useRouter();
   const { auth, api } = useSession();
   const credits = useMemo(() => new CreditsApi({ auth: api }), [api]);

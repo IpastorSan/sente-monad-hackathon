@@ -16,6 +16,7 @@ import {
   marketChoices,
   newWatcherId,
   triggerLine,
+  watchedEvery,
   watchersSummary,
   type MarketChoice,
 } from './watchers.ts';
@@ -196,8 +197,19 @@ test('the summary line counts the wakes and the model calls saved', () => {
   );
   assert.equal(
     watchersSummary({ everySeconds: null, wakes: 0, modelCallsSaved: 0, watchers: one }),
-    'Not checked: it runs only when you run it. Pick a cadence to have these checked.',
+    'These won’t fire on Manual. Nothing checks them while the agent runs only when you run ' +
+      'it. Pick a cadence.',
   );
+});
+
+test('the watchers line follows a cadence change before the watchers are read again (SEN-200)', () => {
+  // Manual → 15m: the save answers with the agent's own schedule at once.
+  assert.equal(watchedEvery(null, { everySeconds: null }, { everySeconds: 900 }), 900);
+  // No own schedule: the schedule route, which knows Sente's global tick.
+  assert.equal(watchedEvery(null, { everySeconds: 300 }, undefined), 300);
+  assert.equal(watchedEvery(300, { everySeconds: null }, null), null);
+  // Neither read yet: the watchers answer.
+  assert.equal(watchedEvery(600, null, undefined), 600);
 });
 
 const MARKETS: MarketChoice[] = [

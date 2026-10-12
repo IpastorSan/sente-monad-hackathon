@@ -50,6 +50,7 @@ import { useDraftRestoreBanner, useDraftSync } from '@/agents/useDraftSync';
 import { usePolling } from '@/markets/usePolling';
 import { useMarkets } from '@/markets/hooks';
 import { cadenceLabel } from '@/presets/cards';
+import { presetTitle } from '@/presets/catalog';
 import {
   checkParams,
   controlFor,
@@ -96,6 +97,7 @@ import {
   TopBar,
 } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 import { describeSendError, sendSponsored } from '@/wallet/send';
 
 type StepId = 'strategy' | 'mandate' | 'review';
@@ -116,7 +118,18 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
 type ErrorCopy = { title: string; detail: string };
 type FundOutcome = { tone: 'ok' | 'info' | 'error'; title: string; detail?: string };
 
-export default function ConfigurePresetScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function ConfigurePresetScreenRoute() {
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  return (
+    <>
+      <PageTitle title={`Configure ${presetTitle(id)}`} />
+      <ConfigurePresetScreen />
+    </>
+  );
+}
+
+function ConfigurePresetScreen() {
   const router = useRouter();
   const { id, market, amount } = useLocalSearchParams<{
     id: string;

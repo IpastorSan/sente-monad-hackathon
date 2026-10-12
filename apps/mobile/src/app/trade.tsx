@@ -44,8 +44,19 @@ import {
 } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { MarketRow } from '@/ui/trading';
+import { PageTitle } from '@/ui/PageTitle';
 
-export default function TradeScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function TradeScreenRoute() {
+  return (
+    <>
+      <PageTitle title="Trade" />
+      <TradeScreen />
+    </>
+  );
+}
+
+function TradeScreen() {
   const router = useRouter();
   const trading = useTradingEnabled();
   const close = () => (router.canGoBack() ? router.back() : router.replace('/'));

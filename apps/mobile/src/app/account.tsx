@@ -26,11 +26,22 @@ import { MONAD_NETWORK, monadChain } from '@/chain';
 import { useSession } from '@/session';
 import { ActionRow, Notice, Row, Screen, Section, TopBar } from '@/ui/kit';
 import { text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 
 /** From `app.json`. Absent only in a bare test environment. */
 const APP_VERSION = Constants.expoConfig?.version ?? '—';
 
-export default function Account() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function AccountRoute() {
+  return (
+    <>
+      <PageTitle title="Account" />
+      <Account />
+    </>
+  );
+}
+
+function Account() {
   const router = useRouter();
   const { auth, wallet } = useSession();
   const { address, error, signOut, forget } = auth;

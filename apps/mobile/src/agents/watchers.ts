@@ -10,6 +10,7 @@
  */
 import type {
   AgentMandate,
+  AgentScheduleStatusDto,
   AgentWatchersDto,
   IndicatorSpecDto,
   VenueId,
@@ -213,6 +214,28 @@ export function firedLine(
 }
 
 /**
+ * The cadence the watchers are checked at, from the same state the page's
+ * cadence line reads (SEN-200): the agent's own schedule first, which a save
+ * updates at once, then `GET …/schedule` (which knows Sente's global tick),
+ * and only then the watchers answer, which lags a cadence change by a poll.
+ */
+export function watchedEvery(
+  dtoEverySeconds: number | null,
+  status: Pick<AgentScheduleStatusDto, 'everySeconds'> | null,
+  own: { everySeconds: number } | null | undefined,
+): number | null {
+  if (own) return own.everySeconds;
+  if (status) return status.everySeconds;
+  return dtoEverySeconds;
+}
+
+/** Watchers set while the agent runs only by hand: nothing will ever check them (SEN-200). */
+export const MANUAL_WATCHERS_NUDGE = {
+  title: 'These won’t fire on Manual',
+  detail: 'Nothing checks them while the agent runs only when you run it. Pick a cadence.',
+};
+
+/**
  * The section's line: what the watchers cost and saved.
  * `Checked every 5m without the model · woke it 3 times · saved ~214 model calls`.
  */
@@ -222,7 +245,7 @@ export function watchersSummary(
   if (dto.everySeconds === null) {
     return dto.watchers.length === 0
       ? 'It runs only when you run it, so there is nothing to watch for.'
-      : 'Not checked: it runs only when you run it. Pick a cadence to have these checked.';
+      : `${MANUAL_WATCHERS_NUDGE.title}. ${MANUAL_WATCHERS_NUDGE.detail}`;
   }
   const every = `every ${formatDuration(dto.everySeconds * 1000)}`;
   if (dto.watchers.length === 0) {

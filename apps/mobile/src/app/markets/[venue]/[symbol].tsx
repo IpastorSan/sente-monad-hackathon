@@ -110,6 +110,7 @@ import {
   TokenGlyph,
 } from '@/ui/trading';
 import { formatPrice, pctDirection, pressureSplit } from '@/ui/tradingFormat';
+import { PageTitle, symbolTitle } from '@/ui/PageTitle';
 
 /** Past this scroll offset the hero is gone and the condensed header takes over. */
 const HERO_HEIGHT = 170;
@@ -128,7 +129,18 @@ const CTA_HEIGHT = 50;
 /** A stable empty series, so the line's memo holds before the first answer. */
 const NO_BARS: readonly KlineDto[] = [];
 
-export default function AssetScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function AssetScreenRoute() {
+  const { symbol } = useLocalSearchParams<{ symbol?: string }>();
+  return (
+    <>
+      <PageTitle title={symbolTitle(symbol)} />
+      <AssetScreen />
+    </>
+  );
+}
+
+function AssetScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ venue?: string; symbol?: string; side?: string }>();
   const venue = parseVenue(params.venue);

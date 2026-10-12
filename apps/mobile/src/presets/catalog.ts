@@ -12,11 +12,16 @@
  * so bundling it costs the six definitions and their render text, nothing
  * else.
  */
-import { listPresets, resolveParams, type PresetDefinition } from '@sente/presets';
+import { getPreset, listPresets, resolveParams, type PresetDefinition } from '@sente/presets';
 
 import type { PresetDto } from './api.ts';
 
 export type CatalogSource = 'api' | 'bundled';
+
+/** A preset's name for a tab title, from the bundled copy ("Preset" when it isn't there). */
+export function presetTitle(id: string | undefined): string {
+  return (id ? getPreset(id)?.name : undefined) ?? 'Preset';
+}
 
 /** One definition as `GET /presets` would serve it: functions evaluated at the defaults. */
 export function presetToDto(def: PresetDefinition): PresetDto {

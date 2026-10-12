@@ -921,6 +921,12 @@ function watcherSummary(view: WatcherSetView) {
   };
 }
 
+/** What `set_watchers` says when saved on Manual, for the model to pass on (SEN-200). */
+export const MANUAL_WATCHERS_WARNING =
+  'Saved, but NOT ACTIVE: your schedule is Manual, so Sente never checks these watchers and ' +
+  'they will not fire. They start working only when your owner picks a cadence on your agent ' +
+  'page. Tell your owner this plainly; you cannot change the schedule yourself.';
+
 function watcherRefusal(error: unknown): never {
   if (error instanceof WatcherInvalidError) throw new SenteRefusal(error.code, error.message);
   throw error;
@@ -956,7 +962,8 @@ const setWatchers = defineTool({
     'pnl_above|pnl_below (value = % of margin)|opened|closed}; funding {market (Perpl), op ' +
     'above|below, value = % per 8h}. crosses_*, enters, leaves, opened and closed fire once on ' +
     'the flip; the others fire while true, at most once per cooldownMinutes (default 60). ' +
-    "Pass a watcher's id back to keep its state. An empty list removes them all.",
+    "Pass a watcher's id back to keep its state. An empty list removes them all. Your owner " +
+    'sets the schedule: on Manual nothing checks watchers, and you cannot change that.',
   input: watcherSetInput,
   async handler(ctx, args) {
     const watchers = requireWatchers(ctx);
@@ -966,7 +973,13 @@ const setWatchers = defineTool({
     } catch (error) {
       watcherRefusal(error);
     }
-    return { set: args.watchers.length, ...watcherSummary(watchers.view(agent.id)) };
+    // SEN-200: saved on Manual, they would sit unchecked without anyone knowing.
+    const manual = args.watchers.length > 0 && ctx.cadenceSeconds?.(agent) === null;
+    return {
+      set: args.watchers.length,
+      ...(manual ? { warning: MANUAL_WATCHERS_WARNING } : {}),
+      ...watcherSummary(watchers.view(agent.id)),
+    };
   },
 });
 

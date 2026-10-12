@@ -18,6 +18,7 @@ import {
   AgentsApiError,
   describeAgentsError,
   type Agent,
+  type AgentScheduleStatusDto,
   type AgentWatchersDto,
   type WatcherDto,
 } from '@/agents/api';
@@ -30,9 +31,11 @@ import {
   FORM_TIMEFRAMES,
   formOf,
   formOps,
+  MANUAL_WATCHERS_NUDGE,
   marketChoices,
   newWatcherId,
   triggerLine,
+  watchedEvery,
   watcherParts,
   watchersSummary,
   type WatcherForm,
@@ -90,7 +93,14 @@ function useWatchers(agentId: string) {
   return { dto, setDto };
 }
 
-export function AgentWatchers({ agent }: { agent: Agent }) {
+export function AgentWatchers({
+  agent,
+  schedule,
+}: {
+  agent: Agent;
+  /** The page's `GET …/schedule`, which the cadence line below reads too. */
+  schedule: AgentScheduleStatusDto | null;
+}) {
   const { agents: api } = useSession();
   const { dto, setDto } = useWatchers(agent.id);
   const [editing, setEditing] = useState<WatcherDto | 'new' | null>(null);
@@ -100,6 +110,9 @@ export function AgentWatchers({ agent }: { agent: Agent }) {
 
   if (!dto) return null;
   const now = Date.now();
+  // The cadence the line names follows the cadence control at once (SEN-200).
+  const everySeconds = watchedEvery(dto.everySeconds, schedule, agent.schedule);
+  const manual = everySeconds === null && dto.watchers.length > 0;
 
   const remove = async (watcher: WatcherDto) => {
     if (!api || removing) return;
@@ -119,7 +132,13 @@ export function AgentWatchers({ agent }: { agent: Agent }) {
       label="Watchers"
       aside={active ? <SectionLink label="Add" onPress={() => setEditing('new')} /> : undefined}
     >
-      <Text style={[text.caption, styles.summary]}>{watchersSummary(dto)}</Text>
+      {manual ? (
+        <Notice title={MANUAL_WATCHERS_NUDGE.title} detail={MANUAL_WATCHERS_NUDGE.detail} />
+      ) : (
+        <Text style={[text.caption, styles.summary]}>
+          {watchersSummary({ ...dto, everySeconds })}
+        </Text>
+      )}
       {dto.watchers.map((watcher, i) => (
         <WatcherRow
           key={watcher.id}

@@ -27,6 +27,11 @@ import {
   ReputationEventLog,
 } from '../reputation/erc8004';
 import { MANDATE_ANCHORS, MandateAnchors } from '../reputation/mandate-anchor';
+import {
+  AGENT_RUNNER_CONFIG,
+  cadenceSecondsOf,
+  type AgentRunnerConfig,
+} from '../runner/runner.config';
 import { AGENT_STORE, type AgentStore } from '../store/agent-store';
 import { AgentVenues } from '../venues/agent-venues';
 import { WatcherService } from '../watchers/watcher.service';
@@ -152,6 +157,7 @@ export const agentToolsProviders: Provider[] = [
       MarketDataService,
       WatcherService,
       AGENT_KURU_BUILDER,
+      AGENT_RUNNER_CONFIG,
     ],
     useFactory: (
       store: AgentStore,
@@ -161,6 +167,7 @@ export const agentToolsProviders: Provider[] = [
       marketData: MarketDataService,
       watchers: WatcherService,
       kuruBuilder: KuruBuilderConfig | null,
+      runner: AgentRunnerConfig,
     ) =>
       new AgentTools({
         store,
@@ -171,6 +178,8 @@ export const agentToolsProviders: Provider[] = [
         marketData,
         // SEN-182: set_watchers, list_watchers and clear_watchers.
         watchers,
+        // SEN-200: set_watchers tells the agent when nothing will check them.
+        cadenceSeconds: (agent) => cadenceSecondsOf(agent, runner.tickSeconds),
         venuesFor: (agent) =>
           venues.forAgent(
             { agentId: agent.id, walletId: agent.walletId, address: agent.address },

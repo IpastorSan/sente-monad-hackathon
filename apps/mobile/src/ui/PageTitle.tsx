@@ -12,3 +12,13 @@ export function PageTitle({ title }: { title: string }) {
     </Head>
   );
 }
+
+/** A market symbol from a route param, readable in a tab title ("BTC-PERP"). */
+export function symbolTitle(symbol: string | undefined): string {
+  if (!symbol) return 'Market';
+  try {
+    return decodeURIComponent(symbol);
+  } catch {
+    return symbol;
+  }
+}

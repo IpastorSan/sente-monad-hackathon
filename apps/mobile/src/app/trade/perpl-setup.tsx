@@ -39,6 +39,7 @@ import {
   useWide,
 } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 import { balanceOf } from '@/wallet';
 
 const MIN_AUSD = 100;
@@ -64,7 +65,17 @@ type Run =
       enroll: StepState;
     };
 
-export default function PerplSetupScreen() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function PerplSetupScreenRoute() {
+  return (
+    <>
+      <PageTitle title="Set up perps" />
+      <PerplSetupScreen />
+    </>
+  );
+}
+
+function PerplSetupScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ symbol?: string }>();
   const symbol = typeof params.symbol === 'string' && params.symbol !== '' ? params.symbol : null;

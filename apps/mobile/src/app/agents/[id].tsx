@@ -774,7 +774,7 @@ function Overview({
         </Section>
       )}
 
-      <AgentWatchers agent={agent} />
+      <AgentWatchers agent={agent} schedule={schedule} />
       {active ? (
         <Cadence
           agent={agent}

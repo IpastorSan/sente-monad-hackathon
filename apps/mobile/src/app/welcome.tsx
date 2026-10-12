@@ -44,6 +44,7 @@ import { GobanHero } from '@/ui/GobanHero';
 import { Mark, Pill } from '@/ui/goban';
 import { Button, Notice, Screen, SHEET_MAX, Sheet, useWide } from '@/ui/kit';
 import { color, text } from '@/ui/theme';
+import { PageTitle } from '@/ui/PageTitle';
 
 /** Default WebAuthn account name. The passkey is what identifies the user. */
 const USER_NAME = 'sente';
@@ -61,7 +62,17 @@ const SHEET_EXIT_MS = 300;
  */
 const SHOWCASE_HREF = showcaseAgentHref(process.env.EXPO_PUBLIC_SHOWCASE_AGENT_ID);
 
-export default function Welcome() {
+/** The route: the browser tab's title, then the screen (SEN-200). */
+export default function WelcomeRoute() {
+  return (
+    <>
+      <PageTitle title="Welcome" />
+      <Welcome />
+    </>
+  );
+}
+
+function Welcome() {
   const { auth } = useSession();
   const { status, hasCredential, error, createPasskey, signIn } = auth;
   const { next } = useLocalSearchParams<{ next?: string }>();
