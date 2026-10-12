@@ -10,7 +10,7 @@
  * error for a feature that is simply not there.
  */
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import type { Agent, AgentPortfolioDto } from '@/agents/api';
 import { usePolling, type Polled } from '@/markets/usePolling';
@@ -19,6 +19,7 @@ import type { Portfolio, PortfolioFill, PortfolioVenue } from '@/trade/types';
 import { useTradingEnabled } from '@/trade/useTradingEnabled';
 
 import type { FillCoverage } from './closed';
+import { overlayPortfolio, perplOverlay, settlePerpl, subscribePerplOverlay } from './perplOverlay';
 import {
   appendSample,
   perplFillsGap,
@@ -35,8 +36,14 @@ const FILLS_PAGE = 50;
 export type UserPortfolio = {
   /** Manual trading is on for this build, this API and this network. */
   trading: boolean;
-  /** `null` with trading off, before the first answer, or when the route refused. */
+  /**
+   * `null` with trading off, before the first answer, or when the route refused.
+   * Its Perpl positions include what this device's own orders did and the
+   * server's cached read does not show yet (SEN-202, `perplOverlay.ts`).
+   */
   portfolio: Portfolio | null;
+  /** Perp markets where an order of this device filled and Perpl has not shown it yet. */
+  perplUpdating: readonly string[];
   polled: Polled<Portfolio>;
   /**
    * What the cash card shows: `/portfolio`'s wallet, or the wallet session's
@@ -51,7 +58,15 @@ export function useUserPortfolio(): UserPortfolio {
   const polled = usePolling(trading && trade ? 'portfolio' : null, () => trade!.portfolio(), {
     intervalMs: PORTFOLIO_MS,
   });
-  const portfolio = trading ? polled.data : null;
+  const entries = useSyncExternalStore(subscribePerplOverlay, perplOverlay, perplOverlay);
+  const overlaid = useMemo(
+    () => (trading && polled.data ? overlayPortfolio(polled.data, entries, Date.now()) : null),
+    [trading, polled.data, entries],
+  );
+  // The server's read agrees now (or the entry expired): it is the truth again.
+  const settled = overlaid?.settled.join(',') ?? '';
+  useEffect(() => settlePerpl(settled === '' ? [] : settled.split(',')), [settled]);
+  const portfolio = overlaid?.portfolio ?? null;
   const walletAmounts = useMemo<WalletAmount[] | null>(() => {
     if (portfolio?.wallet.ok) {
       return portfolio.wallet.balances.map(({ symbol, amount }) => ({ symbol, amount }));
@@ -62,7 +77,13 @@ export function useUserPortfolio(): UserPortfolio {
     const held = wallet.wallet;
     return held ? held.balances.map(({ symbol, amount }) => ({ symbol, amount })) : null;
   }, [portfolio, wallet.wallet]);
-  return { trading, portfolio, polled, wallet: walletAmounts };
+  return {
+    trading,
+    portfolio,
+    perplUpdating: overlaid?.pending ?? [],
+    polled,
+    wallet: walletAmounts,
+  };
 }
 
 /** Each venue's cursor for its next, older page; `null` once it has no more (or was not read). */
