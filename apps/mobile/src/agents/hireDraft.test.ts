@@ -62,6 +62,17 @@ test('parseHireDraft refuses a shape that is missing or has the wrong type for a
   );
 });
 
+test('a draft from before the AUSD amount existed still restores, and a typed one round-trips', () => {
+  const { fundAusdAmount: _none, ...before } = fields();
+  assert.deepEqual(parseHireDraft(JSON.stringify({ v: 1, data: before })), before);
+  const typed = fields({ fundAusdAmount: '150' });
+  assert.deepEqual(parseHireDraft(serializeHireDraft(typed)), typed);
+  assert.equal(
+    parseHireDraft(JSON.stringify({ v: 1, data: { ...fields(), fundAusdAmount: 100 } })),
+    null,
+  );
+});
+
 test('isHireDraftFields rejects a mandate form with a field of the wrong type', () => {
   const broken = { ...fields(), form: { ...fields().form, kuru: 'yes' } };
   assert.equal(isHireDraftFields(broken), false);
@@ -80,6 +91,19 @@ test('isHireDraftEmpty is true only for an untouched identity/instructions/manda
   assert.equal(isHireDraftEmpty(fields({ preset: 'custom' })), false);
   assert.equal(isHireDraftEmpty(fields({ isPublic: true })), false);
   assert.equal(isHireDraftEmpty(fields({ fundAmount: '10' })), false);
+  assert.equal(
+    isHireDraftEmpty(
+      fields({
+        name: '',
+        systemPrompt: '',
+        strategy: '',
+        fundAmount: '',
+        risksAccepted: false,
+        fundAusdAmount: '',
+      }),
+    ),
+    false,
+  );
   assert.equal(isHireDraftEmpty(fields({ risksAccepted: true })), false);
 });
 

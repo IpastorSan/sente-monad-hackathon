@@ -48,8 +48,12 @@ import { HIRE_DRAFT_CODEC, mergeHireDraft, type HireDraftFields } from '@/agents
 import {
   checkFunding,
   fundAgent,
+  fundingLayout,
+  fundingRequests,
   fundingTokensFor,
   hireThenFund,
+  PERPS_FUND_DEFAULT,
+  perpsFundNote,
   type FundingCheck,
   type FundingState,
 } from '@/agents/initialFunding';
@@ -203,7 +207,14 @@ export default function HireAgentScreen() {
   const [fundSymbol, setFundSymbol] = useState<string | null>(null);
   const [fundAmount, setFundAmount] = useState('');
   const [fundBalance, setFundBalance] = useState<bigint | null>(null);
-  const [funding, setFunding] = useState<FundingState | null>(null);
+  /**
+   * SEN-198: the AUSD amount beside it when the mandate trades perps. `null`
+   * until edited, and then it shows Perpl's minimum, `PERPS_FUND_DEFAULT`.
+   */
+  const [fundAusdAmount, setFundAusdAmount] = useState<string | null>(null);
+  const [fundAusdBalance, setFundAusdBalance] = useState<bigint | null>(null);
+  /** One state per transfer asked for, in the order they are sent. */
+  const [fundings, setFundings] = useState<FundingState[]>([]);
   /**
    * SEN-188: the pinning amend that follows every hire, and the mandate it
    * keeps — the one sent at hire, not a recomputed form (its expiry is
@@ -304,10 +315,25 @@ export default function HireAgentScreen() {
   const walletId = wallet.wallet?.walletId;
   const fundTokens = !amend && mandateResult.ok ? fundingTokensFor(mandateResult.mandate) : [];
   const canFund = fundTokens.length > 0 && wallet.address !== null && walletId !== undefined;
+  // SEN-198: with Perpl in the mandate, AUSD gets its own amount beside the spot one.
+  const layout = mandateResult.ok
+    ? fundingLayout(mandateResult.mandate, fundTokens)
+    : { spot: fundTokens, perps: null };
   const chosenToken =
-    fundTokens.find((token) => token.symbol === fundSymbol) ?? fundTokens[0] ?? null;
+    layout.spot.find((token) => token.symbol === fundSymbol) ?? layout.spot[0] ?? null;
+  const perpsToken = layout.perps;
+  const ausdAmount = fundAusdAmount ?? PERPS_FUND_DEFAULT;
   const fundCheck: FundingCheck =
     canFund && chosenToken ? checkFunding(fundAmount, chosenToken, fundBalance) : { kind: 'skip' };
+  const ausdCheck: FundingCheck =
+    canFund && perpsToken
+      ? checkFunding(ausdAmount, perpsToken, fundAusdBalance)
+      : { kind: 'skip' };
+  const fundingInvalid = fundCheck.kind === 'invalid' || ausdCheck.kind === 'invalid';
+  const fundingAsked = [
+    ...(chosenToken ? [{ token: chosenToken, check: fundCheck, amount: fundAmount.trim() }] : []),
+    ...(perpsToken ? [{ token: perpsToken, check: ausdCheck, amount: ausdAmount.trim() }] : []),
+  ].filter((entry) => entry.check.kind === 'ok');
   const startsEmpty = canFund
     ? 'The wallet starts empty unless you fund it here; you can also fund it later from the agent’s page.'
     : 'The wallet starts empty: fund it from the agent’s page.';
@@ -326,6 +352,20 @@ export default function HireAgentScreen() {
       cancelled = true;
     };
   }, [step, canFund, chosenToken, fundFrom]);
+  useEffect(() => {
+    if (step !== 'review' || !canFund || !perpsToken || !fundFrom) return;
+    let cancelled = false;
+    setFundAusdBalance(null);
+    readBalance(perpsToken, fundFrom).then(
+      (balance) => {
+        if (!cancelled) setFundAusdBalance(balance);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [step, canFund, perpsToken, fundFrom]);
 
   /**
    * SEN-190: the hire/fork draft. Never on an amend — that edits an existing
@@ -352,6 +392,7 @@ export default function HireAgentScreen() {
       expiryDays,
       fundSymbol,
       fundAmount,
+      fundAusdAmount,
       risksAccepted,
     }),
     [
@@ -366,6 +407,7 @@ export default function HireAgentScreen() {
       expiryDays,
       fundSymbol,
       fundAmount,
+      fundAusdAmount,
       risksAccepted,
     ],
   );
@@ -385,6 +427,7 @@ export default function HireAgentScreen() {
     expiryDays: 7,
     fundSymbol: null,
     fundAmount: '',
+    fundAusdAmount: null,
     risksAccepted: false,
   });
 
@@ -401,6 +444,7 @@ export default function HireAgentScreen() {
     setExpiryDays(fields.expiryDays);
     setFundSymbol(fields.fundSymbol);
     setFundAmount(fields.fundAmount);
+    setFundAusdAmount(fields.fundAusdAmount ?? null);
     setRisksAccepted(fields.risksAccepted);
     setShowErrors(false);
   };
@@ -508,10 +552,7 @@ export default function HireAgentScreen() {
         setHiredMandate(result.mandate);
         await hireThenFund({
           hire,
-          funding:
-            fundCheck.kind === 'ok' && chosenToken
-              ? { token: chosenToken, atoms: fundCheck.atoms }
-              : null,
+          funding: fundingRequests(fundingAsked),
           fund: (to, token, atoms) =>
             walletId === undefined
               ? Promise.reject(new Error('Your wallet isn’t ready.'))
@@ -525,7 +566,12 @@ export default function HireAgentScreen() {
             draftSync.clear();
             setHired(hireResult);
           },
-          onFunding: setFunding,
+          onFunding: (index, state) =>
+            setFundings((current) => {
+              const next = [...current];
+              next[index] = state;
+              return next;
+            }),
           secure: (agent) => secure(agent, result.mandate),
           onSecure: setPin,
         });
@@ -593,10 +639,8 @@ export default function HireAgentScreen() {
         result={hired}
         pin={pin}
         onSecure={() => void retrySecure()}
-        funding={funding}
-        request={
-          funding && chosenToken ? { token: chosenToken.symbol, amount: fundAmount.trim() } : null
-        }
+        fundings={fundings}
+        requests={fundingAsked.map(({ token, amount }) => ({ token: token.symbol, amount }))}
       />
     );
   }
@@ -634,9 +678,7 @@ export default function HireAgentScreen() {
       label={SUBMIT_LABEL[mode]}
       kind="primary"
       busy={submitting}
-      disabled={
-        !mandateResult.ok || fundCheck.kind === 'invalid' || (mode !== 'amend' && !risksAccepted)
-      }
+      disabled={!mandateResult.ok || fundingInvalid || (mode !== 'amend' && !risksAccepted)}
       onPress={() => void submit()}
     />
   ) : (
@@ -809,15 +851,33 @@ export default function HireAgentScreen() {
           <Section label="Mandate">
             {mandateResult.ok ? <MandateSummary mandate={mandateResult.mandate} /> : null}
           </Section>
-          {canFund && chosenToken ? (
+          {canFund && (chosenToken || perpsToken) ? (
             <FundNow
-              tokens={fundTokens}
-              token={chosenToken}
+              tokens={layout.spot}
               setToken={(token) => setFundSymbol(token.symbol)}
-              amount={fundAmount}
-              setAmount={setFundAmount}
-              balance={fundBalance}
-              check={fundCheck}
+              spot={
+                chosenToken
+                  ? {
+                      token: chosenToken,
+                      amount: fundAmount,
+                      setAmount: setFundAmount,
+                      balance: fundBalance,
+                      check: fundCheck,
+                    }
+                  : null
+              }
+              perps={
+                perpsToken
+                  ? {
+                      token: perpsToken,
+                      amount: ausdAmount,
+                      setAmount: setFundAusdAmount,
+                      balance: fundAusdBalance,
+                      check: ausdCheck,
+                    }
+                  : null
+              }
+              perpsNote={perpsFundNote(ausdCheck)}
             />
           ) : null}
           <Text style={[text.dim, styles.after]}>
@@ -900,29 +960,30 @@ function Hired({
   result,
   pin,
   onSecure,
-  funding,
-  request,
+  fundings,
+  requests,
 }: {
   result: HireAgentResult;
   /** SEN-188: the pinning amend after the hire; `null` when there was nothing to pin. */
   pin: DepositPinState | null;
   onSecure: () => void;
-  /** The funding that followed the hire; `null` when none was asked for. */
-  funding: FundingState | null;
-  /** What was asked, so a retry opens the Fund sheet prefilled. */
-  request: { token: string; amount: string } | null;
+  /** The fundings that followed the hire, in order; empty when none was asked for. */
+  fundings: readonly FundingState[];
+  /** What was asked, index for index, so a retry opens the Fund sheet prefilled. */
+  requests: readonly { token: string; amount: string }[];
 }) {
   const router = useRouter();
   const { agent, mcpToken } = result;
+  // A retry opens the Fund sheet on the first transfer that failed.
+  const failed = fundings.findIndex((state) => state.kind === 'failed');
+  const retry = failed >= 0 ? requests[failed] : undefined;
   const open = (sheet?: 'fund') =>
     router.replace({
       pathname: '/agents/[id]',
-      params: sheet
-        ? { id: agent.id, sheet, ...(funding?.kind === 'failed' && request ? request : {}) }
-        : { id: agent.id },
+      params: sheet ? { id: agent.id, sheet, ...(retry ?? {}) } : { id: agent.id },
     });
   // Funded, or on its way: going to the agent is what is left to do.
-  const funded = funding !== null && funding.kind !== 'failed';
+  const funded = fundings.length > 0 && failed < 0;
   const endpoint = `${API_URL.replace(/\/+$/, '')}/mcp`;
   const config = JSON.stringify(
     {
@@ -951,8 +1012,10 @@ function Hired({
       <TopBar />
       <Text style={text.display}>{agent.name} is hired</Text>
       {pin ? <DepositPinStatus state={pin} onRetry={onSecure} /> : null}
-      {funding ? (
-        <FundingStatus state={funding} onRetry={() => open('fund')} />
+      {fundings.length > 0 ? (
+        fundings.map((state, index) => (
+          <FundingStatus key={index} state={state} onRetry={() => open('fund')} />
+        ))
       ) : (
         <Text style={[text.dim, styles.subtitle]}>
           Its wallet starts empty. Fund it with what it trades, {quoteUnit(agent.mandate)}, so it
