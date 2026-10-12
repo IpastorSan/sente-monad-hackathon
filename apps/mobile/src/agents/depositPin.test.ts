@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { compileMandate, parseMandate } from '@sente/mandate';
-import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS, KURU_DEPLOYMENT } from '@sente/venues/kuru';
 import { getAddress, type Address } from 'viem';
 
 import type { SessionAuth } from '../wallet/api.ts';
@@ -24,6 +24,9 @@ import {
 import { needsDepositPin, secureDeposits, type DepositPinState } from './depositPin.ts';
 import { hireThenFund, type FundingState } from './initialFunding.ts';
 import { KURU_TOKENS } from './mandate.ts';
+
+/** Set D's account-id custody only; `test:set-c` covers Set C's shapes (SEN-189). */
+const SET_D_ONLY = { skip: KURU_DEPLOYMENT.custody !== 'account-id' };
 
 const BASE = 'http://api.test';
 const AGENT_ID = '5b0f8a62-3c1e-4d7a-9f0e-2a6b7c8d9e01';
@@ -154,7 +157,7 @@ test('a device-owned agent is pinned by the same-mandate amend, signed on this p
   assert.deepEqual(signer.signed, [prepared(AGENT_WALLET).payload]);
 });
 
-test('a pin to anyone but this agent’s wallet is never signed', async () => {
+test('a pin to anyone but this agent’s wallet is never signed', SET_D_ONLY, async () => {
   for (const pin of [ATTACKER, null]) {
     const { api, calls } = recordingApi({ status: 200, body: prepared(pin) });
     const signer = recordingSigner();

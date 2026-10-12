@@ -40,6 +40,11 @@
  * `accountAddress.test.ts` pins the exact calldata and those exact responses,
  * so a drift in the ABI fails loudly instead of writing a wrong address.
  *
+ * On Set C (`config.setc.yaml`, SEN-189) the getter is `userAddressById(uint40)`
+ * instead, which that AccountCore still answers: `userAddressById(62)` →
+ * `0x15bbc549…7256` and `(47)` → `0x74443181…5c9e`, the two accounts of the
+ * live fill in docs/indexer.md §proven. The deployment's seeds name the getter.
+ *
  * AccountCore answers an **unknown id with the zero address**, not a revert; a
  * revert is read the same way. Both mean "no address", and both are stored as
  * no address rather than as `0x000…0`, which would match an agent's wallet
@@ -47,9 +52,12 @@
  */
 import { createEffect, S } from 'envio';
 import { decodeFunctionResult, encodeFunctionData } from 'viem';
-import { KURU_ACCOUNT_CORE } from './seeds.ts';
+import { KURU_DEPLOYMENT, type KuruDeploymentSeeds } from './seeds.ts';
 
-/** `AccountCore.getAccountOwner`, from @toxicflow-labs/ts-sdk 0.3's accountCoreAbi. */
+/**
+ * `AccountCore.getAccountOwner` (Set D, @toxicflow-labs/ts-sdk 0.3) and
+ * `AccountCore.userAddressById` (Set C, 0.0.4): id → address, one per deployment.
+ */
 export const KURU_ACCOUNT_CORE_READ_ABI = [
   {
     type: 'function',
@@ -58,7 +66,16 @@ export const KURU_ACCOUNT_CORE_READ_ABI = [
     inputs: [{ name: 'accountId', type: 'uint40' }],
     outputs: [{ name: '', type: 'address' }],
   },
+  {
+    type: 'function',
+    name: 'userAddressById',
+    stateMutability: 'view',
+    inputs: [{ name: 'userId', type: 'uint40' }],
+    outputs: [{ name: '', type: 'address' }],
+  },
 ] as const;
+
+type AccountReader = Pick<KuruDeploymentSeeds, 'accountCore' | 'accountAddressGetter'>;
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -66,15 +83,18 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 export const DEFAULT_RPC_URL = 'https://testnet-rpc.monad.xyz';
 
 /** The `eth_call` one resolution needs. Pure — no network, no clock. */
-export function accountAddressCall(accountId: bigint): {
+export function accountAddressCall(
+  accountId: bigint,
+  deployment: AccountReader = KURU_DEPLOYMENT,
+): {
   readonly to: string;
   readonly data: string;
 } {
   return {
-    to: KURU_ACCOUNT_CORE,
+    to: deployment.accountCore,
     data: encodeFunctionData({
       abi: KURU_ACCOUNT_CORE_READ_ABI,
-      functionName: 'getAccountOwner',
+      functionName: deployment.accountAddressGetter,
       args: [Number(accountId)],
     }),
   };
@@ -86,6 +106,7 @@ export function accountAddressCall(accountId: bigint): {
  */
 export function decodeAccountAddress(result: string): string | undefined {
   if (result === '0x' || result === '') return undefined;
+  // Both getters return one `address`, so either decodes the other's answer.
   const address = decodeFunctionResult({
     abi: KURU_ACCOUNT_CORE_READ_ABI,
     functionName: 'getAccountOwner',
@@ -136,8 +157,9 @@ export function rpcEthCall(
 export async function readAccountAddress(
   accountId: bigint,
   call: EthCall,
+  deployment: AccountReader = KURU_DEPLOYMENT,
 ): Promise<string | undefined> {
-  return decodeAccountAddress(await call(accountAddressCall(accountId)));
+  return decodeAccountAddress(await call(accountAddressCall(accountId, deployment)));
 }
 
 /**

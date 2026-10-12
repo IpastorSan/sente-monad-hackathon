@@ -65,6 +65,7 @@ class FakeTrades {
       chainId,
       venues: { kuru: enabled, perpl: false },
       kuruBuilder: null,
+      kuruDeployment: { id: 'set-d', accountCore: '0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038' },
     };
   }
   async prepare(principal: Principal, dto: unknown): Promise<PreparedTradeDto> {
@@ -187,6 +188,10 @@ describe('TradeController over HTTP (SEN-135)', () => {
           chainId: TRADE_CHAIN_ID,
           venues: { kuru: false, perpl: false },
           kuruBuilder: null,
+          kuruDeployment: {
+            id: 'set-d',
+            accountCore: '0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038',
+          },
         },
       });
     });

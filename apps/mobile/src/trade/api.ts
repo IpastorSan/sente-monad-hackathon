@@ -24,6 +24,7 @@ import type { HistoryRange, ValueHistory } from '../portfolio/history.ts';
 import { unboundFetch } from '../platform/fetch.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 import { KURU_BUILDER_PIN, kuruBuilderAgrees, type KuruBuilderPin } from './kuruBuilder.ts';
+import { kuruDeploymentAgrees } from './kuruDeployment.ts';
 import type {
   EnrollCommitRequest,
   EnrollCommitResult,
@@ -84,12 +85,18 @@ function tradingAllowed(input: TradingInput): boolean {
  * must hold: the build opted in (`EXPO_PUBLIC_USER_TRADING=1`), the API says
  * it is on, the app is on testnet — mainnet trading is out of scope for this
  * plan whatever the server says — and the API's Sente fee on Kuru is the one
- * this build pins (SEN-184). A fee that differs would only be refused at the
- * signature, after the user confirmed, so it reads as trading off instead.
+ * this build pins (SEN-184), as is its Kuru deployment (SEN-189). Either
+ * differing would only be refused at the signature, after the user confirmed,
+ * so it reads as trading off instead.
  */
 export function isTradingEnabled(input: TradingInput): boolean {
   const pin = input.builderPin === undefined ? KURU_BUILDER_PIN : input.builderPin;
-  return tradingAllowed(input) && kuruBuilderAgrees(input.capabilities?.kuruBuilder, pin);
+  return (
+    tradingAllowed(input) &&
+    kuruBuilderAgrees(input.capabilities?.kuruBuilder, pin) &&
+    // SEN-189: the API's Kuru deployment must be the one this build verifies against.
+    kuruDeploymentAgrees(input.capabilities?.kuruDeployment)
+  );
 }
 
 /**

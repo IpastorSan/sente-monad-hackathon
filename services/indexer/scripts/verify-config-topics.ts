@@ -28,6 +28,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const RPC = process.env.VERIFY_RPC ?? 'https://testnet-rpc.monad.xyz';
+/** Which config to verify: `VERIFY_CONFIG=config.setc.yaml` for Kuru Set C (SEN-189). */
+const CONFIG = process.env.VERIFY_CONFIG ?? 'config.yaml';
 const WINDOW = 100;
 const windows = Number(process.argv[2] ?? 5);
 
@@ -155,7 +157,7 @@ try {
   process.exit(2);
 }
 
-const config = readConfig(readFileSync(new URL('../config.yaml', import.meta.url), 'utf8'));
+const config = readConfig(readFileSync(new URL(`../${CONFIG}`, import.meta.url), 'utf8'));
 
 type Declared = {
   readonly contract: string;

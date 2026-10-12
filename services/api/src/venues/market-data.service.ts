@@ -16,6 +16,12 @@
  * | klines                            | Data Source candles        | 10/30/60 s      |
  * | quote book                        | chain `getL2Book` snapshot | 1.5 s per market|
  *
+ * With `KURU_DEPLOYMENT=set-c` (SEN-189) Kuru's Data Source and Gateway do not
+ * serve the books Sente trades, so `KuruVenue` answers the same calls from the
+ * chain: the catalog is the pinned markets checked against their own
+ * `getMarketParams()` (never "missing"), depth is `getL2Book`, and there are
+ * no candles — `last` and the 24h fields are null and a chart has no history.
+ *
  * Perpl's reads and TTLs live in `PerplMarketReader` (SEN-75): one 3 s
  * `/pub/context` for every price, the held book socket for depth and quotes.
  *

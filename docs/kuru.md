@@ -9,6 +9,55 @@ The adapter itself lives in `packages/venues/src/kuru/` and is exported as
 end is what it was built on; everything above it is the research that led
 there.
 
+## Trading either deployment: `KURU_DEPLOYMENT` (SEN-189)
+
+Set D's test USDC (`0xA402…`, ~23k supply) is minted by Kuru's owner and has no
+faucet, so Sente could not fund users or agents on it. Set C (below, "Addresses")
+still trades: on 2026-10-09 the live script placed a GTC buy, cancelled it, sent
+an IOC buy and an IOC sell and withdrew there. Its faucet still pays 10,000 USDC
+per address every 12 h. So both are pinned, and `KURU_DEPLOYMENT=set-c|set-d`
+(default `set-d`; `EXPO_PUBLIC_KURU_DEPLOYMENT` in the app) picks one:
+
+|                           | Set C                                                                                                                           | Set D                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| AccountCore               | `0x6384e9b2…eE22`                                                                                                               | `0xdbaaDe7B…8038`                                                                                               |
+| Markets                   | MON, WETH, cbBTC, XAUt against `0xEe07…` USDC                                                                                   | MON, WETH, WBTC, XAUT, USDT against `0xA402…` USDC                                                              |
+| Custody ABI               | ts-sdk 0.0.4: `deposit(token, amount)`, `withdraw(token, amount)`, `userRegistry`, `getBalanceById` — credit and pay the caller | ts-sdk 0.3.0: `deposit(rootOwner, …)`, `withdraw(rootId, …, recipient)`, `rootAccountIdOf`, `getBalance(id, …)` |
+| Catalog, gateway, candles | none (404 / `unknown symbol`, 2026-10-12)                                                                                       | Data Source and Gateway                                                                                         |
+| Books, 2026-10-12         | cbBTC-USDC and XAUt-USDC quoted; MON-USDC and WETH-USDC empty                                                                   | see below                                                                                                       |
+| Faucet                    | TestnetTokenFaucet `0x25B1…91E9` (`pnpm run kuru:faucet`)                                                                       | none                                                                                                            |
+| Indexer                   | `config.setc.yaml` + `ENVIO_KURU_DEPLOYMENT=set-c`                                                                              | `config.yaml`                                                                                                   |
+
+`KURU_DEPLOYMENTS` in `packages/venues/src/kuru/constants.ts` holds both;
+`KURU_TESTNET_*` are the active one's tables and `KURU_RETIRED_DEPLOYMENT` the
+other's, with counterparts both ways (cbBTC-USDC ↔ WBTC-USDC, XAUt-USDC ↔
+XAUT-USDC, one USDC ↔ the other; USDT-USDC has none on Set C). The OrderBook
+`batch` overloads, `TradesPacked`, `approveBuilder`, `getBuilderApproval` and
+`BuilderFeeAccrued` are byte-identical on both, so orders and the Sente builder
+fee (SEN-184) work unchanged on Set C. What differs with Set C active:
+
+- **No catalog.** `KuruVenue` lists the pinned books from their own
+  `getMarketParams()` (a book whose precisions differ from its pin is left out),
+  reads depth from `getL2Book`, returns no candles (the app says the chart has no
+  history) and refuses `getOpenOrders` with `KuruOpenOrdersUnavailableError`:
+  nothing on chain lists an account's orders. The portfolio shows Set C resting
+  orders as locked balance only; they cancel by the id the placement returned.
+- **Custody names no third party.** The policy compiler pins neither
+  `deposit.rootOwner` nor `withdraw.recipient`; the withdraw rule matches
+  `withdraw` by name (it can only pay the agent itself) and an agent's return
+  withdraws to its own wallet, then transfers to the owner. `compilesKuruDeposit`
+  is false, so a hire needs no SEN-188 pinning amend. The phone pins both custody
+  ABI pairs by hash and accepts only its build's.
+- **The app checks the server's deployment.** `/trade/capabilities` carries
+  `kuruDeployment: { id, accountCore }`; a build whose
+  `EXPO_PUBLIC_KURU_DEPLOYMENT` differs turns manual Kuru trading off.
+- **Checks follow it.** `drift:check` reads Set C from the chain (params match,
+  at least one book quoted) instead of comparing with the catalog;
+  `live-check.sh` reads the pins and the expected capability for
+  `KURU_DEPLOYMENT`.
+
+The switch steps are in `docs/deploy.md`, "Switching the Kuru deployment".
+
 ## Set D: the account-id deployment Kuru moved testnet to (SEN-185)
 
 **Current since 2026-09-25; found by Sente on 2026-10-09.** Kuru redeployed its

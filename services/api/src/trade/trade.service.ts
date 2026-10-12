@@ -58,7 +58,7 @@
 
 import { Inject, Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import type { KuruLog } from '@sente/venues/kuru';
+import { KURU_DEPLOYMENT, type KuruLog } from '@sente/venues/kuru';
 import { getAddress, type PublicClient } from 'viem';
 
 import { PREPARED_APPROVAL_TTL_MS } from '../agents/prepared-approval';
@@ -231,6 +231,11 @@ export class TradeService {
       venues: { kuru: enabled, perpl },
       // SEN-184: what the phone must have been built with; it compares.
       kuruBuilder: this.config.kuruBuilder ?? null,
+      // SEN-189: which Kuru deployment; the phone compares it with its build's.
+      kuruDeployment: {
+        id: KURU_DEPLOYMENT.id,
+        accountCore: KURU_DEPLOYMENT.contracts.accountCore,
+      },
     };
   }
 

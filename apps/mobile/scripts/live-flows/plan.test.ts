@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { KURU_DEPLOYMENT, KURU_TESTNET_MARKETS } from '@sente/venues/kuru';
+
 import { buildMandate } from '../../src/agents/mandate.ts';
 import {
   agentMandateForm,
@@ -249,7 +251,10 @@ describe('prices', () => {
 describe('the agent mandate', () => {
   it('builds through the hire screen’s own buildMandate', () => {
     const now = 1_790_000_000;
-    const kuruMarket = '0x26cd68436B6A4AEB3ec52abC20A4d121f8B4BAc9'; // MON-USDC (SEN-185)
+    // The active deployment's quoted book, as live-flows.ts hires on (SEN-189).
+    const kuruMarket = KURU_TESTNET_MARKETS.find(
+      (m) => m.symbol === KURU_DEPLOYMENT.liquidMarket,
+    )!.address;
     const built = buildMandate(
       agentMandateForm({ kuruMarket, maxOrderNotional: '77', nowSeconds: now, returnTo: ADDRESS }),
       now,

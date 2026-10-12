@@ -8,7 +8,7 @@
     "codegen": "envio codegen",
     "dev": "envio dev",
     "start": "envio start",
-    "test": "node --no-warnings --test src/lib/*.test.ts",
+    "test": "KURU_DEPLOYMENT= ENVIO_KURU_DEPLOYMENT=set-d node --no-warnings --test src/lib/*.test.ts && ENVIO_KURU_DEPLOYMENT=set-c node --no-warnings --test src/lib/deployments.test.ts",
     "test:watch": "node --no-warnings --test --watch src/lib/*.test.ts",
     "typecheck": "npm run codegen && tsc -p tsconfig.json --noEmit",
     "verify:topics": "node --experimental-strip-types --no-warnings scripts/verify-config-topics.ts"

@@ -25,6 +25,7 @@
  * A `side` param (from the Trade sheet, SEN-179) preselects the embedded
  * ticket's side.
  */
+import { KURU_DEPLOYMENT } from '@sente/venues/kuru';
 import * as Haptics from '@/platform/haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -352,6 +353,11 @@ function Asset({
               <Text style={text.caption}>Charts aren't on this server yet.</Text>
             ) : klines.error && !klines.data ? (
               <Text style={text.caption}>Couldn't load the chart. Pull to retry.</Text>
+            ) : klines.data && venue === 'kuru' && !KURU_DEPLOYMENT.catalogListed ? (
+              // SEN-189: Kuru serves no candles for its previous deployment.
+              <Text style={text.caption}>
+                No chart history: Kuru publishes none for its previous testnet deployment.
+              </Text>
             ) : klines.data ? (
               <Text style={text.caption}>No trades in this range yet.</Text>
             ) : (

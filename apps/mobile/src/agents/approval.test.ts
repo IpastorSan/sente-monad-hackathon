@@ -23,6 +23,7 @@ import {
   KURU_ACCOUNT_CORE_DEPOSIT_ABI,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
+  KURU_DEPLOYMENT,
 } from '@sente/venues/kuru';
 import { getAddress, keccak256, stringToBytes, type Address } from 'viem';
 
@@ -37,6 +38,9 @@ import {
   type VerifyResult,
 } from './approval.ts';
 import { AUSD } from './mandate.ts';
+
+/** Set D's account-id custody only; `test:set-c` covers Set C's shapes (SEN-189). */
+const SET_D_ONLY = { skip: KURU_DEPLOYMENT.custody !== 'account-id' };
 
 const MARKET_A = KURU_TESTNET_MARKETS[0]!.address;
 const MARKET_B = KURU_TESTNET_MARKETS[1]!.address;
@@ -191,34 +195,40 @@ test('the mirrored compiler still agrees with @sente/mandate, mandate by mandate
   }
 });
 
-test('with the agent’s address, the mirror pins deposit.rootOwner exactly as the compiler does (SEN-185)', () => {
-  const agent = getAddress('0x3333333333333333333333333333333333333333');
-  for (const m of [mandate(), noExit({ venues: ['kuru'] })]) {
-    const compiledWithAgent = compileMandate(parseMandate(toWireMandate(m)), {
-      agentAddress: agent,
+test(
+  'with the agent’s address, the mirror pins deposit.rootOwner exactly as the compiler does (SEN-185)',
+  SET_D_ONLY,
+  () => {
+    const agent = getAddress('0x3333333333333333333333333333333333333333');
+    for (const m of [mandate(), noExit({ venues: ['kuru'] })]) {
+      const compiledWithAgent = compileMandate(parseMandate(toWireMandate(m)), {
+        agentAddress: agent,
+      });
+      assert.deepEqual(
+        normalise(expectedPolicyRules(m, null, agent)),
+        normalise(compiledWithAgent.map(toExpected)),
+        `drifted for ${JSON.stringify(toWireMandate(m))}`,
+      );
+    }
+    // An amend compiled with the pin is what the phone expects for that agent,
+    // and the same amend for another agent's wallet is refused.
+    const m = mandate();
+    const payload = {
+      ...payloadFor(m),
+      body: { rules: compileMandate(parseMandate(toWireMandate(m)), { agentAddress: agent }) },
+    };
+    assert.deepEqual(verifyPolicyPatch(payload, { ...amend(m), agentAddress: agent }), {
+      ok: true,
     });
-    assert.deepEqual(
-      normalise(expectedPolicyRules(m, null, agent)),
-      normalise(compiledWithAgent.map(toExpected)),
-      `drifted for ${JSON.stringify(toWireMandate(m))}`,
+    assertRefused(
+      verifyPolicyPatch(payload, {
+        ...amend(m),
+        agentAddress: getAddress('0x4444444444444444444444444444444444444444'),
+      }),
+      /it contains a rule this mandate does not: Kuru: deposit/,
     );
-  }
-  // An amend compiled with the pin is what the phone expects for that agent,
-  // and the same amend for another agent's wallet is refused.
-  const m = mandate();
-  const payload = {
-    ...payloadFor(m),
-    body: { rules: compileMandate(parseMandate(toWireMandate(m)), { agentAddress: agent }) },
-  };
-  assert.deepEqual(verifyPolicyPatch(payload, { ...amend(m), agentAddress: agent }), { ok: true });
-  assertRefused(
-    verifyPolicyPatch(payload, {
-      ...amend(m),
-      agentAddress: getAddress('0x4444444444444444444444444444444444444444'),
-    }),
-    /it contains a rule this mandate does not: Kuru: deposit/,
-  );
-});
+  },
+);
 
 test('a payload that is exactly the mandate’s own rules is approved', () => {
   const m = mandate();
@@ -521,89 +531,95 @@ const isWithdraw = (r: PolicyRule) => r.conditions.some((c) => c.field === 'with
 /** The withdraw rule's one calldata condition (SEN-185: its recipient pin). */
 const isFunctionName = (c: PolicyCondition) => c.field === 'withdraw.recipient';
 
-test('a rule whose ABI is not the canonical one is refused, even when every value matches', () => {
-  const m = mandate();
-  // Fails before SEN-142. The attack from the audit: `withdraw.recipient eq owner`
-  // decoded with an ABI the server wrote, one that names a `recipient` over the
-  // selector of another function, where that word is something else entirely.
-  // Every value still matches.
-  const lookalike = [
-    {
-      type: 'function',
-      name: 'withdraw',
-      stateMutability: 'nonpayable',
-      inputs: [
-        { name: 'recipient', type: 'address' },
-        { name: 'token', type: 'address' },
-        { name: 'amount', type: 'uint256' },
-      ],
-      outputs: [],
-    },
-  ];
-  for (const intent of [amend(m), revoke(m)]) {
-    const base = intent.kind === 'revoke' ? payloadFor({ revoke: m }) : payloadFor(m);
-    const rules = (base.body.rules as PolicyRule[]).map((r) =>
-      isWithdraw(r)
-        ? {
-            ...r,
-            conditions: r.conditions.map((c) => (isFunctionName(c) ? { ...c, abi: lookalike } : c)),
-          }
-        : r,
+test(
+  'a rule whose ABI is not the canonical one is refused, even when every value matches',
+  SET_D_ONLY,
+  () => {
+    const m = mandate();
+    // Fails before SEN-142. The attack from the audit: `withdraw.recipient eq owner`
+    // decoded with an ABI the server wrote, one that names a `recipient` over the
+    // selector of another function, where that word is something else entirely.
+    // Every value still matches.
+    const lookalike = [
+      {
+        type: 'function',
+        name: 'withdraw',
+        stateMutability: 'nonpayable',
+        inputs: [
+          { name: 'recipient', type: 'address' },
+          { name: 'token', type: 'address' },
+          { name: 'amount', type: 'uint256' },
+        ],
+        outputs: [],
+      },
+    ];
+    for (const intent of [amend(m), revoke(m)]) {
+      const base = intent.kind === 'revoke' ? payloadFor({ revoke: m }) : payloadFor(m);
+      const rules = (base.body.rules as PolicyRule[]).map((r) =>
+        isWithdraw(r)
+          ? {
+              ...r,
+              conditions: r.conditions.map((c) =>
+                isFunctionName(c) ? { ...c, abi: lookalike } : c,
+              ),
+            }
+          : r,
+      );
+      assertRefused(
+        verifyPolicyPatch({ ...base, body: { rules } }, intent),
+        /rule “Kuru: withdraw.*” decodes with an ABI or typed data this app does not know/,
+        intent.kind,
+      );
+    }
+
+    // A real ABI in the wrong place is no better: the deposit ABI on the withdraw rule.
+    assertRefused(
+      verifyPolicyPatch(
+        rewriteCondition(m, isWithdraw, isFunctionName, (c) => ({
+          ...c,
+          abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+        })),
+        amend(m),
+      ),
+      /decodes with an ABI or typed data this app does not know/,
+    );
+
+    // Dropping the ABI, or moving it onto a condition that decodes nothing, is a
+    // different condition too.
+    assertRefused(
+      verifyPolicyPatch(
+        rewriteCondition(m, isWithdraw, isFunctionName, (c) => {
+          const { abi: _abi, ...rest } = c as PolicyCondition & { abi: unknown };
+          return rest;
+        }),
+        amend(m),
+      ),
+      /decodes with an ABI or typed data this app does not know/,
     );
     assertRefused(
-      verifyPolicyPatch({ ...base, body: { rules } }, intent),
-      /rule “Kuru: withdraw.*” decodes with an ABI or typed data this app does not know/,
-      intent.kind,
-    );
-  }
-
-  // A real ABI in the wrong place is no better: the deposit ABI on the withdraw rule.
-  assertRefused(
-    verifyPolicyPatch(
-      rewriteCondition(m, isWithdraw, isFunctionName, (c) => ({
-        ...c,
-        abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
-      })),
-      amend(m),
-    ),
-    /decodes with an ABI or typed data this app does not know/,
-  );
-
-  // Dropping the ABI, or moving it onto a condition that decodes nothing, is a
-  // different condition too.
-  assertRefused(
-    verifyPolicyPatch(
-      rewriteCondition(m, isWithdraw, isFunctionName, (c) => {
-        const { abi: _abi, ...rest } = c as PolicyCondition & { abi: unknown };
-        return rest;
-      }),
-      amend(m),
-    ),
-    /decodes with an ABI or typed data this app does not know/,
-  );
-  assertRefused(
-    verifyPolicyPatch(
-      rewriteCondition(
-        m,
-        isWithdraw,
-        (c) => c.field === 'to',
-        (c) => ({ ...c, abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI }),
+      verifyPolicyPatch(
+        rewriteCondition(
+          m,
+          isWithdraw,
+          (c) => c.field === 'to',
+          (c) => ({ ...c, abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI }),
+        ),
+        amend(m),
       ),
-      amend(m),
-    ),
-    /decodes with an ABI or typed data this app does not know/,
-  );
-
-  // The canonical ABI with its keys in another order is the same ABI: the pin
-  // is over the canonical form, so it refuses meaning, not spelling.
-  const reordered = rewriteCondition(m, isWithdraw, isFunctionName, (c) => {
-    const abi = (c as { abi: readonly Record<string, unknown>[] }).abi.map((entry) =>
-      Object.fromEntries(Object.entries(entry).reverse()),
+      /decodes with an ABI or typed data this app does not know/,
     );
-    return { abi, ...c };
-  });
-  assert.deepEqual(verifyPolicyPatch(reordered, amend(m)), { ok: true });
-});
+
+    // The canonical ABI with its keys in another order is the same ABI: the pin
+    // is over the canonical form, so it refuses meaning, not spelling.
+    const reordered = rewriteCondition(m, isWithdraw, isFunctionName, (c) => {
+      const abi = (c as { abi: readonly Record<string, unknown>[] }).abi.map((entry) =>
+        Object.fromEntries(Object.entries(entry).reverse()),
+      );
+      return { abi, ...c };
+    });
+    assert.deepEqual(verifyPolicyPatch(reordered, amend(m)), { ok: true });
+  },
+);
 
 test('an enrollment rule whose typed data is not the canonical struct is refused', () => {
   const m = mandate({ venues: ['perpl'] });
@@ -654,7 +670,7 @@ test('an enrollment rule whose typed data is not the canonical struct is refused
   assert.deepEqual(verifyPolicyPatch(payloadFor(m), amend(m)), { ok: true });
 });
 
-test('a condition whose blob this app cannot read is refused, not guessed at', () => {
+test('a condition whose blob this app cannot read is refused, not guessed at', SET_D_ONLY, () => {
   const m = mandate();
   // Fails before SEN-142: the blobs were not read at all.
   const both = rewriteCondition(m, isWithdraw, isFunctionName, (c) => ({

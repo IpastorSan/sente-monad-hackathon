@@ -24,6 +24,7 @@ import {
   placeOrderCall,
   toClientOrderId,
   withdrawCall,
+  KURU_DEPLOYMENT,
 } from '@sente/venues/kuru';
 // Why the SDK directly: the pin must be against the SDK's full ABI, not the
 // filtered cuts `@sente/venues` re-exports. Resolves through the hoisted
@@ -44,6 +45,9 @@ import {
 
 import type { Erc7579Call } from '../wallet/batch.ts';
 import { classifyKuruCall, KURU_LEG_ABI, type KuruLeg } from './kuruLegs.ts';
+
+/** Set D's account-id custody only; `test:set-c` covers Set C's shapes (SEN-189). */
+const SET_D_ONLY = { skip: KURU_DEPLOYMENT.custody !== 'account-id' };
 
 const ACCOUNT_CORE = KURU_TESTNET_CONTRACTS.accountCore;
 const USDC = KURU_TESTNET_TOKENS.USDC;
@@ -94,7 +98,7 @@ function refused(call: Erc7579Call, pattern: RegExp): void {
 // The hand-written allow-list is the SDK's, byte for byte
 // ---------------------------------------------------------------------------
 
-test('each hand-written fragment has the selector of its SDK counterpart', () => {
+test('each hand-written fragment has the selector of its SDK counterpart', SET_D_ONLY, () => {
   const sources: Record<string, readonly unknown[]> = {
     'approve(address,uint256)': erc20Abi,
     'deposit(address,address,uint256)': kuruAbi.accountCoreAbi,
@@ -153,7 +157,7 @@ test('the SDK has exactly four batch overloads: ours plus the two builder-config
 // What the server sends is classified
 // ---------------------------------------------------------------------------
 
-test('an ERC-20 funding pair is an exact approve then a deposit', () => {
+test('an ERC-20 funding pair is an exact approve then a deposit', SET_D_ONLY, () => {
   const [approve, deposit] = depositCalls(ACCOUNT_CORE, USDC, 20_000_000n, OWNER);
   assert.deepEqual(accepted(approve!), {
     ok: true,
@@ -172,7 +176,7 @@ test('an ERC-20 funding pair is an exact approve then a deposit', () => {
   });
 });
 
-test('a native MON deposit carries its amount as value', () => {
+test('a native MON deposit carries its amount as value', SET_D_ONLY, () => {
   const [deposit] = depositCalls(ACCOUNT_CORE, KURU_TESTNET_TOKENS.MON, 10n ** 18n, OWNER);
   assert.deepEqual(accepted(deposit!), {
     ok: true,
@@ -184,18 +188,22 @@ test('a native MON deposit carries its amount as value', () => {
   });
 });
 
-test('a withdraw reports its root id and recipient for the verifier to hold (SEN-185)', () => {
-  assert.deepEqual(accepted(withdrawCall(ACCOUNT_CORE, USDC, 5n, 7n, OWNER)), {
-    ok: true,
-    kind: 'withdraw',
-    rootAccountId: 7n,
-    token: USDC.address,
-    amount: 5n,
-    recipient: OWNER,
-  });
-});
+test(
+  'a withdraw reports its root id and recipient for the verifier to hold (SEN-185)',
+  SET_D_ONLY,
+  () => {
+    assert.deepEqual(accepted(withdrawCall(ACCOUNT_CORE, USDC, 5n, 7n, OWNER)), {
+      ok: true,
+      kind: 'withdraw',
+      rootAccountId: 7n,
+      token: USDC.address,
+      amount: 5n,
+      recipient: OWNER,
+    });
+  },
+);
 
-test('a deposit crediting no account, or a withdraw from no root, is refused', () => {
+test('a deposit crediting no account, or a withdraw from no root, is refused', SET_D_ONLY, () => {
   const deposit = encodeFunctionData({
     abi: KURU_LEG_ABI,
     functionName: 'deposit',
@@ -411,7 +419,7 @@ test('an approval to anyone but AccountCore is refused', () => {
 
 // SEN-132: the zero-amount rules survived mutation testing (test audit
 // 2026-09-27, §2A); a zero leg is signable noise the server never emits.
-test('a zero approve, deposit or withdraw is refused', () => {
+test('a zero approve, deposit or withdraw is refused', SET_D_ONLY, () => {
   // Encoded by hand: the `@sente/venues` builders already refuse a zero amount.
   const args = {
     approve: [ACCOUNT_CORE, 0n],
@@ -514,4 +522,53 @@ test('out-of-range enum values are refused', () => {
   refused(batch([0, [{ ...ORDER, side: 2 }], []]), /side 2/);
   refused(batch([0, [{ ...ORDER, tif: 3 }], []]), /time-in-force 3/);
   refused(batch([0, [{ ...ORDER, executionInstruction: 2 }], []]), /execution instruction 2/);
+});
+
+// ---------------------------------------------------------------------------
+// Set C (SEN-189): the build's deployment decides which custody calls exist.
+// ---------------------------------------------------------------------------
+
+const SET_C_ONLY = { skip: KURU_DEPLOYMENT.custody !== 'address-keyed' };
+
+test('Set C: deposit(token, amount) is a deposit that names no account', SET_C_ONLY, () => {
+  const [approve, deposit] = depositCalls(ACCOUNT_CORE, USDC, 5_000_000n, OWNER);
+  assert.equal(accepted(approve!).kind, 'approve');
+  assert.deepEqual(accepted(deposit!), {
+    ok: true,
+    kind: 'deposit',
+    rootOwner: null,
+    token: USDC.address,
+    amount: 5_000_000n,
+    value: 0n,
+  });
+});
+
+test('Set C: withdraw(token, amount) is a withdraw that pays the caller', SET_C_ONLY, () => {
+  assert.deepEqual(accepted(withdrawCall(ACCOUNT_CORE, USDC, 7n, 62n, OWNER)), {
+    ok: true,
+    kind: 'withdraw',
+    rootAccountId: null,
+    token: USDC.address,
+    amount: 7n,
+    recipient: null,
+  });
+});
+
+test('Set C: Set D’s deposit and withdraw are not calls this build signs', SET_C_ONLY, () => {
+  const setD = (signature: string, args: readonly unknown[]): Erc7579Call => ({
+    to: ACCOUNT_CORE,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: [sdkFunction(kuruAbi.accountCoreAbi, signature)],
+      args,
+    } as unknown as Parameters<typeof encodeFunctionData>[0]),
+  });
+  refused(
+    setD('deposit(address,address,uint256)', [STRANGER, USDC.address, 1n]),
+    /not a Kuru call/,
+  );
+  refused(
+    setD('withdraw(uint40,address,uint256,address)', [1, USDC.address, 1n, STRANGER]),
+    /not a Kuru call/,
+  );
 });

@@ -87,7 +87,8 @@ build_web () {
   local api_url="https://$API_HOST"
   local out="$REPO/apps/mobile/dist-web"
 
-  say "Building the web export (EXPO_PUBLIC_API_URL=$api_url)"
+  # SEN-189: the Kuru deployment the app verifies against must be the API's.
+  say "Building the web export (EXPO_PUBLIC_API_URL=$api_url, Kuru ${EXPO_PUBLIC_KURU_DEPLOYMENT:-${KURU_DEPLOYMENT:-set-d}})"
   rm -rf "$out"
   (
     cd "$REPO"
@@ -96,6 +97,7 @@ build_web () {
     EXPO_PUBLIC_MONAD_RPC_URL="${EXPO_PUBLIC_MONAD_RPC_URL:-}" \
     EXPO_PUBLIC_BUNDLER_URL="${EXPO_PUBLIC_BUNDLER_URL:-https://public.pimlico.io/v2/10143/rpc}" \
     EXPO_PUBLIC_USER_TRADING="${EXPO_PUBLIC_USER_TRADING:-}" \
+    EXPO_PUBLIC_KURU_DEPLOYMENT="${EXPO_PUBLIC_KURU_DEPLOYMENT:-${KURU_DEPLOYMENT:-}}" \
       mise exec -- pnpm --filter @sente/mobile run export:web --clear
   ) || die "the web export failed"
 

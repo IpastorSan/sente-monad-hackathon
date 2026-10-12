@@ -36,7 +36,12 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { compileMandate, parseMandate } from '@sente/mandate';
-import { KURU_MEASURED_GAS, KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import {
+  KURU_DEPLOYMENT,
+  KURU_MEASURED_GAS,
+  KURU_TESTNET_MARKETS,
+  KURU_TESTNET_TOKENS,
+} from '@sente/venues/kuru';
 import { PERPL_COLLATERAL_DECIMALS, PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
 import {
   createPublicClient,
@@ -77,9 +82,10 @@ import {
 import { envFileFromArgs, upsertEnv } from './env-file.ts';
 
 // MON-USDC's book was empty on both sides on 2026-10-09 (SEN-185), and this run
-// prices its bid off the touch; WETH-USDC was quoted. `--kuru-market <symbol>` overrides.
+// prices its bid off the touch, so it defaults to the active deployment's quoted
+// book (SEN-189): WETH-USDC on Set D, cbBTC-USDC on Set C. `--kuru-market <symbol>` overrides.
 const marketFlag = process.argv.indexOf('--kuru-market');
-const KURU_SYMBOL = marketFlag > 0 ? process.argv[marketFlag + 1]! : 'WETH-USDC';
+const KURU_SYMBOL = marketFlag > 0 ? process.argv[marketFlag + 1]! : KURU_DEPLOYMENT.liquidMarket;
 const PERPL_SYMBOL = 'BTC-PERP';
 const KURU_MARKET = ((symbol: string) => {
   const market = KURU_TESTNET_MARKETS.find((m) => m.symbol === symbol);

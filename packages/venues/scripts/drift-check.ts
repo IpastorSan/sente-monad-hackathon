@@ -21,15 +21,24 @@
 // payload (docs/user-trading.md, P5 and "Perpl voids a payload older than its
 // last enrollment"), and the public key sent here is thrown away unsigned.
 //
+// Deployment-aware (SEN-189): with KURU_DEPLOYMENT=set-c the Kuru checks read
+// the chain instead of the catalog, which no longer lists Set C — every pinned
+// book's `getMarketParams()` must match its pin and at least one book must have
+// a quote — and the copies are checked against config.setc.yaml.
+//
 // Output: one `PASS|WARN|FAIL name — detail` line per check, a summary, and
 // exit 1 on any FAIL.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { bytesToHex } from '@noble/hashes/utils.js';
+import { abi as kuruAbi } from '@toxicflow-labs/ts-sdk';
+import { decodeFunctionResult, encodeFunctionData, type Hex } from 'viem';
 
 import { createKuruApi, type ApiMarket } from '../src/kuru/api.ts';
 import {
+  KURU_DEPLOYMENT,
+  KURU_DEPLOYMENTS,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
@@ -48,12 +57,15 @@ import { newSecretKey, publicKeyOf } from '../src/perpl/signing.ts';
 import type { PerplContext, PerplTypedData } from '../src/perpl/wire.ts';
 // The copies the audit found, outside this package. Both modules are plain TS
 // with type-only imports, so node's type stripping loads them as they are.
-import {
-  KURU_ACCOUNT_CORE,
-  KURU_MARKETS as INDEXER_MARKETS,
-  KURU_TOKEN_DECIMALS as INDEXER_TOKEN_DECIMALS,
-} from '../../../services/indexer/src/lib/seeds.ts';
-import { KURU_SPOT_MARKETS } from '../../presets/src/params.ts';
+import { KURU_DEPLOYMENT_SEEDS } from '../../../services/indexer/src/lib/seeds.ts';
+import { KURU_SPOT_MARKETS_BY_DEPLOYMENT } from '../../presets/src/params.ts';
+
+// The indexer's copy of the ACTIVE deployment, and the config file that indexes it.
+const INDEXER_SEEDS = KURU_DEPLOYMENT_SEEDS[KURU_DEPLOYMENT.id];
+const INDEXER_MARKETS = INDEXER_SEEDS.markets;
+const INDEXER_TOKEN_DECIMALS = INDEXER_SEEDS.tokenDecimals;
+const KURU_ACCOUNT_CORE = INDEXER_SEEDS.accountCore;
+const INDEXER_CONFIG = KURU_DEPLOYMENT.id === 'set-c' ? 'config.setc.yaml' : 'config.yaml';
 
 const REPO = join(import.meta.dirname, '..', '..', '..');
 
@@ -137,7 +149,61 @@ async function chainDecimals(token: string): Promise<number> {
 // ---------------------------------------------------------------------------
 // Kuru
 
+/** One OrderBook view through the serialised RPC. */
+async function bookCall(market: KuruMarketConfig, functionName: 'getMarketParams' | 'getL2Book') {
+  const data =
+    functionName === 'getL2Book'
+      ? encodeFunctionData({ abi: kuruAbi.orderBookAbi, functionName, args: [1n] })
+      : encodeFunctionData({ abi: kuruAbi.orderBookAbi, functionName });
+  const raw = await rpc<Hex>('eth_call', [{ to: market.address, data }, 'latest']);
+  return decodeFunctionResult({ abi: kuruAbi.orderBookAbi, functionName, data: raw });
+}
+
+/**
+ * A deployment Kuru's APIs do not serve (Set C, SEN-189): the pins against the
+ * chain. Every book's params must match its pin, and at least one book must
+ * have a quote, or the venue would list markets nobody can trade.
+ */
+async function kuruChain(): Promise<void> {
+  report('PASS', 'kuru catalog', `${KURU_DEPLOYMENT.id} is not in Kuru's catalog; read the chain`);
+  let quoted = 0;
+  for (const pin of KURU_TESTNET_MARKETS) {
+    const params = (await bookCall(pin, 'getMarketParams')) as
+      readonly bigint[] | readonly number[];
+    const [pricePrecision, sizePrecision, tickSize] = params.map((v) => BigInt(v));
+    const diffs: string[] = [];
+    if (pricePrecision !== pin.pricePrecision) diffs.push(`pricePrecision ${pricePrecision}`);
+    if (sizePrecision !== pin.sizePrecision) diffs.push(`sizePrecision ${sizePrecision}`);
+    if (tickSize !== pin.tickSize) diffs.push(`tickSize ${tickSize}`);
+    const [, bidSizes, , askSizes] = (await bookCall(pin, 'getL2Book')) as readonly [
+      readonly number[],
+      readonly bigint[],
+      readonly number[],
+      readonly bigint[],
+    ];
+    const sides = [bidSizes.some((s) => s > 0n) && 'bid', askSizes.some((s) => s > 0n) && 'ask']
+      .filter(Boolean)
+      .join('+');
+    if (sides) quoted += 1;
+    if (diffs.length > 0) {
+      report('FAIL', `kuru market ${pin.symbol}`, `on chain: ${diffs.join('; ')}`);
+    } else {
+      report(
+        'PASS',
+        `kuru market ${pin.symbol}`,
+        `${short(pin.address)} params match the pin; book ${sides || 'empty'}`,
+      );
+    }
+  }
+  report(
+    quoted > 0 ? 'PASS' : 'FAIL',
+    'kuru books quoted',
+    `${quoted} of ${KURU_TESTNET_MARKETS.length} pinned books have a quote`,
+  );
+}
+
 async function kuru(): Promise<void> {
+  if (!KURU_DEPLOYMENT.catalogListed) return kuruChain();
   // The adapter's own call, so a change to how it reads the catalog is checked too.
   const catalog = await createKuruApi().markets();
   report('PASS', 'kuru catalog', `${catalog.length} active markets served`);
@@ -447,10 +513,15 @@ async function copies(): Promise<void> {
     }
   }
   if (problems.length > 0) report('FAIL', 'indexer seeds.ts', problems.join('; '));
-  else report('PASS', 'indexer seeds.ts', 'markets, AccountCore and token decimals match');
+  else
+    report(
+      'PASS',
+      'indexer seeds.ts',
+      `${KURU_DEPLOYMENT.id} markets, AccountCore and decimals match`,
+    );
 
-  // services/indexer/config.yaml — the `chains:` block, read as text.
-  const yaml = await readFile(join(REPO, 'services/indexer/config.yaml'), 'utf8');
+  // services/indexer/config.yaml (config.setc.yaml on Set C) — the `chains:` block, as text.
+  const yaml = await readFile(join(REPO, 'services/indexer', INDEXER_CONFIG), 'utf8');
   const chains = yaml.slice(yaml.indexOf('\nchains:'), yaml.indexOf('\ncontracts:'));
   const orderBooks = chains.slice(
     chains.indexOf('name: KuruOrderBook'),
@@ -470,16 +541,22 @@ async function copies(): Promise<void> {
   if (!addresses(accountCore).has(lower(KURU_TESTNET_CONTRACTS.accountCore))) {
     yamlProblems.push('KuruAccountCore address differs');
   }
-  if (yamlProblems.length > 0) report('FAIL', 'indexer config.yaml', yamlProblems.join('; '));
-  else report('PASS', 'indexer config.yaml', 'OrderBook and AccountCore addresses match');
+  if (yamlProblems.length > 0) report('FAIL', `indexer ${INDEXER_CONFIG}`, yamlProblems.join('; '));
+  else report('PASS', `indexer ${INDEXER_CONFIG}`, 'OrderBook and AccountCore addresses match');
 
-  // packages/presets/src/params.ts mirrors the symbols.
-  const symbols = KURU_TESTNET_MARKETS.map((m) => m.symbol).sort();
-  const mirrored = [...KURU_SPOT_MARKETS].sort();
-  if (symbols.join(',') !== mirrored.join(',')) {
-    report('FAIL', 'presets KURU_SPOT_MARKETS', `[${mirrored}] vs pinned [${symbols}]`);
+  // packages/presets/src/params.ts mirrors the symbols, per deployment.
+  const presetProblems: string[] = [];
+  for (const deployment of Object.values(KURU_DEPLOYMENTS)) {
+    const symbols = deployment.markets.map((m) => m.symbol).sort();
+    const mirrored = [...KURU_SPOT_MARKETS_BY_DEPLOYMENT[deployment.id]].sort();
+    if (symbols.join(',') !== mirrored.join(',')) {
+      presetProblems.push(`${deployment.id} [${mirrored}] vs pinned [${symbols}]`);
+    }
+  }
+  if (presetProblems.length > 0) {
+    report('FAIL', 'presets KURU_SPOT_MARKETS', presetProblems.join('; '));
   } else {
-    report('PASS', 'presets KURU_SPOT_MARKETS', 'symbols match the pins');
+    report('PASS', 'presets KURU_SPOT_MARKETS', 'both deployments’ symbols match the pins');
   }
 }
 

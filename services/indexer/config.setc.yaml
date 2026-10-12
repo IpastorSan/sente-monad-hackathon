@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+#
+# Sente leaderboard indexer — Monad testnet (10143), KURU SET C (SEN-189).
+#
+# The same indexer as config.yaml, pointed at Kuru's PREVIOUS testnet
+# deployment, which Sente trades with KURU_DEPLOYMENT=set-c: four OrderBooks
+# and the Set C AccountCore. Run it with ENVIO_KURU_DEPLOYMENT=set-c so the
+# handlers seed these books and resolve account ids with Set C's
+# `userAddressById` (src/lib/seeds.ts); docs/indexer.md "Switching to Set C"
+# has the Envio redeploy steps.
+#
+# `TradesPacked`, `Deposit` and `Withdrawal` are byte-identical on both
+# deployments; `AccountRegistered` is not, and is declared here in Set C's
+# shape (the handler reads either, src/lib/registered.ts). Every signature was
+# checked against the chain by `scripts/verify-config-topics.ts` when Set C was
+# the indexed deployment (SEN-25) — rerun it with VERIFY_CONFIG=config.setc.yaml.
+#
+# Addresses are packages/venues/src/kuru/constants.ts's `KURU_DEPLOYMENTS['set-c']`.
+name: sente-kuru-indexer
+description: Kuru Spot V2 fills on Monad testnet (Set C), per-account stats for the Sente leaderboard
+
+handlers: ./src
+
+field_selection:
+  transaction_fields:
+    - hash
+
+chains:
+  - id: 10143 # Monad Testnet
+    # Block 69,400,000 ≈ 2026-10-09T00:45Z, before Sente's first trades on
+    # Set C (its live script ran there on 2026-10-09). Set C's books are quiet
+    # since Kuru stopped listing them on 2026-09-25 — quotes, very few fills —
+    # so a ~3-day window is far under the 100k-event cap (docs/indexer.md
+    # §budget). Moving it earlier is safe for the budget; the leaderboard only
+    # needs Sente's own agents.
+    start_block: 69400000
+    hypersync_config:
+      url: https://monad-testnet.hypersync.xyz
+    rpc:
+      - url: https://testnet-rpc.monad.xyz
+        for: fallback
+        initial_block_interval: 100
+        interval_ceiling: 100
+    contracts:
+      - name: KuruOrderBook
+        address:
+          - '0xfdbE356828c8f5A5d5ed4f69ddE0816f4058Ef61' # MON-USDC
+          - '0xa9C2936656a7D2143720BcD91Ba8506200B7CbE7' # WETH-USDC
+          - '0x5BDEA6F9F9abA34F4EcB9B865646A792b835ef7f' # cbBTC-USDC
+          - '0x0B4dD2A7b09d5c5401149fFe51301Cc589017343' # XAUt-USDC
+      - name: KuruAccountCore
+        address: '0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22'
+
+contracts:
+  - name: KuruOrderBook
+    events:
+      - event: 'TradesPacked(uint40 indexed accountId, address indexed executor, bytes32 clientOrderId, uint24 effectiveTakerFeePps, address builder, uint24 builderFeePps, bytes packedTrades)'
+
+  - name: KuruAccountCore
+    events:
+      - event: 'Deposit(uint40 indexed accountId, address indexed token, address indexed payer, uint256 amount)'
+      - event: 'Withdrawal(uint40 indexed accountId, address indexed token, address indexed recipient, uint256 amount)'
+      # Set C's shape: `account` holds the id and trades, `owner` is separate.
+      - event: 'AccountRegistered(address indexed account, uint40 indexed accountId, uint40 indexed rootAccountId, address owner, uint16 subaccountSeq)'

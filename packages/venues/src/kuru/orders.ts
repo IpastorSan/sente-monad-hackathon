@@ -51,7 +51,13 @@ import {
 } from 'viem';
 
 import type { Decimal, Side, TimeInForce } from '../types.ts';
-import { KURU_FAUCET, NATIVE_TOKEN, type KuruToken } from './constants.ts';
+import {
+  KURU_DEPLOYMENT,
+  KURU_FAUCET,
+  NATIVE_TOKEN,
+  type KuruCustody,
+  type KuruToken,
+} from './constants.ts';
 import { fromUnits, precisionDecimals, toUnits } from './units.ts';
 
 /**
@@ -278,53 +284,200 @@ export const KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI: Abi = abiFunctions(
 );
 
 /**
- * `AccountCore.deposit(rootOwner, token, amount)` ONLY — the owner-address
- * overload, which registers the owner's root on first use. Not the
- * `deposit(rootAccountId, …)` overload: a policy decodes calldata with ONE
- * function per name, and `deposit.rootOwner` is the field it pins.
+ * Set C's address-keyed custody functions, from `@toxicflow-labs/ts-sdk`
+ * 0.0.4's `accountCoreAbi` (SEN-189). The pinned SDK is 0.3.x, whose ABI has
+ * only Set D's account-id shapes, so these are kept here verbatim; the
+ * OrderBook and builder ABIs are byte-identical across the two versions.
+ */
+const ADDRESS_KEYED_ACCOUNT_CORE_ABI = [
+  {
+    type: 'function',
+    name: 'deposit',
+    inputs: [
+      { name: 'token', type: 'address', internalType: 'address' },
+      { name: 'amount', type: 'uint256', internalType: 'uint256' },
+    ],
+    outputs: [],
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
+    name: 'withdraw',
+    inputs: [
+      { name: 'token', type: 'address', internalType: 'address' },
+      { name: 'amount', type: 'uint256', internalType: 'uint256' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'userRegistry',
+    inputs: [{ name: '', type: 'address', internalType: 'address' }],
+    outputs: [{ name: '', type: 'uint40', internalType: 'uint40' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getBalanceById',
+    inputs: [
+      { name: 'userId', type: 'uint40', internalType: 'uint40' },
+      { name: 'token', type: 'address', internalType: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getSpotReservedBalance',
+    inputs: [
+      { name: 'user', type: 'address', internalType: 'address' },
+      { name: 'token', type: 'address', internalType: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
+] as const satisfies Abi;
+
+/** One custody read: the ABI it lives in and the function's name there. */
+type CustodyRead = { readonly abi: Abi; readonly functionName: string };
+
+const CUSTODY: Readonly<
+  Record<
+    KuruCustody,
+    {
+      readonly abi: Abi;
+      readonly deposit: Abi;
+      readonly withdraw: Abi;
+      readonly rootId: CustodyRead;
+      readonly freeById: CustodyRead;
+    }
+  >
+> = {
+  'account-id': {
+    abi: kuruAbi.accountCoreAbi as Abi,
+    // The owner-address overload only: a policy decodes calldata with ONE
+    // function per name, and `deposit.rootOwner` is the field it pins.
+    deposit: abiFunctions(
+      kuruAbi.accountCoreAbi as Abi,
+      (fn) => fn.name === 'deposit' && fn.inputs[0]?.type === 'address',
+    ),
+    withdraw: abiFunctions(kuruAbi.accountCoreAbi as Abi, (fn) => fn.name === 'withdraw'),
+    rootId: {
+      abi: abiFunctions(kuruAbi.accountCoreAbi as Abi, (fn) => fn.name === 'rootAccountIdOf'),
+      functionName: 'rootAccountIdOf',
+    },
+    freeById: {
+      abi: abiFunctions(kuruAbi.accountCoreAbi as Abi, (fn) => fn.name === 'getBalance'),
+      functionName: 'getBalance',
+    },
+  },
+  'address-keyed': {
+    abi: ADDRESS_KEYED_ACCOUNT_CORE_ABI,
+    deposit: abiFunctions(ADDRESS_KEYED_ACCOUNT_CORE_ABI, (fn) => fn.name === 'deposit'),
+    withdraw: abiFunctions(ADDRESS_KEYED_ACCOUNT_CORE_ABI, (fn) => fn.name === 'withdraw'),
+    rootId: {
+      abi: abiFunctions(ADDRESS_KEYED_ACCOUNT_CORE_ABI, (fn) => fn.name === 'userRegistry'),
+      functionName: 'userRegistry',
+    },
+    freeById: {
+      abi: abiFunctions(ADDRESS_KEYED_ACCOUNT_CORE_ABI, (fn) => fn.name === 'getBalanceById'),
+      functionName: 'getBalanceById',
+    },
+  },
+};
+
+/**
+ * `AccountCore.deposit`, one ABI per custody model:
  *
- * Unlike Set C's `deposit(token, amount)`, this credits whatever root it names,
- * not the caller's. Anyone may fund anyone (SEN-185), so a signer that does not
- * pin `rootOwner` to its own address can be made to pay a stranger's account.
+ * - `account-id` (Set D): `deposit(rootOwner, token, amount)` ONLY — not the
+ *   `deposit(rootAccountId, …)` overload. It credits whatever root it names,
+ *   not the caller's: anyone may fund anyone (SEN-185), so a signer that does
+ *   not pin `rootOwner` to its own address can be made to pay a stranger.
+ * - `address-keyed` (Set C): `deposit(token, amount)`, which always credits
+ *   the caller and registers it on first use. Nothing to pin.
  */
-export const KURU_ACCOUNT_CORE_DEPOSIT_ABI: Abi = abiFunctions(
-  kuruAbi.accountCoreAbi as Abi,
-  (fn) => fn.name === 'deposit' && fn.inputs[0]?.type === 'address',
-);
+export const KURU_ACCOUNT_CORE_DEPOSIT_ABIS: Readonly<Record<KuruCustody, Abi>> = {
+  'account-id': CUSTODY['account-id'].deposit,
+  'address-keyed': CUSTODY['address-keyed'].deposit,
+};
+
+/** The active deployment's `deposit` ABI. */
+export const KURU_ACCOUNT_CORE_DEPOSIT_ABI: Abi =
+  KURU_ACCOUNT_CORE_DEPOSIT_ABIS[KURU_DEPLOYMENT.custody];
 
 /**
- * `AccountCore.withdraw(rootAccountId, token, amount, recipient)` ONLY — not
- * `transferBetweenAccounts`, not `fulfillApprovedWithdrawal`. Unlike Set C's
- * `withdraw(token, amount)`, which paid `msg.sender`, it pays the `recipient`
- * it names (SEN-185), so a policy that allows it must pin `withdraw.recipient`.
- * Only the root's owner (or a WITHDRAW/ADMIN signer of it) may call it, and
- * the WithdrawalLimiter can refuse it when protocol-wide capacity is spent.
+ * `AccountCore.withdraw`, one ABI per custody model, and nothing else — not
+ * `transferBetweenAccounts`, not `fulfillApprovedWithdrawal`:
+ *
+ * - `account-id` (Set D): `withdraw(rootAccountId, token, amount, recipient)`
+ *   pays the `recipient` it names (SEN-185), so a policy that allows it must
+ *   pin `withdraw.recipient`. The WithdrawalLimiter can refuse it when
+ *   protocol-wide capacity is spent.
+ * - `address-keyed` (Set C): `withdraw(token, amount)` pays `msg.sender`.
+ *
+ * Only the root's owner (or a WITHDRAW/ADMIN signer of it) may call either.
  */
-export const KURU_ACCOUNT_CORE_WITHDRAW_ABI: Abi = abiFunctions(
-  kuruAbi.accountCoreAbi as Abi,
-  (fn) => fn.name === 'withdraw',
-);
+export const KURU_ACCOUNT_CORE_WITHDRAW_ABIS: Readonly<Record<KuruCustody, Abi>> = {
+  'account-id': CUSTODY['account-id'].withdraw,
+  'address-keyed': CUSTODY['address-keyed'].withdraw,
+};
 
-/** `AccountCore.rootAccountIdOf(owner)`: the owner's root id, `0` before its first deposit. */
-export const KURU_ACCOUNT_CORE_ROOT_ID_ABI: Abi = abiFunctions(
-  kuruAbi.accountCoreAbi as Abi,
-  (fn) => fn.name === 'rootAccountIdOf',
-);
+/** The active deployment's `withdraw` ABI. */
+export const KURU_ACCOUNT_CORE_WITHDRAW_ABI: Abi =
+  KURU_ACCOUNT_CORE_WITHDRAW_ABIS[KURU_DEPLOYMENT.custody];
 
 /**
- * `AccountCore.getBalance(user, token)` — the FREE collateral of one holder in
- * one token, which is exactly what `KuruVenue.getBalances` reports as
- * `available` (the reserved part is `getSpotReservedBalance`).
+ * The owner → root-id read: `rootAccountIdOf(owner)` on Set D,
+ * `userRegistry(owner)` on Set C. Both answer `0` before the first deposit.
+ */
+export const KURU_ACCOUNT_CORE_ROOT_ID_ABI: Abi = CUSTODY[KURU_DEPLOYMENT.custody].rootId.abi;
+
+/**
+ * A root's FREE balance of one token — exactly what `KuruVenue.getBalances`
+ * reports as `available` (the reserved part is `getSpotReservedBalance`):
+ * `getBalance(accountId, token)` on Set D, `getBalanceById(userId, token)` on
+ * Set C.
  *
  * Cut out on its own because `getBalances` reads two functions for every token
  * Kuru lists, in parallel: about ten calls, where a caller that knows which
  * token it is asking about needs one. `POST /agents/:id/return` (SEN-17) plans
  * from this, and Monad's public RPC refuses more than 15 requests a second.
  */
-export const KURU_ACCOUNT_CORE_BALANCE_ABI: Abi = abiFunctions(
-  kuruAbi.accountCoreAbi as Abi,
-  (fn) => fn.name === 'getBalance',
-);
+export const KURU_ACCOUNT_CORE_BALANCE_ABI: Abi = CUSTODY[KURU_DEPLOYMENT.custody].freeById.abi;
+
+/**
+ * The `getSpotReservedBalance` read for `custody` — what a holder's resting
+ * orders lock up: by account id on Set D, by the owner's address on Set C.
+ */
+export function kuruReservedBalanceRead(
+  custody: KuruCustody,
+  accountCore: Address,
+  owner: Address,
+  accountId: bigint,
+  token: Address,
+): { address: Address; abi: Abi; functionName: string; args: readonly unknown[] } {
+  return {
+    address: accountCore,
+    abi: CUSTODY[custody].abi,
+    functionName: 'getSpotReservedBalance',
+    args: custody === 'account-id' ? [Number(accountId), token] : [owner, token],
+  };
+}
+
+/**
+ * The free-balance read for `custody` and a known root id — the second half of
+ * {@link readKuruFreeById}, for a caller that batches its own reads.
+ */
+export function kuruFreeBalanceRead(
+  custody: KuruCustody,
+  accountCore: Address,
+  accountId: bigint,
+  token: Address,
+): { address: Address; abi: Abi; functionName: string; args: readonly unknown[] } {
+  const { abi, functionName } = CUSTODY[custody].freeById;
+  return { address: accountCore, abi, functionName, args: [Number(accountId), token] };
+}
 
 /** The one read a caller of {@link readKuruFreeAtoms} needs to make. */
 export type KuruContractReader = {
@@ -344,14 +497,12 @@ export async function readKuruRootId(
   client: KuruContractReader,
   accountCore: Address,
   owner: Address,
+  custody: KuruCustody = KURU_DEPLOYMENT.custody,
 ): Promise<bigint> {
+  const { abi, functionName } = CUSTODY[custody].rootId;
   return BigInt(
-    (await client.readContract({
-      address: accountCore,
-      abi: KURU_ACCOUNT_CORE_ROOT_ID_ABI,
-      functionName: 'rootAccountIdOf',
-      args: [owner],
-    })) as number | bigint,
+    (await client.readContract({ address: accountCore, abi, functionName, args: [owner] })) as
+      number | bigint,
   );
 }
 
@@ -361,13 +512,15 @@ export async function readKuruFreeById(
   accountCore: Address,
   rootId: bigint,
   token: Address,
+  custody: KuruCustody = KURU_DEPLOYMENT.custody,
 ): Promise<bigint> {
   if (rootId === 0n) return 0n;
+  const { abi, functionName } = CUSTODY[custody].freeById;
   return BigInt(
     (await client.readContract({
       address: accountCore,
-      abi: KURU_ACCOUNT_CORE_BALANCE_ABI,
-      functionName: 'getBalance',
+      abi,
+      functionName,
       args: [Number(rootId), token],
     })) as bigint,
   );
@@ -385,9 +538,10 @@ export async function readKuruFreeAtoms(
   accountCore: Address,
   owner: Address,
   token: Address,
+  custody: KuruCustody = KURU_DEPLOYMENT.custody,
 ): Promise<bigint> {
-  const id = await readKuruRootId(client, accountCore, owner);
-  return readKuruFreeById(client, accountCore, id, token);
+  const id = await readKuruRootId(client, accountCore, owner, custody);
+  return readKuruFreeById(client, accountCore, id, token, custody);
 }
 
 /**
@@ -516,6 +670,8 @@ export function cancelOrderCall(market: Address, slotIdx: number): KuruCall {
  * Fund `rootOwner`'s AccountCore root: `approve` + `deposit` for an ERC-20, one
  * payable `deposit` for native MON. `rootOwner` is the calling account itself
  * in every caller Sente has — the deposit registers its root if it has none.
+ * On Set C (`address-keyed`) the call cannot name it: `deposit(token, amount)`
+ * always credits the caller, which is the same account.
  * The approval is for the exact amount, never unlimited — an agent-held
  * account must not leave a standing allowance behind.
  */
@@ -524,15 +680,16 @@ export function depositCalls(
   token: KuruToken,
   amount: bigint,
   rootOwner: Address,
+  custody: KuruCustody = KURU_DEPLOYMENT.custody,
 ): KuruCall[] {
   if (amount <= 0n) {
     throw new KuruOrderError('deposit amount must be positive');
   }
   const deposit = toCall({
     address: accountCore,
-    abi: KURU_ACCOUNT_CORE_DEPOSIT_ABI,
+    abi: KURU_ACCOUNT_CORE_DEPOSIT_ABIS[custody],
     functionName: 'deposit',
-    args: [rootOwner, token.address, amount],
+    args: custody === 'account-id' ? [rootOwner, token.address, amount] : [token.address, amount],
     value: isAddressEqual(token.address, NATIVE_TOKEN) ? amount : 0n,
   });
   if (isAddressEqual(token.address, NATIVE_TOKEN)) return [deposit];
@@ -545,9 +702,12 @@ export function depositCalls(
 /**
  * Take `amount` of `token` out of root `rootAccountId`'s free AccountCore
  * balance and pay it to `recipient`. Only free balance can leave; what resting
- * orders reserve stays until they are cancelled. The recipient is explicit —
- * AccountCore no longer pays the caller by default — and is the account's own
- * address or its owner's in every caller Sente has.
+ * orders reserve stays until they are cancelled. On Set D the recipient is
+ * explicit — that AccountCore does not pay the caller by default — and is the
+ * account's own address or its owner's in every caller Sente has. On Set C
+ * (`address-keyed`) `withdraw(token, amount)` always pays the caller, so
+ * `recipient` is not encoded; a caller that wants the funds elsewhere follows
+ * with an ERC-20 `transfer`.
  */
 export function withdrawCall(
   accountCore: Address,
@@ -555,6 +715,7 @@ export function withdrawCall(
   amount: bigint,
   rootAccountId: bigint,
   recipient: Address,
+  custody: KuruCustody = KURU_DEPLOYMENT.custody,
 ): KuruCall {
   if (amount <= 0n) {
     throw new KuruOrderError('withdraw amount must be positive');
@@ -564,9 +725,12 @@ export function withdrawCall(
   }
   return toCall({
     address: accountCore,
-    abi: KURU_ACCOUNT_CORE_WITHDRAW_ABI,
+    abi: KURU_ACCOUNT_CORE_WITHDRAW_ABIS[custody],
     functionName: 'withdraw',
-    args: [rootAccountId, token.address, amount, recipient],
+    args:
+      custody === 'account-id'
+        ? [rootAccountId, token.address, amount, recipient]
+        : [token.address, amount],
   });
 }
 

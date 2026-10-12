@@ -632,6 +632,35 @@ The first deployment (2026-10-09) ran the pre-SEN-171 config on the Development
 tier and hit its 100k-event cap within minutes (§budget). The Kuru-only config
 needs a fresh deployment, and the 30-day clock starts again with it.
 
+### Switching to Set C (SEN-189)
+
+With `KURU_DEPLOYMENT=set-c` Sente trades Kuru's previous deployment, so the
+leaderboard must index it instead. `config.setc.yaml` is the same indexer over
+Set C's four books and AccountCore (Set C's `AccountRegistered` shape; ids
+resolved with `userAddressById`), from block 69,400,000 (2026-10-09T00:45Z,
+before Sente's first Set C trades). Set C's books have been quiet since Kuru
+stopped listing them, so the window is far under the 100k-event cap; the
+handlers pick their seeds from `ENVIO_KURU_DEPLOYMENT`, which must match the
+config file or every fill is skipped as an unseeded book.
+
+```bash
+cd services/indexer
+VERIFY_CONFIG=config.setc.yaml mise exec -- npm run verify:topics   # read-only
+mise exec -- npx envio codegen --config config.setc.yaml && mise exec -- npx tsc --noEmit
+
+# A second Cloud indexer, so the Set D one stays as it is:
+npx envio-cloud indexer add --name sente-leaderboard-setc --repo <owner>/<repo> \
+  --branch <branch> --root-dir services/indexer --config-file config.setc.yaml \
+  --tier development
+npx envio-cloud indexer env set sente-leaderboard-setc <org> ENVIO_API_TOKEN=...
+npx envio-cloud indexer env set sente-leaderboard-setc <org> ENVIO_KURU_DEPLOYMENT=set-c
+# push to <branch>, then status / promote / endpoint as above
+```
+
+Then set the API's `ENVIO_GRAPHQL_URL` to the new endpoint and push the
+secrets (docs/deploy.md, "Switching the Kuru deployment"). Locally, `envio dev`
+takes the same pair: `ENVIO_CONFIG=config.setc.yaml ENVIO_KURU_DEPLOYMENT=set-c`.
+
 ---
 
 ## Verification

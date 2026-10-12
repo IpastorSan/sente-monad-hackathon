@@ -20,7 +20,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --conditions=source --test 'src/**/*.test.ts'",
+    "test": "KURU_DEPLOYMENT=set-d node --conditions=source --test 'src/**/*.test.ts' && pnpm run test:set-c",
+    "test:set-c": "KURU_DEPLOYMENT=set-c node --conditions=source --test src/setc.test.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },

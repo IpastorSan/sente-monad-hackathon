@@ -19,11 +19,14 @@ import {
   rpcEthCall,
   type EthCall,
 } from './accountAddress.ts';
-import { KURU_ACCOUNT_CORE } from './seeds.ts';
+import { KURU_ACCOUNT_CORE, KURU_DEPLOYMENT_SEEDS } from './seeds.ts';
 
 /** `getAccountOwner(uint40)` → `0xe23d95bb`, argument right-aligned in one word. */
 const KURU_CALLDATA_1 =
   '0xe23d95bb0000000000000000000000000000000000000000000000000000000000000001';
+
+/** `userAddressById(uint40)`'s selector (Set C). */
+const SET_C_SELECTOR = '0x686067c5';
 
 /** The chain's answer for Kuru account 1. */
 const KURU_RESULT_1 = '0x000000000000000000000000c64346f7ddc776b34eaa44c0b61d564797038143';
@@ -32,9 +35,20 @@ const KURU_RESULT_1 = '0x000000000000000000000000c64346f7ddc776b34eaa44c0b61d564
 const KURU_RESULT_5 = '0x000000000000000000000000d26acbf9930a85f87625d85e1ac7af45ae9ac883';
 
 test('the Kuru call is AccountCore.getAccountOwner with the id in one word', () => {
-  const call = accountAddressCall(1n);
-  assert.equal(call.to, KURU_ACCOUNT_CORE);
+  const call = accountAddressCall(1n, KURU_DEPLOYMENT_SEEDS['set-d']);
+  assert.equal(call.to, KURU_DEPLOYMENT_SEEDS['set-d'].accountCore);
   assert.equal(call.data, KURU_CALLDATA_1);
+});
+
+test('on Set C it is userAddressById on the Set C AccountCore (SEN-189)', () => {
+  // `userAddressById(uint40)` → 0x… selector, 62 = the §proven fill's account.
+  const call = accountAddressCall(62n, KURU_DEPLOYMENT_SEEDS['set-c']);
+  assert.equal(call.to, '0x6384e9b2bf3b65e1535403a0a543b5fda905ee22');
+  assert.equal(call.data, `${SET_C_SELECTOR}${(62).toString(16).padStart(64, '0')}`);
+});
+
+test('the active deployment picks the call', () => {
+  assert.equal(accountAddressCall(1n).to, KURU_ACCOUNT_CORE);
 });
 
 test('the live Kuru answers decode to the accounts’ root owners', () => {
@@ -55,8 +69,13 @@ test('a resolution is one eth_call and its decode', async () => {
     calls.push(request);
     return KURU_RESULT_1;
   };
-  assert.equal(await readAccountAddress(1n, call), '0xc64346f7ddc776b34eaa44c0b61d564797038143');
-  assert.deepEqual(calls, [{ to: KURU_ACCOUNT_CORE, data: KURU_CALLDATA_1 }]);
+  assert.equal(
+    await readAccountAddress(1n, call, KURU_DEPLOYMENT_SEEDS['set-d']),
+    '0xc64346f7ddc776b34eaa44c0b61d564797038143',
+  );
+  assert.deepEqual(calls, [
+    { to: KURU_DEPLOYMENT_SEEDS['set-d'].accountCore, data: KURU_CALLDATA_1 },
+  ]);
 });
 
 test('a revert is an answer; a transport failure is not', async () => {

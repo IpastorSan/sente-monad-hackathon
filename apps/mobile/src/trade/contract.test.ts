@@ -223,8 +223,10 @@ function fakeChain(w: World): PublicClient {
       case 'bestBidAsk':
         return Promise.resolve([w.bid, w.ask]);
       case 'getBalance':
+      case 'getBalanceById': // Set C (SEN-189)
         return Promise.resolve(w.kuruFree[(args![1] as Address).toLowerCase()] ?? 0n);
       case 'rootAccountIdOf':
+      case 'userRegistry': // Set C (SEN-189)
         return Promise.resolve(w.accountId);
       case 'getOrderId':
         return Promise.resolve(w.liveOrderId);

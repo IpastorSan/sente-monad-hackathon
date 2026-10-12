@@ -21,6 +21,7 @@ import {
   toClientOrderId,
   withdrawCall,
   type KuruMarketParams,
+  KURU_DEPLOYMENT,
 } from '@sente/venues/kuru';
 import { encodeFunctionData, getAddress, type Address, type Hex } from 'viem';
 
@@ -37,6 +38,9 @@ import type {
   StepKind,
 } from './types.ts';
 import { verifyKuruTrade, type KuruVerifyContext, type KuruVerifyResult } from './verifyKuru.ts';
+
+/** Set D's account-id custody only; `test:set-c` covers Set C's shapes (SEN-189). */
+const SET_D_ONLY = { skip: KURU_DEPLOYMENT.custody !== 'account-id' };
 
 const WALLET_ID = 'wallet00000000000000test';
 const WALLET = getAddress('0x7777777777777777777777777777777777777777');
@@ -622,7 +626,7 @@ test('withdraw: another token is refused', () => {
 });
 
 // SEN-185: the account-id AccountCore pays and credits whoever the call names.
-test('withdraw: paying anyone but your wallet is refused', () => {
+test('withdraw: paying anyone but your wallet is refused', SET_D_ONLY, () => {
   const steps = unbatched(
     [withdrawCall(ACCOUNT_CORE, USDC, 25_000_000n, 7n, STRANGER)],
     ['withdraw'],
@@ -630,7 +634,7 @@ test('withdraw: paying anyone but your wallet is refused', () => {
   refused(verifyKuruTrade(steps, ctx(WITHDRAW)), /withdrawal pays 0x1111.*, not your wallet/);
 });
 
-test('deposit: crediting anyone but your Kuru account is refused', () => {
+test('deposit: crediting anyone but your Kuru account is refused', SET_D_ONLY, () => {
   const steps = buyLimitSteps(place(), depositCalls(ACCOUNT_CORE, USDC, BUY_CAP, STRANGER));
   refused(
     verifyKuruTrade(steps, ctx(BUY_LIMIT)),

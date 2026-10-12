@@ -10,7 +10,7 @@
  * come from — stays in the service.
  */
 import type { Balance, Order, Position } from '@sente/venues';
-import { KURU_TESTNET_TOKENS, KuruVenue } from '@sente/venues/kuru';
+import { KURU_TESTNET_TOKENS, KuruOpenOrdersUnavailableError, KuruVenue } from '@sente/venues/kuru';
 import {
   PERPL_COLLATERAL_DECIMALS,
   PERPL_TESTNET_CONTRACTS,
@@ -79,7 +79,15 @@ export async function readKuruAccount(venue: KuruAccountVenue): Promise<KuruAcco
   // Id 0 is "never deposited": there is nothing to read, and the Gateway has
   // no orders to list for an account that does not exist.
   if (accountId === 0n) return { accountId: null, balances: [], openOrders: [] };
-  const [balances, openOrders] = await Promise.all([venue.getBalances(), venue.getOpenOrders()]);
+  const [balances, openOrders] = await Promise.all([
+    venue.getBalances(),
+    // Kuru serves no open-orders feed for Set C (SEN-189): what resting orders
+    // hold still shows as `locked`, so the section reads rather than fails.
+    venue.getOpenOrders().catch((error: unknown) => {
+      if (error instanceof KuruOpenOrdersUnavailableError) return [];
+      throw error;
+    }),
+  ]);
   return {
     accountId: accountId.toString(),
     balances: balances.map(balanceDto),

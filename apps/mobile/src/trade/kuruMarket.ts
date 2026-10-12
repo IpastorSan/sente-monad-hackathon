@@ -15,7 +15,12 @@
  * phone and the server cannot drift apart silently.
  */
 import type { KuruMarketConfig, KuruMarketParams } from '@sente/venues/kuru';
-import { KURU_TESTNET_CONTRACTS } from '@sente/venues/kuru';
+import {
+  KURU_DEPLOYMENT,
+  KURU_TESTNET_CONTRACTS,
+  readKuruFreeAtoms,
+  type KuruContractReader,
+} from '@sente/venues/kuru';
 import type { Address, PublicClient } from 'viem';
 
 type Side = 'buy' | 'sell';
@@ -157,8 +162,10 @@ export const KURU_MARKET_READ_ABI = [
 ] as const;
 
 /**
- * AccountCore keys custody by account id since SEN-185: the owner's root id
- * first, then that id's balance.
+ * Set D's AccountCore keys custody by account id since SEN-185: the owner's
+ * root id first, then that id's balance. Set C reads the same two steps
+ * through `userRegistry` and `getBalanceById`; {@link readKuruFree} picks the
+ * build's deployment's pair (SEN-189).
  */
 export const KURU_BALANCE_READ_ABI = [
   {
@@ -253,17 +260,11 @@ export async function readKuruFree(
   token: Address,
   accountCore: Address = KURU_TESTNET_CONTRACTS.accountCore,
 ): Promise<bigint> {
-  const id = await client.readContract({
-    address: accountCore,
-    abi: KURU_BALANCE_READ_ABI,
-    functionName: 'rootAccountIdOf',
-    args: [wallet],
-  });
-  if (BigInt(id) === 0n) return 0n;
-  return client.readContract({
-    address: accountCore,
-    abi: KURU_BALANCE_READ_ABI,
-    functionName: 'getBalance',
-    args: [Number(id), token],
-  });
+  return readKuruFreeAtoms(
+    client as unknown as KuruContractReader,
+    accountCore,
+    wallet,
+    token,
+    KURU_DEPLOYMENT.custody,
+  );
 }

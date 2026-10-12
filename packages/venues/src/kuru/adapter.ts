@@ -8,6 +8,11 @@
  *   - Exchange Gateway for the displayed book and the account's open orders;
  *   - Data Source for the market catalog, candles and order history.
  *
+ * A deployment Kuru's APIs no longer serve (Set C, `catalogListed: false`,
+ * SEN-189) reads everything from the chain instead: the market list is the
+ * pinned table checked against `getMarketParams()`, the displayed book is
+ * `getL2Book`, there are no candles, and open orders cannot be listed.
+ *
  * WRITES are call lists handed to a `KuruSubmitter`. The adapter holds no key
  * and does no batching of its own: it produces calls, the submitter lands them
  * as one UserOperation, and the adapter decodes what the OrderBook reported.
@@ -47,8 +52,8 @@ import type {
 import type { Venue } from '../venue.ts';
 import { createKuruApi, type KuruApi, type KuruApiConfig } from './api.ts';
 import {
-  KURU_TESTNET_CONTRACTS,
-  KURU_TESTNET_MARKETS,
+  KURU_DEPLOYMENT,
+  type KuruDeployment,
   type KuruMarketConfig,
   type KuruToken,
 } from './constants.ts';
@@ -78,6 +83,9 @@ import {
   encodeNativeOrder,
   formatOrderId,
   KURU_ACCOUNT_CORE_BUILDER_APPROVAL_ABI,
+  kuruFreeBalanceRead,
+  kuruReservedBalanceRead,
+  PPS_DENOMINATOR,
   readKuruRootId,
   KuruOrderError,
   parseOrderId,
@@ -92,7 +100,7 @@ import {
   type KuruMarketParams,
   type KuruOrderRef,
 } from './orders.ts';
-import { fromUnits, precisionDecimals, toUnits } from './units.ts';
+import { fromUnits, precisionDecimals, ratioToDecimal, toUnits } from './units.ts';
 
 /**
  * What a submitter reports back once a call list has landed.
@@ -160,6 +168,8 @@ export type KuruVenueConfig = {
   /** Account whose balances and orders are read. Defaults to the submitter's. */
   readonly account?: Address;
   readonly api?: KuruApiConfig;
+  /** Which deployment to trade (SEN-189). Defaults to the active one, `KURU_DEPLOYMENT`. */
+  readonly deployment?: KuruDeployment;
   readonly markets?: readonly KuruMarketConfig[];
   readonly accountCore?: Address;
 };
@@ -175,6 +185,21 @@ export class KuruCatalogError extends Error {
     super(`${missing.join(', ')} not in Kuru catalog`);
     this.name = 'KuruCatalogError';
     this.missing = missing;
+  }
+}
+
+/**
+ * Kuru serves no open-orders feed for this deployment (Set C, SEN-189): its
+ * Gateway lists only Set D, and the OrderBook has no view that returns an
+ * account's orders. A resting order still shows as `locked` balance and is
+ * cancelled by the id its placement returned.
+ */
+export class KuruOpenOrdersUnavailableError extends Error {
+  constructor(deployment: string) {
+    super(
+      `Kuru does not list open orders for ${deployment}; cancel by the id the placement returned`,
+    );
+    this.name = 'KuruOpenOrdersUnavailableError';
   }
 }
 
@@ -233,6 +258,7 @@ export class KuruVenue implements Venue {
   readonly #account: Address | undefined;
   readonly #api: KuruApi;
   readonly #accountCore: Address;
+  readonly #deployment: KuruDeployment;
   readonly #markets: readonly KuruMarketConfig[];
   readonly #params = new Map<Address, Promise<KuruMarketParams>>();
   readonly #builder: KuruBuilderSettings | undefined;
@@ -252,12 +278,18 @@ export class KuruVenue implements Venue {
     this.#submitter = config.submitter;
     this.#account = config.account ?? config.submitter?.address;
     this.#api = createKuruApi(config.api);
-    this.#accountCore = config.accountCore ?? KURU_TESTNET_CONTRACTS.accountCore;
-    this.#markets = config.markets ?? KURU_TESTNET_MARKETS;
+    this.#deployment = config.deployment ?? KURU_DEPLOYMENT;
+    this.#accountCore = config.accountCore ?? this.#deployment.contracts.accountCore;
+    this.#markets = config.markets ?? this.#deployment.markets;
   }
 
   // -------------------------------------------------------------------------
   // Kuru-specific extensions. Additive; the shared `Venue` is untouched.
+
+  /** The deployment this venue trades (SEN-189). */
+  get deployment(): KuruDeployment {
+    return this.#deployment;
+  }
 
   market(symbol: MarketSymbol): KuruMarketConfig {
     const market = this.#markets.find((candidate) => candidate.symbol === symbol);
@@ -286,6 +318,7 @@ export class KuruVenue implements Venue {
       this.#client as unknown as KuruContractReader,
       this.#accountCore,
       this.#requireAccount(),
+      this.#deployment.custody,
     );
     // An assigned id never changes, so only a real one is worth caching.
     if (id !== 0n) this.#accountId = id;
@@ -304,6 +337,7 @@ export class KuruVenue implements Venue {
       token,
       toUnits(amount, token.decimals, 'amount'),
       this.#requireAccount(),
+      this.#deployment.custody,
     );
   }
 
@@ -370,10 +404,17 @@ export class KuruVenue implements Venue {
    * The call that moves `amount` of free `asset` out of this account's root to
    * `recipient` — the account's own address unless told otherwise. Reads the
    * root id first: AccountCore withdraws by id, and an account that has never
-   * deposited has none.
+   * deposited has none. Set C's `withdraw(token, amount)` always pays the
+   * account itself, so a different `recipient` is refused there rather than
+   * silently ignored.
    */
   async withdrawCalls(asset: string, amount: Decimal, recipient?: Address): Promise<KuruCall[]> {
     const token = this.#token(asset);
+    const self = this.#requireAccount();
+    const to = recipient ?? self;
+    if (this.#deployment.custody === 'address-keyed' && !isAddressEqual(to, self)) {
+      throw new KuruOrderError(`${this.#deployment.id} withdraws only to the account itself`);
+    }
     const rootId = await this.accountId();
     if (rootId === 0n) throw new KuruOrderError('this account has never deposited on Kuru');
     return [
@@ -382,7 +423,8 @@ export class KuruVenue implements Venue {
         token,
         toUnits(amount, token.decimals, 'amount'),
         rootId,
-        recipient ?? this.#requireAccount(),
+        to,
+        this.#deployment.custody,
       ),
     ];
   }
@@ -402,6 +444,10 @@ export class KuruVenue implements Venue {
    * empty list as "Kuru lists nothing today".
    */
   async listedMarkets(): Promise<{ markets: Market[]; missing: MarketSymbol[] }> {
+    // No catalog to compare against (SEN-189): the pins ARE the list, each
+    // checked against its own `getMarketParams()`.
+    if (!this.#deployment.catalogListed)
+      return { markets: await this.#pinnedMarkets(), missing: [] };
     const listed = await this.#api.markets();
     const markets: Market[] = [];
     const missing: MarketSymbol[] = [];
@@ -427,11 +473,18 @@ export class KuruVenue implements Venue {
   async getDepth({ symbol, limit = 20 }: DepthQuery): Promise<Depth> {
     const market = this.market(symbol);
     const levels = Math.min(Math.max(Math.trunc(limit), 1), GATEWAY_MAX_LEVELS);
+    if (!this.#deployment.catalogListed) return this.#chainDepth(market, levels);
     return toDepth(await this.#api.depth(market.venueSymbol, levels), market, levels, Date.now());
   }
 
+  /**
+   * Candles from the Data Source. A deployment it does not serve (Set C) has
+   * none: `[]`, which the app shows as "no chart history", never a made-up
+   * series.
+   */
   async getKlines(query: KlineQuery): Promise<Kline[]> {
     const market = this.market(query.symbol);
+    if (!this.#deployment.catalogListed) return [];
     const width = KLINE_INTERVAL_MS[query.interval];
     const source = KLINE_SOURCE[query.interval];
     const perKline = width / KLINE_INTERVAL_MS[source];
@@ -502,6 +555,9 @@ export class KuruVenue implements Venue {
   async getOpenOrders(symbol?: MarketSymbol): Promise<Order[]> {
     const accountId = await this.accountId();
     if (accountId === 0n) return [];
+    if (!this.#deployment.catalogListed) {
+      throw new KuruOpenOrdersUnavailableError(this.#deployment.id);
+    }
     const wanted = symbol === undefined ? this.#markets : [this.market(symbol)];
     const observedAt = Date.now();
     const orders = await this.#api.userOrders(accountId);
@@ -544,24 +600,18 @@ export class KuruVenue implements Venue {
   async getBalances(): Promise<Balance[]> {
     // Custody is keyed by root id; an account with none has never deposited.
     const id = await this.accountId();
+    const owner = this.#requireAccount();
+    const custody = this.#deployment.custody;
+    const read = async (request: ReturnType<typeof kuruFreeBalanceRead>): Promise<bigint> =>
+      BigInt((await this.#client.readContract(request as never)) as bigint);
     return Promise.all(
       this.#tokens().map(async (token) => {
         const [free, reserved] =
           id === 0n
             ? [0n, 0n]
             : await Promise.all([
-                this.#client.readContract({
-                  address: this.#accountCore,
-                  abi: kuruAbi.accountCoreAbi,
-                  functionName: 'getBalance',
-                  args: [Number(id), token.address],
-                }),
-                this.#client.readContract({
-                  address: this.#accountCore,
-                  abi: kuruAbi.accountCoreAbi,
-                  functionName: 'getSpotReservedBalance',
-                  args: [Number(id), token.address],
-                }),
+                read(kuruFreeBalanceRead(custody, this.#accountCore, id, token.address)),
+                read(kuruReservedBalanceRead(custody, this.#accountCore, owner, id, token.address)),
               ]);
         return {
           asset: token.symbol,
@@ -671,6 +721,41 @@ export class KuruVenue implements Venue {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * The pinned markets as `Market`s from their own `getMarketParams()`, for a
+   * deployment with no catalog (SEN-189). A book whose read fails, or whose
+   * precisions differ from its pin, is left out; none readable is an error.
+   */
+  async #pinnedMarkets(): Promise<Market[]> {
+    const results = await Promise.allSettled(
+      this.#markets.map(async (market) =>
+        pinnedMarket(market, await this.marketParams(market.symbol)),
+      ),
+    );
+    const markets = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+    if (markets.length === 0 && results.length > 0) {
+      throw (results[0] as PromiseRejectedResult).reason;
+    }
+    return markets;
+  }
+
+  /** The displayed book from `getL2Book`, for a deployment the Gateway does not serve. */
+  async #chainDepth(market: KuruMarketConfig, levels: number): Promise<Depth> {
+    const book = await this.bookSnapshot(market.symbol);
+    const pd = precisionDecimals(book.params.pricePrecision);
+    const sd = precisionDecimals(book.params.sizePrecision);
+    const level = ({ price, size }: BookLevel) => ({
+      price: fromUnits(price, pd),
+      size: fromUnits(size, sd),
+    });
+    return {
+      symbol: market.symbol,
+      bids: book.bids.slice(0, levels).map(level),
+      asks: book.asks.slice(0, levels).map(level),
+      timestamp: book.observedAt,
+    };
+  }
 
   async #readMarketParams(market: KuruMarketConfig): Promise<KuruMarketParams> {
     const [pricePrecision, sizePrecision, tickSize, minQuote, maxQuote, takerFeePps, makerFeePps] =
@@ -900,6 +985,25 @@ export class KuruVenue implements Venue {
     }
     return token;
   }
+}
+
+/** A pinned market as a `Market`, from its own on-chain params (no catalog row). */
+export function pinnedMarket(market: KuruMarketConfig, params: KuruMarketParams): Market {
+  const pd = precisionDecimals(params.pricePrecision);
+  const step = fromUnits(1n, precisionDecimals(params.sizePrecision));
+  return {
+    symbol: market.symbol,
+    kind: 'spot',
+    base: market.base.symbol,
+    quote: market.quote.symbol,
+    tickSize: fromUnits(params.tickSize, pd),
+    stepSize: step,
+    minSize: step,
+    minNotional: fromUnits(params.minQuoteNotional, market.quote.decimals),
+    venueSymbol: market.venueSymbol,
+    makerFee: ratioToDecimal(params.makerFeePps, PPS_DENOMINATOR),
+    takerFee: ratioToDecimal(params.takerFeePps, PPS_DENOMINATOR),
+  };
 }
 
 function rejectReduceOnly(request: OrderRequestBase): void {

@@ -79,7 +79,13 @@
  *
  * Plain TS, no React Native: `approval.test.ts` runs under plain node.
  */
-import { KURU_TESTNET_CONTRACTS, KURU_TESTNET_TOKENS, NATIVE_TOKEN } from '@sente/venues/kuru';
+import {
+  KURU_DEPLOYMENT,
+  KURU_TESTNET_CONTRACTS,
+  KURU_TESTNET_TOKENS,
+  NATIVE_TOKEN,
+  type KuruCustody,
+} from '@sente/venues/kuru';
 import { getAddress, isAddressEqual, keccak256, stringToBytes, type Address } from 'viem';
 
 import { canonicalize, type AuthorizationPayload } from '../auth/deviceKey.ts';
@@ -151,13 +157,35 @@ const RETURNABLE = [
  * that test fails and the hash here must change in the same commit. Until the
  * app ships it, an old build refuses the new shape: fail closed, by design.
  */
+/**
+ * The custody ABIs, one pair per Kuru deployment (SEN-189). The phone pins
+ * BOTH, and uses the pair of the deployment it was built for: a policy carrying
+ * the other deployment's deposit or withdraw ABI is refused like any other
+ * unknown blob.
+ */
+const CUSTODY_BLOBS = {
+  'account-id': {
+    /** SEN-185: `deposit(rootOwner, token, amount)`, Set D's owner overload. */
+    deposit: 'abi:0xe7e98a08bee4703cc0ddc9d1e9a074ca018b8910f67c07911b547abb761a1d27',
+    /** SEN-185: `withdraw(rootAccountId, token, amount, recipient)`. */
+    withdraw: 'abi:0xba146337ad1e4cf35b63bb50eb6606e341ad0d69f42081123b50c411253ea4cb',
+  },
+  'address-keyed': {
+    /** SEN-189: Set C's `deposit(token, amount)`, crediting the caller. */
+    deposit: 'abi:0x4c3ae6c5cb499c7e14be5485e4c866d5a0cf9fd376d6d417b87b8bee09882c0a',
+    /** SEN-189: Set C's `withdraw(token, amount)`, paying the caller. */
+    withdraw: 'abi:0x1f8d34385430b9e8700a82ce0363bf308d2b912ba7d83c2157eaa25ec0b79245',
+  },
+} as const satisfies Record<KuruCustody, { deposit: string; withdraw: string }>;
+
+/** This build's Kuru custody model: its deployment's (`EXPO_PUBLIC_KURU_DEPLOYMENT`). */
+const CUSTODY: KuruCustody = KURU_DEPLOYMENT.custody;
+
 const BLOB = {
   erc20Approve: 'abi:0x490c886ad5215051b719391097d15dd8f2fdfe72ded3158a8de693237aea96bc',
   erc20Transfer: 'abi:0x59cc12fde94ff40f94cd755f0c06e5724ec762b3ae71e9f62f0c370b60661569',
-  /** SEN-185: `deposit(rootOwner, token, amount)`, the account-id AccountCore's owner overload. */
-  kuruDeposit: 'abi:0xe7e98a08bee4703cc0ddc9d1e9a074ca018b8910f67c07911b547abb761a1d27',
-  /** SEN-185: `withdraw(rootAccountId, token, amount, recipient)`. */
-  kuruWithdraw: 'abi:0xba146337ad1e4cf35b63bb50eb6606e341ad0d69f42081123b50c411253ea4cb',
+  kuruDeposit: CUSTODY_BLOBS[CUSTODY].deposit,
+  kuruWithdraw: CUSTODY_BLOBS[CUSTODY].withdraw,
   kuruBatch: 'abi:0x52a7f0313269da737b4e09ca73c491c3cdf7b0e95e255446f74c8d6d95e4b3a4',
   /** SEN-184: the two builder-config `batch` overloads. */
   kuruBuilderBatch: 'abi:0xf254685b9f76f6a037d4cceeb29a12c77e907d0b430795452cf159d1e80e929c',
@@ -225,7 +253,11 @@ const valueLte = (max: bigint) => condition('ethereum_transaction', 'value', 'lt
  * the recipient the call names, so the pin is the whole guarantee.
  */
 const withdrawTo = (owner: Address) =>
-  calldataEq(BLOB.kuruWithdraw, 'withdraw.recipient', getAddress(owner));
+  CUSTODY === 'account-id'
+    ? calldataEq(BLOB.kuruWithdraw, 'withdraw.recipient', getAddress(owner))
+    : // Set C (SEN-189): `withdraw(token, amount)` can pay only the agent itself,
+      // so the rule matches it by name; the return rules pin where it goes next.
+      calldataEq(BLOB.kuruWithdraw, 'function_name', 'withdraw');
 
 /** One rule as this module compares it: a method and an unordered set of conditions. */
 export type ExpectedRule = { method: string; conditions: string[] };
@@ -266,7 +298,8 @@ export function expectedPolicyRules(
       const token = getAddress(key);
       const deposit = [
         txTo(ACCOUNT_CORE),
-        ...(agentAddress
+        // Set C's deposit names no account (SEN-189): nothing to pin.
+        ...(agentAddress && CUSTODY === 'account-id'
           ? [calldataEq(BLOB.kuruDeposit, 'deposit.rootOwner', getAddress(agentAddress))]
           : []),
         calldataEq(BLOB.kuruDeposit, 'deposit.token', token),

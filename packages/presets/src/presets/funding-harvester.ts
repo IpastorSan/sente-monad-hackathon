@@ -3,15 +3,16 @@
  * pays shorts, optionally holding the same coin on Kuru spot. Promise and
  * parameters from docs/design/trading/agents.html, "The catalog".
  */
-import { formatNumber, marketAssets, num, str } from '../params.ts';
+import { formatNumber, KURU_SPOT_MARKETS, marketAssets, num, str } from '../params.ts';
 import type { ParamError, Params, PresetDefinition } from '../types.ts';
 
 /**
  * The Kuru spot market that holds the same coin as each perp. Only these
- * perps can be hedged; the tokenised names (WBTC, WETH) are what Kuru lists.
+ * perps can be hedged; the tokenised names are what Kuru lists — WBTC on Set
+ * D, cbBTC on Set C (SEN-189).
  */
 const HEDGE_MARKETS: Readonly<Record<string, string>> = {
-  BTC: 'WBTC-USDC',
+  BTC: KURU_SPOT_MARKETS.find((m) => /BTC-USDC$/.test(m)) ?? 'WBTC-USDC',
   ETH: 'WETH-USDC',
   MON: 'MON-USDC',
 };
