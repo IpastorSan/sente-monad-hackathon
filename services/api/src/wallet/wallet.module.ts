@@ -65,9 +65,14 @@ export const MONAD_PUBLIC_CLIENT = Symbol('WALLET_MONAD_PUBLIC_CLIENT');
 type MonadPublicClient = ReturnType<typeof createMonadPublicClient>;
 
 function createMonadPublicClient(config: WalletConfig) {
+  // Multicall batching and a patient retry: the portfolio reads the wallet, the
+  // Kuru account (~10 calls) and Perpl in one burst on the public RPC (~15
+  // req/s), and on 2026-10-12 that burst failed every Kuru section in
+  // production with a bare "RPC Request failed" while each read alone passed.
   return createPublicClient({
     chain: monadTestnet,
-    transport: http(config.rpcUrl, { retryCount: 2 }),
+    batch: { multicall: true },
+    transport: http(config.rpcUrl, { retryCount: 4, retryDelay: 400 }),
   });
 }
 
