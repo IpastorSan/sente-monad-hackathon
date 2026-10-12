@@ -21,6 +21,7 @@ import { indexer } from 'envio';
 import { decodeTradesPacked } from '../lib/packed.ts';
 import { kuruMarketByAddress, kuruTokenDecimals } from '../lib/seeds.ts';
 import { decimalsFromPrecision, kuruAccountId, kuruQuoteAtoms, tradeId } from '../lib/stats.ts';
+import { registeredAddresses } from '../lib/registered.ts';
 import { bumpMarket, ensureKuruMarkets, recordMarketDay } from '../lib/markets.ts';
 import {
   type Ctx,
@@ -199,11 +200,9 @@ indexer.onEvent(
       event.block.number,
       event.block.timestamp,
     );
-    // Kuru's account-id AccountCore (SEN-185) gives an id no address of its
-    // own: a root and its children all belong to `rootOwner`, the wallet that
-    // signs and the one a Sente user is matched on — the same answer
-    // `getAccountOwner(id)` gives (lib/accountAddress.ts).
-    await setAccountAddress(context, accountId, event.params.rootOwner);
-    await setAccountOwner(context, accountId, event.params.rootOwner);
+    // Set D's or Set C's shape, by the config the indexer runs (SEN-189).
+    const { address, owner } = registeredAddresses(event.params);
+    if (address !== undefined) await setAccountAddress(context, accountId, address);
+    if (owner !== undefined) await setAccountOwner(context, accountId, owner);
   },
 );
