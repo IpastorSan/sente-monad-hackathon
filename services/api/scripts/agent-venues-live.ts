@@ -368,10 +368,16 @@ async function main(): Promise<number> {
     });
     show('kuru placed', { id: placed.id, status: placed.status, tx: placed.txHash });
 
-    let seen = false;
-    for (let i = 0; i < 20 && !seen; i++) {
-      seen = (await kuru.getOpenOrders(KURU_SYMBOL)).some((o) => o.id === placed.id);
-      if (!seen) await sleep(1_000);
+    // Set C has no open-orders listing (SEN-189): cancel by the placement's id.
+    let seen: boolean | 'unlisted' = false;
+    try {
+      for (let i = 0; i < 20 && !seen; i++) {
+        seen = (await kuru.getOpenOrders(KURU_SYMBOL)).some((o) => o.id === placed.id);
+        if (!seen) await sleep(1_000);
+      }
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'KuruOpenOrdersUnavailableError')) throw error;
+      seen = 'unlisted';
     }
     kuruResult['gatewayListedIt'] = seen;
 
