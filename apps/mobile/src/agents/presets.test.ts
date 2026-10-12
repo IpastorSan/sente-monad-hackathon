@@ -12,8 +12,11 @@ import { test } from 'node:test';
 import { parseMandate } from '@sente/mandate';
 import { KURU_DEPLOYMENT, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 
+import { parseAmount } from './amounts.ts';
 import { toWireMandate, type AgentMandate } from './api.ts';
 import {
+  AUSD,
+  PERPL_MIN_OPEN_ATOMS,
   buildMandate,
   defaultMandateForm,
   formFromMandate,
@@ -132,6 +135,15 @@ test('cautious sits below standard and wide above it, on every limit a preset mo
   assert.deepEqual(standard.venues, ['kuru']);
   assert.deepEqual(wide.venues, ['kuru', 'perpl']);
   assert.equal(wide.perpl.maxLeverage, 2);
+});
+
+test('every preset with Perpl caps collateral at Perpl’s opening minimum or more (SEN-200)', () => {
+  const withPerpl = PRESETS.map((id) => presetValues(id, NOW).form).filter((form) => form.perpl);
+  assert.ok(withPerpl.length > 0, 'some preset trades perps');
+  for (const form of withPerpl) {
+    const cap = parseAmount(form.perplCollateral, AUSD.decimals);
+    assert.ok(cap !== null && cap >= PERPL_MIN_OPEN_ATOMS, form.perplCollateral);
+  }
 });
 
 test('a preset keeps no returnTo it was not given', () => {

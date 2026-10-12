@@ -22,6 +22,7 @@ import {
   formatExpiry,
   KURU_MARKETS,
   relevantDepositTokens,
+  togglePerpl,
   type MandateErrors,
   type MandateForm,
 } from './mandate';
@@ -122,7 +123,7 @@ export function MandateStep({
             title="Perpl"
             detail="Perps, with leverage"
             on={form.perpl}
-            onPress={() => patch({ perpl: !form.perpl })}
+            onPress={() => patch(togglePerpl(form))}
           />
         </View>
         {errors.venues ? <Text style={[text.dim, text.danger]}>{errors.venues}</Text> : null}

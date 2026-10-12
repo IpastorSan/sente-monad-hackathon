@@ -36,6 +36,7 @@ import {
   parsePerplMarkets,
   quoteUnit,
   relevantDepositTokens,
+  togglePerpl,
   type MandateForm,
 } from './mandate.ts';
 
@@ -188,6 +189,24 @@ test('a Perpl collateral cap under Perpl’s 100 AUSD opening minimum is refused
     NOW,
   );
   assert.equal(exactly.ok, true);
+});
+
+test('turning Perpl on fills an empty collateral cap with the opening minimum, never a typed one (SEN-200)', () => {
+  assert.deepEqual(togglePerpl({ perpl: false, perplCollateral: '' }), {
+    perpl: true,
+    perplCollateral: '100',
+  });
+  assert.deepEqual(togglePerpl({ perpl: false, perplCollateral: ' 0.00 ' }), {
+    perpl: true,
+    perplCollateral: '100',
+  });
+  assert.deepEqual(togglePerpl({ perpl: false, perplCollateral: '40' }), { perpl: true });
+  assert.deepEqual(togglePerpl({ perpl: false, perplCollateral: 'abc' }), { perpl: true });
+  assert.deepEqual(togglePerpl({ perpl: true, perplCollateral: '' }), { perpl: false });
+
+  // The filled cap is one the hire accepts.
+  const on = form({ kuru: false, perplMarkets: 'BTC-PERP', ...togglePerpl(form()) });
+  assert.equal(buildMandate(on, NOW).ok, true);
 });
 
 test('parsePerplMarkets splits on commas and spaces and drops repeats', () => {

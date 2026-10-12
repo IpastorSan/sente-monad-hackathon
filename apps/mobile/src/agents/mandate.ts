@@ -83,6 +83,22 @@ export const PERPL_ENROLL_STATEMENT =
  */
 export const PERPL_MIN_OPEN_ATOMS = 100_000_000n;
 
+/**
+ * The form change for the Perpl venue card (SEN-200). Turning Perpl on with
+ * no collateral cap (blank or zero) fills in Perpl's opening minimum, the
+ * smallest cap that can trade at all; a cap the user typed is left alone.
+ */
+export function togglePerpl(form: Pick<MandateForm, 'perpl' | 'perplCollateral'>) {
+  const perpl = !form.perpl;
+  const empty =
+    form.perplCollateral.trim() === '' || parseAmount(form.perplCollateral, AUSD.decimals) === 0n;
+  if (!perpl || !empty) return { perpl };
+  return {
+    perpl,
+    perplCollateral: formatAtoms(PERPL_MIN_OPEN_ATOMS, AUSD.decimals, { group: false }),
+  };
+}
+
 export const KURU_MARKETS: readonly KuruMarketConfig[] = KURU_TESTNET_MARKETS;
 export const KURU_TOKENS: readonly Token[] = Object.values(KURU_TESTNET_TOKENS);
 
