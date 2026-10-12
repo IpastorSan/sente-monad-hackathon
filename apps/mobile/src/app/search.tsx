@@ -43,7 +43,7 @@ import {
   BARE_INPUT,
   Button,
   Chip,
-  FOCUS_RING,
+  FocusBox,
   Screen,
   Section,
   SectionLink,
@@ -147,7 +147,7 @@ function SearchScreen() {
   return (
     <Screen>
       <View style={styles.bar}>
-        <View style={[styles.field, focused && FOCUS_RING]}>
+        <FocusBox focused={focused} style={styles.field}>
           <TextInput
             value={query}
             onChangeText={setQuery}
@@ -174,7 +174,7 @@ function SearchScreen() {
               <Text style={styles.clear}>×</Text>
             </Pressable>
           ) : null}
-        </View>
+        </FocusBox>
         <Pressable accessibilityRole="button" hitSlop={10} onPress={() => router.back()}>
           <Text style={styles.cancel}>Cancel</Text>
         </Pressable>
