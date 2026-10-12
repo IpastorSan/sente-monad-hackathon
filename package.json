@@ -17,7 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "claim:ausd": "pnpm --filter @sente/mobile run claim:ausd",
-    "drift:check": "pnpm --filter @sente/venues run drift:check"
+    "drift:check": "pnpm --filter @sente/venues run drift:check",
+    "kuru:faucet": "pnpm --filter @sente/venues run kuru:faucet"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

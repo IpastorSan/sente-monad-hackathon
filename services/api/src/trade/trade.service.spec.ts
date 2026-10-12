@@ -12,6 +12,7 @@ import {
   type PublicClient,
 } from 'viem';
 import type { UserOperationReceipt } from 'viem/account-abstraction';
+import { KURU_DEPLOYMENT } from '@sente/venues/kuru';
 
 import { PrivyClient } from '../agents/privy/privy.client';
 import type { Bundler } from '../wallet/bundler/bundler';
@@ -695,6 +696,11 @@ describe('trading_disabled', () => {
       chainId: 10143,
       venues: { kuru: false, perpl: false },
       kuruBuilder: null,
+      // SEN-189: the active Kuru deployment, Set D unless KURU_DEPLOYMENT says otherwise.
+      kuruDeployment: {
+        id: KURU_DEPLOYMENT.id,
+        accountCore: KURU_DEPLOYMENT.contracts.accountCore,
+      },
     });
     expect(await refusal(service.prepare(ALICE, intent()))).toBe('trading_disabled');
     expect(await refusal(service.commit(ALICE, 'x', [SIG]))).toBe('trading_disabled');

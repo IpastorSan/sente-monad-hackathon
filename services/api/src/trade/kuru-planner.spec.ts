@@ -88,14 +88,15 @@ function fakeClient(world: World = {}): PublicClient {
         4_000n, // maker 0.04%: 10 USDC -> 10.004 locked, as in docs/kuru.md
       ]);
     }
-    if (functionName === 'getBalance') {
+    // Set D's getBalance / rootAccountIdOf, or Set C's getBalanceById / userRegistry (SEN-189).
+    if (functionName === 'getBalance' || functionName === 'getBalanceById') {
       expect(isAddressEqual(address, ACCOUNT_CORE)).toBe(true);
       // SEN-185: balances are keyed by the wallet's root id, read first.
       expect(BigInt(args![0] as number)).toBe(world.accountId ?? 63n);
       const token = (args![1] as Address).toLowerCase();
       return Promise.resolve(world.kuruFree?.[token] ?? 0n);
     }
-    if (functionName === 'rootAccountIdOf') {
+    if (functionName === 'rootAccountIdOf' || functionName === 'userRegistry') {
       expect(isAddressEqual(args![0] as Address, WALLET)).toBe(true);
       return Promise.resolve(Number(world.accountId ?? 63n));
     }

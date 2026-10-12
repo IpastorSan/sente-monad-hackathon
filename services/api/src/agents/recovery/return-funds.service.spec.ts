@@ -4,7 +4,7 @@
  * order, and every way the route refuses before signing anything.
  */
 import { compileRevocationRules } from '@sente/mandate';
-import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { KURU_DEPLOYMENT, KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
 import { decodeFunctionData, erc20Abi, getAddress, type Address, type Hex } from 'viem';
 
@@ -152,41 +152,78 @@ function transferOf(tx: AgentTransaction): { to: Address; amount: bigint } {
   return { to: getAddress(args![0] as Address), amount: args![1] as bigint };
 }
 
+/** Set D pays the withdraw to the owner; Set C pays the agent (SEN-189). */
+const setDIt = KURU_DEPLOYMENT.custody === 'account-id' ? it : it.skip;
+const setCIt = KURU_DEPLOYMENT.custody === 'address-keyed' ? it : it.skip;
+
 describe('ReturnFundsService', () => {
-  it('withdraws Kuru collateral straight to the owner, then transfers the wallet balance', async () => {
-    const { service, kuru, chain, sender, agent } = await setup();
-    // 4 USDC free in Kuru; a fifth is reserved by a resting order, and
-    // `AccountCore.getBalance` does not report that at all.
-    chain.free = { [USDC.address]: 4_000_000n };
-    // The wallet holds 1.5. SEN-185: the withdraw pays the owner directly, so
-    // the wallet's balance is the same after it.
-    chain.held = { [USDC.address]: 1_500_000n };
-    kuru.onWrite = (method) => {
-      sender.order.push(method);
-      return Promise.resolve();
-    };
+  setCIt(
+    'on Set C: withdraws to the agent itself, then carries it home in the transfer',
+    async () => {
+      const { service, kuru, chain, sender, agent } = await setup();
+      chain.free = { [USDC.address]: 4_000_000n };
+      chain.held = { [USDC.address]: 1_500_000n };
+      // `withdraw(token, amount)` pays msg.sender: the wallet grows by what left Kuru.
+      kuru.onWrite = (method) => {
+        sender.order.push(method);
+        chain.held = { [USDC.address]: 5_500_000n };
+        return Promise.resolve();
+      };
 
-    const outcome = await service.returnFunds(ALICE, agent.id, { asset: 'USDC' });
+      const outcome = await service.returnFunds(ALICE, agent.id, { asset: 'USDC' });
 
-    // The withdraw ran before the transfer, and only those two writes ran.
-    expect(sender.order).toEqual(['withdraw', 'transfer']);
-    expect(kuru.writes()).toEqual([
-      { method: 'withdraw', args: { asset: 'USDC', amount: '4', recipient: OWNER } },
-    ]);
-    expect(outcome.returnTo).toBe(OWNER);
-    expect(outcome.assets).toEqual([
-      {
-        asset: 'USDC',
-        // The 4 off the venue went home in the withdraw itself. The reserved
-        // fifth stays on the venue until the order that holds it is cancelled.
-        withdrawn: { amount: '4', transactionHash: expect.any(String), success: true },
-        returned: { amount: '1.5', transactionHash: expect.any(String), success: true },
-      },
-    ]);
-    expect(sender.sent).toHaveLength(1);
-    expect(transferOf(sender.sent[0]!)).toEqual({ to: OWNER, amount: 1_500_000n });
-    expect(sender.sent[0]!.to).toBe(USDC.address);
-  });
+      expect(sender.order).toEqual(['withdraw', 'transfer']);
+      expect(kuru.writes()).toEqual([
+        { method: 'withdraw', args: { asset: 'USDC', amount: '4', recipient: agent.address } },
+      ]);
+      expect(outcome.assets).toEqual([
+        {
+          asset: 'USDC',
+          withdrawn: { amount: '4', transactionHash: expect.any(String), success: true },
+          returned: { amount: '5.5', transactionHash: expect.any(String), success: true },
+        },
+      ]);
+      expect(transferOf(sender.sent[0]!)).toEqual({ to: OWNER, amount: 5_500_000n });
+    },
+  );
+
+  setDIt(
+    'withdraws Kuru collateral straight to the owner, then transfers the wallet balance',
+    async () => {
+      const { service, kuru, chain, sender, agent } = await setup();
+      // 4 USDC free in Kuru; a fifth is reserved by a resting order, and
+      // `AccountCore.getBalance` does not report that at all.
+      chain.free = { [USDC.address]: 4_000_000n };
+      // The wallet holds 1.5. SEN-185: the withdraw pays the owner directly, so
+      // the wallet's balance is the same after it.
+      chain.held = { [USDC.address]: 1_500_000n };
+      kuru.onWrite = (method) => {
+        sender.order.push(method);
+        return Promise.resolve();
+      };
+
+      const outcome = await service.returnFunds(ALICE, agent.id, { asset: 'USDC' });
+
+      // The withdraw ran before the transfer, and only those two writes ran.
+      expect(sender.order).toEqual(['withdraw', 'transfer']);
+      expect(kuru.writes()).toEqual([
+        { method: 'withdraw', args: { asset: 'USDC', amount: '4', recipient: OWNER } },
+      ]);
+      expect(outcome.returnTo).toBe(OWNER);
+      expect(outcome.assets).toEqual([
+        {
+          asset: 'USDC',
+          // The 4 off the venue went home in the withdraw itself. The reserved
+          // fifth stays on the venue until the order that holds it is cancelled.
+          withdrawn: { amount: '4', transactionHash: expect.any(String), success: true },
+          returned: { amount: '1.5', transactionHash: expect.any(String), success: true },
+        },
+      ]);
+      expect(sender.sent).toHaveLength(1);
+      expect(transferOf(sender.sent[0]!)).toEqual({ to: OWNER, amount: 1_500_000n });
+      expect(sender.sent[0]!.to).toBe(USDC.address);
+    },
+  );
 
   it('a Kuru-only return is the withdraw alone, not a skip', async () => {
     const { service, chain, sender, agent } = await setup();

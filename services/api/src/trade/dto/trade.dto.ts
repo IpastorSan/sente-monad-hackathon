@@ -12,6 +12,7 @@
  */
 
 import type { AuthorizationPayload } from '@sente/mandate';
+import type { KuruDeploymentId } from '@sente/venues/kuru';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -179,6 +180,14 @@ export interface TradeCapabilitiesDto {
    * it was built with. Perpl orders carry no Sente fee.
    */
   kuruBuilder: { address: Address; feePps: number } | null;
+  /**
+   * The Kuru deployment this API trades (SEN-189, `KURU_DEPLOYMENT`). The
+   * phone refuses manual Kuru trading when its own build's
+   * `EXPO_PUBLIC_KURU_DEPLOYMENT` differs: it would verify every leg against
+   * the other deployment's books and AccountCore. Absent from an older API,
+   * which is Set D.
+   */
+  kuruDeployment: { id: KuruDeploymentId; accountCore: Address };
 }
 
 /**

@@ -84,6 +84,11 @@ test('each deployment carries its own custody model, catalog and faucet', () => 
     ['MON-USDC', 'WETH-USDC', 'cbBTC-USDC', 'XAUt-USDC'],
   );
   assert.equal(c.markets[0]!.sizePrecision, 100_000_000n, 'Set C MON-USDC is 10^8');
+  // Live checks default to a book that had quotes: MON and WETH were empty on Set C.
+  assert.equal(c.liquidMarket, 'cbBTC-USDC');
+  for (const deployment of [c, d]) {
+    assert.ok(deployment.markets.some((m) => m.symbol === deployment.liquidMarket));
+  }
   assert.equal(d.markets[0]!.sizePrecision, 1_000_000n, 'Set D MON-USDC is 10^6');
 });
 

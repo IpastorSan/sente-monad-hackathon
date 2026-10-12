@@ -38,6 +38,7 @@ import {
   fromUnits,
   readKuruFreeById,
   readKuruRootId,
+  KURU_DEPLOYMENT,
   KURU_MEASURED_GAS,
   KURU_TESTNET_CONTRACTS,
   KURU_TESTNET_TOKENS,
@@ -370,7 +371,10 @@ export class ReturnFundsService {
       // at its limit (gotcha 4). With no `amount` the budget is everything, so
       // this is the entire free collateral, as it should be.
       const withdrawAtoms = min(free, budget > held ? budget - held : 0n);
-      plans.push({ asset, withdrawAtoms, transferAtoms: min(held, budget) });
+      // Set C's withdraw pays the agent's own wallet (SEN-189), so what it
+      // takes off Kuru goes home in the transfer after it.
+      const viaWallet = KURU_DEPLOYMENT.custody === 'address-keyed' ? withdrawAtoms : 0n;
+      plans.push({ asset, withdrawAtoms, transferAtoms: min(held + viaWallet, budget) });
     }
     return plans;
   }
@@ -420,8 +424,11 @@ export class ReturnFundsService {
 
     if (plan.withdrawAtoms > 0n && kuru) {
       const amount = fromUnits(plan.withdrawAtoms, asset.decimals);
-      // Paid to the owner directly: the policy pins `withdraw.recipient` to it.
-      const execution = await kuru.withdraw(asset.symbol, amount, returnTo);
+      // Set D: paid to the owner directly, the policy pins `withdraw.recipient`
+      // to it. Set C: `withdraw(token, amount)` pays the agent itself, and the
+      // transfer below carries it home (SEN-189).
+      const recipient = KURU_DEPLOYMENT.custody === 'account-id' ? returnTo : agent.address;
+      const execution = await kuru.withdraw(asset.symbol, amount, recipient);
       result.withdrawn = {
         amount,
         transactionHash: execution.transactionHash,

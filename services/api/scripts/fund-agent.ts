@@ -8,9 +8,10 @@
 // from its user, and its gas from the gas drip; this is a testnet shortcut.
 //
 // The treasury key is TREASURY_PRIVATE_KEY in the repo-root .env. It is never
-// printed: only the address it derives is. USDC is Kuru's testnet USDC; when
-// the treasury holds too little, it claims from TestnetTokenFaucet first
-// (10,000 USDC, 12 h cooldown per address). AUSD is transferred, never taken
+// printed: only the address it derives is. USDC is the active Kuru
+// deployment's (KURU_DEPLOYMENT); on Set C, when the treasury holds too little,
+// it claims from TestnetTokenFaucet first (10,000 USDC, 12 h cooldown per
+// address). Set D has no faucet. AUSD is transferred, never taken
 // from the shared AUSD faucet.
 //
 // Gas limits are fixed (Monad charges the LIMIT, CLAUDE.md gotcha 4), and each
@@ -19,7 +20,7 @@
 
 import { existsSync } from 'node:fs';
 
-import { KURU_FAUCET, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
+import { KURU_DEPLOYMENT, KURU_FAUCET, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { PERPL_COLLATERAL_DECIMALS, PERPL_TESTNET_CONTRACTS } from '@sente/venues/perpl';
 import {
   createPublicClient,
@@ -177,6 +178,10 @@ async function main(): Promise<number> {
   if (mon > 0n) await send('MON', { to: recipient, value: mon }, GAS.native);
 
   if (usdc > 0n && (await balanceOf(USDC.address, treasury.address)) < usdc) {
+    // The faucet pays Set C's USDC only (SEN-189): on Set D a claim is gas for nothing.
+    if (!KURU_DEPLOYMENT.contracts.testnetTokenFaucet) {
+      throw new Error(`treasury is short of USDC and ${KURU_DEPLOYMENT.id} has no faucet`);
+    }
     const next = await pub.readContract({
       address: KURU_FAUCET.address,
       abi: [

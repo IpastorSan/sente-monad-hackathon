@@ -11,3 +11,4 @@ export * from './constants.ts';
 export * from './mapping.ts';
 export * from './orders.ts';
 export * from './units.ts';
+export * from './faucet.ts';

@@ -143,6 +143,11 @@ export type KuruDeployment = {
   readonly tokens: KuruDeploymentTokens;
   readonly markets: readonly KuruMarketConfig[];
   /**
+   * The book live checks trade by default: one that had quotes on both sides
+   * when last looked at (2026-10-09). MON-USDC was empty on both deployments.
+   */
+  readonly liquidMarket: string;
+  /**
    * `getMarketParams()` common to every book: `minQuoteNotional` 10 USDC,
    * `maxQuoteNotional` 5,000,000 USDC, taker 7,000 pps (0.07%), maker 4,000
    * pps (0.04%) — the same on both deployments. The adapter still reads the
@@ -193,6 +198,7 @@ export const KURU_DEPLOYMENTS: Readonly<Record<KuruDeploymentId, KuruDeployment>
       withdrawalLimiter: '0x6d9599d6B9A5Cf601C2cdBc43fF170462B256fe0',
     },
     tokens: SET_D_TOKENS,
+    liquidMarket: 'WETH-USDC',
     minQuoteNotionalAtoms: 10_000_000n,
     markets: [
       {
@@ -260,6 +266,7 @@ export const KURU_DEPLOYMENTS: Readonly<Record<KuruDeploymentId, KuruDeployment>
       testnetTokenFaucet: '0x25B1416FcD3400bE2D8F50bbe7Cf1101b8B891E9',
     },
     tokens: SET_C_TOKENS,
+    liquidMarket: 'cbBTC-USDC',
     minQuoteNotionalAtoms: 10_000_000n,
     markets: [
       {
