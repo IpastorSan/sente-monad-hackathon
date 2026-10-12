@@ -64,6 +64,7 @@ import { MandateSummary } from '@/agents/MandateSummary';
 import {
   defaultMandateForm,
   formFromMandate,
+  PERPL_MIN_OPEN_ATOMS,
   quoteUnit,
   type MandateErrors,
   type MandateForm,
@@ -230,7 +231,8 @@ function HireAgentFlow() {
   const [fundBalance, setFundBalance] = useState<bigint | null>(null);
   /**
    * SEN-198: the AUSD amount beside it when the mandate trades perps. `null`
-   * until edited, and then it shows Perpl's minimum, `PERPS_FUND_DEFAULT`.
+   * until edited; it then shows Perpl's minimum, `PERPS_FUND_DEFAULT`, when
+   * the account holds that much, and nothing when it does not.
    */
   const [fundAusdAmount, setFundAusdAmount] = useState<string | null>(null);
   const [fundAusdBalance, setFundAusdBalance] = useState<bigint | null>(null);
@@ -343,7 +345,11 @@ function HireAgentFlow() {
   const chosenToken =
     layout.spot.find((token) => token.symbol === fundSymbol) ?? layout.spot[0] ?? null;
   const perpsToken = layout.perps;
-  const ausdAmount = fundAusdAmount ?? PERPS_FUND_DEFAULT;
+  // Prefill the Perpl minimum only when the account can pay it: an untouched
+  // field must never be what blocks the hire.
+  const ausdAmount =
+    fundAusdAmount ??
+    (fundAusdBalance !== null && fundAusdBalance >= PERPL_MIN_OPEN_ATOMS ? PERPS_FUND_DEFAULT : '');
   const fundCheck: FundingCheck =
     canFund && chosenToken ? checkFunding(fundAmount, chosenToken, fundBalance) : { kind: 'skip' };
   const ausdCheck: FundingCheck =
