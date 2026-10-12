@@ -22,9 +22,10 @@ const LINES = Array.from({ length: 9 }, (_, i) => 20 + i * 20);
 /** `Easing.inOut(Easing.ease)`, near enough, for each half of the breath. */
 const EASE_IN_OUT = '0.42 0 0.58 1';
 
-export function GobanHero() {
+/** `maxSize`: the largest side it grows to (300 on Welcome; the wide landing draws it larger). */
+export function GobanHero({ maxSize = MAX_SIZE }: { maxSize?: number } = {}) {
   const [width, setWidth] = useState(0);
-  const size = Math.min(width, MAX_SIZE);
+  const size = Math.min(width, maxSize);
   const reduced = useReducedMotion();
   const blur = `${useId().replace(/[^a-zA-Z0-9]/g, '')}blur`;
 

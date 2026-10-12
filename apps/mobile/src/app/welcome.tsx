@@ -20,8 +20,13 @@
  * redirects to `/`, so there is no "continue" step after the system sheet.
  * With `?next=/in-app/path` it lands there instead (SEN-193: "Hire a copy" on
  * a public agent page comes back to the fork it started).
+ *
+ * On a wide web window the same actions, error and tip sheet sit in a small
+ * landing page instead (`landing/Landing.tsx`, SEN-196), for a visitor who
+ * arrives knowing nothing about Sente. The phone layout is unchanged but for
+ * the "How it works" link, now a button.
  */
-import { Link, Redirect, useLocalSearchParams, type Href } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -32,11 +37,13 @@ import {
   PASSKEY_CAPTION,
   PASSKEY_TIP,
 } from '@/auth/passkeyTip';
+import { Landing } from '@/landing/Landing';
+import { showcaseAgentHref } from '@/landing/landing';
 import { useSession } from '@/session';
 import { GobanHero } from '@/ui/GobanHero';
 import { Mark, Pill } from '@/ui/goban';
-import { Button, Notice, Screen, SHEET_MAX, Sheet } from '@/ui/kit';
-import { color, font, text } from '@/ui/theme';
+import { Button, Notice, Screen, SHEET_MAX, Sheet, useWide } from '@/ui/kit';
+import { color, text } from '@/ui/theme';
 
 /** Default WebAuthn account name. The passkey is what identifies the user. */
 const USER_NAME = 'sente';
@@ -48,10 +55,18 @@ const USER_NAME = 'sente';
  */
 const SHEET_EXIT_MS = 300;
 
+/**
+ * The public agent page the wide landing links to (SEN-196). Build-time, and
+ * written out in full so Metro inlines it; unset hides the section.
+ */
+const SHOWCASE_HREF = showcaseAgentHref(process.env.EXPO_PUBLIC_SHOWCASE_AGENT_ID);
+
 export default function Welcome() {
   const { auth } = useSession();
   const { status, hasCredential, error, createPasskey, signIn } = auth;
   const { next } = useLocalSearchParams<{ next?: string }>();
+  const router = useRouter();
+  const wide = useWide();
 
   // `null` until read. Unread counts as unseen: at worst the tip shows twice.
   const [tipSeen, setTipSeen] = useState<boolean | null>(null);
@@ -86,36 +101,83 @@ export default function Welcome() {
     setTimeout(() => void createPasskey(USER_NAME), SHEET_EXIT_MS);
   };
 
+  // In the landing's row the two buttons split a fixed width, so a label
+  // flipping or a spinner appearing never moves anything.
+  const share = wide ? styles.share : undefined;
+  const actions = hasCredential ? (
+    <>
+      <Button
+        label="Sign in with passkey"
+        kind="primary"
+        icon="key"
+        onPress={() => void signIn()}
+        disabled={busy}
+        busy={status === 'busy'}
+        style={share}
+      />
+      <Button label="Create a new passkey" onPress={create} disabled={busy} style={share} />
+    </>
+  ) : (
+    <>
+      <Button
+        label="Create passkey"
+        kind="primary"
+        icon="key"
+        onPress={create}
+        disabled={busy}
+        busy={status === 'busy'}
+        style={share}
+      />
+      <Button
+        label="I already have one"
+        onPress={() => void signIn()}
+        disabled={busy}
+        style={share}
+      />
+    </>
+  );
+
+  const notice =
+    error !== null ? (
+      <Notice
+        tone="error"
+        title={error.code !== null ? `${error.title} · ${error.code}` : error.title}
+        detail={error.detail}
+      />
+    ) : null;
+
+  const sheet = (
+    <Sheet visible={tipOpen} title={PASSKEY_TIP.title} onClose={() => setTipOpen(false)}>
+      <Text style={[text.body, styles.dim]}>{PASSKEY_TIP.body}</Text>
+      <Text style={[text.dim, styles.tipNote]}>{PASSKEY_TIP.note}</Text>
+      <Button
+        label="Create passkey"
+        kind="primary"
+        icon="key"
+        onPress={createAfterTip}
+        style={styles.tipButton}
+      />
+    </Sheet>
+  );
+
+  if (wide) {
+    return (
+      <Landing
+        actions={actions}
+        caption={PASSKEY_CAPTION}
+        notice={notice}
+        showcaseHref={SHOWCASE_HREF}
+        sheet={sheet}
+      />
+    );
+  }
+
   return (
     <Screen
       maxWidth={SHEET_MAX}
       footer={
         <>
-          {hasCredential ? (
-            <>
-              <Button
-                label="Sign in with passkey"
-                kind="primary"
-                icon="key"
-                onPress={() => void signIn()}
-                disabled={busy}
-                busy={status === 'busy'}
-              />
-              <Button label="Create a new passkey" onPress={create} disabled={busy} />
-            </>
-          ) : (
-            <>
-              <Button
-                label="Create passkey"
-                kind="primary"
-                icon="key"
-                onPress={create}
-                disabled={busy}
-                busy={status === 'busy'}
-              />
-              <Button label="I already have one" onPress={() => void signIn()} disabled={busy} />
-            </>
-          )}
+          {actions}
           <Text style={[text.caption, styles.center]}>{PASSKEY_CAPTION}</Text>
         </>
       }
@@ -139,30 +201,17 @@ export default function Welcome() {
           however the agent is prompted.
         </Text>
         {/* SEN-181: readable before a passkey exists — the page needs no session. */}
-        <Link href="/how-it-works" style={styles.how}>
-          How it works →
-        </Link>
+        <Button
+          label="How it works"
+          size="sm"
+          icon="help"
+          onPress={() => router.push('/how-it-works')}
+          style={styles.how}
+        />
       </View>
 
-      {error !== null ? (
-        <Notice
-          tone="error"
-          title={error.code !== null ? `${error.title} · ${error.code}` : error.title}
-          detail={error.detail}
-        />
-      ) : null}
-
-      <Sheet visible={tipOpen} title={PASSKEY_TIP.title} onClose={() => setTipOpen(false)}>
-        <Text style={[text.body, styles.dim]}>{PASSKEY_TIP.body}</Text>
-        <Text style={[text.dim, styles.tipNote]}>{PASSKEY_TIP.note}</Text>
-        <Button
-          label="Create passkey"
-          kind="primary"
-          icon="key"
-          onPress={createAfterTip}
-          style={styles.tipButton}
-        />
-      </Sheet>
+      {notice}
+      {sheet}
     </Screen>
   );
 }
@@ -181,5 +230,6 @@ const styles = StyleSheet.create({
   center: { textAlign: 'center' },
   tipNote: { marginTop: 10 },
   tipButton: { marginTop: 20 },
-  how: { alignSelf: 'flex-start', fontFamily: font.medium, fontSize: 15, color: color.purpleHi },
+  how: { alignSelf: 'flex-start' },
+  share: { flex: 1 },
 });
