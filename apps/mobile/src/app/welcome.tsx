@@ -18,11 +18,14 @@
  *
  * Signing in lands on the tabs: the moment the session is `ready` this
  * redirects to `/`, so there is no "continue" step after the system sheet.
+ * With `?next=/in-app/path` it lands there instead (SEN-193: "Hire a copy" on
+ * a public agent page comes back to the fork it started).
  */
-import { Link, Redirect } from 'expo-router';
+import { Link, Redirect, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { safeNext } from '@/agents/publicAgent';
 import {
   hasSeenPasskeyTip,
   markPasskeyTipSeen,
@@ -48,6 +51,7 @@ const SHEET_EXIT_MS = 300;
 export default function Welcome() {
   const { auth } = useSession();
   const { status, hasCredential, error, createPasskey, signIn } = auth;
+  const { next } = useLocalSearchParams<{ next?: string }>();
 
   // `null` until read. Unread counts as unseen: at worst the tip shows twice.
   const [tipSeen, setTipSeen] = useState<boolean | null>(null);
@@ -63,7 +67,7 @@ export default function Welcome() {
     };
   }, []);
 
-  if (status === 'ready') return <Redirect href="/" />;
+  if (status === 'ready') return <Redirect href={(safeNext(next) ?? '/') as Href} />;
 
   const busy = status === 'busy' || status === 'restoring';
 

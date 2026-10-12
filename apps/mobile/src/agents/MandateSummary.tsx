@@ -18,8 +18,22 @@ import { describeMandate, ENFORCERS, type Enforcer } from './mandate';
 
 const ORDER: readonly Enforcer[] = ['enclave', 'sente'];
 
-export function MandateSummary({ mandate }: { mandate: AgentMandate }) {
-  const limits = describeMandate(mandate);
+export function MandateSummary({
+  mandate,
+  returnToLabel,
+}: {
+  mandate: AgentMandate;
+  /**
+   * Says where funds return in words instead of the address: the public agent
+   * page (SEN-193) does not show the owner's wallet.
+   */
+  returnToLabel?: string;
+}) {
+  const limits = describeMandate(mandate).map((limit) =>
+    limit.id === 'returnTo' && returnToLabel !== undefined
+      ? { ...limit, value: returnToLabel }
+      : limit,
+  );
   const venues = mandate.venues
     .map((venue) => (venue === 'kuru' ? 'Kuru (spot)' : 'Perpl (perps)'))
     .join(' and ');
