@@ -156,8 +156,8 @@ phone and on the web. That has not been confirmed on a real device pair yet.
 
 - **Testnet only.** Monad testnet, with the Kuru and Perpl testnet deployments.
   One server, in Madrid.
-- **Kuru testnet: Sente trades Kuru's previous testnet deployment while the new
-  one's test USDC is invite-only.** Its four markets (MON, WETH, cbBTC and XAUt
+- **Kuru testnet: Sente trades Kuru Spot V2 on its earlier testnet deployment,
+  because the newest one's test USDC is handed out on request only.** Its four markets (MON, WETH, cbBTC and XAUt
   against USDC) are read from the chain, since Kuru's APIs list only the new
   deployment: they have no price history, and resting orders show as locked
   balance rather than in **Portfolio → Orders**. An agent hired on the other

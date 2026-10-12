@@ -57,18 +57,18 @@ export function kuruDeploymentAgrees(
 
 /**
  * The honest line for Markets and the ticket when this build trades Set C —
- * "Kuru testnet: Sente trades Kuru's previous testnet deployment while the new
- * one's test USDC is invite-only." — as a notice title and detail; `null` on
- * Set D.
+ * Kuru Spot V2's earlier testnet deployment, not Kuru V1 (a different, older
+ * contract generation Sente never uses) — as a notice title and detail; `null`
+ * on Set D.
  */
 export function kuruDeploymentNote(
   id: KuruDeploymentId = KURU_DEPLOYMENT.id,
 ): { readonly title: string; readonly detail: string } | null {
   return id === 'set-c'
     ? {
-        title: 'Kuru testnet',
+        title: 'Kuru testnet: earlier deployment',
         detail:
-          "Sente trades Kuru's previous testnet deployment while the new one's test USDC is invite-only.",
+          "Sente trades Kuru Spot V2 on its earlier testnet deployment. Kuru's newest testnet deployment hands out its test USDC on request only, so new users couldn't fund a trade there. Same contracts and order books, real on-chain fills.",
       }
     : null;
 }
