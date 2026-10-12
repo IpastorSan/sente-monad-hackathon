@@ -411,7 +411,7 @@ const styles = StyleSheet.create({
     color: color.text,
     fontVariant: ['tabular-nums'],
   },
-  note: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  note: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginTop: 14 },
   hold: {
     minHeight: 54,
     borderRadius: RADIUS.stone,
