@@ -157,6 +157,19 @@ export const AGENT_REFUSAL_REASONS = [
    * message names the exact shortfall and the `agent:fund` command for it.
    */
   'return_gas_insufficient',
+  /**
+   * `POST /agents/:id/archive` on an agent that can still run: active, with a
+   * mandate that has not expired (SEN-197). Revoke it first.
+   */
+  'agent_not_revoked',
+  /**
+   * `POST /agents/:id/archive` while the agent still holds funds above dust —
+   * in its wallet, its Kuru account or its Perpl account. The body's `left`
+   * says what and where; `POST /agents/:id/return` brings it home.
+   */
+  'agent_has_funds',
+  /** The same check could not read a balance just now, so nothing was archived. Retry. */
+  'agent_funds_unknown',
   /** `POST /agents/:id/run` while a run of the same agent is still going (SEN-8). One at a time. */
   'run_in_progress',
   /**
@@ -180,13 +193,28 @@ export class AgentRefusedError extends Error {
   readonly reason: AgentRefusalReason;
   /** Per-field detail, for refusals that have it (`preset_invalid`, SEN-73). */
   readonly errors: readonly AgentFieldError[] | undefined;
+  /** What the agent still holds, for `agent_has_funds` (SEN-197). */
+  readonly left: readonly AgentFundsLeft[] | undefined;
 
-  constructor(reason: AgentRefusalReason, message: string, errors?: readonly AgentFieldError[]) {
+  constructor(
+    reason: AgentRefusalReason,
+    message: string,
+    errors?: readonly AgentFieldError[],
+    left?: readonly AgentFundsLeft[],
+  ) {
     super(message);
     this.name = 'AgentRefusedError';
     this.reason = reason;
     this.errors = errors;
+    this.left = left;
   }
+}
+
+/** One balance an agent still holds: `where` is `wallet`, `kuru` or `perpl`. */
+export interface AgentFundsLeft {
+  where: string;
+  asset: string;
+  amount: string;
 }
 
 /** One refused field: the param key (or `id`/`version`) and why. */
@@ -232,6 +260,9 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   // 409: the agent is simply out of gas. Funding it makes the same call work.
   return_gas_insufficient: 409,
   run_in_progress: 409,
+  agent_not_revoked: 409,
+  agent_has_funds: 409,
+  agent_funds_unknown: 503,
   // 402 Payment Required: exactly what OpenRouter itself answered.
   credits_exhausted: 402,
   model_error: 502,
@@ -254,6 +285,8 @@ export interface AgentErrorBody {
   message: string;
   /** Only on refusals with per-field detail, e.g. `preset_invalid`. */
   errors?: AgentFieldError[];
+  /** Only on `agent_has_funds`. */
+  left?: AgentFundsLeft[];
 }
 
 /**
@@ -275,6 +308,9 @@ export function agentErrorToHttpBody(error: unknown): AgentErrorBody | undefined
     message: error.message,
     ...(error instanceof AgentRefusedError && error.errors
       ? { errors: error.errors.map((e) => ({ key: e.key, message: e.message })) }
+      : {}),
+    ...(error instanceof AgentRefusedError && error.left
+      ? { left: error.left.map((f) => ({ where: f.where, asset: f.asset, amount: f.amount })) }
       : {}),
   };
 }

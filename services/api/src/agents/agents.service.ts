@@ -33,6 +33,7 @@ import {
   EnclaveApprovalRefusedError,
   type AgentRefusalReason,
 } from './agents.errors';
+import { describeFundsLeft, type FundsCheck } from './archive/funds-left';
 import { AGENT_NAME_MAX_LENGTH } from './dto/agent.dto';
 import { MANDATE_OWNERS, type MandateOwners } from './mandate-owner';
 import {
@@ -759,8 +760,69 @@ export class AgentsService {
     }
   }
 
-  list(principal: Principal): Promise<AgentRecord[]> {
-    return this.store.listByUser(principal.userId);
+  /** The owner's agents; archived ones only when asked for (SEN-197), and then only those. */
+  async list(principal: Principal, options: { archived?: boolean } = {}): Promise<AgentRecord[]> {
+    const archived = options.archived === true;
+    return (await this.store.listByUser(principal.userId)).filter(
+      (agent) => (agent.archivedAt !== undefined) === archived,
+    );
+  }
+
+  /**
+   * Puts away an agent its owner no longer uses (SEN-197). Soft: the record,
+   * its history, its wallet and its on-chain identity all stay, and
+   * {@link unarchive} brings it back. It only leaves the owner's list, the
+   * leaderboard and the scheduler.
+   *
+   * Refused while the agent could still act — active with a live mandate
+   * (`agent_not_revoked`) — and while it still holds funds above dust
+   * (`agent_has_funds`, with what is left), because an archived agent is one
+   * its owner stops looking at. `readFunds` is the agent page's own portfolio
+   * read; a section it cannot read refuses with `agent_funds_unknown`.
+   * Idempotent once archived.
+   */
+  archive(
+    principal: Principal,
+    id: string,
+    readFunds: (agent: AgentRecord) => Promise<FundsCheck>,
+    now: Date = new Date(),
+  ): Promise<AgentRecord> {
+    return this.withAgentLock(id, async () => {
+      const agent = await this.owned(principal, id);
+      if (agent.archivedAt) return agent;
+      const expired = agent.mandate.expiresAt * 1000 <= now.getTime();
+      if (agent.status !== 'revoked' && !expired) {
+        throw new AgentRefusedError(
+          'agent_not_revoked',
+          `agent ${id} can still trade; revoke it before archiving`,
+        );
+      }
+      const { left, unreadable } = await readFunds(agent);
+      if (left.length > 0) {
+        throw new AgentRefusedError(
+          'agent_has_funds',
+          `agent ${id} still holds ${describeFundsLeft(left)}; return its funds first`,
+          undefined,
+          left,
+        );
+      }
+      if (unreadable.length > 0) {
+        throw new AgentRefusedError(
+          'agent_funds_unknown',
+          `could not read agent ${id}'s ${unreadable.join(', ')} balances just now; try again`,
+        );
+      }
+      return this.store.update(id, { archivedAt: now, updatedAt: now });
+    });
+  }
+
+  /** Brings an archived agent back to the owner's list (SEN-197). Idempotent. */
+  unarchive(principal: Principal, id: string): Promise<AgentRecord> {
+    return this.withAgentLock(id, async () => {
+      const agent = await this.owned(principal, id);
+      if (!agent.archivedAt) return agent;
+      return this.store.update(id, { archivedAt: undefined, updatedAt: new Date() });
+    });
   }
 
   get(principal: Principal, id: string): Promise<AgentRecord> {

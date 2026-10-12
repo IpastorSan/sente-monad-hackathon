@@ -1555,6 +1555,72 @@ describe('AgentsService', () => {
       expect((await service.get(ALICE, agent.id)).status).toBe('revoked');
     });
   });
+
+  describe('archive (SEN-197)', () => {
+    const empty = () => Promise.resolve({ left: [], unreadable: [] });
+
+    it('refuses an agent that can still trade, and anyone but its owner', async () => {
+      const { service } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect((await refusal(service.archive(ALICE, agent.id, empty))).reason).toBe(
+        'agent_not_revoked',
+      );
+      expect((await refusal(service.archive(BOB, agent.id, empty))).reason).toBe('agent_not_found');
+    });
+
+    it('refuses while funds remain, naming them, and when a balance cannot be read', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      await service.revoke(ALICE, agent.id);
+
+      const left = [{ where: 'kuru' as const, asset: 'USDC', amount: '12.5' }];
+      const held = await refusal(
+        service.archive(ALICE, agent.id, () => Promise.resolve({ left, unreadable: [] })),
+      );
+      expect(held.reason).toBe('agent_has_funds');
+      expect(held.left).toEqual(left);
+      expect(held.message).toContain('12.5 USDC in Kuru');
+
+      const unknown = await refusal(
+        service.archive(ALICE, agent.id, () =>
+          Promise.resolve({ left: [], unreadable: ['perpl' as const] }),
+        ),
+      );
+      expect(unknown.reason).toBe('agent_funds_unknown');
+      expect((await store.get(agent.id))?.archivedAt).toBeUndefined();
+    });
+
+    it('archives a revoked, emptied agent out of the list, and unarchives it back', async () => {
+      const { service } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      await service.revoke(ALICE, agent.id);
+      const at = new Date('2026-10-12T12:00:00Z');
+
+      const archived = await service.archive(ALICE, agent.id, empty, at);
+      expect(archived.archivedAt).toEqual(at);
+      expect(toAgentResponse(archived).archivedAt).toBe(at.toISOString());
+      expect(await service.list(ALICE)).toEqual([]);
+      expect((await service.list(ALICE, { archived: true })).map((a) => a.id)).toEqual([agent.id]);
+      // Idempotent: a second archive keeps the first time.
+      expect((await service.archive(ALICE, agent.id, empty)).archivedAt).toEqual(at);
+
+      const back = await service.unarchive(ALICE, agent.id);
+      expect(back.archivedAt).toBeUndefined();
+      expect((await service.list(ALICE)).map((a) => a.id)).toEqual([agent.id]);
+      expect(await service.list(ALICE, { archived: true })).toEqual([]);
+    });
+
+    it('archives an agent whose mandate expired without a revoke, and the scheduler drops it', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      const afterExpiry = new Date((agent.mandate.expiresAt + 1) * 1000);
+
+      await service.archive(ALICE, agent.id, empty, afterExpiry);
+      expect((await store.get(agent.id))?.status).toBe('active');
+      expect(await store.listActive()).toEqual([]);
+    });
+  });
 });
 
 describe('AgentsService with the Sente builder fee (SEN-184)', () => {

@@ -105,6 +105,8 @@ export interface PublicAgentDto {
   /** ISO 8601. */
   createdAt: string;
   revokedAt: string | null;
+  /** The owner put it away (SEN-197). Its history still stands here. */
+  archived: boolean;
   preset: { id: string; name: string; customized: boolean } | null;
   forkedFrom: string | null;
   /** How many agents were hired as a copy of this one. */
@@ -139,6 +141,7 @@ export const PUBLIC_AGENT_KEYS: readonly (keyof PublicAgentDto)[] = [
   'mandateAnchor',
   'createdAt',
   'revokedAt',
+  'archived',
   'preset',
   'forkedFrom',
   'copies',
@@ -199,6 +202,7 @@ export function toPublicAgent(input: PublicAgentInputs): PublicAgentDto {
     mandateAnchor: anchorOf(agent),
     createdAt: agent.createdAt.toISOString(),
     revokedAt: agent.revokedAt ? agent.revokedAt.toISOString() : null,
+    archived: agent.archivedAt !== undefined,
     preset,
     forkedFrom: agent.forkedFrom ?? null,
     copies: input.copies,

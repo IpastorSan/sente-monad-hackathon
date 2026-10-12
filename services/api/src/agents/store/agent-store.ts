@@ -196,6 +196,14 @@ export interface AgentRecord {
    * and so the app can say "Guardian, customised" rather than guess from text.
    */
   readonly preset?: AgentPreset;
+  /**
+   * When the owner archived the agent (SEN-197): put away once it was stopped
+   * and its funds were back. Soft — nothing on chain or in its history is
+   * deleted, and unarchiving clears it. Archived agents leave the owner's list,
+   * the leaderboard and {@link AgentStore.listActive}; the public page still
+   * answers.
+   */
+  readonly archivedAt?: Date;
 }
 
 export interface AgentPreset {
@@ -242,6 +250,7 @@ export type AgentPatch = Partial<
     | 'mandateAnchor'
     | 'schedule'
     | 'riskAcknowledgedAt'
+    | 'archivedAt'
   >
 >;
 
@@ -251,7 +260,11 @@ export interface AgentStore {
   get(id: string): Promise<AgentRecord | undefined>;
   /** The user's agents, oldest first. */
   listByUser(userId: string): Promise<AgentRecord[]>;
-  /** Every active agent, oldest first: what the run scheduler ticks (SEN-8). */
+  /**
+   * Every active, unarchived agent, oldest first: what the run scheduler ticks
+   * (SEN-8) and the leaderboard ranks. An agent whose mandate expired stays
+   * `active` and may be archived (SEN-197), and then it is left out here.
+   */
   listActive(): Promise<AgentRecord[]>;
   /**
    * Every agent, revoked included, oldest first (SEN-74). For the preset cohort
@@ -278,6 +291,11 @@ export interface AgentStore {
   findByAddress(address: string): Promise<AgentRecord | undefined>;
   /** Rejects an unknown id. Returns the updated record. */
   update(id: string, patch: AgentPatch): Promise<AgentRecord>;
+}
+
+/** What `listActive` keeps: active and not archived (SEN-197). */
+export function isListedActive(agent: Pick<AgentRecord, 'status' | 'archivedAt'>): boolean {
+  return agent.status === 'active' && agent.archivedAt === undefined;
 }
 
 /** When the agent's current mandate took effect; see `AgentRecord.mandateSince`. */
@@ -330,7 +348,7 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   listActive(): Promise<AgentRecord[]> {
-    return Promise.resolve(this.sorted((record) => record.status === 'active'));
+    return Promise.resolve(this.sorted(isListedActive));
   }
 
   listAll(): Promise<AgentRecord[]> {

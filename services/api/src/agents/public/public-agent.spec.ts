@@ -295,6 +295,17 @@ describe('GET /public/agents/:id', () => {
     expect(answer.revokedAt).toBe(new Date(NOW - 1000).toISOString());
   });
 
+  it('still answers for an archived agent, marked archived (SEN-197)', async () => {
+    const live = await setup({ agents: [agent()] });
+    expect((await live.controller.get(ID, 'a')).archived).toBe(false);
+    const archived = await setup({
+      agents: [
+        agent({ status: 'revoked', revokedAt: new Date(NOW - 2000), archivedAt: new Date(NOW) }),
+      ],
+    });
+    expect((await archived.controller.get(ID, 'a')).archived).toBe(true);
+  });
+
   it('carries the on-chain mandate anchor when the record has one (SEN-194)', async () => {
     const anchored = {
       ...agent(),
