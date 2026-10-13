@@ -17,7 +17,7 @@ import { formatPrice as formatPlaces } from './chart/geometry.ts';
 export type AssetAmount = { readonly asset: string; readonly amount: string };
 
 /** The cash currencies, in the order every list prints them. */
-const STABLE_ORDER: readonly string[] = ['USDC', 'AUSD'];
+export const STABLE_ORDER: readonly string[] = ['USDC', 'AUSD'];
 
 const DECIMAL = /^([+-]?)(\d+)(?:\.(\d+))?$/u;
 
@@ -36,7 +36,18 @@ function sumExact(values: readonly string[]): string {
   return `${negative ? '-' : ''}${digits.slice(0, digits.length - scale)}${fraction}`;
 }
 
-function isZero(amount: string): boolean {
+/**
+ * `a` against `b` as exact decimals: negative, zero or positive. `null` when
+ * either is not a plain decimal.
+ */
+export function compareAmounts(a: string, b: string): number | null {
+  if (!DECIMAL.test(a.trim()) || !DECIMAL.test(b.trim())) return null;
+  const negated = b.trim().startsWith('-') ? b.trim().slice(1) : `-${b.trim().replace(/^\+/u, '')}`;
+  const diff = sumExact([a, negated]);
+  return isZero(diff) ? 0 : diff.startsWith('-') ? -1 : 1;
+}
+
+export function isZero(amount: string): boolean {
   const match = DECIMAL.exec(amount.trim());
   return match !== null && /^0*$/u.test(`${match[2] ?? ''}${match[3] ?? ''}`);
 }
