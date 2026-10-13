@@ -428,7 +428,7 @@ export default function AgentScreen() {
         <Notice
           tone="error"
           title="Kuru moved to new markets"
-          detail={`${agent.kuruRetired.message} Tap Amend: the form already has the new markets.`}
+          detail={`${agent.kuruRetired.message} Press Amend: the form already has the new markets.`}
         />
       ) : null}
 
@@ -1567,7 +1567,7 @@ function RunSheet({
         tone: 'info',
         title: 'Not available yet',
         detail:
-          'This server can’t run agents on demand yet. The button starts working once the agent runner ships.',
+          'This server can’t run agents on demand. The button starts working once the server is updated.',
       };
     }
     const { iterations, stopReason, costUsd } = result.result;
@@ -1828,7 +1828,7 @@ function RevokeSheet({
         <>
           <Text style={[text.dim, styles.after]}>
             Your passkey signs this. Sente holds no key that can change this agent’s policy, so the
-            phone checks that the change leaves nothing but the way home and then approves it.
+            app checks that the change leaves nothing but the way home and then approves it.
           </Text>
           <Row
             label="Enclave rules after"

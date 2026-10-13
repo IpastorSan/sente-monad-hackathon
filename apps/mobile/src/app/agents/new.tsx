@@ -943,8 +943,8 @@ function HireAgentFlow() {
       >
         <Text style={[text.dim, styles.sheetLead]}>
           {target?.name ?? 'Your agent'}’s limits change the moment you approve. Your passkey signs
-          the policy change itself: Sente holds no key that can widen this agent’s mandate, and this
-          phone checks the change is exactly what you wrote before it signs.
+          the policy change itself: Sente holds no key that can widen this agent’s mandate, and the
+          app checks the change is exactly what you wrote before it signs.
         </Text>
         {pending ? (
           <>

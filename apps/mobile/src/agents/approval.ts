@@ -487,7 +487,7 @@ export type MandateChangeIntent = {
 function pinReturnTo(
   intent: MandateChangeIntent,
 ): { ok: true; mandate: AgentMandate } | { ok: false; problem: string } {
-  if (!intent.ownWallet) return refuse('this phone doesn’t know your wallet yet');
+  if (!intent.ownWallet) return refuse('the app doesn’t know your wallet yet');
   const named = intent.mandate.returnTo;
   if (!named) {
     return intent.kind === 'amend'
@@ -788,7 +788,7 @@ async function approveChange(
  */
 export function describeApprovalError(error: unknown): { title: string; detail: string } {
   if (error instanceof MandateApprovalRefusedError) {
-    return { title: 'This phone refused to sign it', detail: error.message };
+    return { title: 'The app refused to sign it', detail: error.message };
   }
   if (error instanceof NoDeviceKeyError) {
     return { title: 'Sign in first', detail: error.message };

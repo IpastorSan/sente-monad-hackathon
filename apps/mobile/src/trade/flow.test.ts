@@ -530,7 +530,7 @@ test('every refusal reason has its own plain copy', () => {
 
 test('local refusals have their own copy', () => {
   const refused = describeTradeError(new TradeApprovalRefusedError('the order size is wrong', 1));
-  assert.equal(refused.title, 'This phone refused to sign it');
+  assert.equal(refused.title, 'The app refused to sign it');
   assert.match(refused.detail, /the order size is wrong.*Nothing was sent/);
   assert.equal(describeTradeError(new NoDeviceKeyError('trading')).title, 'Sign in first');
   assert.equal(describeTradeError(new Error('x')).title, 'The trade didn’t go through');

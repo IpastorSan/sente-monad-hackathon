@@ -76,7 +76,7 @@ function TradeScreen() {
             points={[
               'Buy and sell spot on Kuru',
               'Go long or short on Perpl perps, with leverage',
-              'Set take-profit and stop on the ticket',
+              'Every step checked by the app before your passkey signs',
             ]}
           />
           <Button

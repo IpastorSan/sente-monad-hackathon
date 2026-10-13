@@ -603,7 +603,7 @@ function AskSheet({
             ? {
                 tone: 'info',
                 title: 'Not available yet',
-                detail: 'This server can’t run agents on demand yet.',
+                detail: 'This server can’t run agents on demand.',
               }
             : {
                 tone: 'ok',

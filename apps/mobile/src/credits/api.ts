@@ -71,7 +71,7 @@ export type CreditPlans = {
 };
 
 /** Shown when the server does not say why buying is off. Mirrors `PURCHASES_CLOSED_NOTE`. */
-export const PURCHASES_CLOSED_NOTE = 'Purchases open after the testnet demo.';
+export const PURCHASES_CLOSED_NOTE = 'Buying credits isn’t open on this deployment.';
 
 /** The answer when `GET /credits/plans` is missing or unreadable: the shop is shut, never open. */
 export const CLOSED_PLANS: CreditPlans = {

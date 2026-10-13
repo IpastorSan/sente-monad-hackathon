@@ -90,7 +90,7 @@ const CANT: Readonly<Record<string, readonly string[]>> = {
   'range-trader': [
     'Stop you out on the venue. Kuru has no stop orders, so it checks your stop when it runs and can sell past it.',
     'Tell a range from the start of a trend. When ranges break, it loses.',
-    'Buy without price history. Until a candles read exists, it waits.',
+    'Buy without price history. When the candles read fails, it waits.',
   ],
   guardian: [
     'Sell at your exact line. Both lines are checked when it runs, not placed on Kuru, so a fast move can fill past them.',
@@ -99,10 +99,10 @@ const CANT: Readonly<Record<string, readonly string[]>> = {
   'trend-rider': [
     'Trail its stop on the venue. The trailing stop is checked when it runs, so a fast move can close past it.',
     'Outrun liquidation. With leverage, a sharp move can liquidate the position before its next run.',
-    'Enter without price history. Until a candles read exists, it waits.',
+    'Enter without price history. When the candles read fails, it waits.',
   ],
   'funding-harvester': [
-    'Open anything yet. No agent tool reports the funding rate today, so until one does it opens nothing.',
+    'Open anything without a funding read. When the read fails or shows no funding, it opens nothing that run.',
     'Guard against liquidation on the venue. Its liquidation guard is checked when it runs, not placed.',
     'Tie the two legs together. The hedge is its rule; the mandate can’t make the legs match.',
   ],
@@ -113,7 +113,7 @@ const CANT: Readonly<Record<string, readonly string[]>> = {
   'mean-reverter': [
     'Stop you out on the venue. The stop is checked when it runs and can fill past it.',
     'Tell a stretch from a new trend. When a move keeps going, it loses.',
-    'Enter without price history. Until a candles read exists, it waits.',
+    'Enter without price history. When the candles read fails, it waits.',
   ],
 };
 
@@ -415,7 +415,7 @@ export function readBackParams(def: PresetDefinition, p: Params): string {
         `${every} I’ll read ${market}’s funding. When it pays shorts at least ${n(p, 'minFunding')}% ` +
         `per 8 hours I’ll short at ${n(p, 'leverage')}x` +
         `${hedge ? ` and hold the same ${base} on Kuru` : ', unhedged'}, and ${exit}. ` +
-        'I can’t read funding yet, so until I can, I open nothing.'
+        'If the funding read fails, I open nothing that run.'
       );
     }
     case 'dca-stacker': {

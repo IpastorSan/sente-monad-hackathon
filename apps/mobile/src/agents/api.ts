@@ -1329,7 +1329,7 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
         return {
           title: 'This mandate needs your approval',
           detail:
-            'Only the key on this phone can change it. Reopen the change and confirm it with your passkey.',
+            'Only the key derived from your passkey can change it. Reopen the change and confirm it with your passkey.',
         };
       case 'mandate_approval_not_required':
         return {
@@ -1345,7 +1345,7 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
         return {
           title: 'The enclave refused your signature',
           detail:
-            'It must come from the key that owns this agent’s mandate — the passkey that hired it, on this device.',
+            'It must come from the key that owns this agent’s mandate: the passkey that hired it.',
         };
       case 'return_address_missing':
         return {
@@ -1384,7 +1384,7 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
         return {
           title: 'Out of AI credits',
           detail:
-            'This month’s free tier is spent, so the agent can’t call its model until it refills.',
+            'Your free credits are used up, so the agent can’t call its model. Credits shows what was spent.',
         };
       case 'agent_not_forkable':
         return {
@@ -1423,6 +1423,6 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
   const message = error instanceof Error ? error.message : String(error);
   return {
     title: 'Couldn’t reach the API',
-    detail: `${message}. On a phone, EXPO_PUBLIC_API_URL must be this machine’s LAN address.`,
+    detail: `${message}. On a physical device, EXPO_PUBLIC_API_URL must be this machine’s LAN address.`,
   };
 }

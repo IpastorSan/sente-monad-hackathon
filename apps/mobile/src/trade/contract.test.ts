@@ -1566,7 +1566,7 @@ const ENROLL_REFUSED: Record<string, { tamper: EnrollTamper; phone: RegExp }> = 
       { publicKey: Buffer.from('cd'.repeat(32), 'hex').toString('base64url') },
       'trade',
     ),
-    phone: /not this phone’s/,
+    phone: /not this device’s/,
   },
   'the phone’s key spelled as hex': {
     tamper: withFields({ publicKey: PHONE_TRADE_KEY }, 'trade'),
