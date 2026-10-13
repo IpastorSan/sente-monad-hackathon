@@ -11,19 +11,40 @@ import { loadAgentToolsConfig } from './tools.config';
 
 describe('loadAgentToolsConfig', () => {
   it('keeps the pre-check on unless told otherwise', () => {
-    expect(loadAgentToolsConfig({})).toEqual({ precheck: true });
-    expect(loadAgentToolsConfig({ AGENT_PRECHECK: 'on' })).toEqual({ precheck: true });
-    expect(loadAgentToolsConfig({ AGENT_PRECHECK: ' ' })).toEqual({ precheck: true });
+    expect(loadAgentToolsConfig({})).toEqual({ precheck: true, sellMaxBelowMarkPct: 20 });
+    expect(loadAgentToolsConfig({ AGENT_PRECHECK: 'on' })).toEqual({
+      precheck: true,
+      sellMaxBelowMarkPct: 20,
+    });
+    expect(loadAgentToolsConfig({ AGENT_PRECHECK: ' ' })).toEqual({
+      precheck: true,
+      sellMaxBelowMarkPct: 20,
+    });
   });
 
   it('turns it off outside production only', () => {
     expect(loadAgentToolsConfig({ AGENT_PRECHECK: 'off', NODE_ENV: 'development' })).toEqual({
       precheck: false,
+      sellMaxBelowMarkPct: 20,
     });
-    expect(loadAgentToolsConfig({ AGENT_PRECHECK: 'OFF' })).toEqual({ precheck: false });
+    expect(loadAgentToolsConfig({ AGENT_PRECHECK: 'OFF' })).toEqual({
+      precheck: false,
+      sellMaxBelowMarkPct: 20,
+    });
     expect(() => loadAgentToolsConfig({ AGENT_PRECHECK: 'off', NODE_ENV: 'production' })).toThrow(
       /AGENT_PRECHECK=off is refused when NODE_ENV=production/,
     );
+  });
+
+  it('reads the sell band below the mark, 20% by default (SEN-204)', () => {
+    expect(loadAgentToolsConfig({ AGENT_SELL_MAX_BELOW_MARK_PCT: '35' }).sellMaxBelowMarkPct).toBe(
+      35,
+    );
+    for (const bad of ['0', '100', '12.5', 'twenty']) {
+      expect(() => loadAgentToolsConfig({ AGENT_SELL_MAX_BELOW_MARK_PCT: bad })).toThrow(
+        /whole percent from 1 to 99/,
+      );
+    }
   });
 
   it('refuses a value it does not know, rather than guessing', () => {

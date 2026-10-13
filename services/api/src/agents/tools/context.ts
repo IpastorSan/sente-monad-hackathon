@@ -58,6 +58,11 @@ export interface ToolContext {
   readonly theses: Map<string, RecordedThesis>;
   /** Layer 1 on or off (`AGENT_PRECHECK`). */
   readonly precheck: boolean;
+  /**
+   * How far below the mark, in whole percent, a sell limit price may sit
+   * (SEN-204, `AGENT_SELL_MAX_BELOW_MARK_PCT`). Absent: the default, 20.
+   */
+  readonly sellMaxBelowMarkPct?: number;
   /** Per-agent, process-wide: shared by every run and session of the agent. */
   readonly writeLock: KeyedMutex;
   /**
@@ -89,6 +94,7 @@ export interface AgentToolsOptions {
   readonly venuesFor: (agent: AgentRecord) => Promise<ToolVenues>;
   readonly events: AgentEventLog;
   readonly precheck: boolean;
+  readonly sellMaxBelowMarkPct?: number;
   readonly now?: () => number;
   readonly marketData?: ToolMarketData;
   readonly watchers?: ToolWatchers;
@@ -121,8 +127,16 @@ export class AgentTools {
   }
 
   context(agent: AgentRecord, options: { runId?: string } = {}): ToolContext {
-    const { store, venuesFor, events, precheck, marketData, watchers, cadenceSeconds } =
-      this.#options;
+    const {
+      store,
+      venuesFor,
+      events,
+      precheck,
+      sellMaxBelowMarkPct,
+      marketData,
+      watchers,
+      cadenceSeconds,
+    } = this.#options;
     return {
       agent,
       runId: options.runId ?? `run-${randomUUID()}`,
@@ -130,6 +144,7 @@ export class AgentTools {
       events,
       theses: new Map(),
       precheck,
+      ...(sellMaxBelowMarkPct !== undefined ? { sellMaxBelowMarkPct } : {}),
       writeLock: this.#writeLock,
       currentAgent: () => store.get(agent.id),
       now: this.#options.now ?? (() => Math.floor(Date.now() / 1000)),
