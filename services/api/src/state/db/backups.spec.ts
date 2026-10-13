@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -59,6 +59,7 @@ describe('takeBackup', () => {
 
     expect(result.path).toBe(join(backups, 'sente-20261013T101500Z.db'));
     expect(result.bytes).toBeGreaterThan(0);
+    expect(statSync(result.path).mode & 0o777).toBe(0o600);
     expect(result.ms).toBeGreaterThanOrEqual(0);
     expect(result.pruned).toEqual([]);
     const copy = dbs.open(result.path);

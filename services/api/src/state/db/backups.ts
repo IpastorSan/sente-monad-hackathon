@@ -12,7 +12,7 @@
 //
 // Erasable syntax and `.ts` specifiers (CLAUDE.md gotcha 10).
 
-import { readdirSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { SenteDb } from './sente-db.ts';
@@ -79,6 +79,7 @@ export function takeBackup(db: SenteDb, dir: string, keep: number, at = new Date
   const path = join(dir, backupFileName(at));
   const started = performance.now();
   db.backupTo(path);
+  chmodSync(path, 0o600); // like the JSON files; VACUUM INTO creates it under the umask
   const ms = Math.round(performance.now() - started);
   return { path, bytes: statSync(path).size, ms, pruned: pruneBackups(dir, keep) };
 }
