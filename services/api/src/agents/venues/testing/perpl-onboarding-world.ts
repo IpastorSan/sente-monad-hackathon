@@ -119,6 +119,7 @@ export async function perplOnboardingWorld(options: WorldOptions = {}) {
 
   const chain: AgentChainClient = {
     pendingNonce: () => Promise.resolve(broadcasts),
+    balance: () => Promise.resolve(state.mon),
     fees: () => Promise.resolve({ maxFeePerGas: FEE, maxPriorityFeePerGas: 1n }),
     sendRawTransaction: () =>
       Promise.resolve(`0x${(++broadcasts).toString(16).padStart(64, '0')}` as Hex),

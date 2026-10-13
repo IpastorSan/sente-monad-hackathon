@@ -19,7 +19,7 @@
  * Erasable syntax and `.ts` specifiers only: scripts/agent-venues-live.ts loads
  * this file under node's type stripping (CLAUDE.md gotcha 10).
  */
-import type { Address, Hex, PublicClient } from 'viem';
+import { formatEther, type Address, type Hex, type PublicClient } from 'viem';
 
 import type { AgentWalletProvider } from '../agent-wallet.provider.ts';
 import { privyTransaction } from '../privy/agent-wallet.ts';
@@ -62,9 +62,11 @@ export interface AgentReceipt {
   readonly blockNumber: bigint;
 }
 
-/** The slice of a Monad RPC client the sender needs, so specs fake five lines, not viem. */
+/** The slice of a Monad RPC client the sender needs, so specs fake six lines, not viem. */
 export interface AgentChainClient {
   pendingNonce(address: Address): Promise<number>;
+  /** The wallet's MON, in wei. */
+  balance(address: Address): Promise<bigint>;
   fees(): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }>;
   sendRawTransaction(serialized: Hex): Promise<Hex>;
   waitForReceipt(hash: Hex): Promise<AgentReceipt>;
@@ -74,6 +76,7 @@ export interface AgentChainClient {
 export function agentChainClient(client: PublicClient): AgentChainClient {
   return {
     pendingNonce: (address) => client.getTransactionCount({ address, blockTag: 'pending' }),
+    balance: (address) => client.getBalance({ address }),
     fees: async () => {
       const fees = await client.estimateFeesPerGas();
       if (fees.maxFeePerGas === undefined || fees.maxPriorityFeePerGas === undefined) {
@@ -93,6 +96,35 @@ export function agentChainClient(client: PublicClient): AgentChainClient {
       };
     },
   };
+}
+
+/**
+ * The wallet's MON cannot cover a call list's gas, so nothing was signed.
+ *
+ * Monad's RPC refuses a transaction whose sender holds less than
+ * `gas × maxFeePerGas + value` with -32000 "Signer had insufficient balance",
+ * which viem renders as the bare "Missing or invalid parameters." (SEN-208).
+ * Checked for the whole list up front, because the legs are NOT atomic: an
+ * approve that lands before its deposit is refused spends MON for nothing.
+ */
+export class InsufficientGasError extends Error {
+  readonly address: Address;
+  readonly needWei: bigint;
+  readonly haveWei: bigint;
+
+  constructor(address: Address, needWei: bigint, haveWei: bigint, legs: number) {
+    super(
+      `The agent's wallet ${address} holds ${formatEther(haveWei)} MON, and ` +
+        `${legs === 1 ? 'this transaction needs' : `these ${legs} transactions need`} up to ` +
+        `${formatEther(needWei)} MON for gas (Monad reserves the whole gas limit at the max fee). ` +
+        'Kuru writes wait until its owner funds it with MON; Perpl orders need none. ' +
+        'Nothing was signed.',
+    );
+    this.name = 'InsufficientGasError';
+    this.address = address;
+    this.needWei = needWei;
+    this.haveWei = haveWei;
+  }
 }
 
 export interface AgentTransactionSenderOptions {
@@ -124,10 +156,13 @@ export class AgentTransactionSender {
    * Sends `txs` in order, one at a time, as one unit of the wallet's queue.
    * Returns a receipt per transaction that was broadcast; it stops after the
    * first reverted one. A signing refusal (`EnclaveRefusedError`) rejects
-   * unchanged, and the refused transaction is never broadcast.
+   * unchanged, and the refused transaction is never broadcast. A wallet whose
+   * MON cannot pay the whole list's gas rejects with `InsufficientGasError`
+   * before the first leg is signed.
    */
   sendAll(wallet: AgentWalletRef, txs: readonly AgentTransaction[]): Promise<AgentReceipt[]> {
     return this.#serial(wallet.walletId, async () => {
+      await this.#gasGate(wallet, txs);
       const receipts: AgentReceipt[] = [];
       for (const tx of txs) {
         const receipt = await this.#sendOne(wallet, tx);
@@ -136,6 +171,16 @@ export class AgentTransactionSender {
       }
       return receipts;
     });
+  }
+
+  /** Every leg priced at the limit and today's max fee, against the wallet's MON. */
+  async #gasGate(wallet: AgentWalletRef, txs: readonly AgentTransaction[]): Promise<void> {
+    const [have, fees] = await Promise.all([
+      this.#chain.balance(wallet.address),
+      this.#chain.fees(),
+    ]);
+    const need = txs.reduce((sum, tx) => sum + tx.gas * fees.maxFeePerGas + (tx.value ?? 0n), 0n);
+    if (have < need) throw new InsufficientGasError(wallet.address, need, have, txs.length);
   }
 
   async #sendOne(wallet: AgentWalletRef, tx: AgentTransaction): Promise<AgentReceipt> {

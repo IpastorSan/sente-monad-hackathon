@@ -5,7 +5,9 @@
  */
 import type { RefusalCode } from '@sente/mandate';
 
+import { redactSecrets } from '../../common/redact-error';
 import { EnclaveRefusedError } from '../agents.errors';
+import { InsufficientGasError } from '../venues/agent-transactions';
 
 export const SENTE_REFUSAL_PREFIX = 'Refused by Sente mandate: ';
 export const ENCLAVE_REFUSAL_MESSAGE =
@@ -23,7 +25,8 @@ export type SenteRefusalCode =
   /**
    * Venue pre-flight (SEN-19): the wallet or Kuru AccountCore holds less than the
    * write needs. Refused before signing, because on Monad a revert still pays
-   * the whole gas limit.
+   * the whole gas limit. Also the wallet's MON short of the gas a write's
+   * transactions reserve (SEN-208, `InsufficientGasError`).
    */
   | 'insufficient_balance'
   /** Venue pre-flight (SEN-19): below Kuru's minimum order notional for the market. */
@@ -63,14 +66,32 @@ export function invalidInput(detail: string): SenteRefusal {
   return new SenteRefusal('invalid_input', detail);
 }
 
-/** The enclave's refusal, even when a venue or sender wrapped it as a `cause`. */
-export function findEnclaveRefusal(error: unknown): EnclaveRefusedError | undefined {
+/** The first `type` in `error`'s `cause` chain, however a venue or sender wrapped it. */
+function findCause<T extends Error>(
+  error: unknown,
+  type: abstract new (...args: never[]) => T,
+): T | undefined {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
-    if (current instanceof EnclaveRefusedError) return current;
+    if (current instanceof type) return current;
     current = current.cause;
   }
   return undefined;
+}
+
+/** The enclave's refusal, even when a venue or sender wrapped it as a `cause`. */
+export function findEnclaveRefusal(error: unknown): EnclaveRefusedError | undefined {
+  return findCause(error, EnclaveRefusedError);
+}
+
+/**
+ * Sente's own refusal: thrown by the gate or a handler, or the sender's gas
+ * pre-flight (SEN-208), which refuses before anything is signed just like one.
+ */
+export function findSenteRefusal(error: unknown): SenteRefusal | undefined {
+  if (error instanceof SenteRefusal) return error;
+  const gas = findCause(error, InsufficientGasError);
+  return gas ? new SenteRefusal('insufficient_balance', gas.message) : undefined;
 }
 
 const MAX_MESSAGE = 300;
@@ -84,11 +105,18 @@ const REDACTIONS: readonly [RegExp, string][] = [
 
 /**
  * Any other failure, as one line the model can use: the error's own message
- * (venue errors name their reason), first line only, redacted, truncated.
+ * (venue errors name their reason), first line only, redacted, truncated. A
+ * viem RPC error's first line is generic ("Missing or invalid parameters.")
+ * and the node's reason ("Signer had insufficient balance") is in `details`,
+ * so that is kept too (SEN-208).
  */
 export function modelSafeMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   let line = raw.split('\n')[0]?.trim() || 'unknown error';
+  const details = (error as { details?: unknown } | null | undefined)?.details;
+  const reason = typeof details === 'string' ? details.split('\n')[0]?.trim() : undefined;
+  if (reason && !line.includes(reason)) line = `${line} (${reason})`;
+  line = redactSecrets(line);
   for (const [pattern, replacement] of REDACTIONS) line = line.replace(pattern, replacement);
   if (line.length > MAX_MESSAGE) line = `${line.slice(0, MAX_MESSAGE)}…`;
   return `Venue error: ${line}`;

@@ -1,8 +1,10 @@
 import { PerplNoPositionError } from '@sente/venues/perpl';
+import { InvalidInputRpcError, RpcRequestError } from 'viem';
 
 import { EnclaveRefusedError } from '../agents.errors';
 import { InMemoryAgentEventLog } from '../events/agent-event-log';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
+import { InsufficientGasError } from '../venues/agent-transactions';
 import type { DepthDto, KlinesDto, QuoteDto, TickerDto } from '../../venues/dto/markets.dto';
 import { MarketNotFoundError } from '../../venues/market-data.service';
 import { AgentTools, type ToolContext, type ToolMarketData } from './context';
@@ -958,6 +960,42 @@ describe('gate', () => {
     expect(outcome.message).toBe('Venue error: Kuru said no (sente_mcp_[redacted])');
     const [order] = await h.events.list(h.agent.id, { kind: 'order' });
     expect(order!.detail).toMatchObject({ status: 'failed', error: outcome.message });
+  });
+
+  it("keeps the node's reason behind viem's generic RPC error (SEN-208)", async () => {
+    const h = await harness();
+    await h.thesis();
+    // What Monad's RPC answered every Kuru send from a dry agent wallet.
+    h.kuru.onWrite = () =>
+      Promise.reject(
+        new InvalidInputRpcError(
+          new RpcRequestError({
+            body: {},
+            url: 'https://monad-testnet.g.alchemy.com/v2/SECRETKEY',
+            error: { code: -32000, message: 'Signer had insufficient balance' },
+          }),
+        ),
+      );
+
+    const outcome = refused(await h.call('place_limit', limit()));
+    expect(outcome.message).toBe(
+      'Venue error: Missing or invalid parameters. (Signer had insufficient balance)',
+    );
+    expect(outcome.message).not.toContain('SECRETKEY');
+  });
+
+  it('refuses a write the wallet cannot pay gas for as insufficient_balance (SEN-208)', async () => {
+    const h = await harness();
+    await h.thesis();
+    const shortfall = new InsufficientGasError(h.agent.address, 10n ** 17n, 10n ** 16n, 2);
+    h.kuru.onWrite = () => Promise.reject(shortfall);
+
+    const outcome = refused(await h.call('place_limit', limit()));
+    expect(outcome.refusal).toEqual({ layer: 'sente', code: 'insufficient_balance' });
+    expect(outcome.message).toContain('holds 0.01 MON');
+    expect(outcome.message).toContain('up to 0.1 MON for gas');
+    const [refusal] = await h.events.list(h.agent.id, { kind: 'refusal' });
+    expect(refusal!.detail).toMatchObject({ code: 'insufficient_balance' });
   });
 
   it('sets Perpl leverage before the order, and says so when Perpl is not set up', async () => {

@@ -17,7 +17,11 @@ import { getAddress, type Address, type Hex, type PublicClient } from 'viem';
 import type { AgentWalletProvider } from '../agent-wallet.provider';
 import { EnclaveRefusedError } from '../agents.errors';
 import type { PrivyTransactionRequest } from '../privy/agent-wallet';
-import { AgentTransactionSender, type AgentChainClient } from './agent-transactions';
+import {
+  AgentTransactionSender,
+  InsufficientGasError,
+  type AgentChainClient,
+} from './agent-transactions';
 import {
   AGENT_APPROVE_BUILDER_GAS,
   AGENT_APPROVE_GAS,
@@ -45,7 +49,16 @@ const HEX = /^0x[0-9a-f]+$/;
 const hashOf = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}`;
 
 /** Fake Monad RPC plus fake enclave, sharing one "work in flight" counter per wallet. */
-function harness(options: { reverted?: number[]; refuseAt?: number; laggingNonce?: boolean } = {}) {
+function harness(
+  options: {
+    reverted?: number[];
+    refuseAt?: number;
+    laggingNonce?: boolean;
+    /** The wallet's MON, in wei. Default 100 MON. */
+    mon?: bigint;
+    fees?: typeof FEES;
+  } = {},
+) {
   const signed: { walletId: string; tx: PrivyTransactionRequest }[] = [];
   const broadcast: Hex[] = [];
   const active = new Map<string, number>();
@@ -93,7 +106,8 @@ function harness(options: { reverted?: number[]; refuseAt?: number; laggingNonce
       // A lagging RPC keeps reporting the first nonce.
       return Promise.resolve(options.laggingNonce ? 7 : 7 + (nonces.get(walletId) ?? 0));
     },
-    fees: () => Promise.resolve(FEES),
+    balance: () => Promise.resolve(options.mon ?? 10n ** 20n),
+    fees: () => Promise.resolve(options.fees ?? FEES),
     sendRawTransaction: (raw) => {
       broadcast.push(raw);
       const hash = hashOf(broadcast.length);
@@ -258,6 +272,62 @@ describe('PrivyKuruSubmitter', () => {
       UnmeasuredCallError,
     );
     expect(h.signed).toHaveLength(0);
+  });
+
+  describe('MON for gas (SEN-208)', () => {
+    // Production, 2026-10-12: two Set C agents were dripped 0.15 MON, spent it
+    // on Perpl's onboarding and one Kuru deposit + buy, and were left holding
+    // 0.021736122 MON. Monad's RPC refused every later Kuru send with -32000
+    // "Signer had insufficient balance" (viem: "Missing or invalid
+    // parameters."), and each deposit attempt landed its approve first.
+    const PROD_FEES = { maxFeePerGas: 122_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n };
+    const LEFT = 21_736_122_000_000_000n;
+
+    it('refuses a deposit the wallet cannot pay gas for before signing either leg', async () => {
+      const h = harness({ mon: LEFT, fees: PROD_FEES });
+      const error = await h
+        .submitter()
+        .submit(usdcDeposit())
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(InsufficientGasError);
+      const need = (AGENT_APPROVE_GAS + KURU_MEASURED_GAS.firstDeposit) * PROD_FEES.maxFeePerGas;
+      expect(error).toMatchObject({ address: AGENT.address, needWei: need, haveWei: LEFT });
+      expect((error as Error).message).toContain('holds 0.021736122 MON');
+      expect((error as Error).message).toContain('Nothing was signed');
+      expect(h.signed).toHaveLength(0);
+      expect(h.broadcast).toHaveLength(0);
+    });
+
+    it('refuses an order the wallet cannot pay gas for', async () => {
+      const h = harness({ mon: LEFT, fees: PROD_FEES });
+      await expect(h.submitter().submit([placeCall()])).rejects.toBeInstanceOf(
+        InsufficientGasError,
+      );
+      expect(h.signed).toHaveLength(0);
+    });
+
+    it('counts a native deposit value on top of the gas', async () => {
+      const call = depositCalls(ACCOUNT_CORE, MON, 10n ** 18n, AGENT.address);
+      const gas = kuruGasLimit(call[0]!) * FEES.maxFeePerGas;
+      await expect(
+        harness({ mon: 10n ** 18n + gas - 1n })
+          .submitter()
+          .submit(call),
+      ).rejects.toBeInstanceOf(InsufficientGasError);
+      await expect(
+        harness({ mon: 10n ** 18n + gas })
+          .submitter()
+          .submit(call),
+      ).resolves.toMatchObject({ success: true });
+    });
+
+    it('sends as before once the wallet holds what the whole list reserves', async () => {
+      // The same wallet before its first trade: 0.11379 MON.
+      const h = harness({ mon: 113_790_000_000_000_000n, fees: PROD_FEES });
+      await expect(h.submitter().submit(usdcDeposit())).resolves.toMatchObject({ success: true });
+      expect(h.broadcast).toHaveLength(2);
+    });
   });
 
   it('lands KuruVenue writes, and a revert surfaces as KuruExecutionError', async () => {

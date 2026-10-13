@@ -313,6 +313,8 @@ export function fakeChain() {
   const sent: { hash: Hex; from: Address; to: Address | null | undefined; nonce: number }[] = [];
   const client: AgentChainClient = {
     pendingNonce: (address) => Promise.resolve(nonces.get(address.toLowerCase()) ?? 0),
+    // Gas is not what this fake tests: every wallet covers it.
+    balance: () => Promise.resolve(10n ** 20n),
     fees: () =>
       Promise.resolve({ maxFeePerGas: 102_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n }),
     sendRawTransaction: async (serialized) => {
