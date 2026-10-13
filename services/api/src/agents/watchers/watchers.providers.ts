@@ -1,10 +1,10 @@
-import { join } from 'node:path';
+import type { Provider } from '@nestjs/common';
 
-import { Logger, type Provider } from '@nestjs/common';
-
-import { StateDirLease } from '../../state/state.module';
+import { SenteDbLease } from '../../state/state.module';
+import { selectStore } from '../../state/store-backend';
 import { MarketDataService } from '../../venues/market-data.service';
 import { AgentVenues } from '../venues/agent-venues';
+import { SqliteWatcherStore } from './sqlite-watcher-store';
 import { WatchersController } from './watchers.controller';
 import {
   FileWatcherStore,
@@ -21,15 +21,16 @@ import { WatcherService } from './watcher.service';
  */
 export const watcherProviders: Provider[] = [
   {
-    // On disk under STATE_DIR, opened only once this process holds its lock (SEN-161).
+    // On disk under STATE_DIR, opened only once this process holds its lock
+    // (SEN-161): a JSON file, or a table in sente.db under STORE_BACKEND=sqlite (SEN-205).
     provide: WATCHER_STORE,
-    inject: [StateDirLease],
-    useFactory: (lease: StateDirLease): WatcherStore => {
-      if (!lease.dir) return new InMemoryWatcherStore();
-      const store = new FileWatcherStore(join(lease.dir, `${WATCHERS_FILE}.json`));
-      Logger.log(`${store.size} watcher set(s) loaded from ${store.path}`, 'Watchers');
-      return store;
-    },
+    inject: [SenteDbLease],
+    useFactory: (lease: SenteDbLease): WatcherStore =>
+      selectStore<WatcherStore>(lease, `${WATCHERS_FILE}.json`, 'watcher set(s)', {
+        memory: () => new InMemoryWatcherStore(),
+        file: (path) => new FileWatcherStore(path),
+        sqlite: (db) => new SqliteWatcherStore(db),
+      }),
   },
   {
     provide: WatcherService,

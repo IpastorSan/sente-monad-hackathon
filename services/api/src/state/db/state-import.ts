@@ -26,6 +26,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { SqliteAgentStore } from '../../agents/store/sqlite-agent-store.ts';
+import { SqliteWatcherStore } from '../../agents/watchers/sqlite-watcher-store.ts';
 import { SqliteUserWalletRegistry } from '../../wallet/store/sqlite-user-wallet-registry.ts';
 import { encodeValue, JsonRecordFile, type JsonValue } from '../json-file.ts';
 import { acquireStateDirLock } from '../state-dir-lock.ts';
@@ -67,6 +68,13 @@ export const STORE_IMPORTS: readonly StoreImport<unknown>[] = [
     load: loadJsonRecords,
     open: (db) => new SqliteUserWalletRegistry(db),
     key: (record) => record.userId,
+  }),
+  entry<Parameters<SqliteWatcherStore['put']>[0]>({
+    name: 'agent_watchers',
+    file: 'agent-watchers.json',
+    load: loadJsonRecords,
+    open: (db) => new SqliteWatcherStore(db),
+    key: (record) => record.agentId,
   }),
 ];
 

@@ -9,8 +9,15 @@
 // stripping (CLAUDE.md gotcha 10).
 
 import { migration as m001 } from './001-agents-and-user-wallets.ts';
+import { migration as m004 } from './004-watchers.ts';
 import type { Migration } from './migration.ts';
 
 export type { Migration } from './migration.ts';
 
-export const MIGRATIONS: readonly Migration[] = [m001];
+// MERGE: ids 2 and 3 belong to stores converted on sibling SEN-205 branches.
+// These stand-ins only keep the sequence contiguous on this branch; the merge
+// replaces both lines with the real `m002` and `m003` imports.
+const m002: Migration = { id: 2, name: 'reserved-2', sql: 'SELECT 1' };
+const m003: Migration = { id: 3, name: 'reserved-3', sql: 'SELECT 1' };
+
+export const MIGRATIONS: readonly Migration[] = [m001, m002, m003, m004];

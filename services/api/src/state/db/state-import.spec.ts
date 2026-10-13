@@ -7,6 +7,9 @@ import { getAddress } from 'viem';
 import { FileAgentStore } from '../../agents/store/file-agent-store';
 import { SqliteAgentStore } from '../../agents/store/sqlite-agent-store';
 import { testAgent } from '../../agents/tools/testing/agent-fixture';
+import { SqliteWatcherStore } from '../../agents/watchers/sqlite-watcher-store';
+import { testWatcherSet } from '../../agents/watchers/testing/watcher-set';
+import { FileWatcherStore } from '../../agents/watchers/watcher-store';
 import { FileUserWalletRegistry } from '../../wallet/store/file-user-wallet-registry';
 import { SqliteUserWalletRegistry } from '../../wallet/store/sqlite-user-wallet-registry';
 import { acquireStateDirLock, StateDirLockedError } from '../state-dir-lock';
@@ -45,12 +48,16 @@ async function writeFiles() {
     ownerQuorumId: 'quorum00000000000000test',
     devicePublicKey: DEVICE_KEY,
   });
-  return { agents: [first, second] };
+
+  const watchers = new FileWatcherStore(join(dir, 'agent-watchers.json'));
+  const watcherSet = testWatcherSet(first.id);
+  watchers.put(watcherSet);
+  return { agents: [first, second], watcherSet };
 }
 
 describe('importStateToSqlite', () => {
   it('copies every store into sente.db and verifies it record by record', async () => {
-    const { agents } = await writeFiles();
+    const { agents, watcherSet } = await writeFiles();
     const before = {
       agents: readFileSync(join(dir, 'agents.json'), 'utf8'),
       wallets: readFileSync(join(dir, 'user-wallets.json'), 'utf8'),
@@ -61,6 +68,7 @@ describe('importStateToSqlite', () => {
     expect(reports.map((r) => [r.name, r.fileCount, r.dbCount, r.ok])).toEqual([
       ['agents', 2, 2, true],
       ['user_wallets', 1, 1, true],
+      ['agent_watchers', 1, 1, true],
     ]);
     for (const report of reports) {
       expect(report.fileHash).toBe(report.dbHash);
@@ -79,6 +87,7 @@ describe('importStateToSqlite', () => {
       expect((await new SqliteUserWalletRegistry(db).find('alice'))?.walletId).toBe(
         'wallet00000000000000test',
       );
+      expect(new SqliteWatcherStore(db).get(watcherSet.agentId)).toEqual(watcherSet);
     } finally {
       db.close();
     }
@@ -114,6 +123,7 @@ describe('importStateToSqlite', () => {
     expect(reports.map((r) => [r.name, r.fileCount, r.dbCount, r.ok])).toEqual([
       ['agents', undefined, 0, true],
       ['user_wallets', undefined, 0, true],
+      ['agent_watchers', undefined, 0, true],
     ]);
   });
 
@@ -137,7 +147,7 @@ describe('importStateToSqlite', () => {
   it('covers every converted store once', () => {
     const names = STORE_IMPORTS.map((s) => s.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(names).toEqual(['agents', 'user_wallets']);
+    expect(names).toEqual(['agents', 'user_wallets', 'agent_watchers']);
   });
 });
 
