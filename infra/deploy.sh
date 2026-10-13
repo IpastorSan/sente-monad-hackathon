@@ -54,6 +54,26 @@ die () { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 # them relative to this script rather than to wherever it was invoked from.
 cd "$HERE"
 
+# SEN-189/SEN-203: the Kuru deployment the web build verifies against — the
+# environment's, else the repo .env's (as live-check.sh reads it). No default:
+# an unset value used to build a Set D app against a Set C API, which turns
+# manual Kuru trading off for every user. Refuse instead.
+ENV_FILE="${ENV_FILE:-$REPO/.env}"
+if [ -z "${KURU_DEPLOYMENT:-}" ] && [ -f "$ENV_FILE" ]; then
+  KURU_DEPLOYMENT="$(sed -n 's/^KURU_DEPLOYMENT=//p' "$ENV_FILE" | tail -n 1 | tr -d "\"' ")"
+fi
+KURU_DEPLOYMENT="${KURU_DEPLOYMENT:-${EXPO_PUBLIC_KURU_DEPLOYMENT:-}}"
+case "$KURU_DEPLOYMENT" in
+  set-c|set-d) ;;
+  '') die "KURU_DEPLOYMENT is not set (environment or $ENV_FILE). It must name the deployment
+       the API trades (set-c or set-d), or the web app is built against the other one." ;;
+  *) die "KURU_DEPLOYMENT='$KURU_DEPLOYMENT' is not set-c or set-d" ;;
+esac
+if [ -n "${EXPO_PUBLIC_KURU_DEPLOYMENT:-}" ] && [ "$EXPO_PUBLIC_KURU_DEPLOYMENT" != "$KURU_DEPLOYMENT" ]; then
+  die "EXPO_PUBLIC_KURU_DEPLOYMENT=$EXPO_PUBLIC_KURU_DEPLOYMENT but KURU_DEPLOYMENT=$KURU_DEPLOYMENT; they must agree"
+fi
+export KURU_DEPLOYMENT
+
 # A placeholder assetlinks.json is not dangerous — Android simply fails to
 # verify the app, which is loud rather than silent. So warn, do not block:
 # getting the certificate issued early is worth more than withholding a file
@@ -88,7 +108,7 @@ build_web () {
   local out="$REPO/apps/mobile/dist-web"
 
   # SEN-189: the Kuru deployment the app verifies against must be the API's.
-  say "Building the web export (EXPO_PUBLIC_API_URL=$api_url, Kuru ${EXPO_PUBLIC_KURU_DEPLOYMENT:-${KURU_DEPLOYMENT:-set-d}})"
+  say "Building the web export (EXPO_PUBLIC_API_URL=$api_url, Kuru $KURU_DEPLOYMENT)"
   rm -rf "$out"
   (
     cd "$REPO"
@@ -97,7 +117,7 @@ build_web () {
     EXPO_PUBLIC_MONAD_RPC_URL="${EXPO_PUBLIC_MONAD_RPC_URL:-}" \
     EXPO_PUBLIC_BUNDLER_URL="${EXPO_PUBLIC_BUNDLER_URL:-https://public.pimlico.io/v2/10143/rpc}" \
     EXPO_PUBLIC_USER_TRADING="${EXPO_PUBLIC_USER_TRADING:-}" \
-    EXPO_PUBLIC_KURU_DEPLOYMENT="${EXPO_PUBLIC_KURU_DEPLOYMENT:-${KURU_DEPLOYMENT:-}}" \
+    EXPO_PUBLIC_KURU_DEPLOYMENT="$KURU_DEPLOYMENT" \
     EXPO_PUBLIC_KURU_BUILDER_ADDRESS="${EXPO_PUBLIC_KURU_BUILDER_ADDRESS:-${KURU_BUILDER_ADDRESS:-}}" \
     EXPO_PUBLIC_KURU_BUILDER_FEE_PPS="${EXPO_PUBLIC_KURU_BUILDER_FEE_PPS:-${KURU_BUILDER_FEE_PPS:-}}" \
     EXPO_PUBLIC_SHOWCASE_AGENT_ID="${EXPO_PUBLIC_SHOWCASE_AGENT_ID:-}" \
