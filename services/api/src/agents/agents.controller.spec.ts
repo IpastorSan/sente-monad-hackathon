@@ -205,7 +205,7 @@ describe('AgentsController', () => {
 
     it("forks another user's agent into the caller's own agent, under the caller's mandate", async () => {
       const { controller, as } = setup();
-      const source = await controller.hire(body() as unknown as CreateAgentDto);
+      const source = await controller.hire(body({ public: true }) as unknown as CreateAgentDto);
       as('bob');
 
       const forked = await controller.fork({ id: source.agent.id }, { mandate: mine() });
@@ -221,9 +221,7 @@ describe('AgentsController', () => {
       });
       expect(forked.agent.id).not.toBe(source.agent.id);
       expect(forked.agent.address).not.toBe(source.agent.address);
-      // A private source shares its strategy and its model, not its prompt.
-      expect(forked.agent.systemPrompt).not.toBe(source.agent.systemPrompt);
-      expect(source.agent.public).toBe(false);
+      expect(forked.agent.systemPrompt).toBe(source.agent.systemPrompt);
 
       // The mandate that crossed is the FORKER's, and it parses back as written.
       const wire = JSON.parse(JSON.stringify(forked.agent)) as typeof forked.agent;
@@ -259,6 +257,17 @@ describe('AgentsController', () => {
       );
       expect(status).toBe(409);
       expect(refusalBody).toMatchObject({ reason: 'agent_revoked' });
+    });
+
+    it("answers a stranger's private agent with a 403 and copies nothing (SEN-204)", async () => {
+      const { controller, as } = setup();
+      const source = await controller.hire(body() as unknown as CreateAgentDto);
+      as('bob');
+
+      expect(
+        await httpError(controller.fork({ id: source.agent.id }, { mandate: mine() })),
+      ).toMatchObject({ status: 403, body: { reason: 'agent_not_forkable' } });
+      expect((await controller.list()).agents).toEqual([]);
     });
 
     it('answers an unknown source with a 404 and a bad mandate with a 400', async () => {
@@ -923,10 +932,13 @@ describe('AgentsController', () => {
 
     it('hires with a schedule, and a fork does not inherit it', async () => {
       const { controller, as } = setup();
-      const hireBody = (await pipe.transform(body({ schedule: { everySeconds: 900 } }), {
-        type: 'body',
-        metatype: CreateAgentDto,
-      })) as CreateAgentDto;
+      const hireBody = (await pipe.transform(
+        body({ public: true, schedule: { everySeconds: 900 } }),
+        {
+          type: 'body',
+          metatype: CreateAgentDto,
+        },
+      )) as CreateAgentDto;
       const source = await controller.hire(hireBody);
       expect(source.agent.schedule).toEqual({ everySeconds: 900 });
 

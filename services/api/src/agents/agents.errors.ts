@@ -95,6 +95,12 @@ export const AGENT_REFUSAL_REASONS = [
   /** The agent is revoked. Revocation is permanent; hire a new agent. */
   'agent_revoked',
   /**
+   * A fork of an agent whose owner has not published it, or that is archived
+   * (SEN-204). Its strategy and preset settings are the owner's; only a
+   * published agent's are offered to copy. Owners may always fork their own.
+   */
+  'agent_not_forkable',
+  /**
    * A hire or fork while the caller already has `AGENTS_MAX_PER_USER` agents
    * that are not archived (SEN-204). Each agent is a funded wallet and a policy
    * at Privy, so the count is bounded. Revoke and archive one first.
@@ -245,6 +251,8 @@ const AGENT_ERROR_STATUS: Record<AgentErrorReason, number> = {
   agent_revoked: 409,
   // 409: well-formed; archiving an agent makes the same hire succeed.
   agent_limit_reached: 409,
+  // 403: the source exists (its ledger is public), but copying it is not allowed.
+  agent_not_forkable: 403,
   wallet_provision_failed: 502,
   // 409: the request is well-formed, the caller's account is just not ready for
   // it yet. Registering a wallet makes the same request succeed.

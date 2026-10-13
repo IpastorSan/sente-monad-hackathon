@@ -486,10 +486,9 @@ export class AgentsService {
    * the honest way to copy a leaderboard agent is to hire its strategy, never
    * to mirror a stranger's wallet.
    *
-   * Copied: `model` and `strategy` — always — and `systemPrompt`, only when the
-   * source's owner published it (`source.public`). When it is private the fork
-   * gets an EMPTY prompt: we do not summarise, paraphrase or reconstruct
-   * someone else's instructions.
+   * Copied: `model`, `strategy`, `systemPrompt` and the preset. Only a source
+   * its owner published (`source.public`), or the caller's own, can be forked
+   * at all (SEN-204), so there is no private prompt to withhold any more.
    *
    * Not copied, ever: the source's mandate, wallet, address, policy, MCP token,
    * event log and ERC-8004 identity. The forker's mandate is compiled into a
@@ -499,13 +498,29 @@ export class AgentsService {
    *
    * The source is deliberately NOT ownership-checked: forking a stranger's
    * leaderboard agent is the feature, and the two agents share a strategy and
-   * nothing else. A revocation is the one thing that stops it — a revoked
-   * agent's strategy is no longer running, so it is refused rather than copied.
+   * nothing else. But only a PUBLISHED one (SEN-204): `strategy` and the
+   * preset's params are as much the owner's as the prompt, so a stranger's
+   * private agent is refused `agent_not_forkable` rather than copied without
+   * its prompt. The owner may fork their own, published or not. An archived
+   * source is refused too: its owner has put it away. A revoked agent's
+   * strategy is no longer running, so it is refused rather than copied.
    */
   async fork(principal: Principal, sourceId: string, input: ForkAgentInput): Promise<HiredAgent> {
     const source = await this.store.get(sourceId);
     if (!source) {
       throw new AgentRefusedError('agent_not_found', `no agent ${sourceId}`);
+    }
+    if (!source.public && source.userId !== principal.userId) {
+      throw new AgentRefusedError(
+        'agent_not_forkable',
+        `agent ${sourceId} is not published by its owner, so its strategy cannot be forked`,
+      );
+    }
+    if (source.archivedAt) {
+      throw new AgentRefusedError(
+        'agent_not_forkable',
+        `agent ${sourceId} is archived, so its strategy cannot be forked`,
+      );
     }
     if (source.status === 'revoked') {
       throw new AgentRefusedError(
@@ -523,7 +538,7 @@ export class AgentsService {
 
     const mcpToken = generateMcpToken();
     const now = new Date();
-    const systemPrompt = source.public ? source.systemPrompt : '';
+    const systemPrompt = source.systemPrompt;
     const agent: AgentRecord = {
       id,
       userId: principal.userId,
@@ -546,16 +561,8 @@ export class AgentsService {
       ...(kuruBuilder ? { kuruBuilder } : {}),
       // SEN-188: a fork is a hire, compiled before its wallet existed too.
       kuruDepositPinned: !compilesKuruDeposit(mandate),
-      // The fork runs the same preset (SEN-73), but a withheld prompt means it
-      // is not running the preset's text, so its results are not the preset's.
-      ...(source.preset
-        ? {
-            preset: {
-              ...source.preset,
-              customized: source.preset.customized || systemPrompt !== source.systemPrompt,
-            },
-          }
-        : {}),
+      // The fork runs the same preset (SEN-73), with the same prompt.
+      ...(source.preset ? { preset: { ...source.preset } } : {}),
       // No `schedule` (SEN-67): every scheduled run spends the FORKER's credits,
       // so the cadence is theirs to opt into, never the source's to impose.
       ...(input.riskAcknowledged ? { riskAcknowledgedAt: now } : {}),
@@ -568,8 +575,8 @@ export class AgentsService {
     this.logger.log(
       `forked agent ${source.id} into ${id} for ${principal.userId}: wallet ${wallet.address} ` +
         `policy ${wallet.policyId} (${rules.length} rules, owner ` +
-        `${this.describeOwner(ownerQuorumId)}, prompt ` +
-        `${source.public ? 'copied' : 'not copied: the source is private'})`,
+        `${this.describeOwner(ownerQuorumId)}, source ` +
+        `${source.public ? 'published' : "the caller's own"})`,
     );
     return this.completeHire(principal, agent, mcpToken);
   }
