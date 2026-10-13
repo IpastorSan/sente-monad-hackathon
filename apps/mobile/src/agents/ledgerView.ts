@@ -24,6 +24,12 @@ import {
   type TradeEntry,
   type VerdictEntry,
 } from './ledger.ts';
+import {
+  addAmounts,
+  amountsTone,
+  signedAmountsText,
+  type AssetAmount,
+} from '../ui/assetAmounts.ts';
 import { shortAddress } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 
@@ -106,7 +112,7 @@ export function heldBy(layer: RefusalLayer): string {
   return layer === 'enclave' ? 'Held by the enclave' : 'Held by Sente';
 }
 
-/** `Closed long` and `+18.22`, apart, so the screen can tint only the figure. */
+/** `Closed long` and `+18.22 USDC`, apart, so the screen can tint only the figure. */
 export function verdictHeadline(entry: VerdictEntry): {
   lead: string;
   pnl: string | null;
@@ -115,7 +121,10 @@ export function verdictHeadline(entry: VerdictEntry): {
   const what = entry.direction ?? entry.market ?? 'position';
   return {
     lead: `Closed ${what}`,
-    pnl: entry.pnl === null ? null : pnlLabel(entry.pnl),
+    pnl:
+      entry.pnl === null
+        ? null
+        : `${pnlLabel(entry.pnl)}${entry.pnlAsset !== null ? ` ${entry.pnlAsset}` : ''}`,
     tone: outcome(entry),
   };
 }
@@ -152,7 +161,10 @@ export type LedgerStats = {
   trades: number;
   /** Refusals, both layers: each is the mandate holding. */
   held: number;
-  /** Realised PnL summed exactly, as `+42.18`; `null` when nothing settled. */
+  /**
+   * Realised PnL summed exactly per asset, as `+42.18 USDC` or `+0.96 AUSD ·
+   * −0.13 USDC` (SEN-210); `null` when nothing settled.
+   */
   pnl: string | null;
   tone: 'up' | 'down' | null;
 };
@@ -161,24 +173,30 @@ export type LedgerStats = {
  * Trades, Held and P&L over the entries on screen. The PnL is the VERDICTS'
  * only: a Perpl close is followed by the verdict it settles, and adding the
  * close's gross figure to the verdict's net one would count the trade twice.
- * Summed as exact decimals, because a column of cents added in floats drifts.
+ * Summed as exact decimals, because a column of cents added in floats drifts,
+ * and per asset, because USDC and AUSD are not one currency (SEN-210). A
+ * verdict that does not name its asset is left out, as the summaries do.
  */
 export function ledgerStats(entries: readonly LedgerEntry[]): LedgerStats {
   let trades = 0;
   let held = 0;
-  const pnls: string[] = [];
+  const pnls: AssetAmount[] = [];
   for (const entry of entries) {
     if (entry.kind === 'trade' && entry.filled) trades += 1;
     else if (entry.kind === 'refusal') held += 1;
-    else if (entry.kind === 'verdict' && entry.origin === 'verdict' && entry.pnl !== null) {
-      pnls.push(entry.pnl);
+    else if (
+      entry.kind === 'verdict' &&
+      entry.origin === 'verdict' &&
+      entry.pnl !== null &&
+      entry.pnlAsset !== null
+    ) {
+      pnls.push({ asset: entry.pnlAsset, amount: entry.pnl });
     }
   }
-  const total = sumDecimals(pnls);
-  if (total === null) return { trades, held, pnl: null, tone: null };
+  const total = addAmounts(pnls);
+  if (total.length === 0) return { trades, held, pnl: null, tone: null };
   // Label and tone from one rounding (SEN-136): a total of -0.001 is `0.00`, untinted.
-  const figure = signedFigure(total, PNL_LABEL_PLACES);
-  return { trades, held, pnl: figure?.text ?? total, tone: figure?.tone ?? null };
+  return { trades, held, pnl: signedAmountsText(total), tone: amountsTone(total) };
 }
 
 /** `1,204` — the counts are grouped like every other figure in the app. */

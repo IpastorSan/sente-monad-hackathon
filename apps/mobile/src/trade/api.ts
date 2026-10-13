@@ -199,7 +199,7 @@ export class TradeApi {
     return this.request('GET', '/portfolio/fills', { query });
   }
 
-  /** `GET /portfolio/history?range=` (SEN-152): the recorded ≈ $ total, oldest first. */
+  /** `GET /portfolio/history?range=` (SEN-152): the recorded dollar total (the chart only), oldest first. */
   valueHistory(range: HistoryRange): Promise<ValueHistory> {
     return this.request('GET', '/portfolio/history', { query: { range } });
   }

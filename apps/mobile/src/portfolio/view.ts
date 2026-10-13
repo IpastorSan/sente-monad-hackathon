@@ -1,6 +1,6 @@
 /**
  * What the Portfolio tab and your own position SAY (SEN-118, plan U-12): the
- * ≈ $ total and its split, the cash card, your spot and perp rows, the "With
+ * total and its split, the cash card, your spot and perp rows, the "With
  * your agents" group, open orders with their distance to the market, the
  * fills history, and what hiding balances hides.
  *
@@ -8,16 +8,19 @@
  * pins every rule under plain `node --test` and the screens only lay out.
  *
  * Money stays a decimal string, summed exactly and floored to the cent once
- * for display (`floorTo`). Totals add USDC and AUSD as if both were dollars
- * and price every other asset at its Kuru last price; a total that prices one
- * is "≈ $" and says so (`totalIsApprox`); an asset with no price is left out
- * of the total and named, never counted as zero.
+ * for display (`floorTo`). Every figure that is SAID is per asset (SEN-210):
+ * `25.52 USDC · 20.89 AUSD · 0.00999 WETH`, never USDC and AUSD added up as
+ * dollars, and a spot token as itself rather than at its price. Only the bar's
+ * proportions and the hero's line need one number: they add USDC and AUSD at
+ * $1 and price every other asset at its Kuru last price, and an asset with no
+ * price is left out of that number (and named), never counted as zero.
  */
 import type { Agent, AgentPortfolioDto, BalanceDto, OrderDto, PositionDto } from '../agents/api.ts';
 import { sumDecimals } from '../agents/ledgerView.ts';
 import type { TickerDto } from '../markets/api.ts';
 import type { Portfolio, PortfolioFill } from '../trade/types.ts';
 import { formatPrice as formatPlaces } from '../ui/chart/geometry.ts';
+import { addAmounts, amountsText, type AssetAmount } from '../ui/assetAmounts.ts';
 import { BALANCE_PLACES } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct, maskDigits, pctDirection, type Direction } from '../ui/tradingFormat.ts';
@@ -114,11 +117,6 @@ export function money(value: string | null, places = 2): string {
   return formatPlaces(floorTo(value, places) ?? value, places) ?? '—';
 }
 
-/** `≈ $3,918.40`: a figure that prices a non-stable token. */
-export function approxUsd(value: string | null): string {
-  return value === null ? '—' : `≈ $${money(value)}`;
-}
-
 /**
  * A balance in its own token, TRUNCATED to the places `ui/format.ts` gives
  * that token (MON 4, stables 2, anything else 4): a balance is read when
@@ -207,7 +205,7 @@ export type Holdings = {
   venueCash: VenueCash[];
   spot: SpotRow[];
   perps: PerpRow[];
-  /** Assets held but left out of the ≈ $ total because nothing prices them. */
+  /** Assets held but left out of the bar and the line because nothing prices them. */
   unpriced: string[];
   /** `unlinked`: Perpl positions can't be read, so perps are unknown, not zero. */
   perpsUnknown: boolean;
@@ -328,15 +326,26 @@ function perplCash(balances: readonly BalanceDto[], positions: readonly Position
 
 export type AllocationKey = 'cash' | 'agents' | 'spot' | 'perps';
 
-export type AllocationSegment = {
+/**
+ * One part of the total: what it holds per asset, exactly, and the same in
+ * dollars (USDC and AUSD at $1, spot at its Kuru price) for the bar only.
+ */
+export type AllocationPart = { usd: string; amounts: AssetAmount[] };
+
+export type AllocationSegment = AllocationPart & {
   key: AllocationKey;
   label: string;
-  usd: string;
   /** Whole percent of the total; the shown segments add up to 100. */
   share: number;
 };
 
-export type Allocation = { total: string; segments: AllocationSegment[] };
+export type Allocation = {
+  /** Dollars, for the hero's line and the bar: never printed. */
+  total: string;
+  /** Everything, exactly, per asset: what the hero prints. */
+  amounts: AssetAmount[];
+  segments: AllocationSegment[];
+};
 
 const ALLOCATION_LABEL: Record<AllocationKey, string> = {
   cash: 'Cash',
@@ -345,25 +354,29 @@ const ALLOCATION_LABEL: Record<AllocationKey, string> = {
   perps: 'Perps',
 };
 
-/**
- * Whether the total is only ≈ in dollars: some part of it is a non-stable
- * token valued at its Kuru price. USDC and AUSD alone count at $1 and are
- * shown exact.
- */
-export function totalIsApprox(held: Holdings, agentsPriced: boolean): boolean {
-  return agentsPriced || held.spot.some((s) => isPositive(s.value));
-}
-
-/** Each part of the total in dollars, from your holdings and the agents group. */
+/** Each part of the total, from your holdings and the agents group. */
 export function allocationParts(
   held: Holdings,
-  agentsUsd: string | null,
-): Record<AllocationKey, string> {
+  agents: AllocationPart | null,
+): Record<AllocationKey, AllocationPart> {
+  const cash = [
+    ...held.cash,
+    ...held.venueCash.map((c) => ({ symbol: c.asset, amount: c.amount })),
+  ];
   return {
-    cash: sum([...held.cash.map((c) => c.amount), ...held.venueCash.map((c) => c.amount)]),
-    agents: agentsUsd ?? '0',
-    spot: sum(held.spot.flatMap((s) => (s.value === null ? [] : [s.value]))),
-    perps: sum(held.perps.map((p) => p.value)),
+    cash: {
+      usd: sum(cash.map((c) => c.amount)),
+      amounts: addAmounts(cash.map((c) => ({ asset: c.symbol, amount: c.amount }))),
+    },
+    agents: agents ?? { usd: '0', amounts: [] },
+    spot: {
+      usd: sum(held.spot.flatMap((s) => (s.value === null ? [] : [s.value]))),
+      amounts: addAmounts(held.spot.map((s) => ({ asset: s.asset, amount: s.amount }))),
+    },
+    perps: {
+      usd: sum(held.perps.map((p) => p.value)),
+      amounts: addAmounts(held.perps.map((p) => ({ asset: 'AUSD', amount: p.value }))),
+    },
   };
 }
 
@@ -373,36 +386,39 @@ export function allocationParts(
  * in hidden mode always adds up to 100. A negative part (a perp under water
  * past its margin cannot be, but a bad read could) is drawn as nothing.
  */
-export function allocation(parts: Record<AllocationKey, string>): Allocation {
-  const total = sum(Object.values(parts));
-  const keys = (['cash', 'agents', 'spot', 'perps'] as const).filter((k) => isPositive(parts[k]));
-  const whole = Number(sum(keys.map((k) => parts[k])));
-  if (!(whole > 0)) return { total, segments: [] };
-  const raw = keys.map((key) => ({ key, exact: (Number(parts[key]) / whole) * 100 }));
+export function allocation(parts: Record<AllocationKey, AllocationPart>): Allocation {
+  const order = ['cash', 'agents', 'spot', 'perps'] as const;
+  const total = sum(order.map((k) => parts[k].usd));
+  const amounts = addAmounts(...order.map((k) => parts[k].amounts));
+  const keys = order.filter((k) => isPositive(parts[k].usd));
+  const whole = Number(sum(keys.map((k) => parts[k].usd)));
+  if (!(whole > 0)) return { total, amounts, segments: [] };
+  const raw = keys.map((key) => ({ key, exact: (Number(parts[key].usd) / whole) * 100 }));
   const floors = raw.map((r) => Math.floor(r.exact));
   let left = 100 - floors.reduce((a, b) => a + b, 0);
-  const order = raw
+  const byRest = raw
     .map((r, i) => ({ i, rest: r.exact - Math.floor(r.exact) }))
     .sort((a, b) => b.rest - a.rest);
-  for (const { i } of order) {
+  for (const { i } of byRest) {
     if (left <= 0) break;
     floors[i] = (floors[i] ?? 0) + 1;
     left -= 1;
   }
   return {
     total,
+    amounts,
     segments: keys.map((key, i) => ({
       key,
       label: ALLOCATION_LABEL[key],
-      usd: parts[key],
+      ...parts[key],
       share: floors[i] ?? 0,
     })),
   };
 }
 
-/** The legend's figure: dollars, or the share once balances are hidden. */
+/** The legend's figure: exactly what the part holds, per asset, or its share once balances are hidden. */
 export function legendValue(segment: AllocationSegment, hidden: boolean): string {
-  return hidden ? `${segment.share}%` : `$${money(segment.usd)}`;
+  return hidden ? `${segment.share}%` : amountsText(segment.amounts, { separator: '\n' });
 }
 
 // ---------------------------------------------------------------------------
@@ -444,14 +460,6 @@ export function seriesChange(
   return { delta, pct, tone: toneOf(delta) };
 }
 
-/** `+$0.12`, `−$4.10`: the change line's amount. */
-export function signedUsd(delta: string): string {
-  const signed = signedMoney(delta);
-  if (signed.startsWith('+')) return `+$${signed.slice(1)}`;
-  if (signed.startsWith(MINUS)) return `${MINUS}$${signed.slice(1)}`;
-  return `$${signed}`;
-}
-
 // ---------------------------------------------------------------------------
 // With your agents
 
@@ -484,56 +492,84 @@ export type AgentGroupRow =
       agentId: string;
       name: string;
       revoked: boolean;
-      /** `Revoked Sep 23`, `No open position`, `Holdings unavailable`. */
+      /** `Revoked Sep 23`, `No open position · idle`, `Holdings unavailable`. */
       caption: string;
-      /** ≈ $, or `null` when unread. */
-      value: string | null;
+      /** What it holds, exactly, per asset; `null` when unread. */
+      amounts: AssetAmount[] | null;
       /** `ready to return` for a revoked agent still holding funds. */
       aside: string | null;
     };
 
 /**
  * The read-only group: every open position an agent holds (tap → its cockpit),
- * an agent with nothing open as one line with its ≈ $, and a revoked agent
- * only while it still holds funds, so money never drops out of the total
- * without a row saying where it went.
+ * an agent with nothing open as one line saying it is idle and what it holds,
+ * and a revoked agent only while it still holds funds, so money never drops
+ * out of the total without a row saying where it went.
  */
 export function agentGroup(inputs: readonly AgentInput[]): {
   rows: AgentGroupRow[];
-  total: string | null;
-  /** Some agent holds a spot token, valued at its Kuru price: the total is ≈. */
-  priced: boolean;
+  /** Everything the agents hold, exactly, per asset, and in dollars for the bar; `null` with none read. */
+  total: AllocationPart | null;
 } {
   const rows: AgentGroupRow[] = [];
-  const totals: string[] = [];
-  let priced = false;
+  const usd: string[] = [];
+  const held: AssetAmount[][] = [];
   for (const { agent, portfolio } of inputs) {
     const revoked = agent.status === 'revoked';
-    const value = portfolio?.totals.approxUsd ?? null;
-    if (value !== null) totals.push(value);
-    if (portfolio?.holdings.some((h) => isPositive(h.value))) priced = true;
     if (portfolio === null) {
       if (!revoked) {
         rows.push(agentRow(agent, 'Holdings unavailable', null, null));
       }
       continue;
     }
+    const amounts = agentHoldingAmounts(portfolio);
+    usd.push(portfolio.totals.approxUsd);
+    held.push(amounts);
     const positions = agentPositions(agent, portfolio);
     if (revoked) {
-      if (isPositive(value))
-        rows.push(agentRow(agent, revokedCaption(agent), value, 'ready to return'));
+      if (amounts.length > 0)
+        rows.push(agentRow(agent, revokedCaption(agent), amounts, 'ready to return'));
       continue;
     }
-    if (positions.length === 0) rows.push(agentRow(agent, 'No open position', value, null));
+    if (positions.length === 0)
+      rows.push(agentRow(agent, 'No open position · idle', amounts, null));
     rows.push(...positions);
   }
-  return { rows, total: totals.length > 0 ? sum(totals) : null, priced };
+  return {
+    rows,
+    total: usd.length > 0 ? { usd: sum(usd), amounts: addAmounts(...held) } : null,
+  };
+}
+
+/**
+ * What an agent holds, exactly, per asset (SEN-210) — the API's
+ * `holdingAmounts`, read off its portfolio: USDC in its wallet and Kuru
+ * account, AUSD in its wallet and Perpl account plus its perps' unrealised
+ * P&L, and each spot token as itself. Zero amounts are left out, so an empty
+ * agent holds `[]`.
+ */
+export function agentHoldingAmounts(portfolio: AgentPortfolioDto): AssetAmount[] {
+  const { wallet, kuru, perpl } = portfolio;
+  const walletBalances = wallet.ok ? wallet.balances : [];
+  const kuruBalances = kuru.ok ? kuru.balances : [];
+  const balance = (balances: readonly BalanceDto[], asset: string) =>
+    balances.filter((b) => b.asset === asset).map((b) => ({ asset, amount: b.total }));
+  return addAmounts(
+    balance(walletBalances, 'USDC'),
+    balance(kuruBalances, 'USDC'),
+    balance(walletBalances, 'AUSD'),
+    perpl.ok && 'balances' in perpl ? balance(perpl.balances, 'AUSD') : [],
+    perpl.ok && perpl.status === 'ok'
+      ? perpl.positions.map((p) => ({ asset: 'AUSD', amount: p.unrealizedPnl }))
+      : [],
+    portfolio.holdings.map((h) => ({ asset: h.asset, amount: h.amount })),
+  ).filter(({ amount }) => parse(amount)?.atoms !== 0n);
 }
 
 function agentRow(
   agent: AgentInput['agent'],
   caption: string,
-  value: string | null,
+  amounts: AssetAmount[] | null,
   aside: string | null,
 ): AgentGroupRow {
   return {
@@ -543,7 +579,7 @@ function agentRow(
     name: agent.name,
     revoked: agent.status === 'revoked',
     caption,
-    value,
+    amounts,
     aside,
   };
 }

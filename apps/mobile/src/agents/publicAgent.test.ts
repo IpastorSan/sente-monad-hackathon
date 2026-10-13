@@ -13,7 +13,6 @@ import {
   PublicAgentError,
   publicAgentUrl,
   safeNext,
-  signedMoney,
   statusPill,
 } from './publicAgent.ts';
 
@@ -137,10 +136,27 @@ test('Welcome follows only an in-app next', () => {
   assert.equal(safeNext(undefined), null);
 });
 
-test('money and status read the way the page draws them', () => {
-  assert.deepEqual(signedMoney('12.5'), { text: '+12.50', tone: 'up' });
-  assert.deepEqual(signedMoney('-3.1'), { text: '−3.10', tone: 'down' });
-  assert.deepEqual(signedMoney('0'), { text: '0.00', tone: null });
+test('balance and P&L parse per asset; an older answer without them has none (SEN-210)', () => {
+  const old = parsePublicAgent(WIRE);
+  assert.deepEqual(old.balance, { amounts: null, note: 'n' });
+  assert.equal(old.pnl.byAsset, undefined);
+  const agent = parsePublicAgent({
+    ...WIRE,
+    pnl: {
+      ...WIRE.pnl,
+      byAsset: [{ asset: 'USDC', last24h: '-1', allTime: '12.5' }, { asset: 7 }],
+    },
+    balance: {
+      approxUsd: '512.40',
+      amounts: [{ asset: 'AUSD', amount: '50' }, { amount: '1' }],
+      note: 'n',
+    },
+  });
+  assert.deepEqual(agent.pnl.byAsset, [{ asset: 'USDC', last24h: '-1', allTime: '12.5' }]);
+  assert.deepEqual(agent.balance?.amounts, [{ asset: 'AUSD', amount: '50' }]);
+});
+
+test('status reads the way the page draws it', () => {
   assert.equal(statusPill('expired').tone, 'idle');
   assert.equal(statusPill('revoked').tone, 'revoked');
 });

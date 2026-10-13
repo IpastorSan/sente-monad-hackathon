@@ -13,6 +13,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Sigil, Stone } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
+import { amountsText } from '@/ui/assetAmounts';
 import { Button, ButtonRow, Card } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { SideTag, TokenGlyph } from '@/ui/trading';
@@ -21,13 +22,13 @@ import { formatPct, pctDirection, type Direction } from '@/ui/tradingFormat';
 import type { ClosedRow } from './closed';
 import {
   amountText,
-  approxUsd,
   legendValue,
   shown,
   signedMoney,
   toneOf,
   type AgentGroupRow,
   type Allocation,
+  type AllocationPart,
   type AllocationKey,
   type CashLine,
   type FillRow,
@@ -238,11 +239,14 @@ function PosRow({
   chevron = false,
   dimmed = false,
   last = false,
+  valueLines = 1,
 }: {
   lead: ReactNode;
   title: ReactNode;
   caption: string;
   value: ReactNode;
+  /** More than one when `value` stacks one asset per line. */
+  valueLines?: number;
   under?: ReactNode;
   onPress?: () => void;
   chevron?: boolean;
@@ -271,7 +275,7 @@ function PosRow({
         </Text>
       </View>
       <View style={styles.posPx}>
-        <Text style={[text.strong, text.num]} numberOfLines={1}>
+        <Text style={[text.strong, text.num, styles.posValue]} numberOfLines={valueLines}>
           {value}
         </Text>
         {under}
@@ -419,7 +423,8 @@ export function AgentsGroup({
   onOpen,
 }: {
   rows: readonly AgentGroupRow[];
-  total: string | null;
+  /** What they hold, exactly, per asset; `null` before any agent is read. */
+  total: AllocationPart | null;
   hidden: boolean;
   onOpen: (agentId: string) => void;
 }) {
@@ -427,7 +432,9 @@ export function AgentsGroup({
     <View style={styles.group}>
       <View style={styles.between}>
         <Text style={text.label}>With your agents</Text>
-        <Text style={[text.caption, text.num]}>{shown(approxUsd(total), hidden)}</Text>
+        <Text style={[text.caption, text.num, styles.groupTotal]} numberOfLines={2}>
+          {total !== null ? shown(amountsText(total.amounts), hidden) : '—'}
+        </Text>
       </View>
       <Text style={[text.caption, styles.groupNote]}>
         Their funds, their trades. Open one to ask it to close, amend or revoke.
@@ -465,7 +472,12 @@ export function AgentsGroup({
             lead={<Sigil seed={row.agentId} size={36} dimmed={row.revoked} />}
             title={<Text style={row.revoked ? { color: color.textDim } : null}>{row.name}</Text>}
             caption={row.caption}
-            value={shown(approxUsd(row.value), hidden)}
+            value={
+              row.amounts !== null
+                ? shown(amountsText(row.amounts, { separator: '\n' }), hidden)
+                : '—'
+            }
+            valueLines={Math.max(1, row.amounts?.length ?? 1)}
             under={row.aside ? <Text style={text.caption}>{row.aside}</Text> : undefined}
             onPress={() => onOpen(row.agentId)}
             chevron
@@ -617,7 +629,7 @@ const styles = StyleSheet.create({
   legend: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 8, columnGap: 18, marginTop: 12 },
   legendItem: { width: '46%', flexDirection: 'row', alignItems: 'center', gap: 8 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendValue: { color: color.text },
+  legendValue: { color: color.text, textAlign: 'right' },
   cash: { marginTop: 18, paddingTop: 12 },
   cashLine: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   cashButtons: { marginTop: 8 },
@@ -627,6 +639,7 @@ const styles = StyleSheet.create({
   posDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.line },
   posMain: { flex: 1, minWidth: 0, gap: 2 },
   posPx: { alignItems: 'flex-end', gap: 1 },
+  posValue: { textAlign: 'right' },
   spotTag: {
     fontFamily: font.semibold,
     fontSize: 9.5,
@@ -647,6 +660,7 @@ const styles = StyleSheet.create({
     borderColor: color.lineStrong,
   },
   groupNote: { marginTop: 4, marginBottom: 2 },
+  groupTotal: { flexShrink: 1, textAlign: 'right', marginLeft: 12 },
   side: {
     fontFamily: font.semibold,
     fontSize: 10,

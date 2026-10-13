@@ -64,6 +64,7 @@ function verdict(extra: Partial<VerdictEntry> = {}): VerdictEntry {
     at: AT,
     direction: 'long',
     pnl: '18.22',
+    pnlAsset: 'USDC',
     held: true,
     market: 'MON-USDC',
     blockNumber: null,
@@ -167,12 +168,12 @@ test('a thesis is labelled with its direction and market; a refusal with who hel
 test('a close leads with its position and tints only the figure', () => {
   assert.deepEqual(verdictHeadline(verdict()), {
     lead: 'Closed long',
-    pnl: '+18.22',
+    pnl: '+18.22 USDC',
     tone: 'up',
   });
   assert.deepEqual(verdictHeadline(verdict({ direction: null, pnl: '-3.1', held: null })), {
     lead: 'Closed MON-USDC',
-    pnl: '−3.10',
+    pnl: '−3.10 USDC',
     tone: 'down',
   });
   assert.equal(verdictHeadline(verdict({ pnl: null })).pnl, null);
@@ -203,7 +204,27 @@ test('the P&L counts verdicts only, so a Perpl close is never counted twice', ()
     verdict({ pnl: '0.1' }),
     verdict({ pnl: '0.2' }),
   ];
-  assert.deepEqual(ledgerStats(entries), { trades: 1, held: 2, pnl: '+18.52', tone: 'up' });
+  assert.deepEqual(ledgerStats(entries), {
+    trades: 1,
+    held: 2,
+    pnl: '+18.52 USDC',
+    tone: 'up',
+  });
+});
+
+test('the P&L is per asset: a Kuru and Perpl agent never adds USDC to AUSD (SEN-210)', () => {
+  const entries: LedgerEntry[] = [
+    verdict({ pnl: '0.955', pnlAsset: 'AUSD' }),
+    verdict({ pnl: '-0.13' }),
+    // A verdict that does not say its asset is left out, as the summaries do.
+    verdict({ pnl: '100', pnlAsset: null }),
+  ];
+  assert.deepEqual(ledgerStats(entries), {
+    trades: 0,
+    held: 0,
+    pnl: '−0.13 USDC · +0.96 AUSD',
+    tone: null,
+  });
 });
 
 test('a ledger with nothing settled has no P&L rather than a zero', () => {
@@ -211,7 +232,7 @@ test('a ledger with nothing settled has no P&L rather than a zero', () => {
   assert.deepEqual(ledgerStats([verdict({ pnl: '-1.5' }), verdict({ pnl: '1.5' })]), {
     trades: 0,
     held: 0,
-    pnl: '0.00',
+    pnl: '0.00 USDC',
     tone: null,
   });
   assert.equal(countLabel(1204), '1,204');
@@ -222,16 +243,16 @@ test('a P&L that prints as 0.00 is neither a win nor a loss (SEN-136)', () => {
   assert.deepEqual(ledgerStats([verdict({ pnl: '-0.001' })]), {
     trades: 0,
     held: 0,
-    pnl: '0.00',
+    pnl: '0.00 USDC',
     tone: null,
   });
   assert.deepEqual(verdictHeadline(verdict({ pnl: '-0.001', held: null })), {
     lead: 'Closed long',
-    pnl: '0.00',
+    pnl: '0.00 USDC',
     tone: null,
   });
   // Pre-fix: the float's `−2.67`.
-  assert.equal(verdictHeadline(verdict({ pnl: '-2.675' })).pnl, '−2.68');
+  assert.equal(verdictHeadline(verdict({ pnl: '-2.675' })).pnl, '−2.68 USDC');
 });
 
 test('decimals sum exactly, signs and scales mixed, and garbage is left out', () => {

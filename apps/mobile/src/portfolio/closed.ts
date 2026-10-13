@@ -37,6 +37,7 @@
  * the percent is a float.
  */
 import type { PortfolioFill, PortfolioVenue } from '../trade/types.ts';
+import { addAmounts, signedAmountsText, type AssetAmount } from '../ui/assetAmounts.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct, formatPrice, type Direction } from '../ui/tradingFormat.ts';
 
@@ -375,11 +376,12 @@ export type FillCoverage = Record<PortfolioVenue, VenueCoverage>;
 export type ClosedList = {
   positions: ClosedPosition[];
   /**
-   * The realised total in ≈ $ (USDC and AUSD as $1, like the rest of the tab);
-   * `null` whenever any venue is not complete, because a total over part of
-   * the history is a wrong number, not a smaller one.
+   * The realised total per asset (SEN-210): `+0.96 AUSD · −0.13 USDC`, never
+   * the two added up as dollars; `null` whenever any venue is not complete,
+   * because a total over part of the history is a wrong number, not a
+   * smaller one.
    */
-  total: string | null;
+  total: AssetAmount[] | null;
   /** Every trip is after fees. */
   feesIncluded: boolean;
   /** Why rows or the total are missing, one sentence per reason. */
@@ -431,11 +433,14 @@ export function closedList(fills: readonly ClosableFill[], coverage: FillCoverag
   }
   const positions = replay.positions.filter((p) => shown.has(p.venue));
   const complete = gaps.length === 0 && shown.size === 2;
-  let total: Dec = ZERO;
-  for (const p of positions) total = add(total, dec(p.realisedPnl) ?? ZERO);
+  const total = addAmounts(
+    positions.flatMap((p) =>
+      dec(p.realisedPnl) === null ? [] : [{ asset: p.pnlAsset, amount: p.realisedPnl }],
+    ),
+  );
   return {
     positions,
-    total: complete ? text(total) : null,
+    total: complete ? total : null,
     feesIncluded: positions.every((p) => p.feesIncluded),
     gaps,
     reading: coverage.kuru === 'loading' || coverage.perpl === 'loading',
@@ -501,9 +506,13 @@ export function closedRow(p: ClosedPosition, hidden: boolean): ClosedRow {
   };
 }
 
-/** `+$1,204.50` for the list's total, masked when hidden; `null` stays `null`. */
-export function closedTotal(total: string | null, hidden: boolean): string | null {
+/**
+ * `+0.96 AUSD · −0.13 USDC` for the list's total, each asset floored to the
+ * cent like every Portfolio figure (SEN-179), masked when hidden; `null`
+ * stays `null`.
+ */
+export function closedTotal(total: readonly AssetAmount[] | null, hidden: boolean): string | null {
   if (total === null) return null;
-  const figure = signedFigure(cents(total), 2);
-  return figure === null ? null : `${figure.sign}$${shown(figure.magnitude, hidden)}`;
+  const floored = total.map(({ asset, amount }) => ({ asset, amount: cents(amount) ?? amount }));
+  return shown(signedAmountsText(floored), hidden);
 }

@@ -116,12 +116,10 @@ test('below minN it is too new to rate, with the cohort sample still shown', () 
   );
 });
 
-test('without a return the median P&L stands in, as ≈ $ over n', () => {
+test('without a return there is no figure: the median P&L mixes USDC and AUSD', () => {
   const line = statsLine(stats({ medianReturn30d: null, returnN: 0, medianPnl30d: '-3.2' }));
-  assert.deepEqual(line?.figure, { kind: 'median', value: '≈ −$3.20', direction: 'down' });
+  assert.deepEqual(line?.figure, { kind: 'none' });
   assert.equal(line?.sample, '30d · n=23');
-  const flat = statsLine(stats({ medianReturn30d: null, medianPnl30d: '0.001' }));
-  assert.deepEqual(flat?.figure, { kind: 'median', value: '≈ $0.00', direction: 'flat' });
 });
 
 test('neither median: the running count and the sample, no figure', () => {
@@ -145,12 +143,4 @@ test('the median return is floored to the shown place, never rounded up', () => 
   assert.deepEqual(figure('0.29'), { kind: 'median', value: '+29.0%', direction: 'up' });
   assert.deepEqual(figure('-0.29'), { kind: 'median', value: '−29.0%', direction: 'down' });
   assert.deepEqual(figure('0'), { kind: 'median', value: '0.0%', direction: 'flat' });
-});
-
-test('the median P&L stand-in is floored to the cent too', () => {
-  const figure = (medianPnl30d: string) =>
-    statsLine(stats({ medianReturn30d: null, medianPnl30d }))?.figure;
-  assert.deepEqual(figure('4.109'), { kind: 'median', value: '≈ +$4.10', direction: 'up' });
-  assert.deepEqual(figure('-0.001'), { kind: 'median', value: '≈ −$0.01', direction: 'down' });
-  assert.deepEqual(figure('1234.5'), { kind: 'median', value: '≈ +$1,234.50', direction: 'up' });
 });

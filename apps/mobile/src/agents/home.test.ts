@@ -26,11 +26,11 @@ import {
   realisedSeries,
   realisedToday,
   sinceLabel,
-  stableAmount,
   tickerItems,
   ownHoldings,
   totalValue,
   tradingTotal,
+  walletCapital,
   watchlist,
 } from './home.ts';
 import { KURU_MARKETS } from './mandate.ts';
@@ -155,12 +155,21 @@ function cashOf(ausd: string, usdc: string) {
   ];
 }
 
-test('totalValue adds wallet stables and agent capital exactly, never MON', () => {
-  const total = totalValue(cashOf('1284.5', '500'), [
-    { source: 'portfolio', value: '612.4' },
-    { source: 'portfolio', value: '300' },
+/** An agent's capital as the portfolio route reports it: `amount` USDC. */
+function capital(amount: string) {
+  return {
+    source: 'portfolio' as const,
+    usd: amount,
+    amounts: [{ asset: 'USDC', amount: amount }],
+  };
+}
+
+test('totalValue adds wallet stables and agent capital exactly, per asset, never MON', () => {
+  const total = totalValue(cashOf('1284.5', '500'), [capital('612.4'), capital('300')]);
+  assert.deepEqual(total?.amounts, [
+    { asset: 'USDC', amount: '1412.4' },
+    { asset: 'AUSD', amount: '1284.5' },
   ]);
-  assert.equal(total?.total, '2696.9');
   assert.equal(
     total?.includes,
     'Your USDC and AUSD plus your agents’. Not yet your own positions.',
@@ -168,13 +177,16 @@ test('totalValue adds wallet stables and agent capital exactly, never MON', () =
 });
 
 test('totalValue waits for the wallet and names what it leaves out', () => {
-  assert.equal(totalValue(null, [{ source: 'portfolio', value: '1' }]), null);
+  assert.equal(totalValue(null, [capital('1')]), null);
   const partial = totalValue(cashOf('1', '2'), [
-    { source: 'wallet', value: '0.1' },
+    { source: 'wallet', usd: '0.1', amounts: [{ asset: 'USDC', amount: '0.1' }] },
     { source: 'unread' },
     { source: 'unread' },
   ]);
-  assert.equal(partial?.total, '3.1');
+  assert.deepEqual(partial?.amounts, [
+    { asset: 'USDC', amount: '2.1' },
+    { asset: 'AUSD', amount: '1' },
+  ]);
   assert.equal(
     partial?.includes,
     'Your USDC and AUSD plus your agents’. Not yet your own positions or your agents’ open trades. 2 agents couldn’t be read and are left out.',
@@ -248,9 +260,14 @@ function read(data: Portfolio | null, error: Error | null = null) {
   return { data, error, unavailable: false };
 }
 
-function agentPortfolio(approxUsd: string): AgentPortfolioDto {
+function agentPortfolio(usdc: string): AgentPortfolioDto {
   return {
-    totals: { approxUsd },
+    totals: { approxUsd: usdc },
+    wallet: {
+      ok: true,
+      balances: [{ asset: 'USDC', available: usdc, locked: '0', total: usdc, decimals: 6 }],
+    },
+    kuru: { ok: false, error: 'n/a' },
     perpl: { ok: false, error: 'n/a' },
     holdings: [],
   } as unknown as AgentPortfolioDto;
@@ -264,19 +281,23 @@ test('Home’s total is the Portfolio tab’s total for the same data (SEN-155)'
     { agent: agent('a'), portfolio: agentPortfolio('612.4') },
     { agent: agent('b'), portfolio: agentPortfolio('300') },
   ]);
-  const portfolioTotal = allocation(allocationParts(held, group.total)).total;
+  const portfolioTotal = allocation(allocationParts(held, group.total)).amounts;
 
   const home = tradingTotal(ownHoldings(read(p), walletOf(p), PRICES), [
-    { source: 'portfolio', value: '612.4' },
-    { source: 'portfolio', value: '300' },
+    capital('612.4'),
+    capital('300'),
   ]);
-  assert.equal(home?.total, portfolioTotal);
-  // Cash 1784.5 + Kuru 142.5 + Perpl free 100.00 + MON 404.666504 + perp
-  // 219.70 + agents 912.4: every part, exactly.
-  assert.equal(home?.total, '3563.766504');
+  assert.deepEqual(home?.amounts, portfolioTotal);
+  // USDC: wallet 500 + Kuru 142.5 + agents 912.4. AUSD: wallet 1284.5 + Perpl
+  // free 100.00 + perp 219.70. MON as itself, never at its price.
+  assert.deepEqual(home?.amounts, [
+    { asset: 'USDC', amount: '1554.9' },
+    { asset: 'AUSD', amount: '1604.20' },
+    { asset: 'MON', amount: '412.42' },
+  ]);
   assert.equal(
     home?.includes,
-    'Your cash, spot at Kuru prices and perps (margin + P&L), plus your agents’.',
+    'Your cash, spot tokens and perps (margin + P&L), plus your agents’.',
   );
 });
 
@@ -292,28 +313,36 @@ test('a /portfolio that failed leaves both venues out and says so, never as zero
   const wallet = walletOf(userPortfolio());
   const total = tradingTotal(ownHoldings(read(null, new Error('503')), wallet, PRICES), []);
   // Wallet cash and MON only: nothing from Kuru or Perpl.
-  assert.equal(total?.total, '2189.166504');
+  assert.deepEqual(total?.amounts, [
+    { asset: 'USDC', amount: '500' },
+    { asset: 'AUSD', amount: '1284.5' },
+    { asset: 'MON', amount: '412.42' },
+  ]);
   assert.equal(
     total?.includes,
-    'Your cash, spot at Kuru prices and perps (margin + P&L). Leaves out Kuru and Perpl: they didn’t answer.',
+    'Your cash, spot tokens and perps (margin + P&L). Leaves out Kuru and Perpl: they didn’t answer.',
   );
   const refused = ownHoldings({ data: null, error: null, unavailable: true }, wallet, PRICES);
   assert.equal(refused?.venues, 'unread');
 });
 
-test('a failed section, an unpriced token, unlinked perps and unread agents are all named', () => {
+test('a failed section, unlinked perps and unread agents are all named', () => {
   const p = userPortfolio({
     perpl: { ok: false, error: 'socket refused' },
   });
   const perplDown = tradingTotal(ownHoldings(read(p), walletOf(p), []), [
-    { source: 'wallet', value: '5' },
+    { source: 'wallet', usd: '5', amounts: [{ asset: 'USDC', amount: '5' }] },
     { source: 'unread' },
   ]);
-  // No tickers: MON is unpriced, so it is named rather than valued at zero.
-  assert.equal(perplDown?.total, '1932.0');
+  // No tickers: MON has no price, and needs none, since it is listed as itself.
+  assert.deepEqual(perplDown?.amounts, [
+    { asset: 'USDC', amount: '647.5' },
+    { asset: 'AUSD', amount: '1284.5' },
+    { asset: 'MON', amount: '412.42' },
+  ]);
   assert.equal(
     perplDown?.includes,
-    'Your cash, spot at Kuru prices and perps (margin + P&L), plus your agents’. Not yet your agents’ open trades. Leaves out MON: no Kuru price. Leaves out Perpl: it didn’t answer. One agent couldn’t be read and is left out.',
+    'Your cash, spot tokens and perps (margin + P&L), plus your agents’. Not yet your agents’ open trades. Leaves out Perpl: it didn’t answer. One agent couldn’t be read and is left out.',
   );
 
   const unlinked = userPortfolio({
@@ -326,47 +355,78 @@ test('a failed section, an unpriced token, unlinked perps and unread agents are 
     },
   });
   const noPerps = tradingTotal(ownHoldings(read(unlinked), cashOf('10', '0'), PRICES), []);
-  assert.equal(noPerps?.total, '202.912104');
+  assert.deepEqual(noPerps?.amounts, [
+    { asset: 'USDC', amount: '142.5' },
+    { asset: 'AUSD', amount: '60' },
+    { asset: 'MON', amount: '0.42' },
+  ]);
   assert.equal(
     noPerps?.includes,
-    'Your cash, spot at Kuru prices and perps (margin + P&L). Some wallet tokens may be left out. Perp positions are left out until Perpl is linked.',
+    'Your cash, spot tokens and perps (margin + P&L). Some wallet tokens may be left out. Perp positions are left out until Perpl is linked.',
   );
 });
 
-test('stableAmount is the ungrouped, full-precision sum', () => {
+test('walletCapital keeps each stable apart, ungrouped and at full precision', () => {
   const tokens = [
     { symbol: 'USDC', decimals: 6 },
     { symbol: 'AUSD', decimals: 6 },
   ];
-  assert.equal(stableAmount({ USDC: 1_204_500_000n, AUSD: 1n }, tokens), '1204.500001');
-  assert.equal(stableAmount({}, tokens), '0.000000');
-  // Mixed precisions meet at the finer one.
-  assert.equal(
-    stableAmount({ A: 1_000_000n, B: 5n * 10n ** 17n }, [
-      { symbol: 'A', decimals: 6 },
-      { symbol: 'B', decimals: 18 },
-    ]),
-    '1.500000000000000000',
-  );
+  assert.deepEqual(walletCapital({ USDC: 1_204_500_000n, AUSD: 1n }, tokens), {
+    source: 'wallet',
+    usd: '1204.500001',
+    amounts: [
+      { asset: 'USDC', amount: '1204.500000' },
+      { asset: 'AUSD', amount: '0.000001' },
+    ],
+  });
+  const empty = walletCapital({}, tokens);
+  assert.equal(empty.source === 'wallet' && empty.usd, '0.000000');
 });
 
-test('realisedToday sums the day and puts $ after the sign', () => {
+test('realisedToday sums the day per asset, never USDC and AUSD as one', () => {
+  const agents = [
+    { id: 'a', mandate: mandate(['kuru']) },
+    { id: 'b', mandate: mandate(['perpl']) },
+  ];
   const summaries = new Map([
     ['a', summary('a', { pnl: { last24h: '18.22', allTime: '0' } })],
     ['b', summary('b', { pnl: { last24h: '-4.10', allTime: '0' } })],
   ]);
-  assert.deepEqual(realisedToday(summaries), {
+  assert.deepEqual(realisedToday(agents, summaries), {
     value: '14.12',
-    label: '+$14.12 realised by agents today',
-    tone: 'up',
+    label: '+18.22 USDC · −4.10 AUSD realised by agents today',
+    tone: null,
+  });
+  assert.deepEqual(
+    realisedToday(
+      agents,
+      new Map([['b', summary('b', { pnl: { last24h: '-4.1', allTime: '0' } })]]),
+    ),
+    { value: '-4.1', label: '−4.10 AUSD realised by agents today', tone: 'down' },
+  );
+  assert.deepEqual(realisedToday(agents, new Map([['a', summary('a')]])), {
+    value: '0',
+    label: 'Agents flat today',
+    tone: null,
+  });
+  assert.equal(realisedToday(agents, new Map()), null);
+  // A Kuru and Perpl agent on an API that only sends the mixed sum: no line.
+  const both = [{ id: 'c', mandate: mandate(['kuru', 'perpl']) }];
+  assert.equal(realisedToday(both, new Map([['c', summary('c')]])), null);
+  const split = summary('c', {
+    pnl: {
+      last24h: '0.83',
+      allTime: '0',
+      byAsset: [
+        { asset: 'AUSD', last24h: '0.96', allTime: '0' },
+        { asset: 'USDC', last24h: '-0.13', allTime: '0' },
+      ],
+    },
   });
   assert.equal(
-    realisedToday(new Map([['b', summary('b', { pnl: { last24h: '-4.1', allTime: '0' } })]]))
-      ?.label,
-    '−$4.1 realised by agents today',
+    realisedToday(both, new Map([['c', split]]))?.label,
+    '−0.13 USDC · +0.96 AUSD realised by agents today',
   );
-  assert.equal(realisedToday(new Map([['a', summary('a')]]))?.tone, null);
-  assert.equal(realisedToday(new Map()), null);
 });
 
 function verdict(agentId: string, seq: number, at: number, pnl: string): ActivityEvent {
@@ -415,16 +475,28 @@ function mandate(venues: AgentMandate['venues'], kuru: string[] = [], perpl: str
   } as unknown as AgentMandate;
 }
 
-test('atWork names the quote currency, or says ≈ $ for both venues', () => {
-  const day = (last24h: string) => summary('a', { pnl: { last24h, allTime: '0' }, ...lastAt(NOW) });
+test('atWork names the quote currency, and gives each asset its own figure on both venues', () => {
+  const day = (last24h: string, byAsset?: AgentSummary['pnl']['byAsset']) =>
+    summary('a', { pnl: { last24h, allTime: '0', byAsset }, ...lastAt(NOW) });
   assert.deepEqual(atWork({ mandate: mandate(['kuru']) }, day('18.22')).pnl, {
     label: '+18.22 USDC',
     tone: 'up',
   });
-  assert.equal(atWork({ mandate: mandate(['perpl']) }, day('-4.1')).pnl?.label, '−4.1 AUSD');
-  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('3.1')).pnl?.label, '≈ +$3.1');
+  assert.equal(atWork({ mandate: mandate(['perpl']) }, day('-4.1')).pnl?.label, '−4.10 AUSD');
   assert.equal(atWork({ mandate: mandate(['kuru']) }, day('0')).pnl?.label, '0.00 USDC');
-  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0')).pnl?.label, '≈ $0.00');
+  // Both venues: per asset when the API splits it, no figure when it cannot.
+  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('3.1')).pnl, null);
+  assert.deepEqual(
+    atWork(
+      { mandate: mandate(['kuru', 'perpl']) },
+      day('0.83', [
+        { asset: 'AUSD', last24h: '0.96', allTime: '0' },
+        { asset: 'USDC', last24h: '-0.13', allTime: '0' },
+      ]),
+    ).pnl,
+    { label: '−0.13 USDC · +0.96 AUSD', tone: null },
+  );
+  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0', [])).pnl?.label, '0.00');
   assert.deepEqual(atWork({ mandate: mandate(['kuru']) }, undefined), { move: null, pnl: null });
 });
 

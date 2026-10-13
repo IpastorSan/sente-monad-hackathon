@@ -21,7 +21,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { modelLabel } from '@/agents/api';
-import { pnlUnit } from '@/agents/cockpit';
+import { pnlAmounts, pnlUnit } from '@/agents/cockpit';
 import { formatExpiry, formatNotional, quoteUnit } from '@/agents/mandate';
 import { MandateSummary } from '@/agents/MandateSummary';
 import {
@@ -29,7 +29,6 @@ import {
   hireCopyHref,
   PublicAgentError,
   publicAgentUrl,
-  signedMoney,
   statusPill,
   type PublicAgent,
   type PublicFill,
@@ -38,6 +37,7 @@ import {
 import { ShareLinkButton } from '@/agents/ShareLink';
 import { addressUrl, txUrl } from '@/chain/explorer';
 import { useSession } from '@/session';
+import { amountsText, amountsTone, signedAmountsText } from '@/ui/assetAmounts';
 import { Avatar } from '@/ui/Avatar';
 import { shortAddress } from '@/ui/format';
 import { Mark, Pill, Sigil, Stat, Stone } from '@/ui/goban';
@@ -193,12 +193,12 @@ function PublicHead({ agent }: { agent: PublicAgent }) {
 function describeForPreview(agent: PublicAgent): string {
   const { mandate } = agent;
   const venues = mandate.venues.map((v) => (v === 'kuru' ? 'Kuru spot' : 'Perpl perps'));
-  const pnl = signedMoney(agent.pnl.allTime).text;
+  const amounts = pnlAmounts(agent.pnl, mandate.venues, 'allTime');
   return (
     `An AI trading agent on Monad. Its mandate, enforced by Privy's signing enclave: ` +
     `${venues.join(' and ') || 'no venue'}, at most ${formatNotional(mandate.maxOrderNotional)} ` +
-    `${quoteUnit(mandate)} per order, until ${formatExpiry(mandate.expiresAt)}. ` +
-    `Realised P&L ${pnl}.`
+    `${quoteUnit(mandate)} per order, until ${formatExpiry(mandate.expiresAt)}.` +
+    (amounts !== null ? ` Realised P&L ${signedAmountsText(amounts)}.` : '')
   );
 }
 
@@ -313,24 +313,26 @@ function Seal({ agent }: { agent: PublicAgent }) {
 // ─── Record ─────────────────────────────────────────────────────────────────
 
 function Record({ agent }: { agent: PublicAgent }) {
-  const { unit } = pnlUnit(agent.mandate.venues);
-  const all = signedMoney(agent.pnl.allTime);
-  const day = signedMoney(agent.pnl.last24h);
+  // Per asset (SEN-210): never USDC and AUSD added up as one figure.
+  const unit = pnlUnit(agent.mandate.venues);
+  const all = pnlAmounts(agent.pnl, agent.mandate.venues, 'allTime');
+  const day = pnlAmounts(agent.pnl, agent.mandate.venues, 'last24h');
+  const signed = (amounts: typeof all) =>
+    amounts !== null ? amountsText(amounts, { signed: true, separator: '\n' }) : '—';
+  const tone = (amounts: typeof all) =>
+    (amounts !== null ? amountsTone(amounts) : null) ?? undefined;
   const { trades, held } = agent.counts;
   return (
     <View style={styles.block}>
       <Text style={text.label}>Record</Text>
       <View style={styles.stats}>
-        <Stat
-          label="Realised P&L"
-          value={all.text}
-          tone={all.tone ?? undefined}
-          style={styles.grow}
-        />
-        <Stat label="Last 24 h" value={day.text} tone={day.tone ?? undefined} style={styles.grow} />
+        <Stat label="Realised P&L" value={signed(all)} tone={tone(all)} style={styles.grow} />
+        <Stat label="Last 24 h" value={signed(day)} tone={tone(day)} style={styles.grow} />
         <Stat
           label="Balance"
-          value={agent.balance ? `≈ $${agent.balance.approxUsd}` : '—'}
+          value={
+            agent.balance?.amounts ? amountsText(agent.balance.amounts, { separator: '\n' }) : '—'
+          }
           style={styles.grow}
         />
       </View>

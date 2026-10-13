@@ -162,6 +162,8 @@ export type VerdictEntry = Base & {
   direction: Direction | null;
   /** Realised PnL as a decimal string, or null when nothing reported one. */
   pnl: string | null;
+  /** What `pnl` is in (`USDC`, `AUSD`): a verdict's `pnlAsset`; `null` when it did not say. */
+  pnlAsset: string | null;
   /** `null` when the event did not say — a venue close, or a quiet venue. */
   held: boolean | null;
   market: string | null;
@@ -369,6 +371,7 @@ function verdictEntry(event: LedgerEvent): VerdictEntry {
     // Reading only the last two left every real verdict without its number
     // until SEN-60. All three are the same figure to the user.
     pnl: text(detail, 'pnl') ?? text(detail, 'realisedPnl') ?? text(detail, 'realizedPnl'),
+    pnlAsset: text(detail, 'pnlAsset'),
     held: booleanAt(detail, 'held') ?? booleanAt(detail, 'thesisHeld'),
     market: text(detail, 'symbol') ?? text(detail, 'market'),
     blockNumber: numberAt(detail, 'blockNumber'),
@@ -674,6 +677,7 @@ export function demoLedger(now: number = Date.now()): LedgerEntry[] {
       at: at(1),
       direction: 'long',
       pnl: '12.4',
+      pnlAsset: 'USDC',
       held: true,
       market: 'MON-USDC',
       blockNumber: null,

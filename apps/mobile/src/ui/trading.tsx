@@ -19,6 +19,7 @@ import {
   type LayoutChangeEvent,
   type StyleProp,
   type TextStyle,
+  type ViewStyle,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -30,6 +31,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { placesFor, truncatedAmount, type AssetAmount } from './assetAmounts';
 import { Icon } from './icons';
 import { Sparkline } from './chart/Sparkline';
 import type { Decimal } from './chart/geometry';
@@ -76,7 +78,6 @@ export function BigNumber({
   value,
   places = 2,
   prefix = '',
-  approx = false,
   size = 'lg',
   blurred = false,
   style,
@@ -85,8 +86,6 @@ export function BigNumber({
   places?: number;
   /** Currency sign at full size, e.g. `$`. */
   prefix?: string;
-  /** Mixed-venue totals (USDC + AUSD) are only ≈ in dollars. */
-  approx?: boolean;
   size?: keyof typeof BIG_SIZE;
   blurred?: boolean;
   style?: StyleProp<TextStyle>;
@@ -106,11 +105,51 @@ export function BigNumber({
       accessibilityLabel={blurred ? 'Hidden' : undefined}
       numberOfLines={1}
     >
-      {approx ? <Text style={[styles.bigSmall, small]}>≈ </Text> : null}
       {prefix}
       {whole}
       {fraction ? <Text style={[styles.bigSmall, small]}>{fraction}</Text> : null}
     </Text>
+  );
+}
+
+const SMALLER = { xl: 'lg', lg: 'md', md: 'md' } as const;
+
+/**
+ * Holdings in more than one asset as headline figures (SEN-210): one
+ * `BigNumber` per asset with its symbol beside it, `50.00 AUSD` over
+ * `0.00999 WETH`, never a sum of different tokens. Each figure is truncated to
+ * its asset's places (`truncatedAmount`), so it never shows money you don't
+ * have. With nothing held it is `0.00`, with the one asset when there is one.
+ */
+export function BigAmounts({
+  amounts,
+  size = 'lg',
+  blurred = false,
+  style,
+}: {
+  amounts: readonly AssetAmount[];
+  size?: keyof typeof BIG_SIZE;
+  blurred?: boolean;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const held = amounts.filter(({ amount }) => !/^[+-]?0*(\.0*)?$/u.test(amount.trim()));
+  const lines = held.length > 0 ? held : amounts.slice(0, 1);
+  const each = lines.length > 1 ? SMALLER[size] : size;
+  if (lines.length === 0) return <BigNumber value="0" size={size} blurred={blurred} />;
+  return (
+    <View style={style}>
+      {lines.map(({ asset, amount }) => (
+        <View key={asset} style={styles.bigAmount}>
+          <BigNumber
+            value={truncatedAmount(amount, asset) ?? amount}
+            places={placesFor(asset, amount)}
+            size={each}
+            blurred={blurred}
+          />
+          <Text style={[text.dim, styles.bigAsset]}>{asset}</Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -528,6 +567,8 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   bigSmall: { color: color.textFaint },
+  bigAmount: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  bigAsset: { fontFamily: font.semibold },
   chg: {
     fontFamily: font.medium,
     fontSize: 14,
