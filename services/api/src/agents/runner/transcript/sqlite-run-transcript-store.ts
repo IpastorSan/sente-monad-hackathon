@@ -195,15 +195,23 @@ class TranscriptReplay extends InMemoryRunTranscriptStore {
   }
 
   records(): RunTranscriptRecord[] {
-    const out: RunTranscriptRecord[] = [];
+    const runs = [];
     const seen = new Set<string>();
     for (const runId of this.#order) {
       const held = this.byRun.get(runId);
       // A runId started twice is held once, at its last start.
       if (!held || seen.has(runId)) continue;
       seen.add(runId);
+      runs.push(held);
+    }
+    // The table reads runs back by start time (then insertion). The file is in
+    // that order per agent but not across agents (a compaction rewrites it
+    // agent by agent), so sort the same way; the sort is stable for ties.
+    runs.sort((a, b) => a.start.startedAt - b.start.startedAt);
+    const out: RunTranscriptRecord[] = [];
+    for (const held of runs) {
       out.push({ start: held.start });
-      for (const entry of held.entries) out.push({ runId, entry });
+      for (const entry of held.entries) out.push({ runId: held.start.runId, entry });
     }
     return out;
   }
