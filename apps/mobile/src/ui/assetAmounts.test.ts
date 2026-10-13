@@ -33,7 +33,7 @@ test('addAmounts sums each asset exactly and never adds one asset to another', (
   ]);
 });
 
-test('amountsText lists each non-zero asset, truncated to its places', () => {
+test('amountsText lists each non-zero asset: stablecoins truncated, tokens at most 4 places', () => {
   assert.equal(
     amountsText([
       { asset: 'USDC', amount: '25.529' },
@@ -48,8 +48,9 @@ test('amountsText lists each non-zero asset, truncated to its places', () => {
     ]),
     '50.00 AUSD',
   );
-  assert.equal(amountsText([{ asset: 'WETH', amount: '0.009991' }]), '0.00999 WETH');
-  assert.equal(amountsText([{ asset: 'MON', amount: '1234.56789' }]), '1,234.5678 MON');
+  assert.equal(amountsText([{ asset: 'WETH', amount: '0.009991' }]), '0.01 WETH');
+  assert.equal(amountsText([{ asset: 'WETH', amount: '0.00004' }]), '<0.0001 WETH');
+  assert.equal(amountsText([{ asset: 'MON', amount: '1234.56789' }]), '1,234.5679 MON');
   assert.equal(amountsText([{ asset: 'USDC', amount: '0' }]), '0.00 USDC');
   assert.equal(amountsText([]), '0.00');
 });

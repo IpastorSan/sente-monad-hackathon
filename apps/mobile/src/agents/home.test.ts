@@ -4,7 +4,8 @@ import { test } from 'node:test';
 
 import type { MarketDto, TickerDto } from '../markets/api.ts';
 import { indexTickers, marketKey } from '../markets/select.ts';
-import { agentGroup, allocation, allocationParts, holdings } from '../portfolio/view.ts';
+import { agentBook } from '../portfolio/agentBook.ts';
+import { allocation, allocationParts, holdings } from '../portfolio/view.ts';
 import type { Portfolio } from '../trade/types.ts';
 
 import type {
@@ -104,7 +105,7 @@ test('a fill reads as a sentence with its block for the ramp', () => {
     agentId: 'a1',
     at: NOW,
     stone: 'trade',
-    title: 'Range Hunter bought 180 MON-USDC',
+    title: 'Range Hunter bought 180 MON',
     detail: 'at 0.9744 on Kuru',
     block: { number: 42, consensus },
   });
@@ -277,10 +278,22 @@ test('Home’s total is the Portfolio tab’s total for the same data (SEN-155)'
   const p = userPortfolio();
   // The Portfolio tab's hero, as `portfolio.tsx` computes it.
   const held = holdings(walletOf(p), p, PRICES);
-  const group = agentGroup([
-    { agent: agent('a'), portfolio: agentPortfolio('612.4') },
-    { agent: agent('b'), portfolio: agentPortfolio('300') },
-  ]);
+  const group = agentBook(
+    [
+      {
+        agent: { ...agent('a'), mandate: { expiresAt: 4e9 } },
+        portfolio: agentPortfolio('612.4'),
+        entries: [],
+      },
+      {
+        agent: { ...agent('b'), mandate: { expiresAt: 4e9 } },
+        portfolio: agentPortfolio('300'),
+        entries: [],
+      },
+    ],
+    PRICES,
+    0,
+  );
   const portfolioTotal = allocation(allocationParts(held, group.total)).amounts;
 
   const home = tradingTotal(ownHoldings(read(p), walletOf(p), PRICES), [
@@ -496,7 +509,17 @@ test('atWork names the quote currency, and gives each asset its own figure on bo
     ).pnl,
     { label: '−0.13 USDC\n+0.96 AUSD', tone: null },
   );
-  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0', [])).pnl?.label, '0.00');
+  assert.equal(
+    atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0', [])).pnl?.label,
+    '0.00 USDC',
+  );
+  assert.equal(
+    atWork(
+      { mandate: mandate(['perpl', 'kuru']) },
+      day('0', [{ asset: 'AUSD', last24h: '0', allTime: '1' }]),
+    ).pnl?.label,
+    '0.00 AUSD',
+  );
   assert.deepEqual(atWork({ mandate: mandate(['kuru']) }, undefined), { move: null, pnl: null });
 });
 

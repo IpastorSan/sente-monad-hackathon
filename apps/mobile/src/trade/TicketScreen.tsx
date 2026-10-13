@@ -115,6 +115,7 @@ import { RiskDisclosure, useRiskAck } from '@/trade/RiskDisclosure';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
 import { Chart } from '@/ui/chart/Chart';
 import { ComingNext } from '@/ui/ComingNext';
+import { displayAmount } from '@/ui/displayAmount';
 import { Pill } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
 import {
@@ -544,7 +545,7 @@ function Ticket({
         view={stage.view}
         heading={`${side === 'buy' ? 'Buying' : 'Selling'} ${
           ticket.sizeUnits !== null
-            ? shortSize(unitsToDecimal(ticket.sizeUnits, tm.sizePrecision))
+            ? displayAmount(unitsToDecimal(ticket.sizeUnits, tm.sizePrecision))
             : ''
         } ${config.base.symbol}`}
         embedded={embedded}
@@ -833,7 +834,7 @@ function balanceText(atoms: bigint, token: { symbol: string; decimals: number })
   const figure =
     token.symbol === 'USDC' || token.symbol === 'AUSD'
       ? formatFixedAtoms(atoms, token.decimals, { places: 2 })
-      : shortSize(formatAtoms(atoms, token.decimals, { group: false }));
+      : displayAmount(formatAtoms(atoms, token.decimals, { group: false }));
   return `${figure} ${token.symbol}`;
 }
 
@@ -1086,7 +1087,7 @@ function Review({
   });
   const size =
     ticket.sizeUnits !== null ? unitsToDecimal(ticket.sizeUnits, config.sizePrecision) : '0';
-  const sizeLabel = `${shortSize(size)} ${config.base.symbol}`;
+  const sizeLabel = `${displayAmount(size)} ${config.base.symbol}`;
   const rows = reviewRows(input, ticket);
   const paid =
     input.orderType === 'market' && input.side === 'buy'
@@ -1369,7 +1370,7 @@ function Result({
           {
             price: sent.price,
             kind: 'limit' as const,
-            label: `${sent.side.toUpperCase()} ${shortSize(result.requestedSize)} ${config.base.symbol}`,
+            label: `${sent.side.toUpperCase()} ${displayAmount(result.requestedSize)} ${config.base.symbol}`,
           },
         ]
       : [];
@@ -1419,7 +1420,7 @@ function Result({
           {result.unfilledCancelled ? (
             <Row
               label="Cancelled"
-              value={`${shortSize(result.unfilledCancelled)} ${config.base.symbol} not filled`}
+              value={`${displayAmount(result.unfilledCancelled)} ${config.base.symbol} not filled`}
             />
           ) : null}
         </View>
@@ -1428,7 +1429,7 @@ function Result({
         <View style={styles.spacedSm}>
           <Row
             label="Filled"
-            value={`${shortSize(result.filledSize)} of ${shortSize(result.requestedSize)} ${config.base.symbol}`}
+            value={`${displayAmount(result.filledSize)} of ${displayAmount(result.requestedSize)} ${config.base.symbol}`}
           />
           <Row label="Expires" value="Never · cancel any time" />
         </View>

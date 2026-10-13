@@ -32,6 +32,7 @@ import {
 } from '@sente/venues/kuru';
 
 import { formatPrice } from '../ui/tradingFormat.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 import { groupThousands, normalizeDecimal } from '../agents/amounts.ts';
 import { feePpsToPercent } from './kuruBuilder.ts';
 import { depositCapAtoms } from './kuruMarket.ts';
@@ -149,9 +150,10 @@ export function spendable(walletAtoms: bigint, kuruAtoms: bigint, reserveAtoms =
 // ─── Display ────────────────────────────────────────────────────────────────
 
 /**
- * A size for a sentence ("Buy 203.8 MON"): at least four significant digits,
- * truncated, trailing zeros dropped. Truncated, never rounded up, so the
- * label never promises a fraction more than the order carries.
+ * A size cut to four significant digits, truncated, trailing zeros dropped:
+ * what the quote is asked for (TicketScreen), and a base-token funding line,
+ * where a dust shortfall must still show its digits. Sizes in sentences go
+ * through the one display rule instead (`ui/displayAmount.ts`, SEN-215).
  */
 export function shortSize(value: string): string {
   const [whole = '0', fraction = ''] = value.split('.');
@@ -452,7 +454,7 @@ export function evaluateTicket(input: TicketInput): Ticket {
     }
     return {
       ...shared,
-      cta: { label: `${SIDE_WORD[side]} ${shortSize(size)} ${base}`, enabled: true },
+      cta: { label: `${SIDE_WORD[side]} ${displayAmount(size)} ${base}`, enabled: true },
       problem: null,
     };
   }
@@ -479,7 +481,7 @@ function subLine(input: TicketInput, size: string, fillPrice: string | null): st
   }
   if (fillPrice === null) return null;
   if (side === 'buy')
-    return `≈ ${shortSize(size)} ${market.base.symbol} · at ${priceText(fillPrice)}`;
+    return `≈ ${displayAmount(size)} ${market.base.symbol} · at ${priceText(fillPrice)}`;
   return `≈ ${moneyText(mulDecimal(size, fillPrice))} ${market.quote.symbol} · at ${priceText(fillPrice)}`;
 }
 
@@ -505,7 +507,7 @@ export function senteFeeAmount(
   if (side === 'sell') return `${percent} (≈ ${quoteFee} ${quote.symbol})`;
   const baseAtoms = toUnits(size, 10n ** BigInt(base.decimals)) ?? 0n;
   const baseFee = fromUnits(builderFeeAtoms(baseAtoms, builderFeePps), base.decimals);
-  return `${percent} (≈ ${shortSize(baseFee)} ${base.symbol} ≈ $${quoteFee})`;
+  return `${percent} (≈ ${displayAmount(baseFee)} ${base.symbol} ≈ $${quoteFee})`;
 }
 
 /**
@@ -519,7 +521,7 @@ export function senteFeePaidText(
   const asset = result.senteFeeAsset ?? result.feeAsset;
   if (asset === result.feeAsset) return `${moneyText(result.senteFee)} ${asset}`;
   const approx = result.senteFeeQuote ? ` (≈ $${moneyText(result.senteFeeQuote)})` : '';
-  return `${shortSize(result.senteFee)} ${asset}${approx}`;
+  return `${displayAmount(result.senteFee)} ${asset}${approx}`;
 }
 
 function disclosureFor(input: TicketInput, size: string | null): string[] {
@@ -604,7 +606,7 @@ export function reviewRows(input: TicketInput, ticket: Ticket): ReviewRow[] {
     market,
   );
   if (sente !== null) rows.push({ label: 'Sente fee', value: sente });
-  rows.push({ label: 'Size', value: `${shortSize(size)} ${b}` });
+  rows.push({ label: 'Size', value: `${displayAmount(size)} ${b}` });
 
   if (side === 'buy') {
     rows.push({
@@ -689,7 +691,7 @@ export function fundsLines(funds: TradeFunds | undefined): string[] {
     .filter((f) => compareDecimal(f.amount, '0') > 0)
     .map(
       (f) =>
-        `${f.symbol === 'USDC' || f.symbol === 'AUSD' ? moneyText(f.amount) : shortSize(f.amount)} ${f.symbol} · ${where[f.where]}`,
+        `${f.symbol === 'USDC' || f.symbol === 'AUSD' ? moneyText(f.amount) : displayAmount(f.amount)} ${f.symbol} · ${where[f.where]}`,
     );
 }
 
@@ -750,7 +752,7 @@ export function resultView(
   const fee = moneyText(result.fee);
   const verb = side === 'buy' ? 'You bought' : 'You sold';
   const fills = result.fills.map((fill) => ({
-    label: `${shortSize(fill.size)} ${base}`,
+    label: `${displayAmount(fill.size)} ${base}`,
     value: `at ${priceText(fill.price)} · ${moneyText(mulDecimal(fill.size, fill.price))} ${quote}`,
   }));
 
@@ -775,7 +777,7 @@ export function resultView(
         lead: verb,
         amount: filled,
         unit: base,
-        detail: `of ${shortSize(requested)}${avg ? ` · at ${avg} avg` : ''}`,
+        detail: `of ${displayAmount(requested)}${avg ? ` · at ${avg} avg` : ''}`,
         filledPct: pct,
         fillLine: `Filled ${pct}% · ${resting ? 'rest on the book' : 'rest cancelled'}`,
         why: resting
@@ -842,6 +844,8 @@ export function heldMarkets<M extends { kind: 'spot' | 'perp'; base: string }>(
   const held = new Map(balances.filter((b) => b.raw > 0n).map((b) => [b.symbol, b.amount]));
   return markets.flatMap((market) => {
     const amount = market.kind === 'spot' ? held.get(market.base) : undefined;
-    return amount === undefined ? [] : [{ market, holding: `${shortSize(amount)} ${market.base}` }];
+    return amount === undefined
+      ? []
+      : [{ market, holding: `${displayAmount(amount)} ${market.base}` }];
   });
 }

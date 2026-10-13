@@ -15,18 +15,19 @@
  *
  * Plain node, no React Native, so `usage.test.ts` runs without a device.
  */
-import { formatFixedAtoms, normalizeDecimal } from './amounts.ts';
+import { normalizeDecimal } from './amounts.ts';
 import type { AgentMandate, AgentSummary, WireAgentEvent } from './api.ts';
 import {
   depositAmount,
   SIGNED_PNL_PLACES,
   signedPnl,
   toLedgerEntries,
+  tradeAmount,
   venueLabel,
 } from './ledger.ts';
 import { stoneFor, type LedgerStone } from './ledgerView.ts';
 import { formatNotional } from './mandate.ts';
-import { BALANCE_PLACES } from '../ui/format.ts';
+import { formatTokenAtoms } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 
 const MINUTE = 60_000;
@@ -234,11 +235,9 @@ export function holdsReturnable(holdings: readonly Holding[]): boolean {
   return holdings.some((h) => h.symbol !== 'MON' && h.atoms > 0n);
 }
 
-/** A holding as a balance figure, at the app's shared precision (`BALANCE_PLACES`). */
+/** A holding as a balance figure, at the app's shared precision (`formatTokenAtoms`). */
 export function formatHolding(holding: Holding): string {
-  return formatFixedAtoms(holding.atoms, holding.decimals, {
-    places: BALANCE_PLACES[holding.symbol] ?? 2,
-  });
+  return formatTokenAtoms(holding.atoms, holding.decimals, holding.symbol);
 }
 
 // ---------------------------------------------------------------------------
@@ -268,8 +267,7 @@ export function describeMove(event: WireAgentEvent): Move | null {
       const verb =
         entry.direction === 'long' ? 'Bought' : entry.direction === 'short' ? 'Sold' : 'Traded';
       const venue = entry.venue ? ` on ${venueLabel(entry.venue)}` : '';
-      const size = entry.size === '—' ? '' : `${entry.size} `;
-      return { stone: 'trade', line: `${verb} ${size}${entry.market}${venue}`, at };
+      return { stone: 'trade', line: `${verb} ${tradeAmount(entry)}${venue}`, at };
     }
     case 'refusal':
       // Held, not failed: a refusal is the mandate working (never berry).

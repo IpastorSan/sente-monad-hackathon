@@ -12,6 +12,7 @@ import { AgentsApiError, describeAgentsError, describeFundsLeft } from '@/agents
 import type { Agent, AgentFundsLeft, AgentPortfolioDto } from '@/agents/api';
 import { fundsLeftOf, perplCollateralOf } from '@/agents/archive';
 import { useSession } from '@/session';
+import { amountFigure } from '@/ui/assetAmounts';
 import { isoDate } from '@/ui/format';
 import { Button, Notice, Sheet, type NoticeTone } from '@/ui/kit';
 import { text } from '@/ui/theme';
@@ -69,7 +70,7 @@ export function ArchiveAgent({
   const perplNote =
     perplKept.length > 0 ? (
       <Text style={[text.caption, styles.after]}>
-        {`${perplKept.map((f) => `${f.amount} ${f.asset}`).join(', ')} stays in the agent’s Perpl account. Sente cannot withdraw from Perpl, so Return funds does not move it and archiving leaves it there.`}
+        {`${perplKept.map((f) => `${amountFigure(f.amount, f.asset)} ${f.asset}`).join(', ')} stays in the agent’s Perpl account. Sente cannot withdraw from Perpl, so Return funds does not move it and archiving leaves it there.`}
       </Text>
     ) : null;
 

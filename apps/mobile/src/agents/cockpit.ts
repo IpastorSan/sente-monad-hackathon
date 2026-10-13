@@ -33,7 +33,8 @@ import { PNL_LABEL_PLACES, pnlLabel } from './leaderboard.ts';
 import { outcome, sumDecimals } from './ledgerView.ts';
 import { formatNotional, marketFor, tokenFor } from './mandate.ts';
 import { formatDuration, pnlTone } from './usage.ts';
-import { addAmounts, type AssetAmount } from '../ui/assetAmounts.ts';
+import { addAmounts, amountFigure, type AssetAmount } from '../ui/assetAmounts.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct } from '../ui/tradingFormat.ts';
 
@@ -427,7 +428,7 @@ export function positionRows(
         base,
         symbol: position.symbol,
         side: position.side,
-        detail: `${position.size} ${base} @ ${position.entryPrice} · Perpl ${position.leverage}×`,
+        detail: `${displayAmount(position.size)} ${base} @ ${position.entryPrice} · Perpl ${position.leverage}×`,
         pnl: pnlLabel(position.unrealizedPnl),
         quote: position.quote,
         pct: percentOf(position.unrealizedPnl, cost),
@@ -450,7 +451,7 @@ export function positionRows(
       base: holding.asset,
       symbol: holding.market,
       side: 'long',
-      detail: `${holding.amount} ${holding.asset}${avgPrice !== null ? ` @ ${avgPrice}` : ''} · Kuru`,
+      detail: `${amountFigure(holding.amount, holding.asset)} ${holding.asset}${avgPrice !== null ? ` @ ${avgPrice}` : ''} · Kuru`,
       pnl: unrealizedPnl !== null ? pnlLabel(unrealizedPnl) : null,
       quote: holding.market.split('-')[1] ?? 'USDC',
       pct:

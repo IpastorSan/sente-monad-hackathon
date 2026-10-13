@@ -9,7 +9,7 @@
  * a P&L, a side. Purple stays an event (the PERP tag is the only purple, and
  * it marks a leveraged venue, which is a move of its own).
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Image,
   Pressable,
@@ -20,7 +20,6 @@ import {
   type LayoutChangeEvent,
   type StyleProp,
   type TextStyle,
-  type ViewStyle,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -32,16 +31,11 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { AssetMenu, type Anchor } from './AssetMenu';
-import { placesFor, truncatedAmount, type AssetAmount } from './assetAmounts';
-import { headlineFor } from './headlineAsset';
 import { Icon } from './icons';
 import { Sparkline } from './chart/Sparkline';
 import type { Decimal } from './chart/geometry';
 import { color, font, RADIUS, text } from './theme';
 import { TickerFade } from './TickerFade';
-import { useHeadlineAsset } from './useHeadlineAsset';
-import { isHovered } from './kit';
 import { TOKEN_LOGO_ASSETS } from './tokenLogoAssets';
 import { tokenLogoFor } from './tokenLogos';
 import {
@@ -116,81 +110,6 @@ export function BigNumber({
       {whole}
       {fraction ? <Text style={[styles.bigSmall, small]}>{fraction}</Text> : null}
     </Text>
-  );
-}
-
-/**
- * A total held in more than one asset (SEN-210, SEN-213): ONE asset's exact
- * amount as the headline `BigNumber`, never a sum of different tokens, with a
- * caret after the asset that opens `AssetMenu` with every held asset's amount.
- * The headline is the largest stablecoin unless this device picked another
- * (`headlineAsset.ts`). Each figure is truncated to its asset's places
- * (`truncatedAmount`), so it never shows money you don't have. With nothing
- * held it is `0.00`, with the one asset when there is one, and with one asset
- * held there is nothing to pick, so no caret.
- */
-export function BigAmounts({
-  amounts,
-  label = 'Total value',
-  size = 'lg',
-  blurred = false,
-  style,
-}: {
-  amounts: readonly AssetAmount[];
-  /** What the figure is, for its accessible name: `Total value in USDC, change asset`. */
-  label?: string;
-  size?: keyof typeof BIG_SIZE;
-  blurred?: boolean;
-  style?: StyleProp<ViewStyle>;
-}) {
-  const [preferred, pick] = useHeadlineAsset();
-  const [anchor, setAnchor] = useState<Anchor | null>(null);
-  const trigger = useRef<View>(null);
-  const headline = headlineFor(amounts, preferred);
-  if (headline === null) return <BigNumber value="0" size={size} blurred={blurred} />;
-  const { line, choices } = headline;
-  const assetSize = { fontSize: Math.max(15, Math.round(BIG_SIZE[size] * 0.3)) };
-  const open = () =>
-    trigger.current?.measureInWindow((x, y, width, height) => setAnchor({ x, y, width, height }));
-  return (
-    <View style={[styles.bigAmount, style]}>
-      <BigNumber
-        value={truncatedAmount(line.amount, line.asset) ?? line.amount}
-        places={placesFor(line.asset, line.amount)}
-        size={size}
-        blurred={blurred}
-      />
-      {choices.length > 1 ? (
-        <Pressable
-          ref={trigger}
-          onPress={open}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={`${label} in ${line.asset}, change asset`}
-          aria-haspopup="menu"
-          aria-expanded={anchor !== null}
-          style={(state) => [
-            styles.assetPick,
-            isHovered(state) && styles.assetPickHover,
-            state.pressed && styles.pressed,
-          ]}
-        >
-          <Text style={[text.dim, styles.bigAsset, assetSize]}>{line.asset}</Text>
-          <Icon name="caret" size={16} color={color.textDim} strokeWidth={2.2} />
-        </Pressable>
-      ) : (
-        <Text style={[text.dim, styles.bigAsset, assetSize]}>{line.asset}</Text>
-      )}
-      <AssetMenu
-        anchor={anchor}
-        choices={choices}
-        selected={line.asset}
-        hidden={blurred}
-        label={label}
-        onSelect={pick}
-        onClose={() => setAnchor(null)}
-      />
-    </View>
   );
 }
 
@@ -627,18 +546,6 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   bigSmall: { color: color.textFaint },
-  bigAmount: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  bigAsset: { fontFamily: font.semibold },
-  assetPick: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    paddingLeft: 8,
-    paddingRight: 4,
-    paddingVertical: 2,
-    borderRadius: RADIUS.stone,
-  },
-  assetPickHover: { backgroundColor: color.well },
   chg: {
     fontFamily: font.medium,
     fontSize: 14,

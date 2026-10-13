@@ -23,6 +23,7 @@
  * stop compiling the day verdicts land.
  */
 import { formatAtoms, formatFixedAtoms, groupThousands, normalizeDecimal } from './amounts.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 import { BALANCE_PLACES } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 
@@ -502,6 +503,19 @@ export function directionLabel(direction: Direction | null): string {
   return '—';
 }
 
+/**
+ * What a trade moved, for a sentence (SEN-215): `0.0139 WETH` for a spot
+ * fill — the token, not the `WETH-USDC` pair — and `0.002 BTC-PERP` for a
+ * perp, the size at most 4 places (`displayAmount`). Without a size it is the
+ * token or market alone.
+ */
+export function tradeAmount(entry: Pick<TradeEntry, 'venue' | 'market' | 'size'>): string {
+  const perp = entry.venue === 'perpl' || /perp/iu.test(entry.market);
+  const base = entry.market.split(/[-/]/u)[0] || entry.market;
+  const asset = perp ? entry.market : base;
+  return entry.size === '—' ? asset : `${displayAmount(entry.size)} ${asset}`;
+}
+
 /** `kuru` -> `Kuru`. */
 export function venueLabel(venue: string | null): string {
   if (venue === null || venue === '') return '—';
@@ -544,6 +558,12 @@ export function signedPnl(pnl: string | null): string {
  */
 export function depositAmount(entry: DepositEntry): string {
   const exact = exactAtoms(entry);
+  // A token that is not a stablecoin follows the one display rule (SEN-215):
+  // at most 4 places, and `<0.0001` rather than a `0` for dust.
+  const token = entry.asset !== null && entry.asset !== 'USDC' && entry.asset !== 'AUSD';
+  if (exact !== null && token) {
+    return `+${displayAmount(formatAtoms(exact.atoms, exact.decimals, { group: false }))}`;
+  }
   if (exact !== null) {
     const { atoms, decimals } = exact;
     const places = (entry.asset !== null ? BALANCE_PLACES[entry.asset] : undefined) ?? 2;
@@ -560,6 +580,7 @@ export function depositAmount(entry: DepositEntry): string {
   // came rather than rewritten into something the chain did not say.
   const normal = normalizeDecimal(entry.amount);
   if (normal === null) return entry.amount === '' ? '—' : entry.amount;
+  if (token) return `+${displayAmount(normal)}`;
   const [whole = '0', fraction = ''] = normal.split('.');
   return `+${groupThousands(whole)}${fraction ? `.${fraction}` : ''}`;
 }

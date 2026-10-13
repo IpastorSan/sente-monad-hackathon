@@ -53,7 +53,8 @@ import {
   reconcile,
   RECONCILE_DELAYS_MS,
 } from '@/trade/perpReconcile';
-import { pressKey, QUOTE_MAX_AGE_MS, shortSize, type Key } from '@/trade/ticket';
+import { pressKey, QUOTE_MAX_AGE_MS, type Key } from '@/trade/ticket';
+import { displayAmount } from '@/ui/displayAmount';
 import {
   AdvancedPanel,
   AdvancedToggle,
@@ -500,8 +501,9 @@ function Ticket({
           {position.side === 'long' ? 'Long opened' : 'Short opened'}
         </Text>
         <Text style={[text.body, styles.spaced]}>
-          The order’s own confirmation didn’t arrive, but Perpl lists your position: {position.size}{' '}
-          {market.base} at {position.entryPrice}, {position.leverage}×.
+          The order’s own confirmation didn’t arrive, but Perpl lists your position:{' '}
+          {displayAmount(position.size)} {market.base} at {position.entryPrice}, {position.leverage}
+          ×.
         </Text>
         <View style={styles.spaced}>
           <ButtonRow>
@@ -855,7 +857,7 @@ function Review({
           <HoldToConfirm
             tone={TONE[side]}
             keys
-            label={`Hold to ${verb} ${shortSize(size)} ${market.base}${limit ? ` at ${limit.price}` : ''}`}
+            label={`Hold to ${verb} ${displayAmount(size)} ${market.base}${limit ? ` at ${limit.price}` : ''}`}
             onConfirm={() => {
               risk.remember();
               onConfirm();
@@ -910,7 +912,7 @@ function Filled({
             {filled ? 'Part filled, the rest is on the book' : 'Your limit is on the book'}
           </Text>
           <View style={styles.bigRow}>
-            <BigNumber value={order.size} places={5} size="xl" />
+            <BigNumber value={order.size} places={4} size="xl" />
             <Text style={styles.bigUnit}> {market.base}</Text>
           </View>
           <Text style={[text.dim, text.num]}>
@@ -920,7 +922,10 @@ function Filled({
         <View style={styles.spacedSm}>
           <Row label="Order" value={`${order.status} · ${order.id}`} />
           {filled ? (
-            <Row label="Filled so far" value={`${order.filledSize} ${market.base}`} />
+            <Row
+              label="Filled so far"
+              value={`${displayAmount(order.filledSize)} ${market.base}`}
+            />
           ) : null}
         </View>
         <View style={styles.spaced}>
@@ -948,7 +953,7 @@ function Filled({
           {filled ? `${side === 'long' ? 'Long' : 'Short'} opened` : 'Nothing filled'}
         </Text>
         <View style={styles.bigRow}>
-          <BigNumber value={order.filledSize} places={5} size="xl" />
+          <BigNumber value={order.filledSize} places={4} size="xl" />
           <Text style={styles.bigUnit}> {market.base}</Text>
         </View>
         {order.averageFillPrice ? (

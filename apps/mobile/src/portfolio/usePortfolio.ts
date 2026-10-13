@@ -13,6 +13,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import type { Agent, AgentPortfolioDto } from '@/agents/api';
+import { toLedgerEntries, type LedgerEntry } from '@/agents/ledger';
 import { usePolling, type Polled } from '@/markets/usePolling';
 import { useSession } from '@/session';
 import type { Portfolio, PortfolioFill, PortfolioVenue } from '@/trade/types';
@@ -240,6 +241,57 @@ export function useAgentPortfolios(
   }, [pulls, load]);
 
   return portfolios;
+}
+
+/** How many of each agent's newest events the Agents section reads for its closed trades. */
+const AGENT_EVENTS_PAGE = 300;
+
+/**
+ * Each agent's newest events as Ledger entries (SEN-215): what the Agents
+ * section's "Closed positions" reads its round trips from, the same verdicts
+ * the cockpit's best trades come from. Read on focus and on a pull, not
+ * polled: a closed trade does not change. An agent whose read failed maps to
+ * `null`, so the screen can say its trades are missing rather than absent.
+ */
+export function useAgentEntries(
+  agents: readonly Agent[] | null,
+  pulls: number,
+): ReadonlyMap<string, LedgerEntry[] | null> | null {
+  const { agents: api } = useSession();
+  const [entries, setEntries] = useState<ReadonlyMap<string, LedgerEntry[] | null> | null>(null);
+  const ids = agents?.map((a) => a.id).join(',') ?? null;
+
+  const load = useCallback(() => {
+    if (!api || ids === null) return () => undefined;
+    let live = true;
+    const list = ids === '' ? [] : ids.split(',');
+    void Promise.allSettled(list.map((id) => api.events(id, undefined, AGENT_EVENTS_PAGE))).then(
+      (results) => {
+        if (!live) return;
+        setEntries(
+          new Map(
+            list.map((id, i) => {
+              const result = results[i];
+              return [
+                id,
+                result?.status === 'fulfilled' ? toLedgerEntries(result.value.events) : null,
+              ];
+            }),
+          ),
+        );
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, ids]);
+
+  useFocusEffect(load);
+  useEffect(() => {
+    if (pulls > 0) return load();
+  }, [pulls, load]);
+
+  return entries;
 }
 
 /**

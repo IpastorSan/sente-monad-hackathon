@@ -16,6 +16,7 @@ import type { AgentPortfolioDto, AgentPresetRef, PositionDto } from './api.ts';
 import { positionRows, type PositionRow } from './cockpit.ts';
 import type { LedgerEntry, ThesisEntry } from './ledger.ts';
 import { levelLabel, type AgentLevel } from './levels.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 
 export type Venue = 'kuru' | 'perpl';
 
@@ -85,7 +86,7 @@ function perpPosition(portfolio: AgentPortfolioDto, symbol: string): PositionDto
 /** `180 MON · Kuru spot · USDC`, `400 MON · Perpl · AUSD`. */
 export function sizeLine(position: Pick<LivePosition, 'size' | 'base' | 'venue'>): string {
   const venue = position.venue === 'kuru' ? 'Kuru spot' : 'Perpl';
-  return `${position.size} ${position.base} · ${venue} · ${quoteFor(position.venue)}`;
+  return `${displayAmount(position.size)} ${position.base} · ${venue} · ${quoteFor(position.venue)}`;
 }
 
 /**
@@ -240,7 +241,7 @@ export function fillMarkers(
       }
     }
     const sign = entry.direction === 'short' ? '−' : '+';
-    markers.push({ index, who: 'agent', label: `${sign}${entry.size}` });
+    markers.push({ index, who: 'agent', label: `${sign}${displayAmount(entry.size)}` });
   }
   return markers;
 }

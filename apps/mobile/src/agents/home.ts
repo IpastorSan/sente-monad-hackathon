@@ -48,6 +48,7 @@ import {
   heldLabel,
   signedPnl,
   toLedgerEntries,
+  tradeAmount,
   venueLabel,
   type EventConsensus,
   type LedgerEntry,
@@ -134,7 +135,7 @@ function describe(
       ].filter((part): part is string => part !== null);
       return {
         stone: 'trade',
-        title: `${name} ${verb} ${entry.size} ${entry.market}`,
+        title: `${name} ${verb} ${tradeAmount(entry)}`,
         detail: where.length > 0 ? where.join(' ') : null,
       };
     }
@@ -477,6 +478,13 @@ export function atWork(
   const move = summary?.lastEvent ? describeMove(summary.lastEvent) : null;
   const amounts = pnlAmounts(summary?.pnl, agent.mandate.venues, 'last24h');
   if (amounts === null) return { move, pnl: null };
+  // A quiet day still names its asset (SEN-215): `0.00 USDC`, never a bare
+  // `0.00`, in the quote of the agent's first venue.
+  if (roundsToZero(amounts)) {
+    const venue = agent.mandate.venues[0];
+    const asset = venue === 'perpl' ? 'AUSD' : 'USDC';
+    return { move, pnl: { label: `0.00 ${asset}`, tone: null } };
+  }
   // One asset per line: the card is narrow, and a figure cut off mid-asset says nothing.
   const label = amountsText(amounts, { signed: true, separator: '\n' });
   return { move, pnl: { label, tone: amountsTone(amounts) } };

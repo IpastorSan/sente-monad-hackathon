@@ -20,6 +20,7 @@ import {
   signedPnl,
   shortHash,
   toLedgerEntries,
+  tradeAmount,
   venueLabel,
   type DepositEntry,
   type LedgerEntry,
@@ -487,10 +488,10 @@ test('a deposit amount is read from the exact integer, at the precision a balanc
   // the exact pair decides the figure. USDC shows two places, like every balance.
   assert.equal(depositAmount(deposit()), '+250.50');
   assert.equal(depositAmount(deposit({ rawAmount: '1204500000' })), '+1,204.50');
-  // MON gets four places (`BALANCE_PLACES`), because gas amounts live below 0.01.
+  // A token is at most four places, trailing zeros dropped (SEN-215).
   assert.equal(
     depositAmount(deposit({ asset: 'MON', rawAmount: '2500000000000000000', decimals: 18 })),
-    '+2.5000',
+    '+2.5',
   );
   // Hex is what Alchemy's `rawContract.rawValue` actually carries.
   assert.equal(depositAmount(deposit({ rawAmount: '0xee6b280' })), '+250.00');
@@ -662,4 +663,16 @@ test('the demo ledger shows every kind and is not dated in the future', () => {
       'the sample deposit is settled on arrival: a made-up height is not worth a request',
     );
   }
+});
+
+test('a trade names the token it moved, at most 4 places; a perp keeps its market (SEN-215)', () => {
+  assert.equal(
+    tradeAmount({ venue: 'kuru', market: 'WETH-USDC', size: '0.013920066' }),
+    '0.0139 WETH',
+  );
+  assert.equal(
+    tradeAmount({ venue: 'perpl', market: 'BTC-PERP', size: '0.0020' }),
+    '0.002 BTC-PERP',
+  );
+  assert.equal(tradeAmount({ venue: null, market: 'MON-USDC', size: '—' }), 'MON');
 });
