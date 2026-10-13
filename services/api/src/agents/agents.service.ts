@@ -26,7 +26,7 @@ import {
   type AgentWalletProvider,
   type ProvisionedAgentWallet,
 } from './agent-wallet.provider';
-import { AGENT_MODELS, isAgentModel, maxAgentsPerUser } from './agents.config';
+import { AGENT_MODELS, agentSponsoredSends, isAgentModel, maxAgentsPerUser } from './agents.config';
 import {
   AgentRefusedError,
   AgentWalletsUnconfiguredError,
@@ -184,9 +184,20 @@ export function forkName(sourceName: string): string {
  * recompiled with the fee off no longer has the rules. Every amend compiles
  * with the agent's address, so its deposit rules are pinned (SEN-188).
  */
-function mandateChange(mandate: Mandate, kuruBuilder: AgentRecord['kuruBuilder']): AgentPatch {
+function mandateChange(
+  mandate: Mandate,
+  kuruBuilder: AgentRecord['kuruBuilder'],
+  sponsoredSends: boolean,
+): AgentPatch {
   const now = new Date();
-  return { mandate, kuruBuilder, kuruDepositPinned: true, mandateSince: now, updatedAt: now };
+  return {
+    mandate,
+    kuruBuilder,
+    kuruDepositPinned: true,
+    sponsoredSends,
+    mandateSince: now,
+    updatedAt: now,
+  };
 }
 
 function clampAgentName(name: string, sourceName: string): string {
@@ -252,6 +263,8 @@ interface MandateChangeContext {
   mandate?: Mandate;
   /** The builder fee the prepared rules allow (SEN-184), stored with the mandate. */
   kuruBuilder?: AgentRecord['kuruBuilder'];
+  /** Whether the prepared rules carry the sponsored-send twins (SEN-211). */
+  sponsoredSends: boolean;
 }
 
 /**
@@ -314,6 +327,8 @@ export class AgentsService {
    * constructor's optional tail is already long and positional.
    */
   private readonly maxAgentsPerUser = maxAgentsPerUser();
+  /** `AGENT_SPONSORED_SENDS` (SEN-211), read here for the same reason. */
+  private readonly sponsoredSends = agentSponsoredSends();
 
   constructor(
     @Inject(AGENT_STORE) private readonly store: AgentStore,
@@ -413,8 +428,14 @@ export class AgentsService {
     const rules = compileMandate(mandate, {
       kuruBuilder: kuruBuilder ?? null,
       agentAddress: agentAddress ?? null,
+      sponsoredSends: this.sponsoredSends,
     });
     return { rules, kuruBuilder };
+  }
+
+  /** {@link compileRevocationRules}, with the sponsored twins when they are on (SEN-211). */
+  private revocationRules(mandate: Mandate): PolicyRule[] {
+    return compileRevocationRules(mandate, { sponsoredSends: this.sponsoredSends });
   }
 
   /**
@@ -450,6 +471,7 @@ export class AgentsService {
       ...(kuruBuilder ? { kuruBuilder } : {}),
       // SEN-188: compiled before the wallet existed, so nothing is pinned yet.
       kuruDepositPinned: !compilesKuruDeposit(mandate),
+      ...(this.sponsoredSends ? { sponsoredSends: true } : {}),
       name: input.name,
       systemPrompt: text.systemPrompt,
       strategy: text.strategy,
@@ -561,6 +583,7 @@ export class AgentsService {
       ...(kuruBuilder ? { kuruBuilder } : {}),
       // SEN-188: a fork is a hire, compiled before its wallet existed too.
       kuruDepositPinned: !compilesKuruDeposit(mandate),
+      ...(this.sponsoredSends ? { sponsoredSends: true } : {}),
       // The fork runs the same preset (SEN-73), with the same prompt.
       ...(source.preset ? { preset: { ...source.preset } } : {}),
       // No `schedule` (SEN-67): every scheduled run spends the FORKER's credits,
@@ -718,7 +741,7 @@ export class AgentsService {
       return {};
     }
     this.logger.log(`pinned agent ${agent.id}'s Kuru deposits to its own wallet ${agent.address}`);
-    return { kuruDepositPinned: true };
+    return { kuruDepositPinned: true, sponsoredSends: this.sponsoredSends };
   }
 
   /**
@@ -959,7 +982,10 @@ export class AgentsService {
         );
       }
       this.logger.log(`amended agent ${id}: policy ${agent.policyId} now ${rules.length} rules`);
-      const amended = await this.store.update(id, mandateChange(mandate, kuruBuilder));
+      const amended = await this.store.update(
+        id,
+        mandateChange(mandate, kuruBuilder, this.sponsoredSends),
+      );
       this.anchorInBackground(id);
       return amended;
     });
@@ -996,7 +1022,7 @@ export class AgentsService {
       this.requireServerOwned(agent, 'revoked');
       // Compiled from the mandate as it stands, before the status flips: the
       // exit it names is the one the live policy already allows.
-      const rules = compileRevocationRules(agent.mandate);
+      const rules = this.revocationRules(agent.mandate);
       if (agent.status === 'active') {
         const now = new Date();
         agent = await this.store.update(id, { status: 'revoked', revokedAt: now, updatedAt: now });
@@ -1015,7 +1041,11 @@ export class AgentsService {
         `revoked agent ${id}: policy ${agent.policyId} now ${rules.length} rule(s), ` +
           `${this.describeExit(agent.mandate)}`,
       );
-      const revoked = await this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+      const revoked = await this.store.update(id, {
+        policyCleared: true,
+        sponsoredSends: this.sponsoredSends,
+        updatedAt: new Date(),
+      });
       this.anchorInBackground(id);
       return revoked;
     });
@@ -1065,7 +1095,11 @@ export class AgentsService {
     // The SAME compiler the one-step path and the hire use: what the owner
     // approves has to be what the enclave would have been given anyway.
     const { rules, kuruBuilder } = this.compile(mandate, agent.address);
-    return this.prepare(principal, agent, 'mandate_amend', rules, { mandate, kuruBuilder });
+    return this.prepare(principal, agent, 'mandate_amend', rules, {
+      mandate,
+      kuruBuilder,
+      sponsoredSends: this.sponsoredSends,
+    });
   }
 
   /**
@@ -1087,13 +1121,9 @@ export class AgentsService {
         `agent ${id} is already revoked and its policy is cleared; there is nothing to sign`,
       );
     }
-    return this.prepare(
-      principal,
-      agent,
-      'mandate_revoke',
-      compileRevocationRules(agent.mandate),
-      {},
-    );
+    return this.prepare(principal, agent, 'mandate_revoke', this.revocationRules(agent.mandate), {
+      sponsoredSends: this.sponsoredSends,
+    });
   }
 
   /**
@@ -1136,7 +1166,7 @@ export class AgentsService {
       );
       const amended = await this.store.update(
         id,
-        mandateChange(mandate, prepared.context.kuruBuilder),
+        mandateChange(mandate, prepared.context.kuruBuilder, prepared.context.sponsoredSends),
       );
       this.anchorInBackground(id);
       return amended;
@@ -1172,7 +1202,11 @@ export class AgentsService {
       this.logger.log(
         `revoked agent ${id} with an owner signature: policy ${agent.policyId} emptied`,
       );
-      const revoked = await this.store.update(id, { policyCleared: true, updatedAt: new Date() });
+      const revoked = await this.store.update(id, {
+        policyCleared: true,
+        sponsoredSends: prepared.context.sponsoredSends,
+        updatedAt: new Date(),
+      });
       this.anchorInBackground(id);
       return revoked;
     });

@@ -17,7 +17,12 @@ import {
   InMemoryAgentSecretStore,
   type AgentSecretStore,
 } from './agent-secret-store';
-import { AgentTransactionSender, agentChainClient } from './agent-transactions';
+import { agentSponsoredSends } from '../agents.config';
+import {
+  AgentTransactionSender,
+  agentChainClient,
+  agentUserOperationClient,
+} from './agent-transactions';
 import { AgentVenues } from './agent-venues';
 import {
   AGENT_SECRETS_FILE,
@@ -76,8 +81,18 @@ export const agentVenuesProviders: Provider[] = [
   {
     provide: AgentTransactionSender,
     inject: [AGENT_WALLETS, AGENT_PUBLIC_CLIENT],
-    useFactory: (wallets: AgentWalletProvider, client: PublicClient) =>
-      new AgentTransactionSender({ wallets, chain: agentChainClient(client) }),
+    useFactory: (wallets: AgentWalletProvider, client: PublicClient) => {
+      // SEN-211: Privy's gas credits pay for the agents' transactions.
+      const sponsored = agentSponsoredSends();
+      new Logger('AgentsConfig').log(
+        `agents: transactions ${sponsored ? 'Privy-sponsored (AGENT_SPONSORED_SENDS)' : 'signed and broadcast, agent pays gas'}`,
+      );
+      return new AgentTransactionSender({
+        wallets,
+        chain: agentChainClient(client),
+        ...(sponsored ? { sponsored: agentUserOperationClient(client) } : {}),
+      });
+    },
   },
   {
     provide: PerplAgentAccounts,

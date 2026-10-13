@@ -2,7 +2,8 @@ import type { AuthorizationPayload, PolicyRule } from '@sente/mandate';
 import type { Address, Hex, TypedDataDefinition } from 'viem';
 
 import { AgentWalletsUnconfiguredError } from './agents.errors.ts';
-import type { PrivyTransactionRequest } from './privy/agent-wallet.ts';
+import type { PrivyTransactionRequest, SponsoredCall } from './privy/agent-wallet.ts';
+import type { SponsoredSendOutcome } from '../wallet/send/sponsored-send.ts';
 
 /** DI token for the agent wallet provider. */
 export const AGENT_WALLETS = Symbol('AGENT_WALLETS');
@@ -97,6 +98,20 @@ export interface AgentWalletProvider {
 
   /** A raw signed transaction, ready for `eth_sendRawTransaction`. */
   signTransaction(walletId: string, tx: PrivyTransactionRequest): Promise<Hex>;
+
+  /**
+   * A gas-sponsored send (SEN-211): the provider signs AND submits, and its
+   * sponsor pays the gas. The one exception to "nothing is ever broadcast from
+   * here". Same contract on refusal: `EnclaveRefusedError` when the policy says
+   * no — including a policy with no `eth_sendTransaction` rule for the call —
+   * and `SponsoredSendRejectedError` when the policy allowed it but the send
+   * was not submitted. Optional: a provider without it is sign-only.
+   */
+  sendSponsoredTransaction?(
+    walletId: string,
+    chainId: number,
+    call: SponsoredCall,
+  ): Promise<SponsoredSendOutcome>;
 
   /** An EIP-712 signature (`eth_signTypedData_v4`). */
   signTypedData(walletId: string, typed: TypedDataDefinition): Promise<Hex>;

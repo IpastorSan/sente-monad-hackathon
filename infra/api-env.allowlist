@@ -100,6 +100,8 @@ AGENT_SELL_MAX_BELOW_MARK_PCT
 AGENT_MANDATE_OWNER
 # Unarchived agents per user (SEN-204), default 10.
 AGENTS_MAX_PER_USER
+# Agents send Privy-sponsored, gas paid from Privy credits (SEN-211), default off.
+AGENT_SPONSORED_SENDS
 # The scheduler's own knobs (SEN-71); live whatever AGENT_TICK_SECONDS says,
 # because per-agent schedules (SEN-67) need them. POLL_SECONDS=off stops all scheduled runs.
 AGENT_SCHEDULER_POLL_SECONDS

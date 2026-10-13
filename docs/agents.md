@@ -85,6 +85,42 @@ socket included, and the next call builds a fresh one.
 An IOC order that sweeps more than one price level can need more than 425,430.
 Pass `gasLimit` to `PrivyKuruSubmitter` for that.
 
+### Sponsored sends (SEN-211, `AGENT_SPONSORED_SENDS`, off by default)
+
+With `AGENT_SPONSORED_SENDS=1` the same queue sends each call as a
+Privy-sponsored `eth_sendTransaction` (`sponsor: true`) instead, so Privy's gas
+credits pay and the agent needs no MON for a contract call. Measured live in
+`docs/privy-sponsorship.md`, run 4. What changes:
+
+- **The policy.** Every hire, amend and revoke compiles each
+  `eth_signTransaction` rule a second time for `eth_sendTransaction`, with the
+  same conditions (`compileMandate(…, { sponsoredSends: true })`). A Privy rule
+  binds only its own method: without the twins the enclave refuses every
+  sponsored send. `AgentRecord.sponsoredSends` records whether the live policy
+  has them; the mandate anchor hashes them. The app's mirror
+  (`apps/mobile/src/agents/approval.ts`) accepts a policy with or without the
+  twins, all of them or none, so an app build without SEN-211 refuses to sign
+  the amends and revokes this composes (gotcha 13). Ship the app with it.
+- **Gas.** `gas` is ignored; Privy's bundler sizes the operation, and the
+  EntryPoint reports `actualGasCost: 0`.
+- **Outcome.** Privy answers with a user-operation hash. `success` is that
+  operation's own flag off `UserOperationEvent` (gotcha 8 applies here), the
+  receipt's `transactionHash` is the bundle that carried it, and its logs are
+  the operation's own, cut out of the bundle's receipt, so fill tracking reads
+  only this call's events.
+- **Fallbacks.** A sponsored send the policy refuses (`policy_violation`) is
+  retried on the sign path: that is every send of an agent whose policy
+  predates the flag, which keeps working, paid in its own MON, until it is
+  amended. A call the mandate forbids is refused on both. A send refused for
+  a stale EIP-7702 nonce (the first send delegates the wallet, gotcha 12) is
+  retried once after 4 s. Any other `transaction_broadcast_failure` throws
+  `SponsoredSendRejectedError`: Privy simulates first, so the call would have
+  reverted, and nothing reached the chain.
+- **Delegation.** The first sponsored send EIP-7702-delegates the wallet to
+  Kernel (`0xd6ce…5b28`). Privy does it without consulting the wallet's
+  policy. The address does not change, `eth_signTransaction` still works
+  afterwards, and typed-data signatures still `ecrecover` (gotcha 9).
+
 ### Perpl credentials
 
 `credentials(agent)` returns the stored key if one is held. Otherwise it checks
@@ -142,6 +178,9 @@ drip** (SEN-14): every hire sends the new wallet `GAS_DRIP_AGENT_AMOUNT_MON`
 through the reserve-aware dispatcher (CLAUDE.md gotcha 12). It was sized from
 this live check, whose one pass cost the agent 0.138 MON (below), and the
 SEN-18/19 run below confirms one run of that shape costs about 0.10 MON.
+With `AGENT_SPONSORED_SENDS=1` the drip is still sent: it is what the sign-path
+fallback pays with, and the native-MON Kuru deposit spends the agent's own MON
+either way.
 
 For development, `pnpm --filter @sente/api run agent:fund -- --to <addr>
 --mon … --ausd … --usdc …` funds an agent from `TREASURY_PRIVATE_KEY`:

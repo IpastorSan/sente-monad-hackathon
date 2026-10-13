@@ -2,13 +2,22 @@
 // and signs only what its mandate policy allows. Ported from turnstile
 // `buyer/org/org-wallet.ts`, plus `signTypedData` for Perpl API-key enrollment.
 //
-// ## Sign, then broadcast — never `eth_sendTransaction`
+// ## Sign, then broadcast — or a Privy-sponsored send (SEN-211)
 //
 // `eth_signTransaction` returns a raw signed transaction and broadcasts
-// nothing; we submit it over Monad's own RPC. Two reasons, both in
-// docs/privy-policy-enforcement.md: stateful aggregations (the rolling cap)
-// are only evaluated on the sign path, and the send path is where Privy runs
-// transaction simulation — which we do not want on a chain Privy may not route.
+// nothing; we submit it over Monad's own RPC, and the agent pays the gas in
+// MON. It was chosen because stateful aggregations (the rolling cap) are only
+// evaluated on the sign path (docs/privy-policy-enforcement.md); SEN-204
+// refuses `rollingCap`, so that reason no longer binds.
+//
+// {@link sendSponsoredTransaction} is the other path, behind
+// `AGENT_SPONSORED_SENDS`: `eth_sendTransaction` with `sponsor: true`, which
+// Privy bundles as a user operation its gas credits pay for. The mandate binds
+// it only through `eth_sendTransaction` rules — the twins
+// `compileMandate(…, { sponsoredSends: true })` emits (run 4 in
+// docs/privy-sponsorship.md). Privy simulates the call BEFORE it evaluates the
+// policy, so a call that would revert is refused as
+// `transaction_broadcast_failure`, not `policy_violation`.
 //
 // Always set `chain_id`: Privy's SDK defaults to 1, and the chain id is what
 // goes into the EIP-155 signature. Fill nonce, gas and fees yourself.
@@ -21,6 +30,11 @@ import {
   type TypedDataDefinition,
 } from 'viem';
 
+import {
+  readSendResponse,
+  SEND_CAIP2,
+  type SponsoredSendOutcome,
+} from '../../wallet/send/sponsored-send.ts';
 import type { AuthorizationKey } from './authorization-key.ts';
 import type { PrivyClient } from './privy.client.ts';
 
@@ -168,6 +182,58 @@ export async function signTransaction(
     { approvals: options.approvals },
   );
   return response.data.signed_transaction;
+}
+
+/** One call for a sponsored send: no nonce, gas or fees — Privy's bundler sets them. */
+export interface SponsoredCall {
+  readonly to: Address;
+  readonly data?: Hex;
+  readonly value?: bigint;
+}
+
+/**
+ * The Privy RPC body of an agent's sponsored send. `value` is always present
+ * (`0x0` for none), as on the sign path (SEN-146), though run 4 measured that
+ * the send path also reads an absent value as zero.
+ */
+export function sponsoredAgentSendBody(chainId: number, call: SponsoredCall) {
+  return {
+    method: 'eth_sendTransaction',
+    caip2: SEND_CAIP2,
+    sponsor: true,
+    params: {
+      transaction: {
+        // Checksummed: Privy compares `to` case-sensitively against the policy.
+        to: getAddress(call.to),
+        ...(call.data === undefined ? {} : { data: call.data }),
+        value: hex(call.value ?? 0n),
+        chain_id: chainId,
+      },
+    },
+  };
+}
+
+/**
+ * A Privy-sponsored send from an agent wallet (SEN-211), approved by the agent
+ * key and evaluated against the signer's override policy like a sign. Returns
+ * the USER OPERATION hash Privy answers with (CLAUDE.md gotcha 8): whether the
+ * call worked is that operation's `success`, never the carrying transaction's.
+ */
+export async function sendSponsoredTransaction(
+  privy: PrivyClient,
+  options: {
+    walletId: string;
+    chainId: number;
+    call: SponsoredCall;
+    approvals: readonly AuthorizationKey[];
+  },
+): Promise<SponsoredSendOutcome> {
+  const response = await privy.post<unknown>(
+    `/v1/wallets/${options.walletId}/rpc`,
+    sponsoredAgentSendBody(options.chainId, options.call),
+    { approvals: options.approvals },
+  );
+  return readSendResponse(response);
 }
 
 /** EIP-712 typed data in the snake_case, JSON-safe shape Privy's RPC takes. */

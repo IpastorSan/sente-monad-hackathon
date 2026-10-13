@@ -100,6 +100,20 @@ export interface AgentsConfig {
   mandateOwner: AgentMandateOwnerMode;
 }
 
+/**
+ * `AGENT_SPONSORED_SENDS=1` (SEN-211, default off): agents' policies are
+ * compiled with an `eth_sendTransaction` twin of every transaction rule, and
+ * the agents' transactions go out as Privy-sponsored sends — Privy's gas
+ * credits pay, so an agent needs no MON for a contract call. A send its live
+ * policy has no twin for (hired or last amended with this off) falls back to
+ * sign-and-broadcast, paid in the agent's own MON, as before.
+ * docs/privy-sponsorship.md, run 4, is the live evidence.
+ */
+export function agentSponsoredSends(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env['AGENT_SPONSORED_SENDS']?.trim().toLowerCase();
+  return raw === '1' || raw === 'true';
+}
+
 /** `AGENTS_MAX_PER_USER`'s default: active and revoked agents, archived ones not counted (SEN-204). */
 export const DEFAULT_MAX_AGENTS_PER_USER = 10;
 

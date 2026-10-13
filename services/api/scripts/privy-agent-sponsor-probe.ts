@@ -48,6 +48,7 @@ import {
   type Address,
   type Hash,
   type Hex,
+  type PublicClient,
   type TransactionSerializedEIP1559,
 } from 'viem';
 import { monadTestnet } from 'viem/chains';
@@ -56,6 +57,11 @@ import { loadAgentsConfig } from '../src/agents/agents.config.ts';
 import { getAgentWallet, privyTransaction } from '../src/agents/privy/agent-wallet.ts';
 import { PrivyAgentWalletProvider } from '../src/agents/privy/privy-agent-wallet.provider.ts';
 import { PrivyClient, PrivyError } from '../src/agents/privy/privy.client.ts';
+import {
+  AgentTransactionSender,
+  agentChainClient,
+  agentUserOperationClient,
+} from '../src/agents/venues/agent-transactions.ts';
 import { awaitUserOperation } from '../src/wallet/confirmation/user-operation-logs.ts';
 import {
   readSendResponse,
@@ -120,18 +126,6 @@ function writeReport(): void {
 
 const approveData = (spender: Address, amount: bigint): Hex =>
   encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, amount] });
-
-/** The rules as compiled, plus an `eth_sendTransaction` twin of every transaction rule. */
-function withSendTwins(rules: readonly PolicyRule[]): PolicyRule[] {
-  const twins = rules
-    .filter((rule) => rule.method === 'eth_signTransaction')
-    .map((rule) => ({
-      ...rule,
-      name: `${rule.name} (sponsored)`.slice(0, 50),
-      method: 'eth_sendTransaction',
-    }));
-  return [...rules, ...(twins as unknown as PolicyRule[])];
-}
 
 /** The delegation itself, pinned to the one delegate Privy has used. */
 function delegationRule(): PolicyRule {
@@ -276,13 +270,13 @@ async function main(): Promise<number> {
     },
     {
       id: 'a1',
-      title: '+ an eth_sendTransaction twin of every rule',
-      rules: () => withSendTwins(compiled),
+      title: 'compiled with sponsoredSends (an eth_sendTransaction twin of every rule)',
+      rules: () => compileMandate(mandate, { sponsoredSends: true }),
     },
     {
       id: 'a2',
       title: '+ an eth_sign7702Authorization rule pinning the Kernel delegate',
-      rules: () => [...withSendTwins(compiled), delegationRule()],
+      rules: () => [...compileMandate(mandate, { sponsoredSends: true }), delegationRule()],
     },
   ];
   let first: Extract<SendAttempt, { ok: true }> | undefined;
@@ -430,6 +424,44 @@ async function main(): Promise<number> {
         ? `success=${outcome.success} tx=${outcome.transactionHash} block=${outcome.blockNumber} after ${elapsedMs} ms`
         : `no UserOperationEvent within ${CONFIRM_TIMEOUT_MS} ms`,
       outcome?.success === true,
+    );
+  }
+
+  // ---- g. the product path: AgentTransactionSender, sponsored -------------
+  // What the API runs with AGENT_SPONSORED_SENDS=1: the sender sends, follows
+  // the user operation, and cuts its own logs out of the bundle's receipt.
+  await sleep(SPACING_MS);
+  const sender = new AgentTransactionSender({
+    wallets: provider,
+    chain: agentChainClient(rpc as unknown as PublicClient),
+    sponsored: agentUserOperationClient(rpc as unknown as PublicClient),
+  });
+  try {
+    const started = Date.now();
+    const [receipt] = await sender.sendAll({ walletId, address }, [
+      { to: USDC, data: approveData(ACCOUNT_CORE, 2n * ALLOWED), gas: 80_000n },
+    ]);
+    const approvals = (receipt?.logs ?? []).filter((log) => isAddressEqual(log.address, USDC));
+    shapes.g = receipt;
+    report(
+      'g',
+      'AgentTransactionSender in sponsored mode: approve(AccountCore, 2 USDC)',
+      receipt
+        ? `success=${receipt.success} userOp=${receipt.userOpHash ?? 'none'} tx=${receipt.transactionHash} ` +
+            `block=${receipt.blockNumber}, ${receipt.logs.length} log(s) of its own ` +
+            `(${approvals.length} USDC Approval), ${Date.now() - started} ms end to end`
+        : 'no receipt',
+      receipt?.success === true &&
+        receipt.userOpHash !== undefined &&
+        receipt.logs.length === 1 &&
+        approvals.length === 1,
+    );
+  } catch (error) {
+    report(
+      'g',
+      'AgentTransactionSender in sponsored mode',
+      `failed: ${(error as Error).message}`,
+      false,
     );
   }
 

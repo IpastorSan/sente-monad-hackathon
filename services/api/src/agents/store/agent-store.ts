@@ -91,6 +91,16 @@ export interface AgentRecord {
    * also answers `true` for a mandate with no Kuru deposit to pin.
    */
   readonly kuruDepositPinned?: boolean;
+  /**
+   * Whether the live policy was compiled with `sponsoredSends` (SEN-211): every
+   * transaction rule repeated for `eth_sendTransaction`, so the agent can send
+   * through Privy's gas sponsorship. Written by every hire, amend and revoke
+   * from `AGENT_SPONSORED_SENDS` at the time. Absent reads as `false`. The
+   * sender does not need it (a sponsored send the policy has no rule for is
+   * refused and falls back to signing); the mandate anchor does, to hash the
+   * rules the policy actually holds.
+   */
+  readonly sponsoredSends?: boolean;
   /** The provider's (Privy's) wallet id. */
   readonly walletId: string;
   /**
@@ -240,6 +250,7 @@ export type AgentPatch = Partial<
     | 'mandate'
     | 'kuruBuilder'
     | 'kuruDepositPinned'
+    | 'sponsoredSends'
     | 'mandateSince'
     | 'status'
     | 'policyCleared'

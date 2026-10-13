@@ -85,10 +85,11 @@ export function desiredAnchor(agent: AgentRecord): DesiredAnchor {
   const revoked = agent.status === 'revoked';
   const pinned = agent.kuruDepositPinned === true || !compilesKuruDeposit(agent.mandate);
   const rules = revoked
-    ? compileRevocationRules(agent.mandate)
+    ? compileRevocationRules(agent.mandate, { sponsoredSends: agent.sponsoredSends === true })
     : compileMandate(agent.mandate, {
         kuruBuilder: agent.kuruBuilder ?? null,
         agentAddress: pinned ? agent.address : null,
+        sponsoredSends: agent.sponsoredSends === true,
       });
   return {
     status: revoked ? 'revoked' : 'active',
