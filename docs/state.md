@@ -35,7 +35,8 @@ keys (`credits/store/sqlite-credit-key-store.ts`), the agent secrets
 append-only logs: the agent event log
 (`agents/events/sqlite-agent-event-log.ts`), run transcripts
 (`agents/runner/transcript/sqlite-run-transcript-store.ts`) and the value
-history (`portfolio/history/sqlite-value-history-store.ts`).
+history (`portfolio/history/sqlite-value-history-store.ts`); and, in
+migration 4, the watcher store (`agents/watchers/sqlite-watcher-store.ts`).
 
 The sealed stores keep a two-layer shape: `state/db/record-table.ts` moves the
 file's sealed records in and out of the table as they are (that is all the
@@ -157,6 +158,15 @@ Copy the agent store. Six places, each with a worked example in the tree:
 A store that two services write together is the reason `transaction` exists:
 wrap the calls at the service, and each store's own transaction joins it.
 
+Hiring, revoking and archiving have nothing to wrap (checked 2026-10-13):
+`AgentsService` writes one store, the agent store, and its two writes in a
+hire (`insert`, then `update` with the pin, the ERC-8004 id and the gas
+outcome) sit on either side of Privy, the registry, the drip and Alchemy on
+purpose — the record must be on disk before any of those runs, so a crash
+mid-hire never loses a provisioned wallet (SEN-48). Revoke is the same shape
+around the policy PATCH; archive is one write. Grouping them would mean holding
+a transaction across network awaits, which `transaction` refuses.
+
 ## Cut-over and rollback
 
 The import copies the files into the database and never modifies the files,
@@ -165,23 +175,56 @@ so the rollback is the same switch, flipped back.
 Locally: `pnpm --filter @sente/api run state:import-sqlite [-- --state-dir <dir>]`
 (the directory also comes from `STATE_DIR` in the environment or in `.env`).
 
-On the box the runtime image carries `dist/` only, no `scripts/` or `src/`, so
-the script runs from the Dockerfile's `build` stage, which has the whole tree,
-as the same uid that owns the state directory. Not yet run there — the
-procedure as planned, to be checked against the box on the first cut-over:
+The runtime image carries `dist/` only, so the same code is also compiled into
+it: `src/state-import-sqlite.ts` → `node dist/state-import-sqlite.js
+[--state-dir <dir>]`, which reads `STATE_DIR` from the environment. On the box
+it runs as a one-off container of the `api` service — same image, same
+`STATE_DIR`, same bind mount, same uid 1000, same `hostname: sente-api` the
+lock records — so it needs nothing the deploy did not already ship.
+
+### The production runbook
+
+Every command from `infra/` on the laptop, with `PROJECT=plenary-anvil-491607-s6`
+and `ZONE=europe-southwest1-a` exported, as for `deploy.sh`. The box is
+`sente-eu`. Not yet run there; rehearsed locally (below).
 
 ```bash
-# With the API stopped and a backup of /var/lib/sente/state taken first
-# (docs/deploy.md, "Rolling back").
-sudo docker compose -f /opt/sente/docker-compose.yml stop api
-sudo docker build --target build -t sente-api-build -f services/api/Dockerfile .
-sudo docker run --rm --user 1000:1000 -v /var/lib/sente/state:/var/lib/sente/state \
-  -w /app/services/api sente-api-build \
-  node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON \
-  scripts/state-import-sqlite.ts --state-dir /var/lib/sente/state
-# "All N store(s) verified." — then STORE_BACKEND=sqlite in the local .env,
-# infra/push-secrets.sh (the allowlist carries it), and start the API again.
+box() { gcloud compute ssh sente-eu --project "$PROJECT" --zone "$ZONE" --command "$1"; }
+
+# 0. The build that has the import and the SQLite stores, deployed as usual
+#    with STORE_BACKEND unset or `file` in the repo .env. Nothing changes yet.
+./deploy.sh
+
+# 1. Stop the API (its shutdown releases api.lock), then back the files up.
+box 'cd /opt/sente && sudo docker compose stop api'
+box 'sudo tar czf ~/sente-state-pre-sqlite-$(date +%F-%H%M).tgz -C /var/lib/sente state && ls -l ~/sente-state-pre-sqlite-*.tgz'
+
+# 2. The import. Takes the lock, copies, verifies, releases. Expect
+#    "All N store(s) verified." and exit 0; on exit 1 stop here (the API is
+#    still on `file`, so `box 'cd /opt/sente && sudo docker compose start api'`
+#    is the whole rollback).
+box 'cd /opt/sente && sudo docker compose run --rm --no-deps api node dist/state-import-sqlite.js'
+
+# 3. Flip the switch: STORE_BACKEND=sqlite in the repo .env (BACKUP_INTERVAL_MINUTES
+#    and BACKUP_KEEP too, if not the defaults), then deliver it.
+DRY_RUN=1 ./push-secrets.sh
+./push-secrets.sh
+
+# 4. Start the API on the new api.env. --force-recreate: a stopped container
+#    keeps the environment it was created with.
+box 'cd /opt/sente && sudo docker compose up -d --force-recreate api'
+box 'sleep 30; sudo docker logs --tail 80 sente-api 2>&1 | grep -E "StateDb|StateStore|StateDbBackup"'
+#    Expect: "Opened /var/lib/sente/state/sente.db (schema vN)", one
+#    "... in /var/lib/sente/state/sente.db" line per converted store with the
+#    counts the import printed, and a first backup under .../backups/.
+
+# 5. The usual post-deploy checks.
+./live-check.sh --box
 ```
+
+`docker compose run` gives the one-off container a generated name, so it does
+not collide with `container_name: sente-api`, and `--no-deps` keeps it from
+touching Caddy. A re-run of step 2 is safe at any point the API is stopped.
 
 What the script does: takes `api.lock` (it refuses while the API or anything
 else holds the directory), opens or creates `sente.db` and migrates it, and for
@@ -205,23 +248,48 @@ One edge: an event the cap evicted under `sqlite` since the first copy is not
 resurrected by a re-run, and the re-run reports it missing. Measured on a
 laptop: 300k events and 400k snapshots import and verify in about 7 s.
 
-Rollback: `STORE_BACKEND=file`, restart. Anything written under `sqlite` after
-the cut-over stays in `sente.db` and is not in the files; to carry it back,
-there is no reverse import yet — restore the file backup you took, or leave
-`sqlite` on and fix forward.
+Rollback: `STORE_BACKEND=file` in the repo .env, `./push-secrets.sh`, then
+`box 'cd /opt/sente && sudo docker compose up -d --force-recreate api'`. Anything
+written under `sqlite` after the cut-over stays in `sente.db` and is not in the
+files; to carry it back, there is no reverse import yet — restore the file
+backup you took, or leave `sqlite` on and fix forward. A later `./deploy.sh`
+keeps whichever value `api.env` has; it never resets the switch.
+
+Rehearsed 2026-10-13, locally: `node dist/state-import-sqlite.js` from a
+`nest build` against a seeded temp `STATE_DIR` (verified, idempotent on a
+re-run, exit 2 with no directory, exit 1 on a held lock), then the compiled API
+booted on it under `sqlite` and took its boot backup; and step 2 verbatim,
+`docker compose run --rm --no-deps api node dist/state-import-sqlite.js`, in a
+copy of `infra/docker-compose.yml` pointed at a local image built by the
+Dockerfile, a scratch env file and a scratch state directory.
 
 ## Backups
 
 `sente.db` under WAL is three files (`sente.db`, `sente.db-wal`,
 `sente.db-shm`), and `cp` of the main file while the API runs can miss the WAL.
-Two correct ways:
+`SenteDb.backupTo(path)` — `VACUUM INTO` — gives one self-contained file
+while the API keeps writing, and under `sqlite` the API takes one on its own
+(`SenteDbBackups`, `state/state.module.ts`; `state/db/backups.ts`):
 
-- while the API runs: `SenteDb.backupTo(path)` — `VACUUM INTO` — gives one
-  self-contained file. A periodic backup through it is a follow-up; until then
-  `sqlite3 /var/lib/sente/state/sente.db "VACUUM INTO '/root/sente-$(date +%F).db'"`
-  from the host does the same;
-- with the API stopped: the `tar` in `docs/deploy.md` "Rolling back" is fine,
-  the shutdown checkpoint folded the WAL into the main file.
+- right after boot (once the app is up, never holding the boot), then every
+  `BACKUP_INTERVAL_MINUTES` (default 360; `0` turns them off, with a warning);
+- to `<STATE_DIR>/backups/sente-<UTC yyyymmddThhmmssZ>.db`, keeping the newest
+  `BACKUP_KEEP` (default 8, so two days at the default interval). Only files
+  with that name are pruned; anything else in the directory is left alone;
+- each one logged with its size and duration (`StateDbBackup`); a failure is
+  logged and the next tick tries again. A malformed `BACKUP_*` value refuses
+  the boot under `sqlite` (and is ignored under `file`).
+
+They sit on the same disk as the database: they cover a bad write, migration or
+deploy, not the disk. To take one off the box:
+
+```bash
+box 'sudo ls -l /var/lib/sente/state/backups'
+box 'sudo cat /var/lib/sente/state/backups/sente-<stamp>.db' > sente-<stamp>.db
+```
+
+With the API stopped, the `tar` in `docs/deploy.md` "Rolling back" is fine too:
+the shutdown checkpoint folded the WAL into the main file.
 
 A backup restores by copying it to `<STATE_DIR>/sente.db` with the API stopped
-and the `-wal` and `-shm` files removed.
+and the `-wal` and `-shm` files removed, owned by uid 1000.

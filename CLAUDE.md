@@ -529,14 +529,16 @@ delete the lock file by hand, after checking. This covers the API, the live scri
 first. A second replica will not work just because the lock allows it.
 
 SEN-205 adds `STORE_BACKEND=file|sqlite` (default `file`, anything else refuses to boot). Under
-`sqlite` the converted stores (so far the agent store, the user-wallet registry, profiles, starter
-kits, creator fees, the agent event log, run transcripts, the value history, and — still sealed, the
-import never sees the key — credit keys, agent secrets and user venue secrets) live in
+`sqlite` the converted stores (the agent store, the user-wallet registry, profiles, starter kits,
+creator fees, the agent event log, run transcripts, the value history, the watcher store, and —
+still sealed, the import never sees the key — credit keys, agent secrets and user venue secrets)
+live in
 `<STATE_DIR>/sente.db` — one `node:sqlite` database, WAL, opened by `SenteDbLease` after the lock
 is held, migrated at boot — and the rest keep their files. `docs/state.md` has the schema pattern,
-how to convert a store, the import (`state:import-sqlite`, which leaves the JSON files intact so
-`STORE_BACKEND=file` is the rollback) and backups (`VACUUM INTO`, never a bare `cp` of a live WAL
-database).
+how to convert a store, the import (`state:import-sqlite` locally, `node dist/state-import-sqlite.js`
+in the image; it leaves the JSON files intact so `STORE_BACKEND=file` is the rollback) with the
+production runbook, and backups (`VACUUM INTO` into `<STATE_DIR>/backups` at boot and every
+`BACKUP_INTERVAL_MINUTES`; never a bare `cp` of a live WAL database).
 
 ---
 

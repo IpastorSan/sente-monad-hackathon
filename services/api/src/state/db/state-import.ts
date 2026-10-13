@@ -52,6 +52,7 @@ import {
   SqliteValueHistoryStore,
   valueHistoryKey,
 } from '../../portfolio/history/sqlite-value-history-store.ts';
+import { SqliteWatcherStore } from '../../agents/watchers/sqlite-watcher-store.ts';
 import { SqliteUserWalletRegistry } from '../../wallet/store/sqlite-user-wallet-registry.ts';
 import { encodeValue, JsonRecordFile, type JsonValue } from '../json-file.ts';
 import { acquireStateDirLock } from '../state-dir-lock.ts';
@@ -166,6 +167,13 @@ export const STORE_IMPORTS: readonly StoreImport<unknown>[] = [
     open: (db) => new SqliteValueHistoryStore(db),
     key: valueHistoryKey,
     ordered: true,
+  }),
+  entry<Parameters<SqliteWatcherStore['put']>[0]>({
+    name: 'agent_watchers',
+    file: 'agent-watchers.json',
+    load: loadJsonRecords,
+    open: (db) => new SqliteWatcherStore(db),
+    key: (record) => record.agentId,
   }),
 ];
 

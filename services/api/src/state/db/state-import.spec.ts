@@ -25,6 +25,9 @@ import { FileUserVenueSecretStore } from '../../trade/file-user-venue-secrets';
 import { SqliteUserVenueSecretStore } from '../../trade/sqlite-user-venue-secrets';
 import { SqliteValueHistoryStore } from '../../portfolio/history/sqlite-value-history-store';
 import { FileValueHistoryStore } from '../../portfolio/history/value-history.store';
+import { SqliteWatcherStore } from '../../agents/watchers/sqlite-watcher-store';
+import { testWatcherSet } from '../../agents/watchers/testing/watcher-set';
+import { FileWatcherStore } from '../../agents/watchers/watcher-store';
 import { FileUserWalletRegistry } from '../../wallet/store/file-user-wallet-registry';
 import { SqliteUserWalletRegistry } from '../../wallet/store/sqlite-user-wallet-registry';
 import { acquireStateDirLock, StateDirLockedError } from '../state-dir-lock';
@@ -96,7 +99,10 @@ async function writeFiles() {
   );
   const venue = new FileUserVenueSecretStore(join(dir, 'user-venue-secrets.json'), SECRETS_KEY);
   await venue.putPerplTradeToken('alice', 'trade-token');
-  return { agents: [first, second] };
+  const watchers = new FileWatcherStore(join(dir, 'agent-watchers.json'));
+  const watcherSet = testWatcherSet(first.id);
+  watchers.put(watcherSet);
+  return { agents: [first, second], watcherSet };
 }
 
 const SMALL_STORES = [
@@ -141,7 +147,7 @@ function readLogs(): string[] {
 
 describe('importStateToSqlite', () => {
   it('copies every store into sente.db and verifies it record by record', async () => {
-    const { agents } = await writeFiles();
+    const { agents, watcherSet } = await writeFiles();
     const before = {
       agents: readFileSync(join(dir, 'agents.json'), 'utf8'),
       wallets: readFileSync(join(dir, 'user-wallets.json'), 'utf8'),
@@ -162,6 +168,7 @@ describe('importStateToSqlite', () => {
       ['agent_events', undefined, 0, true],
       ['agent_runs', undefined, 0, true],
       ['value_history', undefined, 0, true],
+      ['agent_watchers', 1, 1, true],
     ]);
     expect(SMALL_STORES.map((file) => readFileSync(join(dir, file), 'utf8'))).toEqual(smallBefore);
     for (const report of reports.filter((r) => r.fileCount !== undefined)) {
@@ -201,6 +208,7 @@ describe('importStateToSqlite', () => {
       await expect(
         new SqliteUserVenueSecretStore(db, SECRETS_KEY).getPerplTradeToken('alice'),
       ).resolves.toBe('trade-token');
+      expect(new SqliteWatcherStore(db).get(watcherSet.agentId)).toEqual(watcherSet);
     } finally {
       db.close();
     }
@@ -270,6 +278,7 @@ describe('importStateToSqlite', () => {
       'agent_events',
       'agent_runs',
       'value_history',
+      'agent_watchers',
     ]);
   });
 });
