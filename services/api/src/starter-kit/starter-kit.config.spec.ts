@@ -32,12 +32,13 @@ describe('loadStarterKitConfig', () => {
     expect(loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: '  ' })).toEqual({ enabled: false });
   });
 
-  it('defaults to 250 AUSD + 100 USDC for 50 users a day, AUSD first', () => {
+  it('defaults to 250 AUSD + 100 USDC for 20 users a day, 5 per IP, AUSD first', () => {
     const config = loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: KEY });
 
     if (!config.enabled) throw new Error('expected enabled');
     expect(config.senderKey).toBe(KEY);
-    expect(config.dailyCapUsers).toBe(50);
+    expect(config.dailyCapUsers).toBe(20);
+    expect(config.dailyCapPerIp).toBe(5);
     expect(config.tokens).toEqual([
       {
         symbol: 'AUSD',
@@ -62,11 +63,29 @@ describe('loadStarterKitConfig', () => {
       STARTER_DRIP_AUSD: '120.5',
       STARTER_DRIP_USDC: '15',
       STARTER_DRIP_DAILY_CAP_USERS: '7',
+      STARTER_DRIP_DAILY_CAP_PER_IP: '2',
     });
 
     if (!config.enabled) throw new Error('expected enabled');
     expect(config.tokens.map((token) => token.atoms)).toEqual([120_500_000n, 15_000_000n]);
     expect(config.dailyCapUsers).toBe(7);
+    expect(config.dailyCapPerIp).toBe(2);
+  });
+
+  it('STARTER_KIT_ENABLED=false turns it off with the key still set (SEN-204)', () => {
+    for (const off of ['false', 'FALSE', '0', 'off']) {
+      expect(
+        loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: KEY, STARTER_KIT_ENABLED: off }),
+      ).toEqual({ enabled: false });
+    }
+    for (const on of ['true', '1', 'on', '']) {
+      expect(
+        loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: KEY, STARTER_KIT_ENABLED: on }).enabled,
+      ).toBe(true);
+    }
+    expect(() =>
+      loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: KEY, STARTER_KIT_ENABLED: 'nah' }),
+    ).toThrow(/STARTER_KIT_ENABLED/);
   });
 
   it('leaves the Kuru USDC leg out at STARTER_DRIP_USDC=0, and still sends AUSD (SEN-185)', () => {

@@ -45,6 +45,7 @@ import { checkSpec, indicatorSpec, KLINE_INTERVALS } from './indicator-schema';
 import { summarize, type SourceCandle } from './indicators';
 import { fetchSmartMoneySignals, NansenClient } from './nansen';
 import { invalidInput, SenteRefusal } from './refusals';
+import { DEFAULT_SELL_MAX_BELOW_MARK_PCT } from './tools.config';
 import type { WatcherSetView } from '../watchers/watcher.service';
 import {
   MAX_CLAUSES,
@@ -158,12 +159,21 @@ function marketAllowed(mandate: Mandate, id: ToolVenueId, market: string): boole
  * Order notional in quote units, as the cap should see it. A buy never pays
  * more than `size × price` (the limit price, or the slippage ceiling). A sell's
  * price is a FLOOR, so `size × price` could be made arbitrarily small; it is
- * valued at the higher of that and a real price: the book's own price for the
- * size, else the shared market data's mark.
+ * valued at the highest of that, the book's own price for the size, and the
+ * shared market data's mark.
  *
- * SEN-133: with neither, the sell is refused. Falling back to the floor alone
- * fails open: on an empty book an agent could dump its whole balance at
- * 0.0000001 and the cap would see almost nothing.
+ * SEN-204: the mark counts whenever there is one, not only on an empty book.
+ * A single tiny bid planted under the market used to be "the book's price",
+ * and a sell at a dust floor then passed the cap valued at that bid.
+ *
+ * SEN-133: with neither a book price nor a mark, the sell is refused. Falling
+ * back to the floor alone fails open: on an empty book an agent could dump its
+ * whole balance at 0.0000001 and the cap would see almost nothing.
+ *
+ * `limitSell`: a resting sell's own price must also sit within
+ * `sellMaxBelowMarkPct` of the mark, or it is `price_far_from_mark`. A market
+ * sell's floor is not held to it: a stop-loss on a thin book is exactly the
+ * order that must still go out, and its size is already bounded above.
  */
 async function orderNotional(
   ctx: ToolContext,
@@ -171,6 +181,7 @@ async function orderNotional(
   id: ToolVenueId,
   args: { market: string; side: Side; size: Decimal },
   price: Decimal,
+  options: { limitSell?: boolean } = {},
 ): Promise<Decimal> {
   const atPrice = mulDecimal(args.size, price);
   if (args.side === 'buy') return atPrice;
@@ -179,10 +190,9 @@ async function orderNotional(
     side: 'sell',
     size: args.size,
   });
-  const reference = isPositiveDecimal(quote.averagePrice)
-    ? quote.averagePrice
-    : await markOf(ctx, id, args.market);
-  if (reference === undefined) {
+  const book = isPositiveDecimal(quote.averagePrice) ? quote.averagePrice : undefined;
+  const mark = await markOf(ctx, id, args.market);
+  if (book === undefined && mark === undefined) {
     throw new SenteRefusal(
       'unpriced_sell',
       `the ${args.market} book has no bids and there is no mark price, so this sell cannot be ` +
@@ -190,7 +200,21 @@ async function orderNotional(
         'Nothing was signed. Check get_depth and try again once the market has a price.',
     );
   }
-  return maxDecimal(atPrice, mulDecimal(args.size, reference));
+  if (options.limitSell && mark !== undefined) {
+    const pct = ctx.sellMaxBelowMarkPct ?? DEFAULT_SELL_MAX_BELOW_MARK_PCT;
+    const lowest = mulDecimal(mark, String((100 - pct) / 100));
+    if (compareDecimal(price, lowest) < 0) {
+      throw new SenteRefusal(
+        'price_far_from_mark',
+        `your sell price ${price} is more than ${pct}% below the ${args.market} mark of ${mark} ` +
+          `(the lowest allowed is ${lowest}). Nothing was signed. Price the sell near the market.`,
+      );
+    }
+  }
+  let notional = atPrice;
+  if (book !== undefined) notional = maxDecimal(notional, mulDecimal(args.size, book));
+  if (mark !== undefined) notional = maxDecimal(notional, mulDecimal(args.size, mark));
+  return notional;
 }
 
 /**
@@ -1058,7 +1082,7 @@ const placeLimit = defineTool({
     return orderIntent(
       venues,
       args,
-      await orderNotional(ctx, venues, args.venue, args, args.price),
+      await orderNotional(ctx, venues, args.venue, args, args.price, { limitSell: true }),
     );
   },
   async handler(ctx, args) {

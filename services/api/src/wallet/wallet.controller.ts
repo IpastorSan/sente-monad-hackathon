@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Ip,
   Param,
   Post,
   UseGuards,
@@ -84,11 +85,17 @@ export class WalletController {
    */
   @Post('register')
   @HttpCode(HttpStatus.OK)
-  async register(@Body() body: RegisterUserWalletDto): Promise<UserWalletResponseDto> {
+  async register(
+    @Body() body: RegisterUserWalletDto,
+    @Ip() ip: string | undefined,
+  ): Promise<UserWalletResponseDto> {
     return this.guard(async () =>
       toUserWalletResponse(
         await this.userWallet.register(this.principal(), {
           devicePublicKey: body.devicePublicKey,
+          // The starter kit's per-IP cap (SEN-204). Behind Caddy this is the
+          // X-Forwarded-For client only because TRUST_PROXY_HOPS=1 (main.ts).
+          ip,
         }),
       ),
     );

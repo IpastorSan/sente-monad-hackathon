@@ -1,5 +1,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
+import { redactSecrets } from '../common/redact-error';
+
 /**
  * Every way a wallet request can be refused. These strings are part of the API
  * contract — the mobile app branches on them — so treat renames as breaking
@@ -112,8 +114,9 @@ export function walletRefusalToHttpException(error: unknown): unknown {
     return error;
   }
   const statusCode = walletRefusalStatus(error.reason);
+  // SEN-204: a refusal can carry a provider's error text; never its keyed URL.
   return new HttpException(
-    { statusCode, reason: error.reason, message: error.message },
+    { statusCode, reason: error.reason, message: redactSecrets(error.message) },
     statusCode,
   );
 }

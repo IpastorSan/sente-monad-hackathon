@@ -42,6 +42,7 @@ import {
 } from './store/smart-account-registry';
 import { WALLET_CONFIG, type WalletConfig } from './wallet.config';
 import { WalletRefusedError } from './wallet.errors';
+import { redactError, redactSecrets } from '../common/redact-error';
 
 /** The chain every wallet in this service lives on. Matches `gas/`. */
 /**
@@ -237,7 +238,7 @@ export class WalletService {
         draft = { ...draft, ...(await this.sponsorship.stub(draft)) };
         sponsored = true;
       } catch (error) {
-        this.logger.warn(`paymaster stub declined: ${describe(error)}`);
+        this.logger.warn(`paymaster stub declined: ${redactError(error)}`);
         draft = stripPaymaster(draft);
       }
     }
@@ -245,7 +246,7 @@ export class WalletService {
     try {
       draft = { ...draft, ...(await this.bundler.estimate(draft)) };
     } catch (error) {
-      const detail = describe(error);
+      const detail = redactError(error);
       // `AA21 didn't pay prefund` is the single most likely failure in this
       // repo's current state and it looks like a bug until you know what it
       // means: the operation is fine, nobody has agreed to pay for it. Say so,
@@ -271,8 +272,8 @@ export class WalletService {
         throw new WalletRefusedError(
           'sponsorship_unavailable',
           error instanceof SponsorshipUnavailableError
-            ? error.message
-            : `Paymaster declined this operation: ${describe(error)}`,
+            ? redactSecrets(error.message)
+            : `Paymaster declined this operation: ${redactError(error)}`,
         );
       }
     }
@@ -395,9 +396,9 @@ export class WalletService {
     } catch (error) {
       this.logger.error(
         `bundler rejected userOp for sender=${record.sender} prepare=${command.prepareId}: ` +
-          describe(error),
+          redactError(error),
       );
-      throw new WalletRefusedError('bundler_rejected', describe(error));
+      throw new WalletRefusedError('bundler_rejected', redactError(error));
     }
 
     if (userOpHash.toLowerCase() !== record.userOpHash.toLowerCase()) {
@@ -496,19 +497,4 @@ function stripPaymaster(userOperation: SenteUserOperation): SenteUserOperation {
     ...rest
   } = userOperation;
   return rest as SenteUserOperation;
-}
-
-/**
- * Error text fit for a response body and a log line.
- *
- * viem's account-abstraction errors are several hundred lines — the full
- * UserOperation, every gas field, a docs link. Useful in a stack trace, useless
- * in JSON, so keep the first paragraph (the short message) and cap the rest.
- */
-function describe(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const firstParagraph = raw.split('\n\n')[0] ?? raw;
-  const detail = / Details: (.+)/.exec(raw)?.[1];
-  const combined = detail ? `${firstParagraph} (${detail})` : firstParagraph;
-  return combined.length > 400 ? `${combined.slice(0, 400)}...` : combined;
 }

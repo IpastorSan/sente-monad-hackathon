@@ -8,8 +8,8 @@
  * With `?fork=<id>&from=<name>` it forks that agent's strategy (SEN-28) and
  * shows only the last two steps too. There is no strategy field on this path
  * and nothing to retype: the API copies the source's strategy and model into
- * the new agent, and copies its system prompt only if the source's owner
- * published it. The mandate written here is the forker's OWN — it is compiled
+ * the new agent, prompt included. Only an agent its owner published (or your
+ * own) can be forked at all (SEN-204). The mandate written here is the forker's OWN — it is compiled
  * into the new wallet's policy, and the source's wallet is never touched.
  *
  * SEN-59 (Goban): each step has a title that says what it is for, the primary
@@ -784,7 +784,7 @@ function HireAgentFlow() {
           <Section label="Sharing">
             <ToggleRow
               title="Publish this agent’s prompt"
-              detail="Lets anyone fork this agent with your instructions. The strategy can be forked either way — this is the part it gates. Off by default."
+              detail="Lets anyone fork this agent: its strategy, instructions and preset settings. Unpublished, only you can fork it. Off by default."
               value={isPublic}
               onValueChange={setIsPublic}
             />

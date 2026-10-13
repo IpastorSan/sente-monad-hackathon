@@ -32,6 +32,7 @@ import {
   type ConfirmedSend,
   type DripDispatcher,
 } from './sender/reserve-aware-dispatcher';
+import { redactError } from '../common/redact-error';
 import type { SenderPool } from './sender/sender-pool';
 
 export interface DripCommand {
@@ -225,7 +226,7 @@ export class GasDripService {
         // budget and both dedupe keys stay spent and it is never re-sent —
         // the same outcome as before SEN-16, when no drip waited for a receipt.
         await this.ledger.confirm(claim.reservation.id, error.sent.hash);
-        this.logger.warn(`drip unconfirmed user=${principal.userId}: ${error.message}`);
+        this.logger.warn(`drip unconfirmed user=${principal.userId}: ${redactError(error)}`);
         return {
           address,
           amountWei: this.config.amountWei,
@@ -251,7 +252,7 @@ export class GasDripService {
         );
       }
       this.logger.error(
-        `drip send failed address=${address} user=${principal.userId}: ${describeError(error)}`,
+        `drip send failed address=${address} user=${principal.userId}: ${redactError(error)}`,
       );
       throw new ServiceUnavailableException('Faucet transfer failed; please retry');
     }
@@ -304,7 +305,7 @@ export class GasDripService {
       return await this.fundAgent(command, this.now());
     } catch (error) {
       this.logger.error(
-        `agent drip failed agent=${command.agentId} user=${command.userId}: ${describeError(error)}`,
+        `agent drip failed agent=${command.agentId} user=${command.userId}: ${redactError(error)}`,
       );
       return agentRefusal('drip_failed', 'The gas drip failed; fund the agent manually');
     }
@@ -367,7 +368,7 @@ export class GasDripService {
         // It may still land, so the budget and the dedupe keys stay spent and
         // it is never re-sent. Worst case the agent is unfunded and says so.
         await this.ledger.confirm(claim.reservation.id, error.sent.hash);
-        this.logger.warn(`agent drip unconfirmed agent=${command.agentId}: ${error.message}`);
+        this.logger.warn(`agent drip unconfirmed agent=${command.agentId}: ${redactError(error)}`);
         return {
           ...agentRefusal('drip_unconfirmed', `Drip ${error.sent.hash} was not confirmed in time`),
           txHash: error.sent.hash,
@@ -386,7 +387,7 @@ export class GasDripService {
         return agentRefusal('faucet_unconfigured', error.message);
       }
       this.logger.error(
-        `agent drip send failed address=${address} agent=${command.agentId}: ${describeError(error)}`,
+        `agent drip send failed address=${address} agent=${command.agentId}: ${redactError(error)}`,
       );
       return agentRefusal('drip_failed', 'Faucet transfer failed');
     }
@@ -460,8 +461,4 @@ function agentRefusalMessage(reason: AgentLedgerRefusalReason): string {
     case 'daily_cap_reached':
       return 'The faucet has reached its daily limit; fund this agent manually';
   }
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

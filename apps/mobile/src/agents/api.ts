@@ -1386,6 +1386,16 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
           detail:
             'This month’s free tier is spent, so the agent can’t call its model until it refills.',
         };
+      case 'agent_not_forkable':
+        return {
+          title: 'This strategy can’t be forked',
+          detail: 'Only an agent its owner has published, and not archived, can be forked.',
+        };
+      case 'agent_limit_reached':
+        return {
+          title: 'You have as many agents as you can hold',
+          detail: `${error.message}.`,
+        };
       case 'agent_not_revoked':
         return {
           title: 'This agent can still trade',

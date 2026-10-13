@@ -173,6 +173,7 @@ export const agentToolsProviders: Provider[] = [
         store,
         events,
         precheck: config.precheck,
+        sellMaxBelowMarkPct: config.sellMaxBelowMarkPct,
         // SEN-79: klines, quotes and Perpl depth through the phone's cached
         // path, so N agents cost the venue what one screen does.
         marketData,

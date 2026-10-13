@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Address, Hash } from 'viem';
 
 import { utcDay } from '../gas/ledger/drip-ledger';
@@ -17,11 +19,28 @@ export interface StarterKitRecord {
   txs: Partial<Record<StarterKitSymbol, Hash>>;
   /** Why it failed, for the operator. Never on the wire. */
   reason?: string;
+  /**
+   * SHA-256 of the client IP the claiming register came from (SEN-204), so
+   * the per-IP cap survives a restart without keeping addresses at rest.
+   * Absent on records from before it, and when the request had no IP.
+   */
+  ipHash?: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type StarterKitClaim = 'claimed' | 'exists' | 'capped';
+export type StarterKitClaim = 'claimed' | 'exists' | 'capped' | 'ip_capped';
+
+/** The per-IP half of a claim (SEN-204): the caller's IP and how many kits it may have a day. */
+export interface StarterKitIpLimit {
+  ip: string;
+  cap: number;
+}
+
+/** What a record keeps of an IP: enough to count by, not the address itself. */
+export function hashIp(ip: string): string {
+  return createHash('sha256').update(`sente/starter-kit/ip/${ip}`).digest('hex');
+}
 
 /**
  * Who has been sent a starter kit (SEN-170): one record per user, ever.
@@ -72,25 +91,37 @@ export class StarterKitStore {
   }
 
   /**
-   * Records a pending kit for `userId`, unless they already have one or the
-   * day's cap is spent. Failed attempts count against the cap: each one may
-   * have cost gas.
+   * Records a pending kit for `userId`, unless they already have one, the
+   * day's cap is spent, or (with `ipLimit`) the day's cap for that IP is.
+   * Failed attempts count against both caps: each one may have cost gas.
    */
-  claim(userId: string, address: Address, dailyCap: number, now: Date): StarterKitClaim {
+  claim(
+    userId: string,
+    address: Address,
+    dailyCap: number,
+    now: Date,
+    ipLimit?: StarterKitIpLimit,
+  ): StarterKitClaim {
     if (this.#byUserId.has(userId)) return 'exists';
-    // The cap resets at 00:00 UTC, as the gas drip's does.
+    // The caps reset at 00:00 UTC, as the gas drip's does.
     const day = utcDay(now);
+    const ipHash = ipLimit ? hashIp(ipLimit.ip) : undefined;
     let today = 0;
+    let fromIp = 0;
     for (const record of this.#byUserId.values()) {
-      if (utcDay(record.createdAt) === day) today += 1;
+      if (utcDay(record.createdAt) !== day) continue;
+      today += 1;
+      if (ipHash !== undefined && record.ipHash === ipHash) fromIp += 1;
     }
     if (today >= dailyCap) return 'capped';
+    if (ipLimit && fromIp >= ipLimit.cap) return 'ip_capped';
 
     this.#byUserId.set(userId, {
       userId,
       address,
       status: 'pending',
       txs: {},
+      ...(ipHash !== undefined ? { ipHash } : {}),
       createdAt: now,
       updatedAt: now,
     });

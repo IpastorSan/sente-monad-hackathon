@@ -48,6 +48,19 @@ sente.lol {
 		root * /srv/web
 		encode zstd gzip
 
+		# SEN-204: the app shell's safe headers, and nothing more. No CSP beyond
+		# framing (X-Frame-Options): a script or connect policy would have to
+		# list Privy, Perpl, the RPCs and the API, and one missing host breaks
+		# the wallet silently. HSTS without includeSubDomains or preload, so
+		# nothing here is irreversible. /.well-known/* and /download/* are other
+		# blocks and are untouched.
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			X-Frame-Options "DENY"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "strict-origin-when-cross-origin"
+		}
+
 		# Content-hashed bundle names: safe to cache forever.
 		@hashed path /_expo/static/*
 		header @hashed Cache-Control "public, max-age=31536000, immutable"
@@ -177,15 +190,12 @@ api.sente.lol {
 	# API is reachable only through this proxy, over TLS.
 	handle {
 		reverse_proxy api:3000 {
-			# Caddy already sends X-Forwarded-For/-Proto/-Host. NOTE, and it is a
-			# real behaviour change on deploy: Express only believes those with
-			# `trust proxy` set, which `services/api/src/main.ts` does not set, so
-			# `@Ip()` sees this proxy's container address. The per-IP backstop on
-			# POST /gas/drip therefore becomes one shared bucket
-			# (GAS_DRIP_RATE_LIMIT_MAX per window for everyone). It fails closed,
-			# not open — the per-address and per-user caps in the drip ledger are
-			# untouched — but it can refuse a judge mid-demo. See docs/deploy.md,
-			# "Decisions still open".
+			# Caddy already sends X-Forwarded-For/-Proto/-Host. Express believes
+			# them only with `trust proxy` set: `services/api/src/main.ts` sets it
+			# from TRUST_PROXY_HOPS, which docker-compose.yml pins to 1 (this one
+			# hop). Without it `@Ip()` sees this proxy's address, and the per-IP
+			# limits (POST /gas/drip, the starter kit's per-IP cap) become one
+			# shared bucket for everyone.
 			health_uri /health
 			health_interval 30s
 			health_timeout 5s

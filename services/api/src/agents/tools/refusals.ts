@@ -35,6 +35,12 @@ export type SenteRefusalCode =
    */
   | 'unpriced_sell'
   /**
+   * SEN-204: a sell limit price more than `AGENT_SELL_MAX_BELOW_MARK_PCT`
+   * below the mark. Crossing a book that far down sells into whatever bid
+   * someone planted there.
+   */
+  | 'price_far_from_mark'
+  /**
    * SEN-188: a Kuru deposit while the live policy does not yet pin the
    * credited account to the agent's own wallet (`kuruDepositPinned` false).
    */

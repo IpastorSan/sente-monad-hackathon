@@ -27,6 +27,12 @@ export type StarterKitConfig =
       tokens: readonly StarterKitToken[];
       /** Users granted a kit per UTC day, failed attempts included. */
       dailyCapUsers: number;
+      /**
+       * Users granted a kit per client IP per UTC day (SEN-204). A speed bump
+       * against one person minting identities in a loop, not a defence: a
+       * proxy pool walks past it, which is what `dailyCapUsers` bounds.
+       */
+      dailyCapPerIp: number;
       rpcUrl: string | undefined;
       receiptTimeoutMs: number;
     };
@@ -56,7 +62,10 @@ export const STARTER_KIT_DEFAULTS = {
   ausd: '250',
   /** Kuru's minimum notional is 10 USDC; 100 covers several orders. */
   usdc: '100',
-  dailyCapUsers: 50,
+  /** SEN-204: 50 let one scripted loop take 12,500 AUSD a day; 20 bounds that to 5,000. */
+  dailyCapUsers: 20,
+  /** SEN-204. Several people on one venue's Wi-Fi share an IP, so not 1. */
+  dailyCapPerIp: 5,
   /** Monad finalises in about a second; 15 s is an RPC in trouble. Same as the gas drip. */
   receiptTimeoutMs: 15_000,
 } as const;
@@ -116,6 +125,16 @@ function keysIn(raw: string | undefined): string[] {
  * at boot, never on a user's register.
  */
 export function loadStarterKitConfig(env: Env = process.env): StarterKitConfig {
+  // SEN-204: the kill switch. On unless it says otherwise; anything it does not
+  // recognise fails the boot rather than guessing which way was meant.
+  const switchValue = env.STARTER_KIT_ENABLED?.trim().toLowerCase();
+  if (switchValue && !['1', 'true', 'on', '0', 'false', 'off'].includes(switchValue)) {
+    throw new Error(
+      `STARTER_KIT_ENABLED must be true|false (or 1|0, on|off), got ${JSON.stringify(env.STARTER_KIT_ENABLED)}`,
+    );
+  }
+  if (switchValue && ['0', 'false', 'off'].includes(switchValue)) return { enabled: false };
+
   const key = env.STARTER_DRIP_PRIVATE_KEY?.trim();
   if (!key) return { enabled: false };
 
@@ -177,6 +196,11 @@ export function loadStarterKitConfig(env: Env = process.env): StarterKitConfig {
       STARTER_KIT_DEFAULTS.dailyCapUsers,
       'STARTER_DRIP_DAILY_CAP_USERS',
     ),
+    dailyCapPerIp: parsePositiveInt(
+      env.STARTER_DRIP_DAILY_CAP_PER_IP,
+      STARTER_KIT_DEFAULTS.dailyCapPerIp,
+      'STARTER_DRIP_DAILY_CAP_PER_IP',
+    ),
     rpcUrl: env.MONAD_TESTNET_RPC_URL?.trim() || undefined,
     receiptTimeoutMs: STARTER_KIT_DEFAULTS.receiptTimeoutMs,
   };
@@ -185,14 +209,17 @@ export function loadStarterKitConfig(env: Env = process.env): StarterKitConfig {
 /** Boot-time summary, logged once. Never logs the key; the sender address is logged by the module. */
 export function describeStarterKitConfig(config: StarterKitConfig, logger: Logger): void {
   if (!config.enabled) {
-    logger.log('STARTER_DRIP_PRIVATE_KEY is unset; the starter kit is off');
+    logger.log(
+      'the starter kit is off (STARTER_DRIP_PRIVATE_KEY unset, or STARTER_KIT_ENABLED=false)',
+    );
     return;
   }
   const kit = config.tokens
     .map((token) => `${formatUnits(token.atoms, token.decimals)} ${token.symbol}`)
     .join(' + ');
   logger.log(
-    `starter kit ${kit} per new user, dailyCap=${config.dailyCapUsers} users, ` +
+    `starter kit ${kit} per new user, dailyCap=${config.dailyCapUsers} users ` +
+      `(${config.dailyCapPerIp} per IP), ` +
       `gas ${config.tokens.map((token) => `${token.symbol}=${token.gasLimit}`).join(' ')}`,
   );
 }

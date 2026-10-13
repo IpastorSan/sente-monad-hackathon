@@ -16,6 +16,7 @@ import type { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
 import type { SenderPool } from '../gas/sender/sender-pool';
 import { InMemoryUserWalletRegistry } from '../wallet/store/user-wallet-registry';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
+import { DEFAULT_MAX_AGENTS_PER_USER, maxAgentsPerUser } from './agents.config';
 import {
   AgentRefusedError,
   AgentWalletsUnconfiguredError,
@@ -315,24 +316,118 @@ describe('AgentsService', () => {
       expect(toAgentResponse(agent).preset).toBeNull();
     });
 
-    it('carries the preset into a fork, customized when the prompt stayed behind', async () => {
+    it('carries the preset into a fork, the owner’s own included', async () => {
       const { service } = setup();
       const shared = await service.hire(ALICE, presetHire({ public: true }));
       const copied = await service.fork(BOB, shared.agent.id, { mandate: mandateInput() });
       expect(copied.agent.preset).toEqual(shared.agent.preset);
 
       const privateSource = await service.hire(ALICE, presetHire());
-      const withheld = await service.fork(BOB, privateSource.agent.id, {
-        mandate: mandateInput(),
+      const own = await service.fork(ALICE, privateSource.agent.id, { mandate: mandateInput() });
+      expect(own.agent.preset).toEqual(privateSource.agent.preset);
+    });
+  });
+
+  describe('rollingCap, which nothing enforces (SEN-204)', () => {
+    const CAP = { windowSeconds: 3600, capAtoms: '2000000000', token: USDC };
+
+    it('refuses a hire or a fork that sets one, before any Privy call', async () => {
+      const { service, wallets } = setup();
+      const hire = await refusal(
+        service.hire(ALICE, hireInput({ mandate: mandateInput({ rollingCap: CAP }) })),
+      );
+      expect(hire.reason).toBe('mandate_invalid');
+      expect(hire.message).toMatch(/rollingCap is not enforced/);
+
+      const { agent } = await service.hire(ALICE, hireInput({ public: true }));
+      const fork = await refusal(
+        service.fork(BOB, agent.id, { mandate: mandateInput({ rollingCap: CAP }) }),
+      );
+      expect(fork.reason).toBe('mandate_invalid');
+      expect(wallets.provisioned).toHaveLength(1);
+    });
+
+    it('still amends an older agent that carries one unchanged, and refuses a changed one', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      // An agent hired before SEN-204, with a cap on its stored mandate.
+      await store.update(agent.id, {
+        mandate: parseMandate({ ...mandateInput(), rollingCap: CAP }),
       });
-      expect(withheld.agent.preset).toEqual({ ...privateSource.agent.preset, customized: true });
+
+      const kept = await service.amendMandate(
+        ALICE,
+        agent.id,
+        mandateInput({ rollingCap: { ...CAP, token: USDC.toLowerCase() } }),
+      );
+      expect(kept.mandate.rollingCap?.capAtoms).toBe(2_000_000_000n);
+
+      const changed = await refusal(
+        service.amendMandate(
+          ALICE,
+          agent.id,
+          mandateInput({ rollingCap: { ...CAP, capAtoms: '9000000000' } }),
+        ),
+      );
+      expect(changed.reason).toBe('mandate_invalid');
+      // Dropping it is always fine.
+      expect((await service.amendMandate(ALICE, agent.id, mandateInput())).mandate.rollingCap).toBe(
+        undefined,
+      );
+    });
+  });
+
+  describe('the per-user agent cap (SEN-204)', () => {
+    const saved = process.env['AGENTS_MAX_PER_USER'];
+    beforeEach(() => {
+      process.env['AGENTS_MAX_PER_USER'] = '2';
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env['AGENTS_MAX_PER_USER'];
+      else process.env['AGENTS_MAX_PER_USER'] = saved;
+    });
+
+    it('refuses a hire and a fork past the cap, before any Privy call', async () => {
+      const { service, wallets } = setup();
+      const first = await service.hire(ALICE, hireInput({ public: true }));
+      await service.hire(ALICE, hireInput());
+
+      const hire = await refusal(service.hire(ALICE, hireInput()));
+      expect(hire.reason).toBe('agent_limit_reached');
+      expect(hire.message).toMatch(/limit is 2/);
+      const fork = await refusal(service.fork(ALICE, first.agent.id, { mandate: mandateInput() }));
+      expect(fork.reason).toBe('agent_limit_reached');
+      expect(wallets.provisioned).toHaveLength(2);
+
+      // Per user: another caller is untouched.
+      await expect(service.hire(BOB, hireInput())).resolves.toBeDefined();
+    });
+
+    it('counts revoked agents, and archiving one makes room', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      await service.hire(ALICE, hireInput());
+      await service.revoke(ALICE, agent.id);
+      expect((await refusal(service.hire(ALICE, hireInput()))).reason).toBe('agent_limit_reached');
+
+      await store.update(agent.id, { archivedAt: new Date() });
+      await expect(service.hire(ALICE, hireInput())).resolves.toBeDefined();
+    });
+
+    it('defaults to 10 and refuses a value that is not a positive integer', () => {
+      expect(maxAgentsPerUser({})).toBe(DEFAULT_MAX_AGENTS_PER_USER);
+      expect(DEFAULT_MAX_AGENTS_PER_USER).toBe(10);
+      expect(maxAgentsPerUser({ AGENTS_MAX_PER_USER: '3' })).toBe(3);
+      for (const bad of ['0', '-1', '2.5', 'ten']) {
+        expect(() => maxAgentsPerUser({ AGENTS_MAX_PER_USER: bad })).toThrow(/positive integer/);
+      }
     });
   });
 
   describe('risk acknowledgement (SEN-177)', () => {
     it('records it at hire and fork when ticked, and nothing when not', async () => {
       const { service } = setup();
-      const acked = await service.hire(ALICE, hireInput({ riskAcknowledged: true }));
+      const acked = await service.hire(ALICE, hireInput({ public: true, riskAcknowledged: true }));
       expect(acked.agent.riskAcknowledgedAt).toEqual(acked.agent.createdAt);
       const silent = await service.hire(ALICE, hireInput());
       expect(silent.agent.riskAcknowledgedAt).toBeUndefined();
@@ -416,7 +511,7 @@ describe('AgentsService', () => {
 
     it('forks under the FORKER’s quorum, not the source agent’s owner', async () => {
       const { service, wallets } = await deviceSetup(['alice', 'bob']);
-      const { agent: source } = await service.hire(ALICE, hireInput());
+      const { agent: source } = await service.hire(ALICE, hireInput({ public: true }));
 
       const { agent: fork } = await service.fork(BOB, source.id, { mandate: mandateInput() });
 
@@ -441,7 +536,7 @@ describe('AgentsService', () => {
 
     it('refuses a fork by an unregistered caller too', async () => {
       const { service, wallets } = await deviceSetup(['alice']);
-      const { agent: source } = await service.hire(ALICE, hireInput());
+      const { agent: source } = await service.hire(ALICE, hireInput({ public: true }));
 
       const error = await refusal(service.fork(BOB, source.id, { mandate: mandateInput() }));
       expect(error.reason).toBe('wallet_not_registered');
@@ -500,7 +595,7 @@ describe('AgentsService', () => {
 
       it('a fork starts unpinned too, and has nothing to pin on a Perpl-only mandate', async () => {
         const { service } = await deviceSetup(['alice', 'bob']);
-        const { agent: source } = await service.hire(ALICE, hireInput());
+        const { agent: source } = await service.hire(ALICE, hireInput({ public: true }));
         const { agent: fork } = await service.fork(BOB, source.id, { mandate: mandateInput() });
         expect(fork.kuruDepositPinned).toBe(false);
 
@@ -1044,7 +1139,7 @@ describe('AgentsService', () => {
     it('drips gas to a fork’s own address too — a fork is a hire', async () => {
       const gas = new FakeGasFunder();
       const { service } = withGas(gas);
-      const source = await service.hire(ALICE, hireInput());
+      const source = await service.hire(ALICE, hireInput({ public: true }));
       gas.calls.length = 0;
 
       const { agent } = await service.fork(BOB, source.agent.id, { mandate: mandateInput() });
@@ -1152,7 +1247,7 @@ describe('AgentsService', () => {
 
     it('pins a fork and a preset hire the same way', async () => {
       const { service, wallets } = setup();
-      const { agent: source } = await service.hire(ALICE, hireInput());
+      const { agent: source } = await service.hire(ALICE, hireInput({ public: true }));
       const { agent: fork } = await service.fork(BOB, source.id, { mandate: mandateInput() });
       const { systemPrompt: _p, strategy: _s, ...rest } = hireInput();
       const { agent: preset } = await service.hire(ALICE, {
@@ -1294,10 +1389,9 @@ describe('AgentsService', () => {
   });
 
   describe('fork (SEN-28)', () => {
-    it('copies the strategy and the model, and leaves a private prompt behind', async () => {
+    it('copies the strategy and the model of a published agent', async () => {
       const { service, store } = setup();
-      const source = await service.hire(ALICE, hireInput());
-      expect(source.agent.public).toBe(false);
+      const source = await service.hire(ALICE, hireInput({ public: true }));
 
       const { agent: fork, mcpToken } = await service.fork(BOB, source.agent.id, {
         mandate: mandateInput(),
@@ -1308,8 +1402,7 @@ describe('AgentsService', () => {
         name: 'Momentum (fork)',
         model: source.agent.model,
         strategy: source.agent.strategy,
-        // Private source: an EMPTY prompt, not a paraphrase of someone else's.
-        systemPrompt: '',
+        systemPrompt: source.agent.systemPrompt,
         status: 'active',
         policyCleared: false,
         // The fork inherits the strategy, never the source's sharing choice.
@@ -1322,6 +1415,40 @@ describe('AgentsService', () => {
       expect(fork.mcpTokenHash).toBe(hashMcpToken(mcpToken));
       // The source is untouched: still its own prompt, still its own wallet.
       expect(await store.get(source.agent.id)).toEqual(source.agent);
+    });
+
+    it('refuses a stranger’s private agent, and copies nothing of it (SEN-204)', async () => {
+      const { service, wallets, store } = setup();
+      const source = await service.hire(ALICE, hireInput());
+      expect(source.agent.public).toBe(false);
+
+      const error = await refusal(service.fork(BOB, source.agent.id, { mandate: mandateInput() }));
+      expect(error.reason).toBe('agent_not_forkable');
+      expect(error.message).not.toContain(source.agent.strategy);
+      expect(wallets.provisioned).toHaveLength(1);
+      expect(await store.listByUser('bob')).toEqual([]);
+    });
+
+    it('lets an owner fork their own private agent, prompt and all', async () => {
+      const { service } = setup();
+      const source = await service.hire(ALICE, hireInput());
+
+      const { agent: fork } = await service.fork(ALICE, source.agent.id, {
+        mandate: mandateInput(),
+      });
+      expect(fork.strategy).toBe(source.agent.strategy);
+      expect(fork.systemPrompt).toBe(source.agent.systemPrompt);
+    });
+
+    it('refuses an archived source, even a published one (SEN-204)', async () => {
+      const { service, store, wallets } = setup();
+      const source = await service.hire(ALICE, hireInput({ public: true }));
+      await store.update(source.agent.id, { archivedAt: new Date() });
+
+      const error = await refusal(service.fork(BOB, source.agent.id, { mandate: mandateInput() }));
+      expect(error.reason).toBe('agent_not_forkable');
+      expect(error.message).toMatch(/archived/);
+      expect(wallets.provisioned).toHaveLength(1);
     });
 
     it('copies the prompt when the source’s owner published it', async () => {
@@ -1338,7 +1465,7 @@ describe('AgentsService', () => {
 
     it('compiles the new policy from the forker’s mandate, on a new wallet', async () => {
       const { service, wallets } = setup();
-      const source = await service.hire(ALICE, hireInput());
+      const source = await service.hire(ALICE, hireInput({ public: true }));
       // The forker's mandate is narrower than the source's, and allows a
       // different venue set entirely.
       const mine = mandateInput({
@@ -1374,7 +1501,7 @@ describe('AgentsService', () => {
 
     it('names the fork after the source, or after the caller', async () => {
       const { service } = setup();
-      const source = await service.hire(ALICE, hireInput({ name: 'Night desk' }));
+      const source = await service.hire(ALICE, hireInput({ public: true, name: 'Night desk' }));
 
       const auto = await service.fork(BOB, source.agent.id, { mandate: mandateInput() });
       expect(auto.agent.name).toBe('Night desk (fork)');
@@ -1388,7 +1515,7 @@ describe('AgentsService', () => {
 
     it('keeps a defaulted name inside the API’s own limit', async () => {
       const { service } = setup();
-      const source = await service.hire(ALICE, hireInput({ name: 'x'.repeat(64) }));
+      const source = await service.hire(ALICE, hireInput({ public: true, name: 'x'.repeat(64) }));
 
       const { agent } = await service.fork(BOB, source.agent.id, { mandate: mandateInput() });
 
@@ -1399,7 +1526,7 @@ describe('AgentsService', () => {
 
     it('refuses a revoked source, and forks nothing', async () => {
       const { service, wallets, store } = setup();
-      const source = await service.hire(ALICE, hireInput());
+      const source = await service.hire(ALICE, hireInput({ public: true }));
       await service.revoke(ALICE, source.agent.id);
 
       const error = await refusal(service.fork(BOB, source.agent.id, { mandate: mandateInput() }));
@@ -1420,7 +1547,7 @@ describe('AgentsService', () => {
 
     it('refuses the forker’s own bad mandate before any Privy call', async () => {
       const { service, wallets } = setup();
-      const source = await service.hire(ALICE, hireInput());
+      const source = await service.hire(ALICE, hireInput({ public: true }));
 
       const error = await refusal(
         service.fork(BOB, source.agent.id, { mandate: mandateInput({ chainId: 1 }) }),
@@ -1446,7 +1573,7 @@ describe('AgentsService', () => {
 
     it('is the forker’s agent alone: it is listed for them, not for the source’s owner', async () => {
       const { service } = setup();
-      const source = await service.hire(ALICE, hireInput());
+      const source = await service.hire(ALICE, hireInput({ public: true }));
       const { agent: fork } = await service.fork(BOB, source.agent.id, { mandate: mandateInput() });
 
       expect((await service.list(BOB)).map((a) => a.id)).toEqual([fork.id]);
@@ -1669,7 +1796,7 @@ describe('AgentsService with the Sente builder fee (SEN-184)', () => {
 
   it('a fork gets the grant of its own policy, not its source’s', async () => {
     const { service } = feeSetup();
-    const { agent: source } = await service.hire(ALICE, hireInput());
+    const { agent: source } = await service.hire(ALICE, hireInput({ public: true }));
     const { agent: fork } = await service.fork(BOB, source.id, {
       mandate: mandateInput({ venues: ['perpl'] }),
     });

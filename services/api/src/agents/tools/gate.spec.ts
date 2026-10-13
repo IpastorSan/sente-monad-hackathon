@@ -23,6 +23,7 @@ async function harness(
     perpl?: boolean;
     agent?: Partial<AgentRecord>;
     marketData?: ToolMarketData;
+    sellMaxBelowMarkPct?: number;
   } = {},
 ) {
   const store = new InMemoryAgentStore();
@@ -38,6 +39,9 @@ async function harness(
     venuesFor: () => Promise.resolve(fakes.venues),
     now: () => now,
     ...(options.marketData ? { marketData: options.marketData } : {}),
+    ...(options.sellMaxBelowMarkPct !== undefined
+      ? { sellMaxBelowMarkPct: options.sellMaxBelowMarkPct }
+      : {}),
   });
   const ctx = tools.context(agent, { runId: 'run-1' });
   const call = (name: string, args: unknown, context: ToolContext = ctx) =>
@@ -372,7 +376,7 @@ describe('gate', () => {
         market: BTC_PERP,
         side: 'sell',
         size,
-        price: '0.01',
+        price: '59000',
         leverage: 2,
       });
 
@@ -399,6 +403,95 @@ describe('gate', () => {
       );
       expect(sell.refusal?.code).toBe('unpriced_sell');
       expect(h.kuru.writes()).toEqual([]);
+    });
+  });
+
+  describe('a sell against the mark (SEN-204)', () => {
+    /** Market data that answers only the mark. */
+    function markAt(mark: string): ToolMarketData {
+      const unused = () => Promise.reject(new Error('not used on this path'));
+      return {
+        klines: unused,
+        quote: unused,
+        depth: unused,
+        ticker: unused,
+        market: unused,
+        mark: () => Promise.resolve(mark),
+      };
+    }
+
+    it('values it at the mark even when a planted bid is the book price', async () => {
+      const h = await harness({ marketData: markAt('5') });
+      await h.thesis();
+      h.kuru.quotePrice = '0.0001'; // one tiny bid, planted far under the market
+
+      // 100 MON at a 4.5 floor is 450 on paper and 0.01 at the planted bid; at the
+      // 5 mark it is 500, over the 250 cap.
+      const sell = refused(
+        await h.call('place_limit', limit({ side: 'sell', size: '100', price: '4.5' })),
+      );
+      expect(sell.refusal).toEqual({ layer: 'sente', code: 'notional_over_cap' });
+      expect(sell.message).toContain('500');
+      const market = refused(
+        await h.call('place_market', {
+          venue: 'kuru',
+          market: MON_USDC,
+          side: 'sell',
+          size: '100',
+          slippageLimitPrice: '0.0000001',
+        }),
+      );
+      expect(market.refusal?.code).toBe('notional_over_cap');
+      expect(h.kuru.writes()).toEqual([]);
+
+      expect(
+        (await h.call('place_limit', limit({ side: 'sell', size: '40', price: '4.5' }))).ok,
+      ).toBe(true);
+    });
+
+    it('refuses a sell limit price more than 20% under the mark, onto the ledger', async () => {
+      const h = await harness({ marketData: markAt('5') });
+      await h.thesis();
+      h.kuru.quotePrice = '5';
+
+      const far = refused(
+        await h.call('place_limit', limit({ side: 'sell', size: '10', price: '3.99' })),
+      );
+      expect(far.refusal).toEqual({ layer: 'sente', code: 'price_far_from_mark' });
+      expect(far.message).toMatch(/more than 20% below the MON-USDC mark of 5/);
+      expect(h.kuru.writes()).toEqual([]);
+      const logged = await h.refusals();
+      expect(logged.at(-1)?.detail).toMatchObject({ code: 'price_far_from_mark' });
+
+      // At the edge of the band it passes; a buy is never held to it.
+      expect(
+        (await h.call('place_limit', limit({ side: 'sell', size: '10', price: '4' }))).ok,
+      ).toBe(true);
+      expect((await h.call('place_limit', limit({ price: '0.5' }))).ok).toBe(true);
+      // A market sell's floor is not either: a stop-loss must still go out.
+      expect(
+        (
+          await h.call('place_market', {
+            venue: 'kuru',
+            market: MON_USDC,
+            side: 'sell',
+            size: '10',
+            slippageLimitPrice: '0.01',
+          })
+        ).ok,
+      ).toBe(true);
+    });
+
+    it('takes its band from the config', async () => {
+      const h = await harness({ marketData: markAt('5'), sellMaxBelowMarkPct: 50 });
+      await h.thesis();
+      expect(
+        (await h.call('place_limit', limit({ side: 'sell', size: '10', price: '2.5' }))).ok,
+      ).toBe(true);
+      expect(
+        refused(await h.call('place_limit', limit({ side: 'sell', size: '10', price: '2.49' })))
+          .refusal?.code,
+      ).toBe('price_far_from_mark');
     });
   });
 

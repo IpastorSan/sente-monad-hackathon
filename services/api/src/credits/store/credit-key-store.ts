@@ -43,11 +43,9 @@ export interface CreditKeyStore {
 }
 
 /**
- * PERSISTENCE: in memory, because this repo has no database yet. Restarting
- * the API forgets every binding while the keys live on at OpenRouter, so a
- * restart followed by a provision mints a second key for the same user (the
- * first is orphaned, still capped by its own limit). Acceptable until a real
- * store is bound to `CREDIT_KEYS`; nothing else in `credits/` changes then.
+ * In memory: the specs, and a plain `pnpm start` with no `STATE_DIR`. With
+ * `STATE_DIR` set the module binds `FileCreditKeyStore` instead (SEN-204),
+ * because a store that forgets on restart lets every user mint a second key.
  */
 @Injectable()
 export class InMemoryCreditKeyStore implements CreditKeyStore {
