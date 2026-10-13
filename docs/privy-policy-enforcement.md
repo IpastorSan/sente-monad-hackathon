@@ -116,6 +116,15 @@ So signing and broadcasting ourselves unlocks rolling caps **and** sidesteps the
 Monad simulation question entirely. We already broadcast through Pimlico's
 bundler, so this costs nothing.
 
+**Since SEN-211 the send path is an option for agents again.** SEN-204 refuses
+`rollingCap`, so no mandate depends on an aggregation, and Privy's simulation
+does run on Monad (it refused a would-revert transfer before it evaluated the
+policy). With `AGENT_SPONSORED_SENDS=1` every transaction rule gets an
+`eth_sendTransaction` twin with the same conditions, and the live probe
+(`docs/privy-sponsorship.md`, run 4) measured the twins enforcing the cap, the
+spender, the token and the recipient pin on sponsored sends exactly as the
+sign rules do. The sign rules stay, and the sign path remains the fallback.
+
 ## Rolling caps: the concurrency exposure, and how to size it
 
 Privy is explicit that stateful policies are not real-time:

@@ -6,7 +6,34 @@
  * wraps it.
  */
 
-export type EnclaveSignMethod = 'eth_signTransaction' | 'eth_signTypedData_v4';
+export type EnclaveSignMethod =
+  'eth_signTransaction' | 'eth_sendTransaction' | 'eth_signTypedData_v4';
+
+/**
+ * A Privy-sponsored send the policy allowed but Privy did not submit (SEN-211):
+ * `400 transaction_broadcast_failure`. Privy simulates before it evaluates the
+ * policy, so this is usually a call that would revert; nothing reached the
+ * chain and no gas was spent. `nonceMismatch` is the one transient form: a send
+ * composed while the wallet's first, delegating send had not landed
+ * (CLAUDE.md gotcha 12), which a retry a few seconds later clears.
+ */
+export class SponsoredSendRejectedError extends Error {
+  readonly reason = 'sponsored_send_rejected' as const;
+  readonly walletId: string;
+  readonly nonceMismatch: boolean;
+  readonly detail: string | undefined;
+
+  constructor(options: { walletId: string; detail?: string }) {
+    super(
+      `Privy did not submit the sponsored send from wallet ${options.walletId}` +
+        (options.detail ? `: ${options.detail}` : ''),
+    );
+    this.name = 'SponsoredSendRejectedError';
+    this.walletId = options.walletId;
+    this.detail = options.detail;
+    this.nonceMismatch = /nonce mismatch/i.test(options.detail ?? '');
+  }
+}
 
 /**
  * The enclave evaluated the wallet's mandate policy and refused to sign.

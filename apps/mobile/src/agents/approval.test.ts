@@ -242,8 +242,13 @@ test('a revoke is approved only when it leaves exactly the way out', () => {
   // The recovery rules, and nothing else: an exit stays open (SEN-17).
   assert.deepEqual(verifyPolicyPatch(payloadFor({ revoke: m }), intent), { ok: true });
 
-  // A revoke that leaves the whole live policy in place is not a revoke.
-  assertRefused(verifyPolicyPatch(payloadFor(m), intent), /it sets \d+ rules, and this mandate is/);
+  // A revoke that leaves the whole live policy in place is not a revoke. (Its
+  // rule count can equal the exit's with sponsored twins, SEN-211, and then the
+  // refusal names the first rule that is not part of the exit instead.)
+  assertRefused(
+    verifyPolicyPatch(payloadFor(m), intent),
+    /it sets \d+ rules, and this mandate is|it contains a rule this mandate does not/,
+  );
 
   // Neither is one that keeps a single rule the agent could take risk with: the
   // deposit rule, smuggled in beside the legitimate exit.
@@ -763,4 +768,41 @@ test('a revoke never keeps a fee rule, pin or not', () => {
     },
   });
   assertRefused(verifyPolicyPatch(withFee, { ...revoke(m), builder: PIN }), /sets \d+ rules/);
+});
+
+// ---- SEN-211: sponsored sends -------------------------------------------------
+
+test('the API’s sponsored-send twins are approved, amend and revoke alike', () => {
+  const m = mandate({ returnTo: OWNER });
+  const rules = compileMandate(parseMandate(toWireMandate(m)), { sponsoredSends: true });
+  assert.deepEqual(verifyPolicyPatch({ ...payloadFor(m), body: { rules } }, amend(m)), {
+    ok: true,
+  });
+  const exit = compileRevocationRules(parseMandate(toWireMandate(m)), { sponsoredSends: true });
+  assert.deepEqual(
+    verifyPolicyPatch({ ...payloadFor({ revoke: m }), body: { rules: exit } }, revoke(m)),
+    { ok: true },
+  );
+});
+
+test('a sponsored twin that is missing, or wider than its sign rule, is refused', () => {
+  const m = mandate({ returnTo: OWNER });
+  const rules = compileMandate(parseMandate(toWireMandate(m)), { sponsoredSends: true });
+
+  // One twin short: neither shape.
+  assertRefused(
+    verifyPolicyPatch({ ...payloadFor(m), body: { rules: rules.slice(0, -1) } }, amend(m)),
+    /it sets \d+ rules, and this mandate is/,
+  );
+
+  // A twin with its value pin dropped: wider than the rule it repeats.
+  const lastTwin = rules.at(-1)!;
+  const widened = [
+    ...rules.slice(0, -1),
+    { ...lastTwin, conditions: lastTwin.conditions.filter((c) => c.field !== 'value') },
+  ];
+  assertRefused(
+    verifyPolicyPatch({ ...payloadFor(m), body: { rules: widened } }, amend(m)),
+    /it contains a rule this mandate does not/,
+  );
 });

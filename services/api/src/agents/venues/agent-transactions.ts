@@ -1,6 +1,7 @@
 /**
  * Transactions from an agent's Privy wallet: sign in the enclave, broadcast
- * ourselves, read the receipt.
+ * ourselves, read the receipt — or, with `AGENT_SPONSORED_SENDS` (SEN-211),
+ * a Privy-sponsored send whose USER OPERATION receipt decides the outcome.
  *
  * The agent wallet is a plain EOA, so every call is its own transaction and a
  * call list is NOT atomic — unlike the user's Kernel batch (CLAUDE.md gotcha
@@ -14,14 +15,38 @@
  * docs/privy-policy-enforcement.md).
  *
  * GAS IS NEVER ESTIMATED HERE. Monad charges the gas LIMIT (CLAUDE.md gotcha
- * 4), so each caller supplies a measured, fixed limit per call.
+ * 4), so each caller supplies a measured, fixed limit per call. A sponsored
+ * send ignores it: Privy's bundler sizes the operation, and its credits pay.
+ *
+ * SPONSORED (SEN-211, `sponsored` option). Each transaction goes to Privy as
+ * `eth_sendTransaction` with `sponsor: true`; the agent needs no MON. Success is
+ * the user operation's own `success` flag read off `UserOperationEvent`, never
+ * the bundle transaction's status (gotcha 8), and the logs returned are that
+ * operation's own, cut out of the bundle's receipt. Two fallbacks keep it safe
+ * to switch on for agents hired before it:
+ *
+ * - a `policy_violation` on the sponsored path falls back to the sign path for
+ *   that transaction. A policy compiled without the sponsored twins refuses
+ *   every sponsored send; the sign path re-asks the SAME mandate, so a call the
+ *   mandate forbids is refused there too, and nothing is widened.
+ * - "EIP-7702 nonce mismatch" — a send composed before the wallet's first,
+ *   delegating operation landed (gotcha 12) — is retried once after
+ *   `sponsoredRetryMs`. Every other rejection throws: Privy simulates before
+ *   it submits, so it is a call that would revert, and nothing reached chain.
  *
  * Erasable syntax and `.ts` specifiers only: scripts/agent-venues-live.ts loads
  * this file under node's type stripping (CLAUDE.md gotcha 10).
  */
 import { formatEther, type Address, type Hex, type PublicClient } from 'viem';
 
+import {
+  awaitUserOperation,
+  userOperationLogs,
+  type UserOperationLogClient,
+  type UserOperationOutcome,
+} from '../../wallet/confirmation/user-operation-logs.ts';
 import type { AgentWalletProvider } from '../agent-wallet.provider.ts';
+import { EnclaveRefusedError, SponsoredSendRejectedError } from '../agents.errors.ts';
 import { privyTransaction } from '../privy/agent-wallet.ts';
 
 /** Monad testnet. Both venues are testnet-only today. */
@@ -54,12 +79,19 @@ export interface AgentLog {
 }
 
 export interface AgentReceipt {
+  /** The transaction that carried the call: the agent's own, or the bundle a sponsored send rode in. */
   readonly transactionHash: Hex;
-  /** From the receipt's `status`: for an EOA the transaction IS the operation. */
+  /**
+   * Whether the call took effect: the receipt's `status` for the agent's own
+   * transaction, the user operation's `success` for a sponsored send (gotcha 8).
+   */
   readonly success: boolean;
+  /** The call's own logs — for a sponsored send, only its user operation's. */
   readonly logs: readonly AgentLog[];
   /** The block the transaction was confirmed in (SEN-20). */
   readonly blockNumber: bigint;
+  /** Present when the call went as a sponsored user operation (SEN-211). */
+  readonly userOpHash?: Hex;
 }
 
 /** The slice of a Monad RPC client the sender needs, so specs fake six lines, not viem. */
@@ -127,16 +159,56 @@ export class InsufficientGasError extends Error {
   }
 }
 
+/** Following a sponsored send on chain (SEN-211). */
+export interface AgentUserOperationClient {
+  headBlock(): Promise<bigint>;
+  /** The operation's outcome, or `null` if it did not surface in time. */
+  waitForUserOperation(userOpHash: Hex, fromBlock: bigint): Promise<UserOperationOutcome | null>;
+}
+
+/** How long a sponsored send may take to surface before the sender gives up on it. */
+export const SPONSORED_CONFIRM_TIMEOUT_MS = 60_000;
+
+/** {@link AgentUserOperationClient} over a viem public client, reading `UserOperationEvent`. */
+export function agentUserOperationClient(
+  client: PublicClient,
+  timeoutMs = SPONSORED_CONFIRM_TIMEOUT_MS,
+): AgentUserOperationClient {
+  return {
+    headBlock: () => client.getBlockNumber({ cacheTime: 0 }),
+    waitForUserOperation: async (userOpHash, fromBlock) =>
+      (
+        await awaitUserOperation(client as unknown as UserOperationLogClient, userOpHash, {
+          fromBlock,
+          timeoutMs,
+        })
+      ).outcome,
+  };
+}
+
+/** The wait before retrying a sponsored send refused for a stale EIP-7702 nonce. */
+export const SPONSORED_NONCE_RETRY_MS = 4_000;
+
 export interface AgentTransactionSenderOptions {
   readonly wallets: AgentWalletProvider;
   readonly chain: AgentChainClient;
   readonly chainId?: number;
+  /**
+   * Send through Privy's gas sponsorship (SEN-211, `AGENT_SPONSORED_SENDS`).
+   * Absent, every transaction is signed and broadcast as before. Ignored when
+   * the wallet provider cannot send sponsored.
+   */
+  readonly sponsored?: AgentUserOperationClient;
+  /** Defaults to {@link SPONSORED_NONCE_RETRY_MS}. */
+  readonly sponsoredRetryMs?: number;
 }
 
 export class AgentTransactionSender {
   readonly #wallets: AgentWalletProvider;
   readonly #chain: AgentChainClient;
   readonly #chainId: number;
+  readonly #sponsored: AgentUserOperationClient | undefined;
+  readonly #sponsoredRetryMs: number;
   /** The tail of each wallet's queue. */
   readonly #tails = new Map<string, Promise<unknown>>();
   /**
@@ -150,6 +222,13 @@ export class AgentTransactionSender {
     this.#wallets = options.wallets;
     this.#chain = options.chain;
     this.#chainId = options.chainId ?? AGENT_CHAIN_ID;
+    this.#sponsored = options.wallets.sendSponsoredTransaction ? options.sponsored : undefined;
+    this.#sponsoredRetryMs = options.sponsoredRetryMs ?? SPONSORED_NONCE_RETRY_MS;
+  }
+
+  /** Whether transactions go out Privy-sponsored (SEN-211). */
+  get sponsored(): boolean {
+    return this.#sponsored !== undefined;
   }
 
   /**
@@ -158,11 +237,12 @@ export class AgentTransactionSender {
    * first reverted one. A signing refusal (`EnclaveRefusedError`) rejects
    * unchanged, and the refused transaction is never broadcast. A wallet whose
    * MON cannot pay the whole list's gas rejects with `InsufficientGasError`
-   * before the first leg is signed.
+   * before the first leg is signed — unless sends are sponsored, where Privy
+   * pays and the wallet's MON is not what decides it.
    */
   sendAll(wallet: AgentWalletRef, txs: readonly AgentTransaction[]): Promise<AgentReceipt[]> {
     return this.#serial(wallet.walletId, async () => {
-      await this.#gasGate(wallet, txs);
+      if (!this.#sponsored) await this.#gasGate(wallet, txs);
       const receipts: AgentReceipt[] = [];
       for (const tx of txs) {
         const receipt = await this.#sendOne(wallet, tx);
@@ -184,6 +264,64 @@ export class AgentTransactionSender {
   }
 
   async #sendOne(wallet: AgentWalletRef, tx: AgentTransaction): Promise<AgentReceipt> {
+    if (this.#sponsored) {
+      const receipt = await this.#sendSponsored(wallet, tx, this.#sponsored);
+      if (receipt) return receipt;
+    }
+    return this.#signAndBroadcast(wallet, tx);
+  }
+
+  /**
+   * One sponsored send, followed to its user operation's receipt. `null` when
+   * the policy refused it — the cue to fall back to the sign path.
+   */
+  async #sendSponsored(
+    wallet: AgentWalletRef,
+    tx: AgentTransaction,
+    userOps: AgentUserOperationClient,
+  ): Promise<AgentReceipt | null> {
+    const send = this.#wallets.sendSponsoredTransaction!.bind(this.#wallets);
+    const call = {
+      to: tx.to,
+      ...(tx.data === undefined ? {} : { data: tx.data }),
+      value: tx.value ?? 0n,
+    };
+    // Logs are read from here on: an operation lands within a second or so.
+    const fromBlock = await userOps.headBlock();
+    let sent;
+    try {
+      sent = await send(wallet.walletId, this.#chainId, call).catch(async (error: unknown) => {
+        if (!(error instanceof SponsoredSendRejectedError) || !error.nonceMismatch) throw error;
+        await new Promise((resolve) => setTimeout(resolve, this.#sponsoredRetryMs));
+        return send(wallet.walletId, this.#chainId, call);
+      });
+    } catch (error) {
+      if (error instanceof EnclaveRefusedError) return null;
+      throw error;
+    }
+    if (!sent.userOpHash) {
+      // Privy broadcast a plain transaction instead of bundling one: follow it.
+      if (sent.transactionHash) return this.#chain.waitForReceipt(sent.transactionHash);
+      throw new Error(`Privy answered a sponsored send from ${wallet.walletId} with no hash`);
+    }
+    const outcome = await userOps.waitForUserOperation(sent.userOpHash, fromBlock);
+    if (!outcome) {
+      throw new Error(
+        `sponsored send ${sent.userOpHash} from ${wallet.walletId} did not surface on chain; ` +
+          'it may still land',
+      );
+    }
+    const bundle = await this.#chain.waitForReceipt(outcome.transactionHash);
+    return {
+      transactionHash: outcome.transactionHash,
+      success: outcome.success,
+      logs: userOperationLogs(bundle.logs, sent.userOpHash),
+      blockNumber: outcome.blockNumber,
+      userOpHash: sent.userOpHash,
+    };
+  }
+
+  async #signAndBroadcast(wallet: AgentWalletRef, tx: AgentTransaction): Promise<AgentReceipt> {
     const [pending, fees] = await Promise.all([
       this.#chain.pendingNonce(wallet.address),
       this.#chain.fees(),

@@ -45,6 +45,12 @@
  *    wallet as the session registered it with this phone's device key — and the
  *    transfer rules are then built from that address, never from the mandate's
  *    copy. See {@link pinReturnTo}.
+ * 7b. Either shape may also carry an `eth_sendTransaction` twin of EVERY
+ *    `eth_signTransaction` rule, with the same conditions (SEN-211): what the
+ *    API compiles under `AGENT_SPONSORED_SENDS`, so the agent can send through
+ *    Privy's gas sponsorship. A twin lets the agent do nothing its sign rule
+ *    does not; it only changes who pays the gas. All twins or none — a lone
+ *    `eth_sendTransaction` rule, or one whose conditions differ, is refused.
  * 8. Every condition's `abi` or `typed_data` blob is the canonical one (SEN-142):
  *    its keccak256, over the RFC 8785 form, equals the hash pinned in
  *    {@link BLOB} for that condition, and a condition that names none carries
@@ -504,6 +510,37 @@ function pinReturnTo(
 }
 
 /**
+ * `rules` plus an `eth_sendTransaction` twin of each `eth_signTransaction`
+ * rule — the mirror of `withSponsoredSends` in `@sente/mandate` (SEN-211).
+ */
+export function withSponsoredSends(rules: readonly ExpectedRule[]): ExpectedRule[] {
+  return [
+    ...rules,
+    ...rules
+      .filter((rule) => rule.method === 'eth_signTransaction')
+      .map((rule) => ({ method: 'eth_sendTransaction', conditions: rule.conditions })),
+  ];
+}
+
+/**
+ * The verdict against the first shape `rules` matches, or, when none does,
+ * against the first shape with as many rules as the payload — the shape it is
+ * trying to be — so the refusal names the rule that is actually wrong.
+ */
+function compareShapes(rules: unknown[], shapes: readonly ExpectedRule[][]): VerifyResult {
+  const verdicts = shapes.map((shape) => compareRules(rules, shape));
+  const ok = verdicts.find((verdict) => verdict.ok);
+  if (ok) return ok;
+  const closest = shapes.findIndex((shape) => shape.length === rules.length);
+  return verdicts[closest === -1 ? 0 : closest]!;
+}
+
+/** Each shape, then each with its sponsored twins (SEN-211). */
+function withSponsoredShapes(shapes: readonly ExpectedRule[][]): ExpectedRule[][] {
+  return [...shapes, ...shapes.map(withSponsoredSends)];
+}
+
+/**
  * Does `payload` do exactly what `intent` says, and nothing else?
  *
  * The one question worth asking before signing. See the module header for the
@@ -550,20 +587,18 @@ export function verifyPolicyPatch(
   const pinned = pinReturnTo(intent);
   if (!pinned.ok) return pinned;
   const { mandate } = pinned;
-  if (intent.kind === 'revoke') return compareRules(rules, expectedRevocationRules(mandate));
+  if (intent.kind === 'revoke') {
+    return compareShapes(rules, withSponsoredShapes([expectedRevocationRules(mandate)]));
+  }
 
   // SEN-184: with the build's builder pin, the policy may also carry the Sente
   // fee rules for exactly that builder; without them it is narrower, and fine.
   const builder = intent.builder === undefined ? KURU_BUILDER_PIN : intent.builder;
   const agent = intent.agentAddress ?? null;
   const plain = expectedPolicyRules(mandate, null, agent);
-  const verdict = compareRules(rules, plain);
-  if (verdict.ok || builder === null) return verdict;
-  const withFee = expectedPolicyRules(mandate, builder, agent);
-  if (withFee.length === plain.length) return verdict;
-  const feeVerdict = compareRules(rules, withFee);
-  // Word the refusal against the shape the payload is trying to be.
-  return feeVerdict.ok || rules.length === withFee.length ? feeVerdict : verdict;
+  const withFee = builder === null ? plain : expectedPolicyRules(mandate, builder, agent);
+  const shapes = withFee.length === plain.length ? [plain] : [plain, withFee];
+  return compareShapes(rules, withSponsoredShapes(shapes));
 }
 
 /** Rule-set equality, as multisets: order is Privy's business, content is ours. */

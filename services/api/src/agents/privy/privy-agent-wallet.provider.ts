@@ -12,13 +12,17 @@ import type {
 import {
   EnclaveApprovalRefusedError,
   EnclaveRefusedError,
+  SponsoredSendRejectedError,
   type EnclaveSignMethod,
 } from '../agents.errors.ts';
+import type { SponsoredSendOutcome } from '../../wallet/send/sponsored-send.ts';
 import {
   createAgentWallet,
+  sendSponsoredTransaction,
   signTransaction,
   signTypedData,
   type PrivyTransactionRequest,
+  type SponsoredCall,
 } from './agent-wallet.ts';
 import type { AuthorizationKey } from './authorization-key.ts';
 import { createKeyQuorum } from './key-quorum.ts';
@@ -104,6 +108,28 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
     );
   }
 
+  sendSponsoredTransaction(
+    walletId: string,
+    chainId: number,
+    call: SponsoredCall,
+  ): Promise<SponsoredSendOutcome> {
+    return this.#serial(walletId, 'eth_sendTransaction', async () => {
+      try {
+        return await sendSponsoredTransaction(this.#client, {
+          walletId,
+          chainId,
+          call,
+          approvals: [this.#agentKey],
+        });
+      } catch (error) {
+        if (error instanceof PrivyError && error.code === 'transaction_broadcast_failure') {
+          throw new SponsoredSendRejectedError({ walletId, detail: privyMessage(error) });
+        }
+        throw error;
+      }
+    });
+  }
+
   signTypedData(walletId: string, typed: TypedDataDefinition): Promise<Hex> {
     return this.#serial(walletId, 'eth_signTypedData_v4', () =>
       signTypedData(this.#client, { walletId, typedData: typed, approvals: [this.#agentKey] }),
@@ -186,7 +212,7 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
     return quorums;
   }
 
-  #serial(walletId: string, method: EnclaveSignMethod, sign: () => Promise<Hex>): Promise<Hex> {
+  #serial<T>(walletId: string, method: EnclaveSignMethod, sign: () => Promise<T>): Promise<T> {
     const previous = this.#inflight.get(walletId) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
@@ -210,4 +236,19 @@ export class PrivyAgentWalletProvider implements AgentWalletProvider {
       });
     return next;
   }
+}
+
+/**
+ * Privy's error message without the bundler request it quotes: that carries a
+ * whole user operation (calldata, signature), which belongs in no log line.
+ */
+function privyMessage(error: PrivyError): string | undefined {
+  const message = (error.body as { error?: unknown } | null)?.error;
+  if (typeof message !== 'string') return undefined;
+  return message
+    .replace(/\s*Request body: \{.*\}/s, '')
+    .replace(/\s*URL: \S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300);
 }

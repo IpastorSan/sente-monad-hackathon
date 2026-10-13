@@ -20,6 +20,7 @@
     "probe:privy": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-probe.ts",
     "probe:privy-sponsor": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-sponsor-probe.ts",
     "probe:device-owner": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/sen43-device-owner-probe.ts",
+    "probe:agent-sponsor": "KURU_DEPLOYMENT=${KURU_DEPLOYMENT:-set-c} node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-agent-sponsor-probe.ts",
     "probe:user-send": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/user-send-probe.ts",
     "privy:recover": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/privy-wallets-recover.ts",
     "agent:fund": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/fund-agent.ts",

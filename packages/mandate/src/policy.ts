@@ -64,9 +64,17 @@
  * what it was before SEN-184, so an agent whose live policy predates it simply
  * keeps trading through the plain overloads (`AgentRecord.kuruBuilder`).
  *
- * Raw `eth_signTransaction` only, never Privy's Transfer API: Transfer
- * policies are evaluated at the API level, outside the enclave
+ * Raw transactions only, never Privy's Transfer API: Transfer policies are
+ * evaluated at the API level, outside the enclave
  * (docs/privy-policy-enforcement.md).
+ *
+ * SPONSORED SENDS (SEN-211). Every rule is compiled for `eth_signTransaction`.
+ * With `sponsoredSends`, each of those is repeated, conditions unchanged, for
+ * `eth_sendTransaction` — the method of a Privy-sponsored send. A Privy rule
+ * binds only its own method, so without the twin the enclave refuses every
+ * sponsored send, and with it the sponsored path is held to exactly the same
+ * conditions (measured live: docs/privy-sponsorship.md, run 4). The twins only
+ * change who pays the gas, never what the agent may do.
  */
 import {
   ERC20_TRANSFER_ABI,
@@ -161,6 +169,12 @@ export interface KuruBuilderGrant {
 export interface CompileOptions {
   /** Sente's builder fee; absent or `null`, no builder rule is compiled. */
   readonly kuruBuilder?: KuruBuilderGrant | null;
+  /**
+   * Repeat every transaction rule for `eth_sendTransaction`, so the agent may
+   * also send it Privy-sponsored (SEN-211). Off, the policy is byte-identical
+   * to what it was before.
+   */
+  readonly sponsoredSends?: boolean;
   /**
    * The agent wallet the policy will govern, when it already exists (an amend
    * or a revoke, never a hire: Privy creates the policy before the wallet).
@@ -354,6 +368,25 @@ function recoveryRuleBuilder(mandate: Mandate): TxRule {
     rule(name, 'eth_signTransaction', [chain, ...conditions, txValueLte(maxValue)]);
 }
 
+/** Suffix of a sponsored twin's name. Privy caps a rule name at 50 characters. */
+const SPONSORED_SUFFIX = ' (sponsored)';
+
+/**
+ * `rules`, followed by an `eth_sendTransaction` twin of each
+ * `eth_signTransaction` rule: same conditions, same action (SEN-211). Typed-data
+ * rules have no sponsored form and are not repeated.
+ */
+export function withSponsoredSends(rules: readonly AllowRule[]): AllowRule[] {
+  const twins = rules
+    .filter((rule) => rule.method === 'eth_signTransaction')
+    .map((rule) => ({
+      ...rule,
+      name: `${rule.name.slice(0, 50 - SPONSORED_SUFFIX.length)}${SPONSORED_SUFFIX}`,
+      method: 'eth_sendTransaction' as const,
+    }));
+  return [...rules, ...twins];
+}
+
 /**
  * The mandate as Privy rules. A venue not in `mandate.venues` contributes
  * nothing, so an empty `venues` and no `returnTo` compile to `[]` — a policy
@@ -376,7 +409,7 @@ export function compileMandate(mandate: Mandate, options: CompileOptions = {}): 
   }
   if (mandate.venues.includes('perpl')) rules.push(...perplRules(mandate, tx, expiry));
   if (mandate.returnTo) rules.push(...returnRules(mandate.returnTo, recovery));
-  return rules;
+  return options.sponsoredSends ? withSponsoredSends(rules) : rules;
 }
 
 /**
@@ -403,14 +436,17 @@ export function compileMandate(mandate: Mandate, options: CompileOptions = {}): 
  * `returnTo` from the owner's registered wallet, so an agent hired through the
  * product always has a way out.
  */
-export function compileRevocationRules(mandate: Mandate): AllowRule[] {
+export function compileRevocationRules(
+  mandate: Mandate,
+  options: Pick<CompileOptions, 'sponsoredSends'> = {},
+): AllowRule[] {
   const recovery = recoveryRuleBuilder(mandate);
   const rules: AllowRule[] = [];
   if (mandate.returnTo) {
     if (mandate.venues.includes('kuru')) rules.push(kuruWithdrawRule(recovery, mandate.returnTo));
     rules.push(...returnRules(mandate.returnTo, recovery));
   }
-  return rules;
+  return options.sponsoredSends ? withSponsoredSends(rules) : rules;
 }
 
 /** The caps a policy actually enforces, read back off its rules. */

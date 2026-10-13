@@ -1388,6 +1388,63 @@ describe('AgentsService', () => {
     });
   });
 
+  describe('sponsored sends (SEN-211)', () => {
+    const previous = process.env['AGENT_SPONSORED_SENDS'];
+    beforeEach(() => {
+      process.env['AGENT_SPONSORED_SENDS'] = '1';
+    });
+    afterEach(() => {
+      if (previous === undefined) delete process.env['AGENT_SPONSORED_SENDS'];
+      else process.env['AGENT_SPONSORED_SENDS'] = previous;
+    });
+
+    it('a hire compiles the sponsored twins and records that its policy has them', async () => {
+      const { service, wallets } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(wallets.provisioned[0]!.rules).toEqual(
+        compileMandate(parseMandate(mandateInput()), { sponsoredSends: true }),
+      );
+      expect(wallets.provisioned[0]!.rules.some((r) => r.method === 'eth_sendTransaction')).toBe(
+        true,
+      );
+      expect(agent.sponsoredSends).toBe(true);
+    });
+
+    it('an amend and a revoke carry them too', async () => {
+      const { service, wallets } = setup(OWNER_WALLET);
+      const { agent } = await service.hire(ALICE, hireInput());
+      wallets.policyUpdates.length = 0;
+
+      const next = mandateInput({ venues: ['kuru'] });
+      const amended = await service.amendMandate(ALICE, agent.id, next);
+      expect(wallets.policyUpdates.at(-1)!.rules).toEqual(
+        compileMandate(amended.mandate, { agentAddress: agent.address, sponsoredSends: true }),
+      );
+      expect(amended.sponsoredSends).toBe(true);
+
+      const revoked = await service.revoke(ALICE, agent.id);
+      expect(wallets.policies.get(agent.policyId)).toEqual(
+        compileRevocationRules(amended.mandate, { sponsoredSends: true }),
+      );
+      expect(revoked.sponsoredSends).toBe(true);
+    });
+
+    it('off, an amend records that the policy no longer has them', async () => {
+      const { service, store, wallets } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      expect(agent.sponsoredSends).toBe(true);
+      // The flag is read when the service is built: a restart with it off.
+      delete process.env['AGENT_SPONSORED_SENDS'];
+      const restarted = new AgentsService(store, wallets, new ServerMandateOwners());
+      const amended = await restarted.amendMandate(ALICE, agent.id, mandateInput());
+      expect(
+        wallets.policyUpdates.at(-1)!.rules.some((r) => r.method === 'eth_sendTransaction'),
+      ).toBe(false);
+      expect(amended.sponsoredSends).toBe(false);
+    });
+  });
+
   describe('fork (SEN-28)', () => {
     it('copies the strategy and the model of a published agent', async () => {
       const { service, store } = setup();

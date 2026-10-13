@@ -110,6 +110,31 @@ describe('the anchor value', () => {
   });
 });
 
+describe('anchoring a policy with sponsored-send twins (SEN-211)', () => {
+  const previous = process.env['AGENT_SPONSORED_SENDS'];
+  beforeEach(() => {
+    process.env['AGENT_SPONSORED_SENDS'] = '1';
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env['AGENT_SPONSORED_SENDS'];
+    else process.env['AGENT_SPONSORED_SENDS'] = previous;
+  });
+
+  it('hashes the rules the enclave holds, twins included, at hire and at revoke', async () => {
+    const w = world();
+    const { agent } = await w.service.hire(ALICE, hireInput());
+    const [entry] = w.client.registrationMetadata[0]!;
+    expect(decodeMandateAnchor(entry!.metadataValue)!.policyHash).toBe(
+      livePolicyHash(w.wallets, agent),
+    );
+
+    const revoked = await w.service.revoke(ALICE, agent.id);
+    await w.anchors.whenIdle();
+    const onChain = decodeMandateAnchor(w.client.metadataWrites[0]!.entry.metadataValue)!;
+    expect(onChain.policyHash).toBe(livePolicyHash(w.wallets, revoked));
+  });
+});
+
 describe('anchoring at hire', () => {
   it('registers the identity with the mandate anchor in the same transaction', async () => {
     const w = world();

@@ -183,3 +183,48 @@ export async function awaitUserOperation(
   }
   return { outcome, elapsedMs: Date.now() - started };
 }
+
+/** EntryPoint v0.6/v0.7 emit this once, after validation and before any execution. */
+export const BEFORE_EXECUTION_TOPIC: Hex = toEventSelector('BeforeExecution()');
+
+/** A receipt log, narrowed to what {@link userOperationLogs} reads. */
+export interface ReceiptLog {
+  readonly address: Address;
+  readonly topics: readonly Hex[];
+}
+
+/**
+ * The logs ONE user operation's execution emitted, out of the receipt of the
+ * bundle that carried it (SEN-211).
+ *
+ * A bundle runs its operations one after another, and the EntryPoint closes
+ * each with its `UserOperationEvent`; so an operation's own logs are the ones
+ * between the previous operation's `UserOperationEvent` (or `BeforeExecution`,
+ * for the first) and its own. The EntryPoint's events are left out — they are
+ * the bundle's bookkeeping, not the call's. Empty when the receipt does not
+ * carry the operation at all.
+ */
+export function userOperationLogs<L extends ReceiptLog>(logs: readonly L[], userOpHash: Hash): L[] {
+  const wanted = userOpHash.toLowerCase();
+  const end = logs.findIndex(
+    (log) =>
+      log.topics[0]?.toLowerCase() === USER_OPERATION_EVENT_TOPIC &&
+      log.topics[1]?.toLowerCase() === wanted,
+  );
+  if (end === -1) return [];
+  const entryPoint = logs[end]!.address.toLowerCase();
+  const fromEntryPoint = (log: ReceiptLog) => log.address.toLowerCase() === entryPoint;
+  let start = end;
+  while (start > 0) {
+    const previous = logs[start - 1]!;
+    const topic = previous.topics[0]?.toLowerCase();
+    if (
+      fromEntryPoint(previous) &&
+      (topic === USER_OPERATION_EVENT_TOPIC || topic === BEFORE_EXECUTION_TOPIC)
+    ) {
+      break;
+    }
+    start -= 1;
+  }
+  return logs.slice(start, end).filter((log) => !fromEntryPoint(log));
+}

@@ -48,3 +48,7 @@ apps/mobile/public/canvaskit.wasm
 
 # Local secrets for live scripts (test identities). Never commit, never ship.
 .secrets/
+
+# Release builds (build-apk), published to the box, never committed
+sente-release.apk
+sente-release.apk.idsig

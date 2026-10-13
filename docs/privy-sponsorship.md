@@ -1,4 +1,4 @@
-# Privy-sponsored sends from a user-owned wallet (SEN-39, SEN-42)
+# Privy-sponsored sends from a user-owned wallet (SEN-39, SEN-42) and an agent's (SEN-211)
 
 Phase 3's user wallet is **a Privy server wallet + an owner key on the user's
 device + Privy-paid gas**. That third part is the one nothing depended on yet,
@@ -146,6 +146,85 @@ Four answers, and the fourth is the one that changes the design:
    a delegated Privy wallet. The signature is
    `0xcb295a2f…1c` over the probe's own typed data; gotcha 13 still applies to
    Perpl's live struct, which this does not test.
+
+### Run 4 — 2026-10-13, an AGENT wallet under its mandate (SEN-211)
+
+Runs 1–3 were user wallets, which carry no policy. This one asks whether an
+agent's Privy server wallet can send sponsored too, and whether its mandate
+still binds on that path:
+
+```bash
+mise exec -- pnpm --filter @sente/api run probe:agent-sponsor
+#   -- --env-file <path>   the repo-root .env by default
+#   -- --out report.json
+```
+
+`services/api/scripts/privy-agent-sponsor-probe.ts` provisions a NEW
+throwaway wallet on every run, through `PrivyAgentWalletProvider.provision`
+(mandate policy, mandate quorum as owner, the agent key as the only signer),
+under a real `compileMandate` policy: Kuru Set C, cbBTC-USDC, deposits and
+approves ≤ 5 USDC, `returnTo` the treasury. The wallet holds **0 MON and 0
+USDC**: an `approve` needs no balance, so nothing is funded. Every request is
+signed by the agent key, as the API would sign it.
+
+Five runs. The table is run 4's (wallet `<privy-agent-sponsor-probe-wallet-id>`,
+`0x3ac51C49B77B4B70666Cc14A79D6641a0FE77089`), with what the others added:
+
+| #   | Check                                                                                                                          | Result                                                                                                                                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a0  | sponsored `approve(AccountCore, 1 USDC)` under the policy **as compiled**                                                      | **400 `policy_violation`** — every rule is `eth_signTransaction`, and a rule binds only its own method                                                                                                |
+| a1  | the same, after adding an `eth_sendTransaction` twin of every rule                                                             | **accepted in 862 ms**, userOp `0xc9a7f83c…eea3`                                                                                                                                                      |
+| a   | its user-operation receipt                                                                                                     | `success=true`, tx `0xd5394f5c35ff52d57029b48d3a7a4726164eda430d556825050fd7a7c3e319f3`, block 70706428, `actualGasCost` 0, confirmed 77 ms after the response                                        |
+| a+  | the allowance on chain                                                                                                         | 1,000,000 — the approve took effect                                                                                                                                                                   |
+| a′  | the EIP-7702 delegation                                                                                                        | code `0x` → `0xef0100d6cedde84be40893d153be9d467cd6ad37875b28`, in that same operation. **No `eth_sign7702Authorization` rule was needed** (see below)                                                |
+| b1  | `approve(AccountCore, cap + 1)`                                                                                                | **400 `policy_violation`**                                                                                                                                                                            |
+| b2  | `approve(Perpl Exchange, 1 USDC)` — a spender the mandate never names                                                          | **400 `policy_violation`**                                                                                                                                                                            |
+| b3  | `approve` on AUSD — a token the mandate never names                                                                            | **400 `policy_violation`**                                                                                                                                                                            |
+| b4  | USDC `transfer(0xdEaD, 0)` — the return rule pins the recipient                                                                | **400 `policy_violation`**                                                                                                                                                                            |
+| c0  | a second allowed send 68 ms after the delegating one was accepted                                                              | accepted; `success=true` in block 70706430. **Runs 1, 2 and 5 refused it at 0–33 ms**: "EIP-7702 nonce mismatch. Expected: 1, Actual: 0", as in run 3 above                                           |
+| c1  | an allowed send ~4 s after the previous request                                                                                | accepted in 934 ms; `success=true`, tx `0x2359aa59412d47bfcd3df7ef3285d4bed2f1cf9247c3377308d4333f8a0ac0dc`, block 70706529                                                                           |
+| c2  | another, 72 ms after c1 was accepted                                                                                           | accepted in 677 ms; `success=true`, tx `0x88bfc1adeee7eae9d5efc482e800526c4ac5dedcafe4879248af863a46845088`, block 70706531                                                                           |
+| f   | an allowed approve with **no `value` key** (every rule pins `value lte 0x0`)                                                   | accepted; `success=true` in block 70706511. On the send path Privy reads an absent value as zero                                                                                                      |
+| d   | `eth_signTransaction` from the **delegated** wallet                                                                            | **signed**; `recoverTransactionAddress` → the wallet. Not broadcast (0 MON). The sign path survives delegation, so it stays a fallback                                                                |
+| e   | address after delegation                                                                                                       | unchanged                                                                                                                                                                                             |
+| g   | run 5: `AgentTransactionSender` in sponsored mode, the product path, policy from `compileMandate(…, { sponsoredSends: true })` | `success=true`, userOp `0x3d74d1ef…cacd`, tx `0x0f67ecf1bc94e4774a71f68e0b5b21ab8e7379d4eb52ffd7e9566e3c5b3ccebd`, block 70709062; exactly one log of its own (the USDC `Approval`), 1.2 s end to end |
+
+Every sponsored request answered in 0.5–1.0 s, and every operation was in a
+block within ~80 ms of the answer. Run 1 also showed what an
+`eth_sendTransaction` that would revert looks like: a 1-atom USDC transfer
+from a wallet holding none came back
+`400 transaction_broadcast_failure`, "Execution reverted", from Alchemy's
+`eth_estimateUserOperationGas` — **Privy simulates before it evaluates the
+policy**. That is why b4 transfers zero: a refusal check must use a call that
+would succeed, or it proves only the simulation. (Run 3's confirmations timed
+out because the probe read logs from a fixed 50-block lookback long after the
+operations landed; they had all succeeded, and the probe now reads from the
+block it sent at.)
+
+What it means:
+
+1. **The mandate binds the sponsored path, but only if the policy names it.**
+   A Privy rule matches its own `method` and nothing else, so today's
+   compiled policy refuses every sponsored send (a0), and the same rules
+   repeated under `eth_sendTransaction` let exactly the allowed call through
+   and refuse the four the mandate forbids (b1–b4). Every condition the sign
+   path enforces (`to`, the calldata decode, the caps, `value`, the expiry, the
+   recipient pin) is a property of the transaction and is evaluated the same.
+   SEN-204 already refuses `rollingCap`, the one thing that was sign-path-only.
+2. **The delegation is not gated by the wallet's policy.** Privy signed the
+   EIP-7702 authorization to `0xd6ce…5b28` (Kernel) as part of the first
+   sponsored send, with no `eth_sign7702Authorization` rule in the policy. The
+   delegate is Privy's choice, not the agent's: the agent key cannot name
+   another one through `eth_sendTransaction`. Kernel in EIP-7702 mode
+   validates a user operation with the EOA's own signature, which the enclave
+   gives only under the wallet's policy; that last step is read from Kernel's
+   design, not measured here.
+3. **Space the second send after the delegating one, or wait for it to land.**
+   Three of five runs refused a send fired at once after the first; sends from an
+   already-delegated wallet 72 ms apart both landed (c2, as in run 3).
+4. **A sponsored agent never needs MON** for a contract call: `actualGasCost` 0,
+   paid from Privy's credits. The native-MON Kuru deposit is the exception —
+   its value is the agent's own MON.
 
 ## The human step, and its exact wording
 
@@ -363,5 +442,6 @@ What is still open, and neither is this document's to close:
    (SEN-16) exists so a user's own account can pay for its own transactions; a
    Privy user never needs MON for a transfer, because sponsorship pays. It is
    deliberately **left in place** — the Kernel path still uses it until SEN-45,
-   and agents still get their own drip (SEN-14, and an agent's wallet is NOT
-   sponsored) — but nothing on the Phase 3 path calls it, and the demo should not.
+   and agents still get their own drip (SEN-14) — but nothing on the Phase 3
+   path calls it, and the demo should not. An agent's wallet can be sponsored
+   too since SEN-211 (run 4 above), behind `AGENT_SPONSORED_SENDS`.

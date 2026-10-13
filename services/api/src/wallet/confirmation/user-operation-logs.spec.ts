@@ -1,7 +1,9 @@
 import { encodeAbiParameters, getAddress, numberToHex, type Hash, type Hex } from 'viem';
 
 import {
+  BEFORE_EXECUTION_TOPIC,
   USER_OPERATION_EVENT_TOPIC,
+  userOperationLogs,
   userOperationOutcome,
   type UserOperationLogClient,
 } from './user-operation-logs';
@@ -100,5 +102,35 @@ describe('userOperationOutcome', () => {
     await userOperationOutcome(client, USER_OP_HASH, { lookbackBlocks: 50n });
 
     expect(filters).toEqual([expect.objectContaining({ fromBlock: numberToHex(0n) })]);
+  });
+});
+
+describe('userOperationLogs (SEN-211)', () => {
+  const ENTRY_POINT = getAddress(`0x${'ee'.repeat(20)}`);
+  const OTHER_OP = `0x${'0b'.repeat(32)}` as Hash;
+  const at = (address: `0x${string}`, ...topics: Hex[]) => ({ address, topics });
+  const call = (n: number) =>
+    at(getAddress(`0x${n.toString(16).padStart(40, '0')}`), numberToHex(n, { size: 32 }));
+  const closes = (hash: Hash) => at(ENTRY_POINT, USER_OPERATION_EVENT_TOPIC, hash);
+
+  it('cuts one operation’s own logs out of a bundle, without the EntryPoint’s', () => {
+    const logs = [
+      at(ENTRY_POINT, BEFORE_EXECUTION_TOPIC),
+      call(1),
+      closes(OTHER_OP),
+      call(2),
+      call(3),
+      closes(USER_OP_HASH),
+      call(4),
+      closes(`0x${'0c'.repeat(32)}` as Hash),
+    ];
+    expect(userOperationLogs(logs, USER_OP_HASH)).toEqual([call(2), call(3)]);
+    expect(userOperationLogs(logs, OTHER_OP)).toEqual([call(1)]);
+  });
+
+  it('is empty when the receipt does not carry the operation', () => {
+    expect(
+      userOperationLogs([at(ENTRY_POINT, BEFORE_EXECUTION_TOPIC), call(1)], USER_OP_HASH),
+    ).toEqual([]);
   });
 });
