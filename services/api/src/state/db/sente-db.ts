@@ -34,7 +34,7 @@
 // loads this under node's type stripping (CLAUDE.md gotcha 10). Nest wiring is
 // in `state/state.module.ts`.
 
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
@@ -76,6 +76,10 @@ export class SenteDb {
     const raw = new DatabaseSync(resolved);
     const db = new SenteDb(resolved, raw);
     try {
+      // 0600 like the JSON files. node:sqlite follows the umask, and SQLite
+      // gives the -wal and -shm files the database file's mode, so this comes
+      // before WAL creates them.
+      if (resolved !== IN_MEMORY) chmodSync(resolved, 0o600);
       raw.exec('PRAGMA journal_mode = WAL');
       raw.exec('PRAGMA synchronous = FULL');
       raw.exec('PRAGMA foreign_keys = ON');
