@@ -20,6 +20,7 @@ import {
   AgentTransactionSender,
   type AgentChainClient,
   type AgentLog,
+  type AgentSendReport,
   type AgentUserOperationClient,
 } from './agent-transactions';
 
@@ -90,7 +91,11 @@ function bundleLogs(userOpHash: Hex, success: boolean): AgentLog[] {
 }
 
 function setup(
-  options: { handle?: (request: CapturedRequest) => Reply; userOpSuccess?: boolean } = {},
+  options: {
+    handle?: (request: CapturedRequest) => Reply;
+    userOpSuccess?: boolean;
+    onSent?: (report: AgentSendReport) => void;
+  } = {},
 ) {
   const fake = fakePrivy(options.handle);
   const wallets = new PrivyAgentWalletProvider({
@@ -144,6 +149,7 @@ function setup(
     chain,
     sponsored: userOps,
     sponsoredRetryMs: 0,
+    ...(options.onSent ? { onSent: options.onSent } : {}),
   });
   const rpc = () => fake.calls.filter((call) => rpcMethod(call) !== undefined);
   return { sender, calls: fake.calls, rpc, broadcast, followed };
@@ -269,6 +275,51 @@ describe('AgentTransactionSender, sponsored (SEN-211)', () => {
     expect(rejected.message).not.toContain('alchemy.com');
     expect(rpc()).toHaveLength(1);
     expect(broadcast).toEqual([]);
+  });
+
+  it('reports which path each transaction took (SEN-212)', async () => {
+    const sponsored: AgentSendReport[] = [];
+    await setup({ onSent: (r) => sponsored.push(r) }).sender.sendAll(WALLET, [APPROVE]);
+    expect(sponsored).toEqual([
+      expect.objectContaining({
+        walletId: 'wallet-a',
+        to: USDC,
+        via: 'sponsored',
+        transactionHash: BUNDLE,
+        userOpHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+        success: true,
+      }),
+    ]);
+    expect(sponsored[0]!.submitMs).toBeGreaterThanOrEqual(0);
+    expect(sponsored[0]!.confirmMs).toBeGreaterThanOrEqual(0);
+
+    const fellBack: AgentSendReport[] = [];
+    await setup({
+      handle: (request) =>
+        rpcMethod(request) === 'eth_sendTransaction' ? policyViolation : undefined,
+      onSent: (r) => fellBack.push(r),
+    }).sender.sendAll(WALLET, [APPROVE]);
+    expect(fellBack).toEqual([
+      expect.objectContaining({ via: 'signed_after_refusal', success: true }),
+    ]);
+    expect(fellBack[0]!.userOpHash).toBeUndefined();
+
+    // A refused call reached nothing, so there is nothing to report; and a
+    // throwing reporter never fails a send that landed.
+    const refused: AgentSendReport[] = [];
+    await setup({
+      handle: (request) => (rpcMethod(request) ? policyViolation : undefined),
+      onSent: (r) => refused.push(r),
+    })
+      .sender.sendAll(WALLET, [APPROVE])
+      .catch(() => undefined);
+    expect(refused).toEqual([]);
+    const [landed] = await setup({
+      onSent: () => {
+        throw new Error('logger down');
+      },
+    }).sender.sendAll(WALLET, [APPROVE]);
+    expect(landed!.success).toBe(true);
   });
 
   it('without the sponsored option it signs and broadcasts, as before', async () => {
