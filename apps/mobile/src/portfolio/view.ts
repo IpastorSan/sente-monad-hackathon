@@ -1,26 +1,26 @@
 /**
  * What the Portfolio tab and your own position SAY (SEN-118, plan U-12): the
- * total and its split, the cash card, your spot and perp rows, the "With
- * your agents" group, open orders with their distance to the market, the
- * fills history, and what hiding balances hides.
+ * total and its split, the cash card, your spot and perp rows, what your
+ * agents hold, open orders with their distance to the market, the fills
+ * history, and what hiding balances hides.
  *
  * Pure, like `agents/cockpit.ts`: no React, no React Native, so `view.test.ts`
  * pins every rule under plain `node --test` and the screens only lay out.
  *
  * Money stays a decimal string, summed exactly and floored to the cent once
- * for display (`floorTo`). Every figure that is SAID is per asset (SEN-210):
- * `25.52 USDC · 20.89 AUSD · 0.00999 WETH`, never USDC and AUSD added up as
- * dollars, and a spot token as itself rather than at its price. Only the bar's
- * proportions and the hero's line need one number: they add USDC and AUSD at
- * $1 and price every other asset at its Kuru last price, and an asset with no
- * price is left out of that number (and named), never counted as zero.
+ * for display (`floorTo`). A holding is said in its own asset (SEN-210):
+ * `25.52 USDC`, `0.01 WETH`. The total is one dollar figure with its
+ * breakdown by coin (`valuation.ts`, SEN-215): USDC and AUSD at $1 and every
+ * other asset at its Kuru last price, the same prices as the bar and the
+ * hero's line, and an asset with no price is listed and left out of the sum,
+ * never counted as zero.
  */
-import type { Agent, AgentPortfolioDto, BalanceDto, OrderDto, PositionDto } from '../agents/api.ts';
+import type { AgentPortfolioDto, BalanceDto, OrderDto, PositionDto } from '../agents/api.ts';
 import { sumDecimals } from '../agents/ledgerView.ts';
 import type { TickerDto } from '../markets/api.ts';
 import type { Portfolio, PortfolioFill } from '../trade/types.ts';
 import { formatPrice as formatPlaces } from '../ui/chart/geometry.ts';
-import { addAmounts, amountFigure, amountsText, type AssetAmount } from '../ui/assetAmounts.ts';
+import { addAmounts, amountFigure, type AssetAmount } from '../ui/assetAmounts.ts';
 import { displayAmount } from '../ui/displayAmount.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct, maskDigits, pctDirection, type Direction } from '../ui/tradingFormat.ts';
@@ -73,14 +73,17 @@ function sum(values: readonly string[]): string {
   return sumDecimals(values) ?? '0';
 }
 
-function isPositive(value: string | null | undefined): boolean {
+/** Plain decimals summed exactly; `0` for none. */
+export const sumOf = sum;
+
+export function isPositive(value: string | null | undefined): boolean {
   if (value === null || value === undefined) return false;
   const parsed = parse(value);
   return parsed !== null && parsed.atoms > 0n;
 }
 
 /** A display ratio: floats are fine for a percent, never for the money itself. */
-function ratio(part: string, whole: string): number | null {
+export function ratio(part: string, whole: string): number | null {
   const p = Number(part);
   const w = Number(whole);
   if (!Number.isFinite(p) || !Number.isFinite(w) || w === 0) return null;
@@ -410,9 +413,16 @@ export function allocation(parts: Record<AllocationKey, AllocationPart>): Alloca
   };
 }
 
-/** The legend's figure: exactly what the part holds, per asset, or its share once balances are hidden. */
-export function legendValue(segment: AllocationSegment, hidden: boolean): string {
-  return hidden ? `${segment.share}%` : amountsText(segment.amounts, { separator: '\n' });
+/**
+ * The legend's figures for one part: its dollars at the headline's prices,
+ * floored to the cent, and its share. Hidden balances keep only the share.
+ */
+export function legendFigures(
+  segment: AllocationSegment,
+  hidden: boolean,
+): { usd: string | null; share: string } {
+  const usd = money(segment.usd);
+  return { usd: hidden ? null : `$${usd}`, share: `${segment.share}%` };
 }
 
 // ---------------------------------------------------------------------------
@@ -455,85 +465,7 @@ export function seriesChange(
 }
 
 // ---------------------------------------------------------------------------
-// With your agents
-
-export type AgentInput = {
-  agent: Pick<Agent, 'id' | 'name' | 'status' | 'revokedAt'>;
-  /** `null` when the route is missing or the read failed. */
-  portfolio: AgentPortfolioDto | null;
-};
-
-export type AgentGroupRow =
-  | {
-      kind: 'position';
-      key: string;
-      agentId: string;
-      symbol: string;
-      base: string;
-      side: 'long' | 'short';
-      /** Perps only. */
-      leverage: number | null;
-      /** `Range Hunter · from 0.9744`. */
-      caption: string;
-      value: string | null;
-      unit: 'USDC' | 'AUSD';
-      pnl: string | null;
-      pct: number | null;
-    }
-  | {
-      kind: 'agent';
-      key: string;
-      agentId: string;
-      name: string;
-      revoked: boolean;
-      /** `Revoked Sep 23`, `No open position · idle`, `Holdings unavailable`. */
-      caption: string;
-      /** What it holds, exactly, per asset; `null` when unread. */
-      amounts: AssetAmount[] | null;
-      /** `ready to return` for a revoked agent still holding funds. */
-      aside: string | null;
-    };
-
-/**
- * The read-only group: every open position an agent holds (tap → its cockpit),
- * an agent with nothing open as one line saying it is idle and what it holds,
- * and a revoked agent only while it still holds funds, so money never drops
- * out of the total without a row saying where it went.
- */
-export function agentGroup(inputs: readonly AgentInput[]): {
-  rows: AgentGroupRow[];
-  /** Everything the agents hold, exactly, per asset, and in dollars for the bar; `null` with none read. */
-  total: AllocationPart | null;
-} {
-  const rows: AgentGroupRow[] = [];
-  const usd: string[] = [];
-  const held: AssetAmount[][] = [];
-  for (const { agent, portfolio } of inputs) {
-    const revoked = agent.status === 'revoked';
-    if (portfolio === null) {
-      if (!revoked) {
-        rows.push(agentRow(agent, 'Holdings unavailable', null, null));
-      }
-      continue;
-    }
-    const amounts = agentHoldingAmounts(portfolio);
-    usd.push(portfolio.totals.approxUsd);
-    held.push(amounts);
-    const positions = agentPositions(agent, portfolio);
-    if (revoked) {
-      if (amounts.length > 0)
-        rows.push(agentRow(agent, revokedCaption(agent), amounts, 'ready to return'));
-      continue;
-    }
-    if (positions.length === 0)
-      rows.push(agentRow(agent, 'No open position · idle', amounts, null));
-    rows.push(...positions);
-  }
-  return {
-    rows,
-    total: usd.length > 0 ? { usd: sum(usd), amounts: addAmounts(...held) } : null,
-  };
-}
+// Your agents' holdings (the Agents section itself is `agentBook.ts`)
 
 /**
  * What an agent holds, exactly, per asset (SEN-210) — the API's
@@ -558,78 +490,6 @@ export function agentHoldingAmounts(portfolio: AgentPortfolioDto): AssetAmount[]
       : [],
     portfolio.holdings.map((h) => ({ asset: h.asset, amount: h.amount })),
   ).filter(({ amount }) => parse(amount)?.atoms !== 0n);
-}
-
-function agentRow(
-  agent: AgentInput['agent'],
-  caption: string,
-  amounts: AssetAmount[] | null,
-  aside: string | null,
-): AgentGroupRow {
-  return {
-    kind: 'agent',
-    key: `agent:${agent.id}`,
-    agentId: agent.id,
-    name: agent.name,
-    revoked: agent.status === 'revoked',
-    caption,
-    amounts,
-    aside,
-  };
-}
-
-function revokedCaption(agent: AgentInput['agent']): string {
-  const at = agent.revokedAt ? Date.parse(agent.revokedAt) : NaN;
-  return Number.isFinite(at) ? `Revoked ${shortDate(at)}` : 'Revoked';
-}
-
-/**
- * Its Perpl positions (value = margin + unrealised P&L, in AUSD) and every Kuru
- * holding its event log explains (value at the mark, in USDC) — the same
- * "explained holdings only" rule the cockpit's `positionRows` follows, so the
- * wallet's gas MON is not an agent "position".
- */
-function agentPositions(agent: AgentInput['agent'], portfolio: AgentPortfolioDto): AgentGroupRow[] {
-  const rows: AgentGroupRow[] = [];
-  const perpl = portfolio.perpl;
-  if (perpl.ok && perpl.status === 'ok') {
-    for (const p of perpl.positions) {
-      rows.push({
-        kind: 'position',
-        key: `${agent.id}:perpl:${p.symbol}:${p.side}`,
-        agentId: agent.id,
-        symbol: p.symbol,
-        base: baseOf(p.symbol),
-        side: p.side,
-        leverage: p.leverage,
-        caption: `${agent.name} · from ${p.entryPrice}`,
-        value: sum([p.margin, p.unrealizedPnl]),
-        unit: 'AUSD',
-        pnl: p.unrealizedPnl,
-        pct: ratio(p.unrealizedPnl, p.margin),
-      });
-    }
-  }
-  for (const h of portfolio.holdings) {
-    if (!isPositive(h.costBasis.coveredSize)) continue;
-    const { avgPrice, unrealizedPnl } = h.costBasis;
-    const cost = avgPrice !== null ? mulDecimal(h.costBasis.coveredSize, avgPrice) : null;
-    rows.push({
-      kind: 'position',
-      key: `${agent.id}:kuru:${h.market}`,
-      agentId: agent.id,
-      symbol: h.asset,
-      base: h.asset,
-      side: 'long',
-      leverage: null,
-      caption: avgPrice !== null ? `${agent.name} · from ${avgPrice}` : agent.name,
-      value: h.value,
-      unit: 'USDC',
-      pnl: unrealizedPnl,
-      pct: unrealizedPnl !== null && cost !== null ? ratio(unrealizedPnl, cost) : null,
-    });
-  }
-  return rows;
 }
 
 export function baseOf(symbol: string): string {

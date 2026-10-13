@@ -129,9 +129,13 @@ import {
 } from '@/ui/kit';
 import { PageTitle } from '@/ui/PageTitle';
 import { color, font, RADIUS, text } from '@/ui/theme';
+import { useTickers } from '@/markets/hooks';
+import { useHideBalances } from '@/portfolio/hideBalances';
+import { TotalValue } from '@/portfolio/TotalValue';
+import { unpricedNote, valuation } from '@/portfolio/valuation';
 import { agentHoldingAmounts } from '@/portfolio/view';
 import { amountsTone, signedAmountsText } from '@/ui/assetAmounts';
-import { BigAmounts, BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
+import { BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
 
 /** `reason`: the API's refusal, when one is worth a link (SEN-183: out of credits → Credits). */
 type NoticeState = {
@@ -635,6 +639,15 @@ function Overview({
   onScheduled: (agent: Agent) => void;
 }) {
   const active = agent.status === 'active';
+  // The balance as one dollar figure at the Portfolio's prices (SEN-215).
+  const tickers = useTickers();
+  // The eye Home and Portfolio share: hidden there, hidden here.
+  const [hidden] = useHideBalances();
+  const value = useMemo(
+    () =>
+      portfolio ? valuation(agentHoldingAmounts(portfolio), tickers.data?.tickers ?? []) : null,
+    [portfolio, tickers.data],
+  );
   const [range, setRange] = useState<EquityRange>('All');
   const [scrub, setScrub] = useState<number | null>(null);
 
@@ -676,8 +689,8 @@ function Overview({
     <View>
       <View style={styles.hero}>
         <Text style={text.label}>Balance</Text>
-        {portfolio ? (
-          <BigAmounts amounts={agentHoldingAmounts(portfolio)} label="Balance" />
+        {value !== null ? (
+          <TotalValue value={value} label="Balance" size="lg" hidden={hidden} />
         ) : main ? (
           <View style={styles.figure}>
             <BigNumber value={formatAtoms(main.atoms, main.decimals, { group: false })} />
@@ -691,8 +704,10 @@ function Overview({
           </Text>
         )}
         <Text style={[text.caption, text.num]}>
-          {portfolio
-            ? 'Across its wallet and venues'
+          {value !== null
+            ? ['Across its wallet and venues.', unpricedNote(value.unpriced)]
+                .filter(Boolean)
+                .join(' ')
             : others.length > 0
               ? `In its wallet, with ${others
                   .map((holding) => `${formatHolding(holding)} ${holding.symbol}`)

@@ -1,6 +1,7 @@
 /**
  * The Portfolio tab's pieces (SEN-118): the allocation bar, the cash card,
- * position rows (yours and your agents'), the order card and a fill line.
+ * position rows (yours and your agents'), the agents' balances and closed
+ * trades (SEN-215), the order card and a fill line.
  * The visual spec is `docs/design/trading/portfolio.html` (`.alloc`,
  * `.cash-line`, `.pos`, `.agents-group`, `.order`, `.dist`, `.move`); every
  * figure arrives formatted from `view.ts`, so these only lay out.
@@ -13,22 +14,22 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Sigil, Stone } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
-import { amountsText } from '@/ui/assetAmounts';
+import { displayAmount } from '@/ui/displayAmount';
 import { Button, ButtonRow, Card } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { SideTag, TokenGlyph } from '@/ui/trading';
 import { formatPct, pctDirection, type Direction } from '@/ui/tradingFormat';
 
+import type { AgentBalanceRow, AgentClosedRow, AgentPositionRow } from './agentBook';
 import type { ClosedRow } from './closed';
+import { dollars } from './valuation';
 import {
   amountText,
-  legendValue,
+  legendFigures,
   shown,
   signedMoney,
   toneOf,
-  type AgentGroupRow,
   type Allocation,
-  type AllocationPart,
   type AllocationKey,
   type CashLine,
   type FillRow,
@@ -91,13 +92,21 @@ export function AllocationBar({ split, hidden }: { split: Allocation; hidden: bo
         ))}
       </View>
       <View style={styles.legend}>
-        {split.segments.map((s) => (
-          <View key={s.key} style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: SEGMENT_TONE[s.key] }]} />
-            <Text style={[text.dim, styles.grow]}>{s.label}</Text>
-            <Text style={[text.dim, text.num, styles.legendValue]}>{legendValue(s, hidden)}</Text>
-          </View>
-        ))}
+        {split.segments.map((s) => {
+          const figures = legendFigures(s, hidden);
+          return (
+            <View key={s.key} style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: SEGMENT_TONE[s.key] }]} />
+              <Text style={[text.dim, styles.grow]} numberOfLines={1}>
+                {s.label}
+              </Text>
+              {figures.usd !== null ? (
+                <Text style={[text.strong, text.num, styles.legendValue]}>{figures.usd}</Text>
+              ) : null}
+              <Text style={[text.caption, text.num, styles.legendShare]}>{figures.share}</Text>
+            </View>
+          );
+        })}
       </View>
     </View>
   );
@@ -368,7 +377,7 @@ export function PerpPositionRow({
           <Leverage n={leverage} />
         </>
       }
-      caption={`${shown(size, hidden)} ${base} · entry ${entry} · Perpl`}
+      caption={`${shown(displayAmount(size), hidden)} ${base} · entry ${entry} · Perpl`}
       value={
         <>
           {shown(amountText(value, 'AUSD'), hidden)} <Text style={text.dim}>AUSD</Text>
@@ -415,81 +424,108 @@ export function ClosedPositionRow({ row, last }: { row: ClosedRow; last?: boolea
 }
 
 /**
- * The dashed "With your agents" group: read-only, because an agent's funds
- * are the agent's. Every row opens that agent's cockpit, where you can ask it
- * to close, amend its mandate or revoke it.
+ * One agent under "Agent balances" (SEN-215): its face, name and status, what
+ * it holds as one dollar figure, and any coin left out of it for want of a
+ * price. Opens the agent, where you can ask it to close, amend or revoke.
  */
-export function AgentsGroup({
-  rows,
-  total,
+export function AgentBalanceLine({
+  row,
   hidden,
-  onOpen,
+  onPress,
+  last,
 }: {
-  rows: readonly AgentGroupRow[];
-  /** What they hold, exactly, per asset; `null` before any agent is read. */
-  total: AllocationPart | null;
+  row: AgentBalanceRow;
   hidden: boolean;
-  onOpen: (agentId: string) => void;
+  onPress: () => void;
+  last?: boolean;
+}) {
+  const unpriced = row.value?.rows.filter((r) => r.usd === null) ?? [];
+  return (
+    <PosRow
+      lead={<Sigil seed={row.agentId} size={36} dimmed={row.over} />}
+      title={<Text style={row.over ? { color: color.textDim } : null}>{row.name}</Text>}
+      caption={row.value === null ? `${row.status} · holdings unavailable` : row.status}
+      value={row.value !== null ? shown(dollars(row.value.usd), hidden) : '—'}
+      under={
+        unpriced.length > 0 ? (
+          <Text style={[text.caption, text.num, styles.unpriced]} numberOfLines={2}>
+            {`+ ${unpriced
+              .map((r) => `${shown(amountText(r.amount, r.asset), hidden)} ${r.asset}`)
+              .join(' · ')} not counted`}
+          </Text>
+        ) : undefined
+      }
+      onPress={onPress}
+      chevron
+      dimmed={row.over}
+      last={last}
+    />
+  );
+}
+
+/** An agent's open position: the market and side, which agent, its value and P&L. */
+export function AgentPositionLine({
+  row,
+  hidden,
+  onPress,
+  last,
+}: {
+  row: AgentPositionRow;
+  hidden: boolean;
+  onPress: () => void;
+  last?: boolean;
 }) {
   return (
-    <View style={styles.group}>
-      <View style={styles.between}>
-        <Text style={text.label}>With your agents</Text>
-        <Text style={[text.caption, text.num, styles.groupTotal]} numberOfLines={2}>
-          {total !== null ? shown(amountsText(total.amounts), hidden) : '—'}
-        </Text>
-      </View>
-      <Text style={[text.caption, styles.groupNote]}>
-        Their funds, their trades. Open one to ask it to close, amend or revoke.
-      </Text>
-      {rows.map((row, i) => {
-        const last = i === rows.length - 1;
-        if (row.kind === 'position') {
-          return (
-            <PosRow
-              key={row.key}
-              lead={<Sigil seed={row.agentId} size={36} />}
-              title={
-                <>
-                  {row.symbol} <SideTag side={row.side} />
-                  <Leverage n={row.leverage} />
-                </>
-              }
-              caption={row.caption}
-              value={
-                <>
-                  {row.value !== null ? shown(amountText(row.value, row.unit), hidden) : '—'}{' '}
-                  <Text style={text.dim}>{row.unit}</Text>
-                </>
-              }
-              under={<PnlLine pnl={row.pnl} unit={row.unit} pct={row.pct} hidden={hidden} />}
-              onPress={() => onOpen(row.agentId)}
-              chevron
-              last={last}
-            />
-          );
-        }
-        return (
-          <PosRow
-            key={row.key}
-            lead={<Sigil seed={row.agentId} size={36} dimmed={row.revoked} />}
-            title={<Text style={row.revoked ? { color: color.textDim } : null}>{row.name}</Text>}
-            caption={row.caption}
-            value={
-              row.amounts !== null
-                ? shown(amountsText(row.amounts, { separator: '\n' }), hidden)
-                : '—'
-            }
-            valueLines={Math.max(1, row.amounts?.length ?? 1)}
-            under={row.aside ? <Text style={text.caption}>{row.aside}</Text> : undefined}
-            onPress={() => onOpen(row.agentId)}
-            chevron
-            dimmed={row.revoked}
-            last={last}
-          />
-        );
-      })}
-    </View>
+    <PosRow
+      lead={<TokenGlyph symbol={row.base} />}
+      title={
+        <>
+          {row.symbol} {row.leverage === null ? <SpotTag /> : <SideTag side={row.side} />}
+          <Leverage n={row.leverage} />
+        </>
+      }
+      caption={row.caption}
+      value={
+        <>
+          {row.value !== null ? shown(amountText(row.value, row.unit), hidden) : '—'}{' '}
+          <Text style={text.dim}>{row.unit}</Text>
+        </>
+      }
+      under={<PnlLine pnl={row.pnl} unit={row.unit} pct={row.pct} hidden={hidden} />}
+      onPress={onPress}
+      chevron
+      last={last}
+    />
+  );
+}
+
+/** A round trip an agent closed: what it realised, in the asset it settled in. */
+export function AgentClosedLine({
+  row,
+  hidden,
+  onPress,
+  last,
+}: {
+  row: AgentClosedRow;
+  hidden: boolean;
+  onPress: () => void;
+  last?: boolean;
+}) {
+  return (
+    <PosRow
+      lead={<TokenGlyph symbol={row.title} />}
+      title={
+        <>
+          {row.title} {row.direction !== null ? <SideTag side={row.direction} /> : null}
+        </>
+      }
+      caption={row.caption}
+      value={<Text style={{ color: TONE[row.tone] }}>{shown(row.pnl, hidden)}</Text>}
+      under={<Text style={text.caption}>realised</Text>}
+      onPress={onPress}
+      chevron
+      last={last}
+    />
   );
 }
 
@@ -630,15 +666,17 @@ const styles = StyleSheet.create({
   alloc: { marginTop: 20 },
   allocBar: { flexDirection: 'row', gap: 2, height: 8, borderRadius: 8, overflow: 'hidden' },
   legend: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 8, columnGap: 18, marginTop: 12 },
-  legendItem: { width: '46%', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  legendItem: { flexGrow: 1, flexBasis: 220, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  unpriced: { maxWidth: 150, textAlign: 'right' },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendValue: { color: color.text, textAlign: 'right' },
+  legendValue: { textAlign: 'right' },
+  legendShare: { minWidth: 34, textAlign: 'right' },
   cash: { marginTop: 18, paddingTop: 12 },
   cashLine: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   cashButtons: { marginTop: 8 },
   venueLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   venueAction: { color: color.purple },
-  pos: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  pos: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   posDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.line },
   posMain: { flex: 1, minWidth: 0, gap: 2 },
   posPx: { alignItems: 'flex-end', gap: 1 },
@@ -651,19 +689,6 @@ const styles = StyleSheet.create({
     color: color.textDim,
     backgroundColor: color.well,
   },
-  group: {
-    marginTop: 22,
-    marginHorizontal: -8,
-    paddingTop: 12,
-    paddingHorizontal: 10,
-    paddingBottom: 2,
-    borderRadius: RADIUS.board,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: color.lineStrong,
-  },
-  groupNote: { marginTop: 4, marginBottom: 2 },
-  groupTotal: { flexShrink: 1, textAlign: 'right', marginLeft: 12 },
   side: {
     fontFamily: font.semibold,
     fontSize: 10,

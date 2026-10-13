@@ -12,10 +12,9 @@
  * `portfolio/view.ts` functions so the two tabs agree. A venue or section
  * that did not answer is named under the figure, never counted as zero.
  * With trading off it is wallet cash (USDC + AUSD) plus the capital with your
- * agents, and says it leaves your own positions out. Either way it is
- * printed exactly, per asset (SEN-210): `25.52 USDC` over `20.89 AUSD`, never
- * different tokens added up as dollars, and the line under it says exactly
- * what it counts. An agent's capital comes from `GET /agents/:id/portfolio`
+ * agents, and says it leaves your own positions out. Either way it is one
+ * dollar figure with its breakdown by coin (SEN-215, `TotalValue`), at the
+ * Portfolio's prices, and the line under it says exactly what it counts. An agent's capital comes from `GET /agents/:id/portfolio`
  * and, while that route is not deployed, from the stablecoins in the agent's
  * wallet, which the sentence then names as missing its open trades.
  *
@@ -95,7 +94,9 @@ import {
 } from '@/markets/select';
 import { useSparklines } from '@/markets/useSparklines';
 import { useHideBalances } from '@/portfolio/hideBalances';
+import { TotalValue } from '@/portfolio/TotalValue';
 import { useUserPortfolio } from '@/portfolio/usePortfolio';
+import { unpricedNote, valuation } from '@/portfolio/valuation';
 import { useSession } from '@/session';
 import { Chart } from '@/ui/chart/Chart';
 import { ConsensusFeed, ConsensusRamp } from '@/ui/ConsensusRamp';
@@ -118,15 +119,7 @@ import {
   WIDE_MAX,
 } from '@/ui/kit';
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
-import {
-  AsOf,
-  BigAmounts,
-  ChangeText,
-  MarketRow,
-  PerpTag,
-  TickerMarquee,
-  TokenGlyph,
-} from '@/ui/trading';
+import { AsOf, ChangeText, MarketRow, PerpTag, TickerMarquee, TokenGlyph } from '@/ui/trading';
 import { maskDigits } from '@/ui/tradingFormat';
 import { balanceOf, type UseUserWallet } from '@/wallet';
 
@@ -302,6 +295,7 @@ export default function Home() {
       capital={capital}
       trading={user.trading}
       own={own}
+      tickers={tickerList}
       agents={agents}
       summaries={summaries}
       events={activity.events}
@@ -504,6 +498,7 @@ function Hero({
   capital,
   trading,
   own,
+  tickers,
   agents,
   summaries,
   events,
@@ -518,6 +513,8 @@ function Hero({
   trading: boolean;
   /** `null` until `/portfolio` and the tickers have answered, or with trading off. */
   own: OwnHoldings | null;
+  /** `null` until they answer, `[]` when they failed: the total's prices. */
+  tickers: readonly TickerDto[] | null;
   agents: readonly Agent[] | null;
   summaries: ReadonlyMap<string, AgentSummary>;
   events: readonly ActivityEvent[];
@@ -533,6 +530,12 @@ function Hero({
       : trading
         ? tradingTotal(own, capital)
         : totalValue(held?.balances ?? null, capital);
+  // One dollar figure at the Portfolio's prices, with its breakdown (SEN-215);
+  // it waits for the tickers rather than jumping once they price a token.
+  const value = useMemo(
+    () => (total !== null && tickers !== null ? valuation(total.amounts, tickers) : null),
+    [total, tickers],
+  );
   const day = realisedToday(agents ?? [], summaries);
   const series = useMemo(
     () => realisedSeries(events, day?.value ?? null, Date.now()),
@@ -556,13 +559,8 @@ function Hero({
         />
       ) : (
         <>
-          {total !== null ? (
-            <BigAmounts
-              amounts={total.amounts}
-              size="xl"
-              blurred={hidden}
-              style={styles.heroFigure}
-            />
+          {value !== null ? (
+            <TotalValue value={value} hidden={hidden} style={styles.heroFigure} />
           ) : (
             <Loading />
           )}
@@ -577,8 +575,10 @@ function Hero({
               {mask(day.label)}
             </Text>
           ) : null}
-          {total !== null ? (
-            <Text style={[text.caption, styles.includes]}>{total.includes}</Text>
+          {total !== null && value !== null ? (
+            <Text style={[text.caption, styles.includes]}>
+              {[total.includes, unpricedNote(value.unpriced)].filter(Boolean).join(' ')}
+            </Text>
           ) : null}
           <Text style={[text.dim, text.num, styles.cash]}>
             {mask(

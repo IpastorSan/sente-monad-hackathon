@@ -1,8 +1,10 @@
 /**
  * Portfolio (SEN-118, plan U-12): where your money is and what it is doing.
  * The total, a bar splitting it into cash, capital with agents, spot and
- * perps, the cash card, then Positions / Orders / History. Spec:
- * `docs/design/trading/portfolio.html`.
+ * perps, the cash card, then two clearly titled sections (SEN-215): "Your
+ * trades" (open and closed positions, orders and fills from your own wallet)
+ * and "Agents" (each agent's balance and status, their open positions, and
+ * the round trips they closed). Spec: `docs/design/trading/portfolio.html`.
  *
  * Your own positions and orders come from `GET /portfolio`, which only
  * answers while manual trading is on (the same flag as `/trade`). With it
@@ -10,14 +12,13 @@
  * agents hold, plus an honest "trading from your wallet is coming" card —
  * never an empty tab and never an error for a feature that is simply off.
  *
- * Your agents' positions sit beside yours for the full picture but are
- * read-only: an agent's funds are the agent's, so a row opens its cockpit.
+ * Your agents' positions sit in their own section and are read-only: an
+ * agent's funds are the agent's, so a row opens its cockpit.
  *
- * The total is computed on the phone (`portfolio/view.ts`) and printed
- * exactly, per asset (SEN-210): `25.52 USDC · 20.89 AUSD · 0.00999 WETH`,
- * never USDC and AUSD added up as dollars and never a token converted at its
- * price. Only the bar and the line need one number: they count USDC and AUSD
- * at $1 and anything else at its Kuru last price. The
+ * The total is computed on the phone and printed as one dollar figure with
+ * its breakdown by coin (SEN-215, `portfolio/valuation.ts`): USDC and AUSD at
+ * $1 and anything else at its Kuru last price — the same prices the bar and
+ * the line use — and a coin with no price listed, not counted. The
  * line under it is the server's recorded history over 1D / 1W / 1M / ALL
  * (SEN-152, `portfolio/ValueHero.tsx`); until that has a point, it is what
  * this phone observed since the app opened, and the caption says exactly that.
@@ -27,6 +28,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
 
 import { useAgentsOverview } from '@/agents/useAgentsOverview';
+import { agentBook, type AgentBook } from '@/portfolio/agentBook';
 import { closedList } from '@/portfolio/closed';
 import { ClosedPositions } from '@/portfolio/ClosedPositions';
 import { useTickers } from '@/markets/hooks';
@@ -34,7 +36,9 @@ import { useHideBalances } from '@/portfolio/hideBalances';
 import { EXTERNAL_WITHDRAW_ENABLED } from '@/portfolio/withdraw';
 import { KuruWithdrawSheet, WithdrawSheet } from '@/portfolio/WithdrawSheets';
 import {
-  AgentsGroup,
+  AgentBalanceLine,
+  AgentClosedLine,
+  AgentPositionLine,
   AllocationBar,
   CashCard,
   FillLine,
@@ -43,10 +47,15 @@ import {
   PerpPositionRow,
   SpotPositionRow,
 } from '@/portfolio/parts';
-import { useAgentPortfolios, useFills, useUserPortfolio } from '@/portfolio/usePortfolio';
+import {
+  useAgentEntries,
+  useAgentPortfolios,
+  useFills,
+  useUserPortfolio,
+} from '@/portfolio/usePortfolio';
+import { dollars, unpricedNote, valuation } from '@/portfolio/valuation';
 import { ValueHero } from '@/portfolio/ValueHero';
 import {
-  agentGroup,
   allocation,
   allocationParts,
   amountText,
@@ -65,11 +74,14 @@ import { createAppPerplTrader } from '@/trade/appPerplTrader';
 import { describeTradeError, kuruCancelDraft, runTrade, type TradeFlowState } from '@/trade/flow';
 import { usePerplSetup } from '@/trade/usePerplSetup';
 import { useTradingCapabilities } from '@/trade/useTradingEnabled';
-import { Button, Card, Loading, Notice, Row, Screen, Segmented, Sheet } from '@/ui/kit';
+import { Button, Card, Loading, Notice, Row, Screen, Section, Segmented, Sheet } from '@/ui/kit';
 import { color, font, RADIUS, text } from '@/ui/theme';
 import { AsOf } from '@/ui/trading';
 
-type Tab = 'positions' | 'orders' | 'history';
+type Tab = 'open' | 'closed' | 'orders' | 'history';
+
+/** How many of the agents' closed trades show before "Show all". */
+const CLOSED_PREVIEW = 5;
 
 export default function PortfolioScreen() {
   const router = useRouter();
@@ -81,10 +93,10 @@ export default function PortfolioScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const agents = overview.state.kind === 'loaded' ? overview.state.agents : null;
   const agentPortfolios = useAgentPortfolios(agents, pulls);
+  const agentEntries = useAgentEntries(agents, pulls);
   const fills = useFills(user.trading);
   const [hidden, toggleHidden] = useHideBalances();
-  const [tab, setTab] = useState<Tab>('positions');
-  const [positionsView, setPositionsView] = useState<'open' | 'closed'>('open');
+  const [tab, setTab] = useState<Tab>('open');
   const [fundOpen, setFundOpen] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [kuruWithdrawOpen, setKuruWithdrawOpen] = useState(false);
@@ -107,18 +119,29 @@ export default function PortfolioScreen() {
     () => (user.wallet ? holdings(user.wallet, user.portfolio, tickerList) : null),
     [user.wallet, user.portfolio, tickerList],
   );
-  const group = useMemo(
+  const book = useMemo(
     () =>
       agents && agentPortfolios
-        ? agentGroup(
-            agents.map((agent) => ({ agent, portfolio: agentPortfolios.get(agent.id) ?? null })),
+        ? agentBook(
+            agents.map((agent) => ({
+              agent,
+              portfolio: agentPortfolios.get(agent.id) ?? null,
+              entries: agentEntries ? (agentEntries.get(agent.id) ?? null) : null,
+            })),
+            tickerList,
+            Date.now(),
           )
         : null,
-    [agents, agentPortfolios],
+    [agents, agentPortfolios, agentEntries, tickerList],
   );
   const split = useMemo(
-    () => (held ? allocation(allocationParts(held, group?.total ?? null)) : null),
-    [held, group],
+    () => (held ? allocation(allocationParts(held, book?.total ?? null)) : null),
+    [held, book],
+  );
+  // One dollar figure and its breakdown by coin, at the bar's prices (SEN-215).
+  const value = useMemo(
+    () => (split ? valuation(split.amounts, tickerList) : null),
+    [split, tickerList],
   );
   // The hero stamps its live point with the newest data time behind it, so
   // the line only moves when a read lands, never on a re-render.
@@ -164,12 +187,11 @@ export default function PortfolioScreen() {
       ) : (
         <>
           <ValueHero
-            total={split.total}
-            amounts={split.amounts}
+            value={value ?? valuation([], [])}
             at={at}
             trading={user.trading}
             hidden={hidden}
-            note={totalNote(held, agentPortfolios === null)}
+            note={totalNote(held, value?.unpriced ?? [], agentPortfolios === null)}
           />
 
           <AllocationBar split={split} hidden={hidden} />
@@ -188,121 +210,115 @@ export default function PortfolioScreen() {
             }
           />
 
-          {user.trading && user.portfolio ? (
-            <View style={styles.tabs}>
-              <Segmented
-                options={[
-                  { value: 'positions', label: 'Positions' },
-                  { value: 'orders', label: orders.length ? `Orders ${orders.length}` : 'Orders' },
-                  { value: 'history', label: 'History' },
-                ]}
-                value={tab}
-                onChange={setTab}
-              />
-            </View>
-          ) : (
-            <ComingCard trading={user.trading} failed={user.polled.error !== null} />
-          )}
-
-          {tab === 'positions' || !user.portfolio ? (
-            <View style={styles.section}>
-              <View style={styles.between}>
-                {user.portfolio ? (
-                  // SEN-154: closed positions come from your fills, which only
-                  // exist with trading on, so the toggle does too.
-                  <View style={styles.openClosed}>
-                    <Segmented
-                      options={[
-                        {
-                          value: 'open',
-                          label: openCount ? `Open ${openCount}` : 'Open',
-                        },
-                        { value: 'closed', label: 'Closed' },
-                      ]}
-                      value={positionsView}
-                      onChange={setPositionsView}
-                    />
-                  </View>
-                ) : (
-                  <Text style={text.label}>Your positions</Text>
-                )}
-                {user.portfolio ? <AsOf at={user.polled.asOf} paused={user.polled.stale} /> : null}
+          <Section
+            label="Your trades"
+            aside={
+              user.portfolio ? <AsOf at={user.polled.asOf} paused={user.polled.stale} /> : null
+            }
+          >
+            <Text style={text.caption}>What you trade yourself, from your own wallet.</Text>
+            {user.trading && user.portfolio ? (
+              <View style={styles.tabs}>
+                <Segmented
+                  options={[
+                    { value: 'open', label: openCount ? `Open ${openCount}` : 'Open' },
+                    { value: 'closed', label: 'Closed' },
+                    {
+                      value: 'orders',
+                      label: orders.length ? `Orders ${orders.length}` : 'Orders',
+                    },
+                    { value: 'history', label: 'History' },
+                  ]}
+                  value={tab}
+                  onChange={setTab}
+                />
               </View>
-              {user.portfolio && positionsView === 'closed' ? (
+            ) : (
+              <ComingCard trading={user.trading} failed={user.polled.error !== null} />
+            )}
+
+            {tab === 'open' || !user.portfolio ? (
+              <View>
+                <SubHead title="Open positions" />
+                <Unread sections={held.unread} />
+                {perplSetup.kind === 'needed' ? (
+                  <PerpsSetupCard
+                    open={perplSetup.needs.open}
+                    onSetup={() => router.push('/trade/perpl-setup')}
+                  />
+                ) : null}
+                {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
+                  <Text style={[text.dim, styles.empty]}>
+                    {user.portfolio
+                      ? 'No open positions. Open Trade to place your first order.'
+                      : 'Nothing but cash in your wallet yet.'}
+                  </Text>
+                ) : null}
+                {held.perps.map((p, i) => (
+                  <PerpPositionRow
+                    key={`perpl:${p.position.symbol}`}
+                    symbol={p.position.symbol}
+                    side={p.position.side}
+                    leverage={p.position.leverage}
+                    size={p.position.size}
+                    entry={p.position.entryPrice}
+                    value={p.value}
+                    pnl={p.position.unrealizedPnl}
+                    pct={p.pctOnMargin}
+                    hidden={hidden}
+                    onPress={() => openPosition('perpl', p.position.symbol)}
+                    last={i === held.perps.length - 1 && held.spot.length === 0}
+                  />
+                ))}
+                {held.spot.map((s, i) => (
+                  <SpotPositionRow
+                    key={`kuru:${s.asset}`}
+                    {...s}
+                    hidden={hidden}
+                    onPress={() => openPosition('kuru', s.asset)}
+                    last={i === held.spot.length - 1}
+                  />
+                ))}
+              </View>
+            ) : tab === 'closed' ? (
+              // SEN-154: closed positions come from your fills, which only
+              // exist with trading on, so the tab does too.
+              <View>
+                <SubHead title="Closed positions" />
                 <ClosedPositions fills={fills} hidden={hidden} />
-              ) : (
-                <>
-                  <Unread sections={held.unread} />
-                  {perplSetup.kind === 'needed' ? (
-                    <PerpsSetupCard
-                      open={perplSetup.needs.open}
-                      onSetup={() => router.push('/trade/perpl-setup')}
-                    />
-                  ) : null}
-                  {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
-                    <Text style={[text.dim, styles.empty]}>
-                      {user.portfolio
-                        ? 'No open positions. Open Trade to place your first order.'
-                        : 'Nothing but cash in your wallet yet.'}
-                    </Text>
-                  ) : null}
-                  {held.perps.map((p, i) => (
-                    <PerpPositionRow
-                      key={`perpl:${p.position.symbol}`}
-                      symbol={p.position.symbol}
-                      side={p.position.side}
-                      leverage={p.position.leverage}
-                      size={p.position.size}
-                      entry={p.position.entryPrice}
-                      value={p.value}
-                      pnl={p.position.unrealizedPnl}
-                      pct={p.pctOnMargin}
+              </View>
+            ) : tab === 'orders' ? (
+              <View>
+                <SubHead title="Open orders" />
+                {/* Both venues carry orders; the wallet does not (SEN-123). */}
+                <Unread sections={held.unread.filter((s) => s !== 'wallet')} />
+                {orders.length === 0 && !held.unread.some((s) => s !== 'wallet') ? (
+                  <Text style={[text.dim, styles.empty]}>
+                    No open orders. Limit orders you place rest here until they fill.
+                  </Text>
+                ) : (
+                  orders.map((row) => (
+                    <OrderCard
+                      key={row.key}
+                      row={row}
                       hidden={hidden}
-                      onPress={() => openPosition('perpl', p.position.symbol)}
-                      last={i === held.perps.length - 1 && held.spot.length === 0}
+                      onCancel={user.trading ? () => setCancelling(row) : undefined}
                     />
-                  ))}
-                  {held.spot.map((s, i) => (
-                    <SpotPositionRow
-                      key={`kuru:${s.asset}`}
-                      {...s}
-                      hidden={hidden}
-                      onPress={() => openPosition('kuru', s.asset)}
-                      last={i === held.spot.length - 1}
-                    />
-                  ))}
-                  <Agents
-                    state={overview.state}
-                    group={group}
-                    hidden={hidden}
-                    onOpen={openAgent}
-                    onHire={() => router.push('/agents')}
-                  />
-                </>
-              )}
-            </View>
-          ) : tab === 'orders' ? (
-            <View style={styles.section}>
-              {/* Both venues carry orders; the wallet does not (SEN-123). */}
-              <Unread sections={held.unread.filter((s) => s !== 'wallet')} />
-              {orders.length === 0 && !held.unread.some((s) => s !== 'wallet') ? (
-                <Text style={[text.dim, styles.empty]}>
-                  No open orders. Limit orders you place rest here until they fill.
-                </Text>
-              ) : (
-                orders.map((row) => (
-                  <OrderCard
-                    key={row.key}
-                    row={row}
-                    hidden={hidden}
-                    onCancel={user.trading ? () => setCancelling(row) : undefined}
-                  />
-                ))
-              )}
-            </View>
-          ) : (
-            <History fills={fills} hidden={hidden} now={now} />
-          )}
+                  ))
+                )}
+              </View>
+            ) : (
+              <History fills={fills} hidden={hidden} now={now} />
+            )}
+          </Section>
+
+          <Agents
+            state={overview.state}
+            book={book}
+            hidden={hidden}
+            onOpen={openAgent}
+            onHire={() => router.push('/agents')}
+          />
         </>
       )}
 
@@ -342,14 +358,11 @@ export default function PortfolioScreen() {
   );
 }
 
-/** What the total leaves out, said under it rather than folded silently into the number. */
-function totalNote(held: Holdings, agentsLoading: boolean) {
-  const parts = [
-    'The bar and the chart add USDC and AUSD at $1 and other tokens at their Kuru price.',
-  ];
-  if (held.unpriced.length > 0) {
-    parts.push(`They leave out ${held.unpriced.join(', ')}: no Kuru price.`);
-  }
+/** How the total is counted and what it leaves out, said under it rather than folded into the number. */
+function totalNote(held: Holdings, unpriced: readonly string[], agentsLoading: boolean) {
+  const parts = ['USDC and AUSD count at $1, other tokens at their Kuru price.'];
+  const left = unpricedNote(unpriced);
+  if (left !== null) parts.push(left);
   const unread = held.unread.filter((s) => s !== 'wallet').map((s) => VENUE_NAME[s]);
   if (unread.length > 0) parts.push(`Leaves out ${unread.join(' and ')}: it didn’t answer.`);
   if (held.perpsUnknown) parts.push('Perp positions are not readable until Perpl is linked.');
@@ -409,35 +422,134 @@ function ComingCard({ trading, failed }: { trading: boolean; failed: boolean }) 
   );
 }
 
+/** A titled block inside a section: `Agent balances`, `Open positions`. */
+function SubHead({ title, aside }: { title: string; aside?: string | null }) {
+  return (
+    <View style={styles.subHead}>
+      <Text style={styles.subTitle}>{title}</Text>
+      {aside ? <Text style={[text.dim, text.num]}>{aside}</Text> : null}
+    </View>
+  );
+}
+
+/**
+ * Your agents (SEN-215): what each holds and where it stands, their open
+ * positions, and the round trips they closed — three titled lists, so none is
+ * mistaken for another. Every row opens the agent.
+ */
 function Agents({
   state,
-  group,
+  book,
   hidden,
   onOpen,
   onHire,
 }: {
   state: ReturnType<typeof useAgentsOverview>['state'];
-  group: ReturnType<typeof agentGroup> | null;
+  book: AgentBook | null;
   hidden: boolean;
   onOpen: (id: string) => void;
   onHire: () => void;
 }) {
+  const [allClosed, setAllClosed] = useState(false);
+  const label = 'Agents';
   if (state.kind === 'failed') {
-    return <Notice tone="error" title={state.title} detail={state.detail} />;
-  }
-  if (state.kind === 'loading' || group === null) return <Loading />;
-  if (state.agents.length === 0) {
     return (
-      <View style={styles.hire}>
-        <Text style={text.dim}>
-          No agents yet. An agent trades for you inside a mandate you set.
-        </Text>
-        <Button label="Browse agents" kind="soft" size="sm" onPress={onHire} />
-      </View>
+      <Section label={label}>
+        <Notice tone="error" title={state.title} detail={state.detail} />
+      </Section>
     );
   }
-  if (group.rows.length === 0) return null;
-  return <AgentsGroup rows={group.rows} total={group.total} hidden={hidden} onOpen={onOpen} />;
+  if (state.kind === 'loading' || book === null) {
+    return (
+      <Section label={label}>
+        <Loading />
+      </Section>
+    );
+  }
+  if (state.agents.length === 0) {
+    return (
+      <Section label={label}>
+        <View style={styles.hire}>
+          <Text style={text.dim}>
+            No agents yet. An agent trades for you inside a mandate you set.
+          </Text>
+          <Button label="Browse agents" kind="soft" size="sm" onPress={onHire} />
+        </View>
+      </Section>
+    );
+  }
+  const closed = allClosed ? book.closed : book.closed.slice(0, CLOSED_PREVIEW);
+  return (
+    <Section label={label}>
+      <Text style={text.caption}>
+        Their funds, their trades. Open one to ask it to close, amend or revoke.
+      </Text>
+
+      <SubHead
+        title="Agent balances"
+        aside={book.total !== null ? shown(dollars(book.total.usd), hidden) : null}
+      />
+      {book.balances.length === 0 ? (
+        <Text style={[text.dim, styles.empty]}>No agent holds anything right now.</Text>
+      ) : (
+        book.balances.map((row, i) => (
+          <AgentBalanceLine
+            key={row.key}
+            row={row}
+            hidden={hidden}
+            onPress={() => onOpen(row.agentId)}
+            last={i === book.balances.length - 1}
+          />
+        ))
+      )}
+
+      <SubHead title="Open positions" aside={book.open.length ? `${book.open.length}` : null} />
+      {book.open.length === 0 ? (
+        <Text style={[text.dim, styles.empty]}>No agent has a position open.</Text>
+      ) : (
+        book.open.map((row, i) => (
+          <AgentPositionLine
+            key={row.key}
+            row={row}
+            hidden={hidden}
+            onPress={() => onOpen(row.agentId)}
+            last={i === book.open.length - 1}
+          />
+        ))
+      )}
+
+      <SubHead
+        title="Closed positions"
+        aside={book.closed.length ? `${book.closed.length}` : null}
+      />
+      {book.closed.length === 0 ? (
+        book.closedPending ? (
+          <Loading />
+        ) : (
+          <Text style={[text.dim, styles.empty]}>No agent has closed a trade yet.</Text>
+        )
+      ) : (
+        closed.map((row, i) => (
+          <AgentClosedLine
+            key={row.key}
+            row={row}
+            hidden={hidden}
+            onPress={() => onOpen(row.agentId)}
+            last={i === closed.length - 1}
+          />
+        ))
+      )}
+      {book.closed.length > CLOSED_PREVIEW ? (
+        <Button
+          label={allClosed ? 'Show fewer' : `Show all ${book.closed.length}`}
+          kind="soft"
+          size="sm"
+          onPress={() => setAllClosed((all) => !all)}
+          style={styles.more}
+        />
+      ) : null}
+    </Section>
+  );
 }
 
 function History({
@@ -460,8 +572,8 @@ function History({
   const days = fillDays(fills.fills, now, realised);
   const perplNote = perplFillsNote(fills.perplGap);
   return (
-    <View style={styles.section}>
-      <Text style={text.label}>Your fills</Text>
+    <View>
+      <SubHead title="Fills" />
       <Text style={[text.caption, styles.historyNote]}>
         Only what you traded. Your agents' fills stay in their own ledgers.
         {perplNote ? ` ${perplNote}` : ''}
@@ -753,16 +865,21 @@ const styles = StyleSheet.create({
     borderColor: color.line,
     borderRadius: RADIUS.stone,
   },
-  between: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  tabs: { marginTop: 20 },
-  openClosed: { width: 172 },
-  section: { marginTop: 16 },
-  empty: { marginTop: 10 },
+  tabs: { marginTop: 12 },
+  subHead: {
+    marginTop: 20,
+    marginBottom: 2,
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+  },
+  subTitle: { fontFamily: font.semibold, fontSize: 15, lineHeight: 22, color: color.text },
+  empty: { marginTop: 6 },
   unread: { marginTop: 10 },
   coming: { marginTop: 20 },
   comingText: { marginTop: 6 },
-  hire: { marginTop: 22, gap: 10, alignItems: 'flex-start' },
-  historyNote: { marginTop: 4 },
+  hire: { gap: 10, alignItems: 'flex-start' },
+  historyNote: { marginTop: 2 },
   day: { marginTop: 18, marginBottom: 2 },
   more: { marginTop: 12, alignSelf: 'flex-start' },
   addressWell: {

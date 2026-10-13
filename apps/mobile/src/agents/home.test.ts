@@ -4,7 +4,8 @@ import { test } from 'node:test';
 
 import type { MarketDto, TickerDto } from '../markets/api.ts';
 import { indexTickers, marketKey } from '../markets/select.ts';
-import { agentGroup, allocation, allocationParts, holdings } from '../portfolio/view.ts';
+import { agentBook } from '../portfolio/agentBook.ts';
+import { allocation, allocationParts, holdings } from '../portfolio/view.ts';
 import type { Portfolio } from '../trade/types.ts';
 
 import type {
@@ -277,10 +278,22 @@ test('Home’s total is the Portfolio tab’s total for the same data (SEN-155)'
   const p = userPortfolio();
   // The Portfolio tab's hero, as `portfolio.tsx` computes it.
   const held = holdings(walletOf(p), p, PRICES);
-  const group = agentGroup([
-    { agent: agent('a'), portfolio: agentPortfolio('612.4') },
-    { agent: agent('b'), portfolio: agentPortfolio('300') },
-  ]);
+  const group = agentBook(
+    [
+      {
+        agent: { ...agent('a'), mandate: { expiresAt: 4e9 } },
+        portfolio: agentPortfolio('612.4'),
+        entries: [],
+      },
+      {
+        agent: { ...agent('b'), mandate: { expiresAt: 4e9 } },
+        portfolio: agentPortfolio('300'),
+        entries: [],
+      },
+    ],
+    PRICES,
+    0,
+  );
   const portfolioTotal = allocation(allocationParts(held, group.total)).amounts;
 
   const home = tradingTotal(ownHoldings(read(p), walletOf(p), PRICES), [

@@ -3,11 +3,10 @@
  * and a sign-tinted area chart with 1D / 1W / 1M / ALL pills — the `hero-v`
  * block of `docs/design/trading/portfolio.html`.
  *
- * The total is printed exactly, per asset (SEN-210): one asset as the
- * headline, the others in its dropdown (SEN-213, `BigAmounts`), never added up
- * as dollars. The line and the change's
- * percent need one number, so they use the dollar sum (USDC and AUSD at $1,
- * spot at its Kuru price); no dollar amount is printed from it.
+ * The total is one dollar figure with its breakdown by coin (SEN-215,
+ * `TotalValue`): USDC and AUSD at $1, other tokens at their Kuru price. The
+ * line ends at that same figure, so the headline, the breakdown and the
+ * chart agree.
  *
  * The line is the server's recorded history (`GET /portfolio/history`) ending
  * at the live total. Until the server has a point in the range — trading off,
@@ -20,26 +19,24 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Chart } from '@/ui/chart/Chart';
 import { text } from '@/ui/theme';
-import type { AssetAmount } from '@/ui/assetAmounts';
-import { BigAmounts, ChangeText, RangePills } from '@/ui/trading';
+import { ChangeText, RangePills } from '@/ui/trading';
 
 import { HERO_RANGES, heroLine, PARTIAL_NOTE, type HeroRange } from './history';
+import { TotalValue } from './TotalValue';
 import { useObservedValue } from './usePortfolio';
 import { useValueHistory } from './useValueHistory';
+import type { Valuation } from './valuation';
 import { clock, seriesChange } from './view';
 
 export function ValueHero({
-  total,
-  amounts,
+  value,
   at,
   trading,
   hidden,
   note,
 }: {
-  /** The dollar sum, agents included: the line's newest point. Never printed. */
-  total: string;
-  /** The same total, exactly, per asset: what is printed. */
-  amounts: readonly AssetAmount[];
+  /** The total in dollars and by coin, agents included: the headline and the line's newest point. */
+  value: Valuation;
   /** The newest data time behind `total`, `null` before any read. */
   at: number | null;
   trading: boolean;
@@ -56,6 +53,7 @@ export function ValueHero({
     if (history.data && history.data.points.length > 0) setRecorded(true);
   }, [history.data]);
 
+  const total = value.usd;
   const observed = useObservedValue(total, at);
   const line = heroLine(history.data, range, at === null ? null : { at, usd: total });
   const points = line?.points ?? observed;
@@ -66,7 +64,7 @@ export function ValueHero({
     <>
       <View style={styles.hero}>
         <Text style={text.label}>Total value</Text>
-        <BigAmounts amounts={amounts} size="xl" blurred={hidden} />
+        <TotalValue value={value} hidden={hidden} />
         {change !== null ? <ChangeText pct={change.pct} suffix={suffix} /> : null}
         {points.length > 1 ? (
           <Chart
