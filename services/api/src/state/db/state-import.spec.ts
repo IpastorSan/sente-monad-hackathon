@@ -173,7 +173,12 @@ describe('importStateToSqlite', () => {
     expect(SMALL_STORES.map((file) => readFileSync(join(dir, file), 'utf8'))).toEqual(smallBefore);
     for (const report of reports.filter((r) => r.fileCount !== undefined)) {
       expect(report.fileHash).toBe(report.dbHash);
-      expect(report).toMatchObject({ differs: 0, missing: 0, dbOnly: 0 });
+      expect(report).toMatchObject({
+        inserted: report.fileCount,
+        changedSince: 0,
+        missing: 0,
+        dbOnly: 0,
+      });
     }
 
     // The files are the rollback; the import must not touch them.
@@ -237,6 +242,51 @@ describe('importStateToSqlite', () => {
       ok: true,
     });
     expect(reports[1]).toMatchObject({ name: 'user_wallets', fileCount: 1, dbCount: 1, ok: true });
+  });
+
+  it('never overwrites a row the API changed since: a re-run only adds what is missing', async () => {
+    const { agents } = await writeFiles();
+    await importStateToSqlite(dir);
+
+    // Under sqlite the API revokes the active agent and rebinds alice's wallet.
+    const db = SenteDb.open(senteDbPath(dir));
+    let revoked;
+    let rebound;
+    try {
+      const store = new SqliteAgentStore(db);
+      revoked = await store.update(agents[0]!.id, {
+        status: 'revoked',
+        revokedAt: new Date(Date.now() + 5_000),
+      });
+      const wallets = new SqliteUserWalletRegistry(db);
+      wallets.put({ ...(await wallets.find('alice'))!, walletId: 'wallet0000000000000moved' });
+      rebound = await wallets.find('alice');
+    } finally {
+      db.close();
+    }
+
+    const reports = new Map((await importStateToSqlite(dir)).map((r) => [r.name, r]));
+    expect(reports.get('agents')).toMatchObject({
+      inserted: 0,
+      matched: 1,
+      changedSince: 1,
+      missing: 0,
+      ok: true,
+    });
+    expect(reports.get('user_wallets')).toMatchObject({
+      inserted: 0,
+      changedSince: 1,
+      missing: 0,
+      ok: true,
+    });
+
+    const after = SenteDb.open(senteDbPath(dir));
+    try {
+      expect(await new SqliteAgentStore(after).get(agents[0]!.id)).toEqual(revoked);
+      expect(await new SqliteUserWalletRegistry(after).find('alice')).toEqual(rebound);
+    } finally {
+      after.close();
+    }
   });
 
   it('imports nothing for a store whose file does not exist, and says so', async () => {

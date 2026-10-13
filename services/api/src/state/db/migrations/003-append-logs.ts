@@ -14,8 +14,8 @@ import type { Migration } from './migration.ts';
  *   Reads are per agent in `seq` order, narrowed by `kind` or `run_id`, hence
  *   the three `(agent_id, …, seq)` indexes; `at` is indexed for time windows.
  * - `agent_event_truncation`: what the per-agent cap evicted (SEN-129).
- * - `agent_runs` / `agent_run_entries`: one row per run, in `rowid` order (the
- *   order the runs started), and one per transcript entry, by `seq` within its
+ * - `agent_runs` / `agent_run_entries`: one row per run, read in
+ *   `(started_at, rowid)` order, and one per transcript entry, by `seq` within its
  *   run. Evicting a run deletes its entries by cascade.
  * - `value_history`: one row per snapshot. `dup` numbers a subject's
  *   snapshots stamped at the same millisecond in arrival order, so

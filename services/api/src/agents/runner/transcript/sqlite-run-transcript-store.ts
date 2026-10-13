@@ -71,10 +71,12 @@ export class SqliteRunTranscriptStore extends InMemoryRunTranscriptStore {
         'data = excluded.data',
     );
     this.#deleteRun = db.prepare('DELETE FROM agent_runs WHERE run_id = ?');
-    this.#runs = db.prepare('SELECT data FROM agent_runs ORDER BY rowid');
+    // By start time, then insertion: a run the import adds after the API has
+    // written newer ones must not read back (or survive the cap) as the newest.
+    this.#runs = db.prepare('SELECT data FROM agent_runs ORDER BY started_at, rowid');
     this.#entries = db.prepare(
       'SELECT e.run_id, e.data FROM agent_run_entries e JOIN agent_runs r USING (run_id) ' +
-        'ORDER BY r.rowid, e.seq',
+        'ORDER BY r.started_at, r.rowid, e.seq',
     );
     this.#load();
     this.#loading = false;

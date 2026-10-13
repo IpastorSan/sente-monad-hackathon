@@ -368,6 +368,21 @@ describe('SqliteRunTranscriptStore', () => {
     expect(db.prepare('SELECT count(*) AS n FROM agent_run_entries').get()).toEqual({ n: 0 });
   });
 
+  it('reads runs back by start time, so an older run imported late is not the newest', () => {
+    const first = new SqliteRunTranscriptStore(dbs.reopen(dir), { maxRuns: 2, logger: quiet });
+    first.start({ ...START, runId: 'run-new', startedAt: 3_000 });
+    first.start({ ...START, runId: 'run-mid', startedAt: 2_000 });
+    // What a re-run of the import does: an old run's row lands after the API's.
+    first.put({ start: { ...START, runId: 'run-old', startedAt: 1_000 } });
+
+    const second = new SqliteRunTranscriptStore(dbs.reopen(dir), { maxRuns: 2, logger: quiet });
+    expect(second.list('agent-1').map((r) => r.runId)).toEqual(['run-new', 'run-mid']);
+    expect(dbs.last!.prepare('SELECT run_id FROM agent_runs ORDER BY run_id').all()).toEqual([
+      { run_id: 'run-mid' },
+      { run_id: 'run-new' },
+    ]);
+  });
+
   it('logs a write that fails and carries the run on in memory', () => {
     const error = jest.fn();
     const store = new SqliteRunTranscriptStore(dbs.reopen(dir), {

@@ -2,10 +2,14 @@
 //
 // Reads each store's file under STATE_DIR exactly as the file store would
 // (`state/json-file.ts`, so a bad file fails rather than imports empty), writes
-// every record into its table through the SQLite store's `put` (an upsert by
-// key, so re-running is safe and a second run after new API writes changes
-// nothing it should not), one transaction per store, and then reads the table
-// back and compares it with the file record by record. The files are never
+// each record whose key the table does not hold yet through the SQLite store's
+// `put`, one transaction per store, and then reads the table back and compares
+// it with the file record by record. It is insert-only: a key already in the
+// table is never overwritten, so a re-run after the API has written under
+// `sqlite` only adds what is missing and never reverts a row the API wrote
+// (such a row is reported as `changedSince`). It cannot tell a row the API
+// deleted from one never imported, so a re-run re-adds deleted records: run it
+// once against a fresh `sente.db` (docs/state.md). The files are never
 // touched: `STORE_BACKEND=file` is the rollback, and it needs them intact.
 //
 // It takes the STATE_DIR lock first (`state/state-dir-lock.ts`): a running API
@@ -65,7 +69,7 @@ export interface StoreImport<T> {
   readonly file: string;
   /** The file's records, or `undefined` when the file does not exist. Throws on a bad file. */
   readonly load: (path: string) => T[] | undefined;
-  /** The SQLite store over `db`: an upsert by key, and every record it holds. */
+  /** The SQLite store over `db`: a write by key, and every record it holds. The import only `put`s absent keys. */
   readonly open: (db: SenteDb) => { put: (record: T) => void; listAll: () => Promise<T[]> };
   readonly key: (record: T) => string;
   /**
@@ -184,10 +188,15 @@ export interface StoreImportReport {
   readonly fileCount: number | undefined;
   /** What the table holds after the import. */
   readonly dbCount: number;
+  /** File records written by this run: their key was not in the table. */
+  readonly inserted: number;
   /** File records whose stored copy is identical. */
   readonly matched: number;
-  /** File records whose stored copy differs — never, unless something else wrote the table since. */
-  readonly differs: number;
+  /**
+   * File records whose stored copy differs: the API changed the row under
+   * `sqlite` since the first copy. Left as the API wrote it; not a failure.
+   */
+  readonly changedSince: number;
   /** File records absent from the table — never, unless the import failed. */
   readonly missing: number;
   /** Table records with no file counterpart: written by the API under `sqlite` since the copy. */
@@ -200,7 +209,7 @@ export interface StoreImportReport {
   readonly inOrder: boolean;
   readonly fileHash: string | undefined;
   readonly dbHash: string;
-  /** Every file record is in the table, identical. */
+  /** Every file record's key is in the table (and, for an `ordered` store, in the file's order). */
   readonly ok: boolean;
 }
 
@@ -241,11 +250,21 @@ async function importStore(
   const path = join(root, store.file);
   const records = store.load(path);
   const table = store.open(db);
+  let inserted = 0;
   if (records !== undefined) {
+    // Insert-only: what the table holds now — a previous run's copy or the API's writes since — stays.
+    const held = new Set((await table.listAll()).map(store.key));
     db.transaction(() => {
-      for (const record of records) table.put(record);
+      for (const record of records) {
+        if (held.has(store.key(record))) continue;
+        table.put(record);
+        inserted += 1;
+      }
     });
-    log(`${store.name}: ${records.length} record(s) from ${store.file} written`);
+    log(
+      `${store.name}: ${inserted} of ${records.length} record(s) from ${store.file} written ` +
+        `(${records.length - inserted} already in the table, left as they are)`,
+    );
   } else {
     log(`${store.name}: no ${store.file} in ${root}, nothing imported`);
   }
@@ -254,13 +273,13 @@ async function importStore(
   const inFile = records ? canonicalByKey(records, store.key) : undefined;
   const inDb = canonicalByKey(await table.listAll(), store.key);
   let matched = 0;
-  let differs = 0;
+  let changedSince = 0;
   let missing = 0;
   for (const [key, line] of inFile ?? []) {
     const copy = inDb.get(key);
     if (copy === undefined) missing += 1;
     else if (copy === line) matched += 1;
-    else differs += 1;
+    else changedSince += 1;
   }
   let dbOnly = 0;
   for (const key of inDb.keys()) if (!inFile?.has(key)) dbOnly += 1;
@@ -270,14 +289,15 @@ async function importStore(
     file: store.file,
     fileCount: records?.length,
     dbCount: inDb.size,
+    inserted,
     matched,
-    differs,
+    changedSince,
     missing,
     dbOnly,
     inOrder,
     fileHash: inFile ? hashOf(inFile) : undefined,
     dbHash: hashOf(inDb),
-    ok: differs === 0 && missing === 0 && inOrder,
+    ok: missing === 0 && inOrder,
   };
 }
 
