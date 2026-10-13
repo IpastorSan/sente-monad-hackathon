@@ -6,10 +6,11 @@ import {
   PerplMarketData,
   type PerplNetwork,
 } from '@sente/venues/perpl';
-import { createPublicClient, http, type PublicClient } from 'viem';
+import { createPublicClient, type PublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import { monadReadTransport } from '../chain/monad-rpc';
 import { KURU_READER, MarketDataService, PERPL_READER } from './market-data.service';
 import { MarketsController } from './markets.controller';
 import { PerplBookFeed } from './perpl/perpl-book-feed';
@@ -37,9 +38,8 @@ const marketDataProviders: Provider[] = [
       createPublicClient({
         chain: monadTestnet,
         batch: { multicall: true },
-        transport: http(process.env['MONAD_TESTNET_RPC_URL']?.trim() || undefined, {
-          retryCount: 2,
-        }),
+        // The dedicated RPC with the public one behind it, as everywhere else (SEN-203).
+        transport: monadReadTransport(process.env['MONAD_TESTNET_RPC_URL'], { retryCount: 2 }),
       }) as PublicClient,
   },
   {
