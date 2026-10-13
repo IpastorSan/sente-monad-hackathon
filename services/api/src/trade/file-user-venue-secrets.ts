@@ -40,33 +40,81 @@ const AAD_PREFIX = 'sente/user-venue-secrets/v1/';
 const readAad = (userId: string): string => `${AAD_PREFIX}perpl-read/${userId}`;
 const tokenAad = (userId: string): string => `${AAD_PREFIX}perpl-trade-token/${userId}`;
 
-/** What the file holds per user. Nothing in it is readable without the key. */
-interface SecretRecord {
+/**
+ * What the file (or the `user_venue_secrets` table) holds per user. Nothing in
+ * it is readable without the key.
+ */
+export interface UserVenueSecretRecord {
   readonly userId: string;
   readonly perplRead?: Sealed;
   readonly perplTradeToken?: Sealed;
 }
 
 /** One user's secrets, decrypted; the read key kept sealed like the in-memory store's. */
-interface Held {
+export interface HeldUserVenueSecrets {
   readonly perplRead?: PerplCredentials;
   readonly perplTradeToken?: string;
 }
 
+/** The read key, sealed for `userId`. */
+export function sealPerplRead(
+  key: Uint8Array,
+  userId: string,
+  credentials: PerplCredentials,
+): Sealed {
+  return sealBytes(key, readAad(userId), encodePerplCredentials(credentials));
+}
+
+/** The trade token, sealed for `userId`. */
+export function sealPerplTradeToken(key: Uint8Array, userId: string, token: string): Sealed {
+  return sealBytes(key, tokenAad(userId), Buffer.from(token, 'utf8'));
+}
+
+/**
+ * The record, decrypted. Throws, naming `where` and the user, on a wrong key,
+ * a tampered record or a record moved onto another user.
+ */
+export function unsealUserVenueSecrets(
+  key: Uint8Array,
+  record: UserVenueSecretRecord,
+  where: string,
+): HeldUserVenueSecrets {
+  try {
+    let perplTradeToken: string | undefined;
+    if (record.perplTradeToken) {
+      const plain = unsealBytes(key, tokenAad(record.userId), record.perplTradeToken);
+      perplTradeToken = plain.toString('utf8');
+      plain.fill(0);
+    }
+    const perplRead = record.perplRead
+      ? decodePerplCredentials(unsealBytes(key, readAad(record.userId), record.perplRead))
+      : undefined;
+    return { perplRead, perplTradeToken };
+  } catch (error) {
+    // No detail from `error`: GCM only ever says "unable to authenticate data".
+    throw new Error(
+      `${where}: cannot decrypt user ${record.userId}'s Perpl keys with ` +
+        `${AGENT_SECRETS_KEY_VAR}. Refusing to start: a wrong key would unlink every user, ` +
+        'and each re-enrollment uses a Perpl key slot. Restore the key that wrote this file.',
+      { cause: error },
+    );
+  }
+}
+
 export class FileUserVenueSecretStore implements UserVenueSecretStore {
-  readonly #file: JsonRecordFile<SecretRecord>;
+  readonly #file: JsonRecordFile<UserVenueSecretRecord>;
   readonly #key: Buffer;
-  readonly #records = new Map<string, SecretRecord>();
-  readonly #held = new Map<string, Held>();
+  readonly #records = new Map<string, UserVenueSecretRecord>();
+  readonly #held = new Map<string, HeldUserVenueSecrets>();
 
   /** Loads and decrypts eagerly, so a wrong key or a bad file fails the boot. */
   constructor(path: string, key: Uint8Array) {
     if (key.length !== 32) throw new Error('the venue secrets key must be 32 bytes');
     this.#key = Buffer.from(key);
-    this.#file = new JsonRecordFile<SecretRecord>(path);
+    this.#file = new JsonRecordFile<UserVenueSecretRecord>(path);
     for (const record of this.#file.load()) {
       this.#records.set(record.userId, record);
-      this.#held.set(record.userId, this.#unseal(record));
+      this.#held.set(record.userId, unsealUserVenueSecrets(this.#key, record, this.#file.path));
     }
   }
 
@@ -87,10 +135,9 @@ export class FileUserVenueSecretStore implements UserVenueSecretStore {
 
   putPerplRead(userId: string, credentials: PerplCredentials): Promise<void> {
     const previous = this.#held.get(userId)?.perplRead;
-    const sealed = sealBytes(this.#key, readAad(userId), encodePerplCredentials(credentials));
     const failure = this.#update(
       userId,
-      { perplRead: sealed },
+      { perplRead: sealPerplRead(this.#key, userId, credentials) },
       { perplRead: sealPerplCredentials(credentials) },
     );
     if (failure) return Promise.reject(failure);
@@ -104,39 +151,23 @@ export class FileUserVenueSecretStore implements UserVenueSecretStore {
   }
 
   putPerplTradeToken(userId: string, token: string): Promise<void> {
-    const sealed = sealBytes(this.#key, tokenAad(userId), Buffer.from(token, 'utf8'));
-    const failure = this.#update(userId, { perplTradeToken: sealed }, { perplTradeToken: token });
+    const failure = this.#update(
+      userId,
+      { perplTradeToken: sealPerplTradeToken(this.#key, userId, token) },
+      { perplTradeToken: token },
+    );
     return failure ? Promise.reject(failure) : Promise.resolve();
-  }
-
-  #unseal(record: SecretRecord): Held {
-    try {
-      let perplTradeToken: string | undefined;
-      if (record.perplTradeToken) {
-        const plain = unsealBytes(this.#key, tokenAad(record.userId), record.perplTradeToken);
-        perplTradeToken = plain.toString('utf8');
-        plain.fill(0);
-      }
-      const perplRead = record.perplRead
-        ? decodePerplCredentials(unsealBytes(this.#key, readAad(record.userId), record.perplRead))
-        : undefined;
-      return { perplRead, perplTradeToken };
-    } catch (error) {
-      // No detail from `error`: GCM only ever says "unable to authenticate data".
-      throw new Error(
-        `${this.#file.path}: cannot decrypt user ${record.userId}'s Perpl keys with ` +
-          `${AGENT_SECRETS_KEY_VAR}. Refusing to start: a wrong key would unlink every user, ` +
-          'and each re-enrollment uses a Perpl key slot. Restore the key that wrote this file.',
-        { cause: error },
-      );
-    }
   }
 
   /**
    * Writes through. On a failed write memory is put back, so it never runs
    * ahead of disk, and the error is returned for the caller to reject with.
    */
-  #update(userId: string, record: Omit<SecretRecord, 'userId'>, held: Held): Error | undefined {
+  #update(
+    userId: string,
+    record: Omit<UserVenueSecretRecord, 'userId'>,
+    held: HeldUserVenueSecrets,
+  ): Error | undefined {
     const previousRecord = this.#records.get(userId);
     const previousHeld = this.#held.get(userId);
     this.#records.set(userId, { ...previousRecord, ...record, userId });

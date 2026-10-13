@@ -4,8 +4,8 @@ import { createPublicClient, type PublicClient } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
 import { monadReadTransport } from '../../chain/monad-rpc';
-import { statePath } from '../../state/json-file';
-import { StateDirLease } from '../../state/state.module';
+import { SenteDbLease } from '../../state/state.module';
+import { selectStore, type StoreSelector } from '../../state/store-backend';
 import { cachedPerplContext, type PerplContextSource } from '../../trade/perpl-context';
 import { AGENT_WALLETS, type AgentWalletProvider } from '../agent-wallet.provider';
 import { AGENT_EVENTS, type AgentEventLog } from '../events/agent-event-log';
@@ -26,24 +26,28 @@ import {
 } from './file-agent-secret-store';
 import { PerplAgentAccounts, perplAccountReader, perplAllowanceReader } from './perpl-agent';
 import { AGENT_PERPL_CONTEXT, AgentPerplOnboarder, perplOnboardingChain } from './perpl-onboarding';
+import { SqliteAgentSecretStore } from './sqlite-agent-secret-store';
 
 /** DI token for the Monad public client the agents' venues read and broadcast through. */
 export const AGENT_PUBLIC_CLIENT = Symbol('AGENT_PUBLIC_CLIENT');
 
 /**
- * In memory unless `STATE_DIR` is set; then encrypted on disk (SEN-148), so a
- * restart keeps every agent's enrolled Perpl key instead of burning one of
- * the account's 16 slots on the next use. `agentSecretsKey()` throws without
- * `AGENT_SECRETS_KEY`, and a wrong key fails the load: both stop the boot.
+ * In memory unless `STATE_DIR` is set; then encrypted on disk (SEN-148), in
+ * `agent-secrets.json` or, under `STORE_BACKEND=sqlite`, a table in
+ * `sente.db` (SEN-205), so a restart keeps every agent's enrolled Perpl key
+ * instead of burning one of the account's 16 slots on the next use.
+ * `agentSecretsKey()` throws without `AGENT_SECRETS_KEY`, and a wrong key
+ * fails the load: both stop the boot.
  */
 export function agentSecretStore(
+  lease: StoreSelector,
   env: Record<string, string | undefined> = process.env,
 ): AgentSecretStore {
-  const path = statePath(AGENT_SECRETS_FILE, env);
-  if (!path) return new InMemoryAgentSecretStore();
-  const store = new FileAgentSecretStore(path, agentSecretsKey(env));
-  Logger.log(`${store.size} agent Perpl key(s) loaded from ${store.path}`, 'AgentSecrets');
-  return store;
+  return selectStore<AgentSecretStore>(lease, `${AGENT_SECRETS_FILE}.json`, 'agent Perpl key(s)', {
+    memory: () => new InMemoryAgentSecretStore(),
+    file: (path) => new FileAgentSecretStore(path, agentSecretsKey(env)),
+    sqlite: (db) => new SqliteAgentSecretStore(db, agentSecretsKey(env)),
+  });
 }
 
 /**
@@ -65,9 +69,9 @@ export const agentVenuesProviders: Provider[] = [
   },
   {
     provide: AGENT_SECRETS,
-    // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
-    inject: [StateDirLease],
-    useFactory: (_lease: StateDirLease) => agentSecretStore(),
+    // Injected so the STATE_DIR lock and the database are held before this store opens (SEN-161).
+    inject: [SenteDbLease],
+    useFactory: (lease: SenteDbLease) => agentSecretStore(lease),
   },
   {
     provide: AgentTransactionSender,
