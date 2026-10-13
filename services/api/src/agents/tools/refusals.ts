@@ -47,7 +47,13 @@ export type SenteRefusalCode =
    * SEN-188: a Kuru deposit while the live policy does not yet pin the
    * credited account to the agent's own wallet (`kuruDepositPinned` false).
    */
-  | 'kuru_deposit_unpinned';
+  | 'kuru_deposit_unpinned'
+  /**
+   * SEN-212: a native-MON deposit by an agent whose gas Privy sponsors. Its
+   * wallet is EIP-7702-delegated, and Monad's reserve balance forbids a
+   * delegated account to move native MON while it holds under 10 MON.
+   */
+  | 'native_mon_reserve';
 
 /** A refusal by Sente's own gate. The message is model-facing. */
 export class SenteRefusal extends Error {

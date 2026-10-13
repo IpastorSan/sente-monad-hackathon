@@ -23,6 +23,7 @@ import {
   KURU_DEPLOYMENT,
   KURU_TESTNET_MARKETS,
   KURU_TESTNET_TOKENS,
+  NATIVE_TOKEN,
   toUnits,
   type KuruToken,
 } from '@sente/venues/kuru';
@@ -1163,6 +1164,18 @@ export const KURU_DEPOSIT_UNPINNED_MESSAGE =
   'hiring; the agent page offers "Secure deposits"). Nothing was signed. Perpl, withdrawals and ' +
   'reads are unaffected, and Kuru orders can use what AccountCore already holds.';
 
+/**
+ * Model-facing: why native MON cannot be deposited by an agent whose gas Privy
+ * sponsors (SEN-212). Its first sponsored send EIP-7702-delegates the wallet,
+ * and Monad forbids a delegated account to move native MON while it holds
+ * under 10 MON (the reserve balance): a signed deposit reverts with
+ * `reserve balance violation`, a sponsored one is dropped by the bundler.
+ */
+export const NATIVE_MON_RESERVE_MESSAGE =
+  'Native MON cannot leave your wallet: Monad keeps a 10 MON reserve on a delegated wallet ' +
+  'like yours, so a MON deposit would revert. Nothing was signed. Deposit USDC (or another ' +
+  'token your mandate allows) instead.';
+
 const deposit = defineTool({
   name: 'deposit',
   kind: 'write',
@@ -1200,6 +1213,10 @@ const deposit = defineTool({
     const { kuru } = await ctx.venues();
     const token = depositToken(kuru, args);
     atoms(args.amount, token); // precision, before anything is signed
+    // SEN-212: whatever AGENT_PRECHECK says — this is Monad's rule, not the mandate's.
+    if (isAddressEqual(token.address, NATIVE_TOKEN) && ctx.sponsorsGas?.(agent)) {
+      throw new SenteRefusal('native_mon_reserve', NATIVE_MON_RESERVE_MESSAGE);
+    }
     if (ctx.precheck) {
       const held = (await kuru.walletBalances()).find((b) => b.asset === token.symbol)?.available;
       if (compareDecimal(held ?? '0', args.amount) < 0) {
