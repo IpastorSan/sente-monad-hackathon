@@ -23,8 +23,21 @@ holds `api.lock` — the same single-writer rule as the files, enforced the same
 way — runs the migrations, and closes the database with a WAL checkpoint on
 shutdown.
 
-Converted so far: the agent store (`agents/store/sqlite-agent-store.ts`) and the
-user-wallet registry (`wallet/store/sqlite-user-wallet-registry.ts`).
+Converted so far: the agent store (`agents/store/sqlite-agent-store.ts`), the
+user-wallet registry (`wallet/store/sqlite-user-wallet-registry.ts`), and, in
+migration 2, the profiles (`profile/sqlite-profile.store.ts`), the starter kits
+(`starter-kit/sqlite-starter-kit.store.ts`), the creator fee ledger
+(`fees/sqlite-creator-fees.ts`, which `creator:payout` also opens under
+`sqlite`), and the three stores sealed under `AGENT_SECRETS_KEY`: the credit
+keys (`credits/store/sqlite-credit-key-store.ts`), the agent secrets
+(`agents/venues/sqlite-agent-secret-store.ts`) and the user venue secrets
+(`trade/sqlite-user-venue-secrets.ts`).
+
+The sealed stores keep a two-layer shape: `state/db/record-table.ts` moves the
+file's sealed records in and out of the table as they are (that is all the
+import touches, so it never needs the key), and the store on top seals,
+decrypts every row once at boot (a wrong key still fails the boot) and unseals
+per read instead of caching plaintext in memory.
 
 ## The database
 

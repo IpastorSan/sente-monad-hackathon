@@ -67,7 +67,6 @@ describe.each([
   ['FileCreatorFeeLedger', (): CreatorFeeLedger => new FileCreatorFeeLedger(join(dir, 'c.json'))],
   ['SqliteCreatorFeeLedger', (): CreatorFeeLedger => sqliteLedger()],
 ])('%s', (_name, create) => {
-
   it('accrues each fill once, keyed by agent and transaction', () => {
     const ledger = create();
     expect(ledger.accrue(fill())!.amountAtoms).toBe(10_500n);

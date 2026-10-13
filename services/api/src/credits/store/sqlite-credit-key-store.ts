@@ -14,11 +14,7 @@ import { RecordTable } from '../../state/db/record-table.ts';
 import { toDataJson } from '../../state/db/row.ts';
 import type { SenteDb } from '../../state/db/sente-db.ts';
 import type { CreditKeyClaim, CreditKeyRecord, CreditKeyStore } from './credit-key-store.ts';
-import {
-  sealCreditKey,
-  unsealCreditKey,
-  type SealedCreditKey,
-} from './file-credit-key-store.ts';
+import { sealCreditKey, unsealCreditKey, type SealedCreditKey } from './file-credit-key-store.ts';
 
 /** The `credit_keys` rows, sealed: what the import copies, with no key. */
 export function creditKeyRows(db: SenteDb): RecordTable<SealedCreditKey> {

@@ -26,6 +26,15 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { SqliteAgentStore } from '../../agents/store/sqlite-agent-store.ts';
+import type { AgentSecretRecord } from '../../agents/venues/file-agent-secret-store.ts';
+import { agentSecretRows } from '../../agents/venues/sqlite-agent-secret-store.ts';
+import type { SealedCreditKey } from '../../credits/store/file-credit-key-store.ts';
+import { creditKeyRows } from '../../credits/store/sqlite-credit-key-store.ts';
+import { SqliteCreatorFeeLedger } from '../../fees/sqlite-creator-fees.ts';
+import { SqliteProfileStore } from '../../profile/sqlite-profile.store.ts';
+import { SqliteStarterKitStore } from '../../starter-kit/sqlite-starter-kit.store.ts';
+import type { UserVenueSecretRecord } from '../../trade/file-user-venue-secrets.ts';
+import { userVenueSecretRows } from '../../trade/sqlite-user-venue-secrets.ts';
 import { SqliteUserWalletRegistry } from '../../wallet/store/sqlite-user-wallet-registry.ts';
 import { encodeValue, JsonRecordFile, type JsonValue } from '../json-file.ts';
 import { acquireStateDirLock } from '../state-dir-lock.ts';
@@ -66,6 +75,49 @@ export const STORE_IMPORTS: readonly StoreImport<unknown>[] = [
     file: 'user-wallets.json',
     load: loadJsonRecords,
     open: (db) => new SqliteUserWalletRegistry(db),
+    key: (record) => record.userId,
+  }),
+  entry<Parameters<SqliteProfileStore['put']>[0]>({
+    name: 'profiles',
+    file: 'profiles.json',
+    load: loadJsonRecords,
+    open: (db) => new SqliteProfileStore(db),
+    key: (record) => record.userId,
+  }),
+  entry<Parameters<SqliteStarterKitStore['put']>[0]>({
+    name: 'starter_kits',
+    file: 'starter-kits.json',
+    load: loadJsonRecords,
+    open: (db) => new SqliteStarterKitStore(db),
+    key: (record) => record.userId,
+  }),
+  entry<Parameters<SqliteCreatorFeeLedger['put']>[0]>({
+    name: 'creator_fees',
+    file: 'creator-fees.json',
+    load: loadJsonRecords,
+    open: (db) => new SqliteCreatorFeeLedger(db),
+    key: (record) => record.id,
+  }),
+  // The sealed stores: rows in, rows out, ciphertext as it is — no AGENT_SECRETS_KEY here.
+  entry<SealedCreditKey>({
+    name: 'credit_keys',
+    file: 'credit-keys.json',
+    load: loadJsonRecords,
+    open: creditKeyRows,
+    key: (record) => record.userId,
+  }),
+  entry<AgentSecretRecord>({
+    name: 'agent_secrets',
+    file: 'agent-secrets.json',
+    load: loadJsonRecords,
+    open: agentSecretRows,
+    key: (record) => record.agentId,
+  }),
+  entry<UserVenueSecretRecord>({
+    name: 'user_venue_secrets',
+    file: 'user-venue-secrets.json',
+    load: loadJsonRecords,
+    open: userVenueSecretRows,
     key: (record) => record.userId,
   }),
 ];

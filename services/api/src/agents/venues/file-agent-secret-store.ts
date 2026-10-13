@@ -130,7 +130,10 @@ export function sealAgentSecret(
   agentId: string,
   credentials: PerplCredentials,
 ): AgentSecretRecord {
-  return { agentId, perpl: sealBytes(key, AAD_PREFIX + agentId, encodePerplCredentials(credentials)) };
+  return {
+    agentId,
+    perpl: sealBytes(key, AAD_PREFIX + agentId, encodePerplCredentials(credentials)),
+  };
 }
 
 /**

@@ -529,7 +529,9 @@ delete the lock file by hand, after checking. This covers the API, the live scri
 first. A second replica will not work just because the lock allows it.
 
 SEN-205 adds `STORE_BACKEND=file|sqlite` (default `file`, anything else refuses to boot). Under
-`sqlite` the converted stores (the agent store and the user-wallet registry so far) live in
+`sqlite` the converted stores (so far the agent store, the user-wallet registry, profiles, starter
+kits, creator fees, and — still sealed, the import never sees the key — credit keys, agent secrets
+and user venue secrets) live in
 `<STATE_DIR>/sente.db` — one `node:sqlite` database, WAL, opened by `SenteDbLease` after the lock
 is held, migrated at boot — and the rest keep their files. `docs/state.md` has the schema pattern,
 how to convert a store, the import (`state:import-sqlite`, which leaves the JSON files intact so
