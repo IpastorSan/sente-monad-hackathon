@@ -26,7 +26,9 @@ given. Everything that has not happened says so, in
   in its popup). Other providers are not measured
   ([`docs/web.md`](docs/web.md#provider-matrix)).
 - **Android APK: <https://sente.lol/download/sente.apk>** (Android 9 or later,
-  sideloading allowed). Same domain and same derivation as the web app.
+  sideloading allowed), also attached to the
+  [`v1.0-judging` release](https://github.com/IpastorSan/sente-monad-hackathon/releases/tag/v1.0-judging) with its SHA-256. Same domain and same
+  derivation as the web app.
 - **How it works: <https://sente.lol/how-it-works>**, readable without signing in.
 - **Judging walkthrough: [`docs/judges.md`](docs/judges.md).**
 

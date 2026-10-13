@@ -163,7 +163,8 @@ Welcome.
 ## 7. The Android app (optional)
 
 **<https://sente.lol/download/sente.apk>**, for Android 9 or later with
-sideloading allowed. It uses the same domain and derives keys the same way, so
+sideloading allowed. The same file, with its SHA-256, is attached to the
+[`v1.0-judging` release](https://github.com/IpastorSan/sente-monad-hackathon/releases/tag/v1.0-judging). It uses the same domain and derives keys the same way, so
 the same Google Password Manager passkey should give the same wallet on the
 phone and on the web. That has not been confirmed on a real device pair yet.
 
