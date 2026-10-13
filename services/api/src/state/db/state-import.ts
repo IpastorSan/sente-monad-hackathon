@@ -16,7 +16,9 @@
 //
 // One entry in `STORE_IMPORTS`: the file, how to load it, the SQLite store's
 // `put` and `listAll`, and the key. `loadJsonRecords` covers `.json` envelope
-// files; a `.jsonl` store brings its own `load`.
+// files; a `.jsonl` store brings its own `load` (streamed with
+// `state/jsonl.ts#readJsonlLines`, never the whole file as one string) and sets
+// `ordered`, so the check also proves the table reads back in the file's order.
 //
 // Erasable syntax and `.ts` specifiers: `scripts/state-import-sqlite.ts` runs
 // this under node's type stripping (CLAUDE.md gotcha 10).
@@ -25,7 +27,22 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import {
+  agentEventLogKey,
+  loadAgentEventLogRecords,
+  SqliteAgentEventLog,
+} from '../../agents/events/sqlite-agent-event-log.ts';
+import {
+  loadRunTranscriptRecords,
+  runTranscriptKey,
+  SqliteRunTranscriptStore,
+} from '../../agents/runner/transcript/sqlite-run-transcript-store.ts';
 import { SqliteAgentStore } from '../../agents/store/sqlite-agent-store.ts';
+import {
+  loadValueHistoryRecords,
+  SqliteValueHistoryStore,
+  valueHistoryKey,
+} from '../../portfolio/history/sqlite-value-history-store.ts';
 import { SqliteUserWalletRegistry } from '../../wallet/store/sqlite-user-wallet-registry.ts';
 import { encodeValue, JsonRecordFile, type JsonValue } from '../json-file.ts';
 import { acquireStateDirLock } from '../state-dir-lock.ts';
@@ -41,6 +58,11 @@ export interface StoreImport<T> {
   /** The SQLite store over `db`: an upsert by key, and every record it holds. */
   readonly open: (db: SenteDb) => { put: (record: T) => void; listAll: () => Promise<T[]> };
   readonly key: (record: T) => string;
+  /**
+   * An append-only log: `listAll` must return the file's records in the
+   * file's order (`load`'s), which the check verifies along with the content.
+   */
+  readonly ordered?: boolean;
 }
 
 /** `JsonRecordFile.load`, or `undefined` for a file that is not there. */
@@ -68,6 +90,31 @@ export const STORE_IMPORTS: readonly StoreImport<unknown>[] = [
     open: (db) => new SqliteUserWalletRegistry(db),
     key: (record) => record.userId,
   }),
+  entry<Parameters<SqliteAgentEventLog['put']>[0]>({
+    name: 'agent_events',
+    file: 'agent-events.jsonl',
+    load: (path) => loadAgentEventLogRecords(path),
+    open: (db) => new SqliteAgentEventLog(db),
+    key: agentEventLogKey,
+    ordered: true,
+  }),
+  entry<Parameters<SqliteRunTranscriptStore['put']>[0]>({
+    name: 'agent_runs',
+    file: 'agent-runs.jsonl',
+    load: (path) => loadRunTranscriptRecords(path),
+    // The import never starts or appends a run, so loading the table is all this does.
+    open: (db) => new SqliteRunTranscriptStore(db),
+    key: runTranscriptKey,
+    ordered: true,
+  }),
+  entry<Parameters<SqliteValueHistoryStore['put']>[0]>({
+    name: 'value_history',
+    file: 'value-history.jsonl',
+    load: (path) => loadValueHistoryRecords(path),
+    open: (db) => new SqliteValueHistoryStore(db),
+    key: valueHistoryKey,
+    ordered: true,
+  }),
 ];
 
 export interface StoreImportReport {
@@ -85,6 +132,12 @@ export interface StoreImportReport {
   readonly missing: number;
   /** Table records with no file counterpart: written by the API under `sqlite` since the copy. */
   readonly dbOnly: number;
+  /**
+   * For an `ordered` store: whether the file's records read back from the
+   * table in the file's order (records only in the table are skipped). Always
+   * true for the others.
+   */
+  readonly inOrder: boolean;
   readonly fileHash: string | undefined;
   readonly dbHash: string;
   /** Every file record is in the table, identical. */
@@ -151,6 +204,7 @@ async function importStore(
   }
   let dbOnly = 0;
   for (const key of inDb.keys()) if (!inFile?.has(key)) dbOnly += 1;
+  const inOrder = !store.ordered || !inFile || sameOrder(inFile, inDb);
   return {
     name: store.name,
     file: store.file,
@@ -160,10 +214,21 @@ async function importStore(
     differs,
     missing,
     dbOnly,
+    inOrder,
     fileHash: inFile ? hashOf(inFile) : undefined,
     dbHash: hashOf(inDb),
-    ok: differs === 0 && missing === 0,
+    ok: differs === 0 && missing === 0 && inOrder,
   };
+}
+
+/** The file's keys appear in the table's listing in the file's order. */
+function sameOrder(inFile: Map<string, string>, inDb: Map<string, string>): boolean {
+  const fileKeys = inFile.keys();
+  for (const key of inDb.keys()) {
+    if (!inFile.has(key)) continue;
+    if (fileKeys.next().value !== key) return false;
+  }
+  return true;
 }
 
 /**
