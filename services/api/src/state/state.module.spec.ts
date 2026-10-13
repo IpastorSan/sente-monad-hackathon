@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { AGENT_STORE, InMemoryAgentStore } from '../agents/store/agent-store';
 import { AgentStoreModule } from '../agents/store/agent-store.module';
 import { FileAgentStore } from '../agents/store/file-agent-store';
 import { SqliteAgentStore } from '../agents/store/sqlite-agent-store';
+import { FileUserWalletRegistry } from '../wallet/store/file-user-wallet-registry';
 import { STATE_DIR_LOCK_FILE } from './state-dir-lock';
 import { SenteDbLease, StateDirLease } from './state.module';
 import { STORE_BACKEND_VAR } from './store-backend';
@@ -65,16 +66,38 @@ describe('StateModule', () => {
     expect(existsSync(join(dir, 'sente.db'))).toBe(false);
   });
 
-  it('serves the SQLite store under STORE_BACKEND=sqlite, and closes it with the lock', async () => {
+  it('serves the SQLite store under STORE_BACKEND=sqlite, and keeps it open for late writes', async () => {
     const app = await boot(dir, 'sqlite');
-    expect(app.get(AGENT_STORE)).toBeInstanceOf(SqliteAgentStore);
+    const store = app.get(AGENT_STORE);
+    expect(store).toBeInstanceOf(SqliteAgentStore);
     const lease = app.get(SenteDbLease);
     expect(lease.db?.path).toBe(join(dir, 'sente.db'));
     expect(lease.db?.schemaVersion).toBeGreaterThan(0);
     expect(lease.dir).toBe(app.get(StateDirLease).dir);
     await app.close();
     expect(existsSync(join(dir, STATE_DIR_LOCK_FILE))).toBe(false);
-    expect(() => lease.db!.prepare('SELECT 1')).toThrow(/not open/);
+    // Checkpointed, not closed: a run still in flight after shutdown can write (closed at exit).
+    expect(lease.db!.prepare('SELECT count(*) AS n FROM agents').get()).toEqual({ n: 0 });
+    lease.db!.close();
+  });
+
+  it('refuses to boot under sqlite while user-wallets.json holds bindings the table does not', async () => {
+    await new FileUserWalletRegistry(join(dir, 'user-wallets.json')).bind({
+      userId: 'alice',
+      walletId: 'wallet00000000000000test',
+      address: `0x${'9'.repeat(40)}`,
+      ownerQuorumId: 'quorum00000000000000test',
+      devicePublicKey: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE' + 'A'.repeat(52) + '==',
+    });
+    await expect(boot(dir, 'sqlite')).rejects.toThrow(/never imported.*state-import-sqlite\.js/s);
+  });
+
+  it('boots under sqlite with an empty user-wallets.json, or none', async () => {
+    writeFileSync(join(dir, 'user-wallets.json'), JSON.stringify({ version: 1, records: [] }));
+    const app = await boot(dir, 'sqlite');
+    const db = app.get(SenteDbLease).db!;
+    await app.close();
+    db.close();
   });
 
   it('refuses to boot on an unknown STORE_BACKEND, naming it', async () => {
