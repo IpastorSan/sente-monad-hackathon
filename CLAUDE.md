@@ -525,8 +525,16 @@ wallet bindings, an interleaved event log). SEN-161 enforces a **single writer**
 any store opens and releases it on shutdown. A second process refuses to boot and names the holder.
 A lock left by a hard kill is taken over only when the same host shows its pid is dead. Otherwise
 delete the lock file by hand, after checking. This covers the API, the live scripts that boot
-`AppModule`, `privy:recover --apply` and `creator:payout`. Scaling the API past one replica needs a shared store
+`AppModule`, `privy:recover --apply`, `creator:payout` and `state:import-sqlite`. Scaling the API past one replica needs a shared store
 first. A second replica will not work just because the lock allows it.
+
+SEN-205 adds `STORE_BACKEND=file|sqlite` (default `file`, anything else refuses to boot). Under
+`sqlite` the converted stores (the agent store and the user-wallet registry so far) live in
+`<STATE_DIR>/sente.db` — one `node:sqlite` database, WAL, opened by `SenteDbLease` after the lock
+is held, migrated at boot — and the rest keep their files. `docs/state.md` has the schema pattern,
+how to convert a store, the import (`state:import-sqlite`, which leaves the JSON files intact so
+`STORE_BACKEND=file` is the rollback) and backups (`VACUUM INTO`, never a bare `cp` of a live WAL
+database).
 
 ---
 

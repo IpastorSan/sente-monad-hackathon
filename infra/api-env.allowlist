@@ -113,6 +113,12 @@ AGENT_FILL_MAX_BLOCK_RANGE
 # it. Encrypts agent-secrets.json (the agents' Perpl keys, SEN-148).
 AGENT_SECRETS_KEY
 
+# --- persistent state (SEN-205, docs/state.md) ---
+# file (the default, today's JSON files) or sqlite (<STATE_DIR>/sente.db).
+# Flip to sqlite only after `state:import-sqlite` has run on the box with the
+# API stopped; flip back to file to roll back.
+STORE_BACKEND
+
 # --- signals ---
 NANSEN_API_KEY
 
