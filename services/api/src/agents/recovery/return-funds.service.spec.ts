@@ -94,8 +94,14 @@ class FakeChain implements ReturnChainReader {
 class FakeSender implements ReturnSender {
   readonly sent: AgentTransaction[] = [];
   success = true;
+  /** Privy-sponsored sends on (SEN-211): the sender's own rule, read off the agent. */
+  sponsored = false;
   /** Appended to by the venue too, so the ORDER of the two legs is observable. */
   readonly order: string[] = [];
+
+  sponsorsGasFor(agent: { readonly sponsoredSends?: boolean }): boolean {
+    return this.sponsored && agent.sponsoredSends === true;
+  }
 
   sendAll(_wallet: unknown, txs: readonly AgentTransaction[]): Promise<AgentReceipt[]> {
     this.sent.push(...txs);
@@ -332,6 +338,25 @@ describe('ReturnFundsService', () => {
     expect(kuru.writes()).toEqual([]);
   });
 
+  it('does not gate on MON when Privy sponsors the agent’s gas (SEN-212)', async () => {
+    const { service, chain, sender, store, agent } = await setup();
+    chain.held = { [USDC.address]: 1_000_000n };
+    chain.mon = 0n;
+    sender.sponsored = true;
+
+    // Sponsored sends on, but the live policy predates them: it signs, so it pays.
+    const unpaid = await refusal(service.returnFunds(ALICE, agent.id, { asset: 'USDC' }));
+    expect(unpaid.reason).toBe('return_gas_insufficient');
+    expect(sender.sent).toEqual([]);
+
+    // Its policy carries the sponsored twins: 0 MON is enough.
+    await store.update(agent.id, { sponsoredSends: true });
+    const result = await service.returnFunds(ALICE, agent.id, { asset: 'USDC' });
+    expect(result.assets[0]!.returned).toMatchObject({ amount: '1', success: true });
+    expect(result.monSpent).toBe('0');
+    expect(sender.sent).toHaveLength(1);
+  });
+
   it('is another user’s 404, and moves nothing', async () => {
     const { service, sender, agent, chain } = await setup();
     chain.held = { [USDC.address]: 2_000_000n };
@@ -361,7 +386,7 @@ describe('ReturnFundsService', () => {
     const service = new ReturnFundsService(
       agents,
       { forAgent: () => Promise.resolve({ kuru }) },
-      { sendAll: () => Promise.reject(refused) },
+      { sendAll: () => Promise.reject(refused), sponsorsGasFor: () => false },
       chain,
     );
     await expect(service.returnFunds(ALICE, agent.id, { asset: 'USDC' })).rejects.toBe(refused);

@@ -261,6 +261,17 @@ export class AgentTransactionSender {
   }
 
   /**
+   * Whether Privy pays this agent's gas (SEN-212): sends are sponsored AND its
+   * live policy carries the sponsored twins. Then the agent's MON decides
+   * nothing, and a MON gate in front of a send would refuse what Privy would
+   * have paid for. An agent whose policy predates the flag falls back to
+   * signing, paid in its own MON, so its gate stays.
+   */
+  sponsorsGasFor(agent: { readonly sponsoredSends?: boolean }): boolean {
+    return this.sponsored && agent.sponsoredSends === true;
+  }
+
+  /**
    * Sends `txs` in order, one at a time, as one unit of the wallet's queue.
    * Returns a receipt per transaction that was broadcast; it stops after the
    * first reverted one. A signing refusal (`EnclaveRefusedError`) rejects

@@ -189,6 +189,13 @@ export interface AgentPerplOnboarderOptions {
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly logger?: { log(message: string): void; warn(message: string): void };
+  /**
+   * Whether Privy pays this agent's gas (SEN-212,
+   * `AgentTransactionSender.sponsorsGasFor`): then its MON pays for none of the
+   * three legs, and the gas gate would refuse what Privy would have paid for.
+   * Default: never, so the gate always applies.
+   */
+  readonly sponsorsGas?: (agent: AgentRecord) => boolean;
 }
 
 /** What the agent needs next, before anything is sent. */
@@ -223,6 +230,7 @@ export class AgentPerplOnboarder {
   readonly #now: () => number;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #logger: AgentPerplOnboarderOptions['logger'];
+  readonly #sponsorsGas: (agent: AgentRecord) => boolean;
   /** One flight per agent: every trigger joins it. */
   readonly #flights = new Map<string, Promise<PerplOnboardingStatus>>();
   /** Agents whose post-fund wait is running, so a second kick does not start another. */
@@ -253,6 +261,7 @@ export class AgentPerplOnboarder {
     this.#now = options.now ?? Date.now;
     this.#sleep = options.sleep ?? sleepFor;
     this.#logger = options.logger;
+    this.#sponsorsGas = options.sponsorsGas ?? (() => false);
   }
 
   /**
@@ -487,6 +496,7 @@ export class AgentPerplOnboarder {
 
   /** Refuses, before anything is signed, legs the agent's MON cannot pay for. */
   async #gasGate(agent: AgentRecord, plan: PerplOnboardingPlan): Promise<void> {
+    if (this.#sponsorsGas(agent)) return;
     const [have, fee] = await Promise.all([
       this.#chain.nativeBalance(agent.address),
       this.#chain.maxFeePerGas(),

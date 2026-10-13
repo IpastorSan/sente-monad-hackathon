@@ -137,6 +137,7 @@ export const agentVenuesProviders: Provider[] = [
       AGENT_PERPL_CONTEXT,
       WriteSpacer,
       AgentTools,
+      AgentTransactionSender,
     ],
     useFactory: (
       accounts: PerplAgentAccounts,
@@ -147,6 +148,7 @@ export const agentVenuesProviders: Provider[] = [
       context: PerplContextSource,
       spacer: WriteSpacer,
       tools: AgentTools,
+      sender: AgentTransactionSender,
     ) =>
       new AgentPerplOnboarder({
         accounts,
@@ -159,6 +161,8 @@ export const agentVenuesProviders: Provider[] = [
         // outside, the per-agent write lock inside (runner/write-spacing.ts).
         exclusive: (agentId, task) => spacer.run(agentId, () => tools.writeLock.run(agentId, task)),
         logger: new Logger('PerplOnboarding'),
+        // SEN-212: a sponsored agent opens its Perpl account with no MON.
+        sponsorsGas: (agent) => sender.sponsorsGasFor(agent),
       }),
   },
   {
