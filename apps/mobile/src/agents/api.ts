@@ -1432,6 +1432,11 @@ export function describeAgentsError(error: unknown): { title: string; detail: st
   const message = error instanceof Error ? error.message : String(error);
   return {
     title: 'Couldn’t reach the API',
-    detail: `${message}. On a physical device, EXPO_PUBLIC_API_URL must be this machine’s LAN address.`,
+    // The LAN hint only helps a dev build talking to a laptop; in production
+    // this is almost always a few seconds of deploy or a dropped connection.
+    detail:
+      typeof __DEV__ !== 'undefined' && __DEV__
+        ? `${message}. On a physical device, EXPO_PUBLIC_API_URL must be this machine’s LAN address.`
+        : 'The server may be restarting, or your connection dropped. Try again in a moment.',
   };
 }

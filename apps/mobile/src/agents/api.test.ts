@@ -327,10 +327,10 @@ test('describeAgentsError speaks to the reason, and to an unreachable API', () =
     describeAgentsError(new AgentsApiError(503, 'agent_wallets_unconfigured', 'x')).title,
     'Agent wallets aren’t configured on this API',
   );
-  assert.equal(
-    describeAgentsError(new TypeError('Network request failed')).title,
-    'Couldn’t reach the API',
-  );
+  const unreachable = describeAgentsError(new TypeError('Network request failed'));
+  assert.equal(unreachable.title, 'Couldn’t reach the API');
+  // Outside a dev build, no developer hint about EXPO_PUBLIC_API_URL.
+  assert.doesNotMatch(unreachable.detail, /EXPO_PUBLIC_API_URL/);
 });
 
 test('leaderboard is GET /leaderboard, and keeps n beside the rate it belongs to', async () => {
