@@ -122,7 +122,8 @@ export function leverageTag(n?: number | null): string {
 /**
  * Tints for the token stone. The study's pastels, keyed by base asset; the
  * letter on an `ink` face has to read on every one of them, so the list stays
- * light. No third-party logos: a logo is a claim about who issued the token.
+ * light. A token with a bundled logo (`tokenLogos.ts`) shows its tint only
+ * behind the image, while it loads.
  */
 const TOKEN_TINTS: Record<string, string> = {
   MON: '#DDD7FE',

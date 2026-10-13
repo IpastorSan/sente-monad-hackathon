@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -41,6 +42,8 @@ import { color, font, RADIUS, text } from './theme';
 import { TickerFade } from './TickerFade';
 import { useHeadlineAsset } from './useHeadlineAsset';
 import { isHovered } from './kit';
+import { TOKEN_LOGO_ASSETS } from './tokenLogoAssets';
+import { tokenLogoFor } from './tokenLogos';
 import {
   asOfLabel,
   formatPct,
@@ -218,17 +221,36 @@ export function ChangeText({
 
 // ─── Market rows ────────────────────────────────────────────────────────────
 
-/** A token as a stone with its first letter. No third-party logos. */
+/**
+ * A token as a stone: its logo where the app bundles one (SEN-214), else its
+ * first letter. Always a circle: the stone clips the image, keeps the token's
+ * tint behind it while it loads, and shows the letter if it fails.
+ */
 export function TokenGlyph({ symbol, size = 'md' }: { symbol: string; size?: 'md' | 'sm' }) {
   const { letter, tint } = glyphFor(symbol);
+  const logo = tokenLogoFor(symbol);
+  // Holds the symbol whose image failed, so a row reused for another token
+  // tries that token's image afresh.
+  const [failed, setFailed] = useState<string | null>(null);
   const d = size === 'md' ? 36 : 24;
+  const round = { width: d, height: d, borderRadius: d / 2 };
   return (
     <View
-      style={[styles.tok, { width: d, height: d, borderRadius: d / 2, backgroundColor: tint }]}
+      style={[styles.tok, round, { backgroundColor: tint }]}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      <Text style={[styles.tokLetter, { fontSize: size === 'md' ? 14 : 11 }]}>{letter}</Text>
+      {logo && failed !== symbol ? (
+        <Image
+          source={TOKEN_LOGO_ASSETS[logo]}
+          style={round}
+          resizeMode="cover"
+          accessible={false}
+          onError={() => setFailed(symbol)}
+        />
+      ) : (
+        <Text style={[styles.tokLetter, { fontSize: size === 'md' ? 14 : 11 }]}>{letter}</Text>
+      )}
     </View>
   );
 }
@@ -623,7 +645,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontVariant: ['tabular-nums'],
   },
-  tok: { alignItems: 'center', justifyContent: 'center' },
+  tok: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   tokLetter: { fontFamily: font.display, color: color.ink },
   perp: {
     fontFamily: font.semibold,
