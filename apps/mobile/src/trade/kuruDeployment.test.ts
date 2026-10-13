@@ -68,7 +68,7 @@ test('the Set C note says why, and Set D has none', () => {
   const note = kuruDeploymentNote('set-c')!;
   assert.equal(
     `${note.title}: ${note.detail}`,
-    "Kuru testnet: earlier deployment: Sente trades Kuru Spot V2 on its earlier testnet deployment. Kuru's newest testnet deployment hands out its test USDC on request only, so new users couldn't fund a trade there. Same contracts and order books, real on-chain fills.",
+    "Kuru testnet: earlier deployment: Sente trades Kuru Spot V2 on its earlier testnet deployment. Kuru's newest testnet deployment hands out its test USDC on request only, so new users couldn't fund a trade there. The same Kuru Spot V2 contracts, with real on-chain fills.",
   );
   assert.equal(kuruDeploymentNote('set-d'), null);
 });

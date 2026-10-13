@@ -538,7 +538,7 @@ export type TradeErrorCopy = { readonly title: string; readonly detail: string }
  */
 export function describeTradeError(error: unknown): TradeErrorCopy {
   if (error instanceof TradeApprovalRefusedError) {
-    return { title: 'This phone refused to sign it', detail: error.message };
+    return { title: 'The app refused to sign it', detail: error.message };
   }
   if (error instanceof TradePriceMovedError) {
     return {
@@ -625,7 +625,7 @@ function describeRefusal(error: TradeApiError): TradeErrorCopy {
     case 'perpl_enroll_refused':
       return {
         title: 'Perpl refused the key',
-        detail: `Perpl didn’t accept this phone’s trading key. Try again in a minute. (${error.message})`,
+        detail: `Perpl didn’t accept this device’s trading key. Try again in a minute. (${error.message})`,
       };
     case 'perpl_format_changed':
       return {

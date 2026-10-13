@@ -423,7 +423,7 @@ test('an expired approval says so, and says what to do', () => {
   assert.match(described.detail, /single-use/);
 });
 
-test('the refusal copy for a rejected signature tells you which device to use', async () => {
+test('the refusal copy for a rejected signature tells you which passkey to use', async () => {
   const { api } = fakeApi({
     executeStatus: 401,
     executeBody: { reason: 'invalid_authorization', message: 'nope' },
@@ -433,7 +433,7 @@ test('the refusal copy for a rejected signature tells you which device to use', 
     (caught: unknown) => caught,
   );
 
-  assert.match(describeSendError(error).detail, /device that owns this wallet/);
+  assert.match(describeSendError(error).detail, /passkey that owns this wallet/);
 });
 
 test('a lower-cased recipient still encodes the same transfer', () => {

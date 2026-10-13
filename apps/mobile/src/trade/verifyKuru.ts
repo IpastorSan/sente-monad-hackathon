@@ -109,7 +109,7 @@ export function verifyKuruTrade(
   // cannot contain ':' (so no key can be forged across the separator) and is
   // never 32-byte hex (so `toClientOrderId` hashes it, as we do below).
   if (typeof intent.clientTradeId !== 'string' || !UUID_V4.test(intent.clientTradeId)) {
-    return refuse('the trade id is not a phone-generated UUID');
+    return refuse('the trade id is not a UUID this app generated');
   }
   if (steps.length === 0) return refuse('the trade has no steps');
 
@@ -133,7 +133,7 @@ export function verifyKuruTrade(
     case 'kuru.withdraw':
       return verifyWithdraw(legs, intent, ctx.wallet);
     default:
-      return refuse('the trade is not a Kuru trade this phone verifies');
+      return refuse('the trade is not a Kuru trade this app verifies');
   }
 }
 
@@ -181,7 +181,7 @@ function verifyPlace(
   const market = allowedMarket(intent.market);
   if (market === undefined) return refuse(`${intent.market} is not a Kuru market the app trades`);
   const { facts } = ctx;
-  if (facts === undefined) return refuse('the phone has not read this market');
+  if (facts === undefined) return refuse('the app has not read this market');
   // `readMarketFacts` already refuses a mismatch; checked again so facts read
   // for another market cannot pass as this one's.
   if (
@@ -278,7 +278,7 @@ function checkBuilder(
     );
   }
   const now = ctx.nowSeconds;
-  if (now === undefined) return refuse('the phone has no clock to check the builder approval', at);
+  if (now === undefined) return refuse('the app has no clock to check the builder approval', at);
   if (approval.expiry <= BigInt(Math.floor(now)))
     return refuse('the builder approval has already expired', at);
   if (approval.expiry > BigInt(Math.floor(now) + BUILDER_APPROVAL_MAX_SECONDS)) {

@@ -75,7 +75,7 @@ const LIST_LABEL: Record<MarketFilter, string> = {
 /** Said instead of an empty list, so a short list never reads as broken. */
 const EMPTY: Record<MarketFilter, string> = {
   all: 'No markets are listed right now.',
-  favourites: 'No favourites yet. Long-press a market to star it.',
+  favourites: 'No favourites yet. Star a market to keep it here.',
   spot: 'No Kuru spot markets are listed right now.',
   perps: 'No Perpl perps are listed right now.',
   gainers: 'Nothing is up over the last 24 hours.',

@@ -171,7 +171,7 @@ test('a pin to anyone but this agent’s wallet is never signed', SET_D_ONLY, as
     });
 
     assert.equal(state.kind, 'failed', String(pin));
-    assert.equal(state.kind === 'failed' ? state.title : '', 'This phone refused to sign it');
+    assert.equal(state.kind === 'failed' ? state.title : '', 'The app refused to sign it');
     assert.match(state.kind === 'failed' ? state.detail : '', /Kuru: deposit USDC/);
     assert.deepEqual(signer.signed, [], 'nothing was signed');
     assert.equal(calls.length, 1, 'no commit was sent');

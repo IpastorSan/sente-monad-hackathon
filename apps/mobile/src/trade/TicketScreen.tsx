@@ -166,7 +166,7 @@ export default function TicketRoute() {
           detail="Longs and shorts on Perpl, with leverage, from your own account. Until then, an agent can trade this market for you, inside limits you set."
           points={[
             'Margin, leverage and a liquidation estimate',
-            'Take-profit and stop on the ticket',
+            'Market orders within 1% of the mark, or limit orders on the book',
             'Close from Portfolio',
           ]}
         />
@@ -736,7 +736,7 @@ function Ticket({
                 <Icon name="bolt" size={14} color={color.berry} />
                 <Text style={[text.dim, styles.grow]}>
                   <Text style={text.strong}>That's {ticket.problem.short} more than you have.</Text>{' '}
-                  Tap Max for {ticket.problem.have}, or{' '}
+                  Press Max for {ticket.problem.have}, or{' '}
                   <Text style={styles.link} onPress={() => router.push('/')}>
                     add {side === 'buy' ? config.quote.symbol : config.base.symbol}
                   </Text>

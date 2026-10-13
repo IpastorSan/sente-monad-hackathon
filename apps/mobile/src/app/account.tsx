@@ -63,7 +63,7 @@ function Account() {
         <Row label="Address to fund" value={wallet.wallet?.address ?? '—'} mono />
         <Row label="Network" value={`${monadChain.name} · ${MONAD_NETWORK}`} />
         <Text style={[text.caption, styles.note]}>
-          Send AUSD or USDC here to fund your agents. Gas is sponsored.
+          Send AUSD or USDC here to trade and to fund your agents. Gas is sponsored.
         </Text>
       </Section>
 
@@ -96,7 +96,7 @@ function Account() {
         <ActionRow
           icon="return"
           title="Sign out"
-          detail="Your passkey stays on this phone."
+          detail="Your passkey stays on this device."
           onPress={signOut}
         />
       </Section>

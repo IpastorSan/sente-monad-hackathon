@@ -330,7 +330,7 @@ export default function Home() {
     >
       {watched.length === 0 ? (
         <Text style={[text.dim, styles.empty]}>
-          Nothing starred yet. Long-press a market in Markets to add it here.
+          Nothing starred yet. Star a market in Markets to add it here.
         </Text>
       ) : (
         watched.map((market, i) => rowFor(market, i, watched.length))

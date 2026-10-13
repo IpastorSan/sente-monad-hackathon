@@ -241,7 +241,7 @@ export default function PortfolioScreen() {
                   {held.spot.length + held.perps.length === 0 && held.unread.length === 0 ? (
                     <Text style={[text.dim, styles.empty]}>
                       {user.portfolio
-                        ? 'No open positions. Tap Trade to place your first order.'
+                        ? 'No open positions. Open Trade to place your first order.'
                         : 'Nothing but cash in your wallet yet.'}
                     </Text>
                   ) : null}

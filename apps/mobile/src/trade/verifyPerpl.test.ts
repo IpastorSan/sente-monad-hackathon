@@ -603,7 +603,7 @@ test('refuses a trade key that is not this phone’s', () => {
       prepared({ served: withMessage({ publicKey: perplKey(READ_KEY) }) }),
       CTX,
     ),
-    /not this phone’s/,
+    /not this device’s/,
   );
 });
 
@@ -613,7 +613,7 @@ test('refuses a read item that enrolls the phone’s own key', () => {
       prepared({}, { served: withMessage({ publicKey: perplKey(TRADE_KEY) }) }),
       CTX,
     ),
-    /this phone’s own key/,
+    /this device’s own key/,
   );
 });
 

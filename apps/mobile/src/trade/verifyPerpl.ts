@@ -252,7 +252,7 @@ export function verifyPerplOnboard(
   // Seeds the idempotency keys: a UUID cannot contain ':', so no key can be
   // forged across the separator.
   if (typeof intent.clientTradeId !== 'string' || !UUID_V4.test(intent.clientTradeId)) {
-    return refuse('the trade id is not a phone-generated UUID');
+    return refuse('the trade id is not a UUID this app generated');
   }
   const amount = parseAtoms(intent.amountAtoms);
   if (amount === undefined) return refuse('the deposit is not an amount');
@@ -683,10 +683,10 @@ function messageProblem(typed: Eip712, expected: EnrollItemExpectation): string 
   }
   if ('equals' in expected.publicKey) {
     if (key !== expected.publicKey.equals.toLowerCase()) {
-      return 'it enrolls a key that is not this phone’s';
+      return 'it enrolls a key that is not this device’s';
     }
   } else if (key === expected.publicKey.differsFrom.toLowerCase()) {
-    return 'it enrolls this phone’s own key';
+    return 'it enrolls this device’s own key';
   }
 
   if (m['scope'] !== pinned.scope[expected.role]) {

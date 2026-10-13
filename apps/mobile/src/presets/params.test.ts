@@ -121,14 +121,14 @@ test('honesty: which levels rest on the venue and which the agent only watches',
   for (const spec of preset('dca-stacker').params) {
     assert.equal(levelKind('dca-stacker', spec.key), undefined, spec.key);
   }
-  // Every preset admits it can't leave its mandate; Funding Harvester admits it can't open yet.
+  // Every preset admits it can't leave its mandate; Funding Harvester admits it needs a funding read.
   for (const def of listPresets()) {
     assert.ok(
       cantDo(def.id).some((line) => line.includes('mandate')),
       def.id,
     );
   }
-  assert.ok(cantDo('funding-harvester').some((line) => line.startsWith('Open anything yet')));
+  assert.ok(cantDo('funding-harvester').some((line) => line.startsWith('Open anything without')));
 });
 
 test('validation is resolveParams: defaults pass, and every failure names its control', () => {

@@ -142,7 +142,7 @@ test('fundAgent sends exactly the intent, and turns a throw into a failed outcom
     { walletId: 'w', token: USDC, to: AGENT, atoms: 25_000_000n },
   );
   assert.equal(refused.kind, 'failed');
-  assert.equal(refused.kind === 'failed' ? refused.title : '', 'This phone refused to sign it');
+  assert.equal(refused.kind === 'failed' ? refused.title : '', 'The app refused to sign it');
 });
 
 test('hire comes first, funding goes to the hired wallet, then reports', async () => {

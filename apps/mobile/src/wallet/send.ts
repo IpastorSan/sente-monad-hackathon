@@ -282,7 +282,7 @@ export async function sendSponsored(
  */
 export function describeSendError(error: unknown): { title: string; detail: string } {
   if (error instanceof SendApprovalRefusedError) {
-    return { title: 'This phone refused to sign it', detail: error.message };
+    return { title: 'The app refused to sign it', detail: error.message };
   }
   if (error instanceof NoDeviceKeyError) {
     return { title: 'Sign in first', detail: error.message };
@@ -306,7 +306,7 @@ export function describeSendError(error: unknown): { title: string; detail: stri
       case 'invalid_authorization':
         return {
           title: 'Your passkey signature wasn’t accepted',
-          detail: 'Sign in again on the device that owns this wallet, then retry.',
+          detail: 'Sign in again with the passkey that owns this wallet, then retry.',
         };
       case 'account_not_registered':
         return {

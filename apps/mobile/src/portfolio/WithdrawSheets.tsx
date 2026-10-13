@@ -225,8 +225,8 @@ export function WithdrawSheet({
             ))
           )}
           <Text style={[text.caption, styles.gap]}>
-            Your passkey signs this exact transfer; this phone checks it before signing. Transfers
-            on chain can’t be reversed.
+            Your passkey signs this exact transfer; the app checks it before signing. Transfers on
+            chain can’t be reversed.
           </Text>
           {notice ? (
             <View style={styles.gap}>
@@ -443,7 +443,7 @@ export function KuruWithdrawSheet({
             <Text style={[text.strong, styles.gap]}>{kuruReview(check.atoms, token)}</Text>
           ) : null}
           <Text style={[text.caption, styles.gap]}>
-            Your passkey signs one Kuru withdrawal; this phone checks its token and amount first.
+            Your passkey signs one Kuru withdrawal; the app checks its token and amount first.
           </Text>
           {notice ? (
             <View style={styles.gap}>

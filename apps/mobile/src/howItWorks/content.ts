@@ -184,7 +184,7 @@ export const SECTIONS: readonly HelpSection[] = [
           'Perpl is a perpetual-futures exchange on Monad, settled in AUSD. [Set up perps](/trade/perpl-setup) does two things, once: it opens your Perpl account with at least 100 AUSD and lets Perpl forward your orders (three transactions from your wallet), then it enrolls a trade key.',
           'The trade key is an Ed25519 key your device derives from your device key, under the label `sente.perpl.trade-key.v1`. It is never stored, and Sente’s server never sees it. Enrolling it takes a signature from your wallet over Perpl’s own request, which the app checks field by field first.',
           'Sente’s server enrolls a separate read-only key for your account, so [Portfolio](/portfolio) can show your positions. That key cannot trade: Perpl refused an order placed with it. The server keeps it encrypted.',
-          'Orders are market orders, bounded at 1% from the mark price, with isolated margin and leverage set per order. You close a position from its page. Try [BTC-PERP](/markets/perpl/BTC-PERP).',
+          'A market order is bounded at 1% from the mark price; a limit order, under the ticket’s advanced options, rests on the book. Margin is isolated and leverage is set per order. You close a position from its page. Try [BTC-PERP](/markets/perpl/BTC-PERP).',
         ],
       },
       {
@@ -288,7 +288,7 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'tools',
         question: 'What tools does an agent have?',
         body: [
-          'To read: its mandate, the markets, order-book depth, candles, Perpl funding, a quote, balances, positions, open orders, and [Nansen](#nansen) smart-money signals. To act: record a thesis, place a limit or market order, deposit, withdraw, cancel an order, and close a position.',
+          'To read: its mandate, the markets, order-book depth, candles, indicators, Perpl funding, a quote, balances, positions, open orders, and [Nansen](#nansen) smart-money signals. To act: record a thesis, place a limit or market order, deposit, withdraw, cancel an order, and close a position.',
           'Every action passes Sente’s check and then [the enclave](#limits). A refusal is final and goes on the Ledger; the agent is told not to route around it.',
         ],
       },
@@ -371,7 +371,7 @@ export const SECTIONS: readonly HelpSection[] = [
         id: 'storage',
         question: 'What does Sente store, and where?',
         body: [
-          'On one server, in one state directory (`STATE_DIR`): the registry of user wallets, agents and their event logs, starter-kit records, profiles, value history, run transcripts, and venue credentials (your Perpl read key is encrypted under a server-side key). Your passkey and the keys derived from it never reach the server.',
+          'On one server, in one state directory (`STATE_DIR`): the registry of user wallets, agents and their event logs, watchers, starter-kit records, profiles, value history, run transcripts, and credentials: your Perpl read key and your OpenRouter credits key, both encrypted under a server-side key. Your passkey and the keys derived from it never reach the server.',
           'Some state is only in memory: sign-in challenges and prepared approvals do not survive a restart. Only one API process can use the directory at a time, so the API cannot run more than one copy yet.',
         ],
       },

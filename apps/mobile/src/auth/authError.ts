@@ -128,8 +128,8 @@ export function describeAuthError(error: unknown): AuthErrorDescription {
         title: 'This passkey cannot hold a wallet',
         detail:
           'The passkey provider did not return PRF key material. Save the passkey to ' +
-          "Google Password Manager, then try again — a passkey in Chrome's local store " +
-          'on Android has no PRF extension and cannot derive a wallet.',
+          "Google Password Manager, then try again: Chrome's local store on Android has no " +
+          'PRF extension, and on a computer Chromium and the Bitwarden extension do not provide it either.',
       };
     case 'PASSKEY_OPERATION_FAILED': {
       const browser = browserRejection(error);
