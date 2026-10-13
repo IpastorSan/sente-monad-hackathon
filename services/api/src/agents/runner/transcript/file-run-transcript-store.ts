@@ -34,14 +34,14 @@ import { dirname, resolve } from 'node:path';
 
 import { Logger } from '@nestjs/common';
 
-import { MAX_ENTRIES_PER_RUN, MAX_RUNS_PER_AGENT, type TranscriptEntry } from './run-transcript';
-import { InMemoryRunTranscriptStore, type RunStart } from './run-transcript-store';
+import { MAX_ENTRIES_PER_RUN, MAX_RUNS_PER_AGENT, type TranscriptEntry } from './run-transcript.ts';
+import { InMemoryRunTranscriptStore, type RunStart } from './run-transcript-store.ts';
 
 export const RUN_TRANSCRIPTS_FILE = 'agent-runs.jsonl';
 
 const LINE_VERSION = 1;
 
-type Line = { v: 1; start: RunStart } | { v: 1; runId: string; entry: TranscriptEntry };
+export type Line = { v: 1; start: RunStart } | { v: 1; runId: string; entry: TranscriptEntry };
 
 type StoreLogger = Pick<Logger, 'warn' | 'error'>;
 
@@ -155,7 +155,7 @@ export class FileRunTranscriptStore extends InMemoryRunTranscriptStore {
   }
 }
 
-function parse(raw: string): Line | undefined {
+export function parse(raw: string): Line | undefined {
   let value: unknown;
   try {
     value = JSON.parse(raw);

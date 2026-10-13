@@ -16,7 +16,7 @@ import {
   type RunTranscriptSummary,
   type TranscriptEntry,
   type TranscriptEntryBody,
-} from './run-transcript';
+} from './run-transcript.ts';
 import type { RunTrigger } from '../agent-runner.service';
 
 /** DI token for the `RunTranscriptStore`. */
@@ -73,10 +73,13 @@ export class InMemoryRunTranscriptStore implements RunTranscriptStore {
   protected readonly byAgent = new Map<string, HeldRun[]>();
   protected readonly byRun = new Map<string, HeldRun>();
 
-  constructor(
-    protected readonly maxRuns = MAX_RUNS_PER_AGENT,
-    protected readonly maxEntries = MAX_ENTRIES_PER_RUN,
-  ) {}
+  protected readonly maxRuns: number;
+  protected readonly maxEntries: number;
+
+  constructor(maxRuns = MAX_RUNS_PER_AGENT, maxEntries = MAX_ENTRIES_PER_RUN) {
+    this.maxRuns = maxRuns;
+    this.maxEntries = maxEntries;
+  }
 
   start(run: RunStart): void {
     this.open(run, false);

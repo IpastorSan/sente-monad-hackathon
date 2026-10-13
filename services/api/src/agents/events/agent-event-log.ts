@@ -157,6 +157,7 @@ export class InMemoryAgentEventLog implements AgentEventLog {
   private readonly byAgent = new Map<string, AgentEvent[]>();
   private readonly truncated = new Map<string, AgentEventTruncation>();
   private seq = 0;
+  private readonly maxPerAgent: number;
 
   /**
    * `seed` is a log read back from disk (SEN-65, `file-agent-event-log.ts`):
@@ -168,10 +169,11 @@ export class InMemoryAgentEventLog implements AgentEventLog {
    * not forget that an agent's history is partial.
    */
   constructor(
-    private readonly maxPerAgent = AGENT_EVENTS_PER_AGENT,
+    maxPerAgent = AGENT_EVENTS_PER_AGENT,
     seed: readonly AgentEvent[] = [],
     seedTruncation: ReadonlyMap<string, AgentEventTruncation> = new Map(),
   ) {
+    this.maxPerAgent = maxPerAgent;
     for (const [agentId, truncation] of seedTruncation) {
       if (truncation.evicted > 0) this.truncated.set(agentId, truncation);
     }
@@ -251,7 +253,7 @@ export class InMemoryAgentEventLog implements AgentEventLog {
  * the value a private deep copy of plain JSON, so this only has to walk objects
  * and arrays — there is nothing else in it.
  */
-function deepFreeze<T>(value: T): T {
+export function deepFreeze<T>(value: T): T {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value;
   Object.freeze(value);
   for (const entry of Object.values(value)) deepFreeze(entry);
