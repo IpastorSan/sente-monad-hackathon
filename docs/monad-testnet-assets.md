@@ -23,18 +23,18 @@ AUSD is **6 decimals**, not 18. Scale by `1e6`.
 The two Kuru rows above are Kuru's V1 docs and were never used. Kuru's Spot V2
 addresses are in `docs/kuru.md`, and they changed once:
 
-| Kuru set            | AccountCore                                  | Quote USDC                                   | Funding                                   |
-| ------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
-| Set C (previous)    | `0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22` | `0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E` | public faucet `0x25B1…91E9`, 12 h/address |
-| **Set D (current)** | `0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038` | `0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1` | **no public faucet**; ask Kuru            |
+| Kuru set                                        | AccountCore                                  | Quote USDC                                   | Funding                                   |
+| ----------------------------------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
+| **Set C** (earlier; what Sente trades, SEN-189) | `0x6384e9b2Bf3b65e1535403a0A543b5FDA905eE22` | `0xEe0722ead54f1B4fe97bE399Be43BC0226a6f97E` | public faucet `0x25B1…91E9`, 12 h/address |
+| Set D (the one Kuru lists)                      | `0xdbaaDe7B42c95399bb1E9614D51B5B9e2cf78038` | `0xA402B424f392EAA05DBc8779e4502A1F6A96fEF1` | **no public faucet**; ask Kuru            |
 
 Set D (listed since 2026-09-25, pinned by SEN-185 on 2026-10-09) also has new
 WETH, WBTC (replacing cbBTC), XAUT and USDT tokens; all read back on chain on
 2026-10-09 (`symbol()`, `decimals()`, `AccountCore.supportedSpotTokens(i)`).
-Set-C USDC held in a wallet or a Set-C AccountCore account trades on no current
-book, and the Set-C faucet pays only Set-C tokens. Anything that funds the Kuru
-leg — the starter kit, `scripts/fund-agent.ts`, the treasury — needs Set-D USDC
-from Kuru.
+Each set's USDC trades only on its own books, and the Set-C faucet pays only
+Set-C tokens. `KURU_DEPLOYMENT` picks the set, and anything that funds the Kuru
+leg — the starter kit, `scripts/fund-agent.ts`, the treasury — needs that set's
+USDC: from the faucet on Set C (production), from Kuru on Set D.
 
 ## Getting testnet AUSD
 
@@ -169,8 +169,10 @@ AUSD. The Agora faucet is the only path and Perpl does not link to it.
 5. allowOrderForwarding(true)       without it, orders fail with reason 34
 ```
 
-Steps 3-5 are three separate transactions and three failure modes — batch them
-into one sponsored userOp via the ERC-7579 helper.
+Steps 3-5 are three separate transactions and three failure modes. The API
+plans them as three Privy-sponsored sends from the user's wallet
+(`docs/user-trading.md`, P5) and as three plain transactions from an agent's
+(`docs/agents.md`); the ERC-7579 batch that once did it is history.
 
 **Minimum is exactly 100.000000 AUSD**, established two independent ways:
 on-chain binary search (99.999999 reverts `0xcfe73bb0`, 100.000000 passes) and
@@ -234,8 +236,9 @@ origin and reads as a whitelist block.
 **`/api-key/enroll` verifies the wallet signature with `ecrecover` only.** A
 smart account can own a Perpl account on chain, but it can never get an API
 key for it, so it can never trade through the API. The Perpl account must be
-owned by the **passkey EOA**, not the Kernel smart account. Verified on testnet
-2026-09-10, with controls that rule out everything else:
+owned by an ECDSA signer — at the time the **passkey EOA**, today the user's
+Privy wallet (CLAUDE.md gotcha 9) — not the Kernel smart account. Verified on
+testnet 2026-09-10, with controls that rule out everything else:
 
 | Signer                          | Owns a Perpl account? | Signature                                                     | `/enroll` |
 | ------------------------------- | --------------------- | ------------------------------------------------------------- | --------- |

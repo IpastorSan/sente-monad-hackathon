@@ -9,13 +9,13 @@ An agent trades from **its own EOA**: a Privy server wallet whose key lives in
 the enclave and signs only what its compiled mandate policy allows (SEN-2,
 SEN-3). The agent owns its own venue accounts, separate from the user's:
 
-| Venue | Agent's account                                    | User's account (gotcha 9) |
-| ----- | -------------------------------------------------- | ------------------------- |
-| Kuru  | AccountCore root = the agent EOA (`userId = 0`)    | the Kernel smart account  |
-| Perpl | owned by the agent EOA; API key enrolled by it too | the passkey EOA           |
+| Venue | Agent's account                                    | User's account (gotcha 9)                |
+| ----- | -------------------------------------------------- | ---------------------------------------- |
+| Kuru  | AccountCore root = the agent EOA (`userId = 0`)    | their device-owned Privy wallet (SEN-40) |
+| Perpl | owned by the agent EOA; API key enrolled by it too | the same Privy wallet; its own trade key |
 
-A Privy wallet is a plain secp256k1 EOA, so Perpl's `ecrecover`-only
-enrollment works for it exactly as for the passkey EOA.
+A Privy wallet signs with plain secp256k1 ECDSA, so Perpl's `ecrecover`-only
+enrollment works for the agent's wallet exactly as for the user's.
 
 ## The code (`services/api/src/agents/venues/`)
 
@@ -96,10 +96,11 @@ secret never leaves the server. The store hands out **sealed** objects whose
 fields are readable but not enumerable, and `JSON.stringify` and
 `util.inspect` print `[PerplCredentials redacted]`.
 
-The store is **in memory**, like the gas drip ledger. A restart forgets every
-key, and the next use enrolls a new one; an account holds at most 16 active
-keys. A durable store must encrypt at rest. Rebind `AGENT_SECRETS` and nothing
-else changes.
+The store is durable since SEN-148: with `STATE_DIR` set, each key is sealed
+with AES-256-GCM under `AGENT_SECRETS_KEY` in `agent-secrets.json` (the
+`agent_secrets` table under `STORE_BACKEND=sqlite`), so a restart keeps it; an
+account holds at most 16 active keys, which is why that matters. Without
+`STATE_DIR` it is in memory and the next use after a restart enrolls a new one.
 
 ### Sente opens the agent's Perpl account (SEN-187)
 
@@ -135,12 +136,12 @@ mandate and funded with AUSD could never trade a perp. Now
 
 ### Gas and collateral for the agent EOA
 
-Collateral comes from the user in production. **Gas on hire is not wired
-yet.** The hire route is SEN-5's, and `GasDripService.drip` refuses
-`user_already_dripped` for a user whose passkey EOA was already funded. So an
-agent drip needs its own principal namespace (e.g. `agent:<id>`) and its own
-IP bucket. Size it too: one pass of this live check cost the agent 0.138 MON
-(below).
+Collateral comes from the user in production. **Gas on hire is the agent
+drip** (SEN-14): every hire sends the new wallet `GAS_DRIP_AGENT_AMOUNT_MON`
+(0.15 MON) from the drip keys, under `GAS_DRIP_AGENT_MAX_PER_USER_PER_DAY`,
+through the reserve-aware dispatcher (CLAUDE.md gotcha 12). It was sized from
+this live check, whose one pass cost the agent 0.138 MON (below), and the
+SEN-18/19 run below confirms one run of that shape costs about 0.10 MON.
 
 For development, `pnpm --filter @sente/api run agent:fund -- --to <addr>
 --mon … --ausd … --usdc …` funds an agent from `TREASURY_PRIVATE_KEY`:
@@ -166,10 +167,14 @@ sequence are observed. The exact block window is not measured.
 `fund-agent` now sends native MON first. Gas-only ERC-20 calls were
 unaffected.
 
-**Open for the gas drip:** a drip sender holding under 10 MON sends a value
-transfer on every drip. Two drips from the same sender a block or two apart
-would revert the second, and Monad charges the full 21,000 gas limit for it.
-`SenderPool` with 3–5 keys spreads the load, but nothing enforces spacing.
+**Closed for the gas drip** (SEN-16): a drip sender holding under 10 MON sends a
+value transfer on every drip, and two from the same sender a block or two apart
+would revert the second, charged its full 21,000 gas limit. The window was
+measured at 2 blocks (`docs/monad-testnet-assets.md`, "Reserve balance
+window"), and every drip now goes through
+`gas/sender/reserve-aware-dispatcher.ts`: one send per key at a time,
+`GAS_DRIP_SENDER_SPACING_MS` between sends from the same key, a reverted
+transfer retried on another key.
 
 ## Live check — 2026-09-11
 
@@ -272,8 +277,8 @@ pnpm --filter @sente/api run agent:venues-live -- --skip-kuru             # Perp
 ```
 
 When the agent is short, the script prints the exact `agent:fund` command and
-stops. Each run enrolls one new Perpl key, because the secret store is in
-memory.
+stops. Each run enrolls one new Perpl key, because the script uses
+`InMemoryAgentSecretStore` rather than the API's durable store.
 
 ## Securing a new agent's Kuru deposits (SEN-188)
 
@@ -628,13 +633,17 @@ with a bare mandate or an object with a `mandate` field. `--show-canonical`
 prints the exact JSON that was hashed. It exits 0 on a match and 1 on a
 mismatch.
 
-### Live probe: PENDING
+### Live, 2026-10-12
 
-Nothing has been sent. The read-only probe (`erc8004:live`, 2026-10-12) measured
-`register` with the anchor at 786,999 gas for an 861-character URI (limit
-1,000,000) and `setMetadata` at 149,248 (limit 160,000). It also showed that
-`setMetadata` from a non-owner reverts `Not authorized` and that the key
-`agentWallet` is reserved. The live run, once the registrar is funded:
+The read-only probe (`erc8004:live`) first measured `register` with the anchor
+at 786,999 gas for an 861-character URI (limit 1,000,000) and `setMetadata` at
+149,248 (limit 160,000), and showed that `setMetadata` from a non-owner reverts
+`Not authorized` and that the key `agentWallet` is reserved. Then, with the
+registrar funded, `--register` minted probe agent **#2207** with its
+`sente.mandate` record and read it back active
+(`0x322199e0f656f13f243081a96ea366a281a98a84e13a3965ff04799499affb95`), and
+every hire on production since registers an identity and anchors its mandate
+the same way (#2213 and #2219 that day, shown on their public pages).
 
 ```bash
 mise exec -- pnpm --filter @sente/api run erc8004:live -- --register         # mints a probe agent WITH an anchor, reads it back
@@ -681,7 +690,8 @@ price, next to the venue's own `fee`.
 user's agent (`forkedFrom`), the source agent's owner is owed 3/10 of each fill's
 Sente fee, floored to whole atoms of the fee's own asset (a buy's base, a sell's
 USDC). `CreatorFeeEventLog` records that share in
-`<STATE_DIR>/creator-fees.json` as the fill event is appended, once per agent,
+`<STATE_DIR>/creator-fees.json` (the `creator_fees` table under
+`STORE_BACKEND=sqlite`) as the fill event is appended, once per agent,
 transaction and asset, whichever writer appended it. Totals are per asset. Forking your own agent accrues
 nothing. The creator reads it at `GET /creators/me/fees`:
 
@@ -721,28 +731,28 @@ builder fees from AccountCore with `claimBuilderFees(asset)` (by hand, not wired
 on Set D (SEN-185) they credit the treasury's own root and leave by an ordinary
 `withdraw(rootId, asset, amount, recipient)`.
 
-### Live probe: PENDING
+### Live, 2026-10-12 (Set C)
 
-Two things only a live run can show, both covered by one command against a
-throwaway probe agent (it only creates and re-PATCHes its own wallet's policy):
+One command against a throwaway probe agent (it only creates and re-PATCHes its
+own wallet's policy) answered the two questions only a live run could:
 
 ```bash
 # .env: PRIVY_* and KURU_BUILDER_ADDRESS (the treasury) set.
 pnpm --filter @sente/api run agent:venues-live -- --skip-perpl --builder --builder-take
 ```
 
-1. **Privy matches the builder overloads by name.** The policy PATCH must be
-   accepted with the new ABIs, the `approveBuilder` leg must sign, and the
-   resting bid — the builder overload, whose `builderConfig` is a bare tuple,
-   not the `tuple[]` the plain rules already proved — must sign. A
-   `policy_violation` on the bid means Privy does not match it; the fallback is
-   `KURU_BUILDER_AGENTS=0` (agents trade fee-free through the plain overloads
-   while users' trades still pay), see `docs/privy-policy-enforcement.md`.
-2. **What a taker fill is charged.** `--builder-take` buys the minimum as an IOC
-   and prints `senteFee` and every `BuilderFeeAccrued` of the receipt by asset.
-   The asset is settled — the base a buy receives (tx `0xca084e71…`, SEN-195,
-   `docs/kuru.md`); still check the side charged (taker) and compare its `gasUsed` with the plain place's 425,430 to replace
-   `KURU_BUILDER_ORDER_SURCHARGE_GAS`.
+1. **Privy matches the builder overloads by name.** The policy PATCH was
+   accepted with the new ABIs, the `approveBuilder` leg signed, and the resting
+   bid and its cancel — the builder overload, whose `builderConfig` is a bare
+   tuple, not the `tuple[]` the plain rules had already proved — signed. The
+   fallback kept for a future ABI change is `KURU_BUILDER_AGENTS=0` (agents
+   trade fee-free through the plain overloads while users' trades still pay),
+   see `docs/privy-policy-enforcement.md`.
+2. **What a taker fill is charged.** The `--builder-take` IOC buy paid 10 bps in
+   the asset received — 13 cbBTC atoms, no USDC
+   (`0xca084e719e56884f684ec37627926e59e9e1212b66b062ba65b618e655f2dbe8`,
+   SEN-195, `docs/kuru.md`). Still open from that run: comparing its `gasUsed`
+   with the plain place's 425,430 to replace `KURU_BUILDER_ORDER_SURCHARGE_GAS`.
 
 ## The runner (SEN-8)
 
@@ -796,7 +806,9 @@ agent, and the Tool Runner loops only over tools we define.
    mandate and the enclave are.
 
 4. **The loop.** The call is
-   `toolRunner({model, max_tokens: 4096, system, tools: toRunnerTools(ctx), messages, max_iterations: 12}, {signal})`,
+   `toolRunner({model, max_tokens: 16384, system, tools: toRunnerTools(ctx), messages, max_iterations: 12}, {signal})`
+   (`AGENT_RUN_MAX_TOKENS`; 4,096 until 2026-10-12, when a Kimi run spent all
+   of it reasoning and ended on `max_tokens`),
    iterated with `for await`. Each turn's `tool_use` blocks are logged (name
    and truncated input). Before each turn's tools run, the agent is re-read,
    so an agent revoked mid-run stops there (`agent_revoked`). An
@@ -892,8 +904,10 @@ Bounds: text 2,000 chars, thinking 4,000, summaries 240, 400 entries per run
 agent. Every string is redacted on the way in: the run's own OpenRouter key,
 `sk-or-`/`sk-ant-` shapes, `Bearer …`, `sente_mcp_…`, and any value under a key
 named like a secret. With `STATE_DIR` it is journalled to `agent-runs.jsonl`
-(not fsynced, unreadable lines skipped, compacted at boot); a run left open by
-a restart reads `interrupted`. It is a view, not a record of account: orders
+(not fsynced, unreadable lines skipped, compacted at boot) or, under
+`STORE_BACKEND=sqlite`, to the `agent_runs` tables, where every entry is a
+durable commit (`docs/state.md`); a run left open by a restart reads
+`interrupted`. It is a view, not a record of account: orders
 and fills stay in the event log.
 
 - `GET /agents/:id/runs` → `{runs}`: summaries, newest first (`status`
@@ -935,25 +949,30 @@ previous one finished.
 
 ### Scheduler
 
-`AGENT_TICK_SECONDS` is unset (off) by default, because a timer spends users'
-credits unprompted. Set it to 30 or more and every active agent runs once per
-interval, concurrently. An agent whose previous run is still open is skipped.
-Chainlink CRE replaces this timer in Phase 5.
+Since SEN-67/SEN-71 each agent carries its own schedule (`PATCH
+/agents/:id/schedule`, one minute to seven days), polled every
+`AGENT_SCHEDULER_POLL_SECONDS` (default 15) with a credits guard
+(`AGENT_SCHEDULE_MIN_CREDITS_USD`), a daily run cap
+(`AGENT_SCHEDULE_MAX_RUNS_PER_DAY`) and `AGENT_SCHEDULE_MAX_CONCURRENT`; with
+watchers set (below), a tick checks them instead of calling the model.
+`AGENT_TICK_SECONDS` is only the default cadence for agents without a schedule
+of their own, and it is unset (off) by default, because a timer spends users'
+credits unprompted; those agents run only on **Run now**. An agent whose
+previous run is still open is skipped.
 
 The other knobs:
 
 - `AGENT_RUN_TIMEOUT_MS`, default 180000;
 - `AGENT_RUN_MAX_ITERATIONS`, default 12;
-- `AGENT_RUN_MAX_TOKENS`, default 4096;
+- `AGENT_RUN_MAX_TOKENS`, default 16384;
 - `AGENT_RUNNER_THINKING`, default `off`.
 
-### Live check: PENDING CREDENTIALS
+### Live check
 
-**Not run.** `OPENROUTER_MANAGEMENT_KEY` is not set in `sente/.env` (checked
-2026-09-11, by name only). No live run exists, so no thesis or order event
-from one is recorded here. What is proven without credentials comes from the
-jest specs in `runner/`, which run the real SDK `BetaToolRunner` against a
-stubbed `fetch`:
+First attempted on 2026-09-11 without credentials, run for real on 2026-09-13
+on the shared key (the next section), and production has minted per-user keys
+since 2026-10-09 (`docs/openrouter.md`). What the jest specs in `runner/` prove
+on their own, running the real SDK `BetaToolRunner` against a stubbed `fetch`:
 
 - tool_use → tool_result → end_turn;
 - `max_iterations`;
@@ -963,9 +982,9 @@ stubbed `fetch`:
 - timeout, and write spacing;
 - the key never appearing in logs, results or events.
 
-To run it once the key exists (put it in the repo-root `.env`; never print
-it), from the main checkout, where the funded SEN-6 probe wallet is recorded
-as `PRIVY_AGENT_VENUES_*`:
+To run it (the key goes in the repo-root `.env`; never print it), from the main
+checkout, where the funded SEN-6 probe wallet is recorded as
+`PRIVY_AGENT_VENUES_*`:
 
 ```bash
 mise exec -- pnpm --filter @sente/api run build
@@ -986,8 +1005,7 @@ The script is `services/api/scripts/agent-run-live.ts`. It:
 
 It exits 1 unless the run produced at least one `thesis` event and one
 `order` event that landed. Without the key it prints
-`pending credentials: OPENROUTER_MANAGEMENT_KEY not set` and exits 0. Copy
-its output here and replace this heading.
+`pending credentials: OPENROUTER_MANAGEMENT_KEY not set` and exits 0.
 
 **Correction (2026-09-11, SEN-9):** the refusal demo is no longer this
 script with an instruction. It is `pnpm --filter @sente/api run demo:refusal
@@ -1185,8 +1203,9 @@ Bodies go through the same validation as the tool. A rule broken is a 400 with `
 `watchers: {count, heartbeatSeconds} | null`. With
 watchers set, its `nextRunAt` is the next check.
 
-**Persistence.** `<STATE_DIR>/agent-watchers.json`, rewritten on every change and every check, so
-edge state survives a restart. In memory without `STATE_DIR`.
+**Persistence.** `<STATE_DIR>/agent-watchers.json` (the `agent_watchers` table under
+`STORE_BACKEND=sqlite`), rewritten on every change and every check, so edge state survives a
+restart. In memory without `STATE_DIR`.
 
 **Tests.** `watcher.schema.spec.ts` covers validation and mandate scoping.
 `watcher-eval.spec.ts` covers edge crossings with state, the cooldown, unknowns, all/any, bands,

@@ -9,7 +9,7 @@ system. OpenRouter meters usage and enforces the limit, so we build no metering 
 | Piece                                                | What it does                                                                                                                                                                                                                                                                    |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `services/api/src/credits/openrouter.client.ts`      | `fetch` client over `https://openrouter.ai/api/v1/keys`: `createKey`, `getKey`, `updateKey`, `deleteKey`. Authenticated with `OPENROUTER_MANAGEMENT_KEY`.                                                                                                                       |
-| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token; in-memory, **first write wins**.                                                                                                                                                                                                        |
+| `services/api/src/credits/store/credit-key-store.ts` | `CreditKeyStore` + `CREDIT_KEYS` token, **first write wins**. With `STATE_DIR` the keys persist, sealed under `AGENT_SECRETS_KEY`, in `credit-keys.json` (`file-credit-key-store.ts`) or the `credit_keys` table (`sqlite-credit-key-store.ts`, SEN-204); in memory without.    |
 | `services/api/src/credits/credits.service.ts`        | `provision` (idempotent), `status`, and `keyFor(userId)`, which is **server-only**.                                                                                                                                                                                             |
 | `services/api/src/credits/credits.controller.ts`     | `POST /credits/provision` → `{limitUsd, remainingUsd, usageMonthUsd, resetsAt, created}`; `GET /credits/plans`, `POST /credits/purchase`, `GET`/`PUT /credits/auto-top-up` (SEN-183). Every route sits behind `SessionAuthGuard` and uses the same principal seam as `wallet/`. |
 | `services/api/src/credits/usage/`                    | `GET /credits` (SEN-183): the free tier, how it resets, and an estimated breakdown by agent and run from the SEN-178 transcripts. Its own module, because `AgentsModule` imports `CreditsModule`.                                                                               |
@@ -49,8 +49,7 @@ already at or above the target that only needed its reset converted keeps its ow
 ever raises or converts, and only for a key that is ours (`sente:` name) and enabled, and either
 below the current default or still resetting monthly; a failed PATCH is logged and not retried by
 that process. To cap one user below the free tier, disable their key rather than lowering its
-limit, or the next read raises it again. Note the key store is still in memory, so after a restart
-a user's next run mints a fresh key at the current default anyway (see the caveat above).
+limit, or the next read raises it again.
 
 **`GET /credits`** → the four original fields, plus:
 
@@ -101,9 +100,10 @@ Concurrency: concurrent provisions for one user in one process share a single mi
 replicas, the store's first-write-wins `claim()` decides the winner, and the loser **deletes the key
 it just minted** so no orphan with budget attached is left behind.
 
-Caveat: the in-memory store is lost on restart, while the keys live on at OpenRouter. So a restart
-followed by a provision mints a second key for that user. The first key is orphaned but still capped
-by its own limit. A real store must encrypt `key` at rest.
+Caveat, closed in production by SEN-204: without `STATE_DIR` the store is in memory and lost on
+restart, while the keys live on at OpenRouter, so a restart followed by a provision mints a second
+key for that user — a free top-up. The first key is orphaned but still capped by its own limit. With
+`STATE_DIR` the binding survives, sealed at rest.
 
 ### Management API facts (from OpenRouter's OpenAPI spec, 2026-09-11)
 
@@ -128,11 +128,12 @@ Each target gets one tool (`get_price`) over two turns (tool_use → tool_result
 then one call with `thinking: { type: 'adaptive' }`. After each target the probe reads the key's
 `usage` back via `GET /keys/:hash`. It deletes the key in a `finally`.
 
-### Result: PENDING CREDENTIALS
+### First attempt, 2026-09-11: no credentials
 
-**Not run yet.** `OPENROUTER_MANAGEMENT_KEY` is not set in `sente/.env` (checked 2026-09-11). The
-probe exits 0 and prints `pending credentials: OPENROUTER_MANAGEMENT_KEY not set`. No results
-exist, so none are recorded here.
+`OPENROUTER_MANAGEMENT_KEY` was not set in `sente/.env` then; the probe exits 0 and prints
+`pending credentials: OPENROUTER_MANAGEMENT_KEY not set`. The tool-use half ran two days later on
+an inference key ("Verified live" below), and per-user provisioning has run in production since the
+Credits page shipped on 2026-10-09 (SEN-183).
 
 To run it once the key exists (create it at https://openrouter.ai/settings/management-keys, put it
 in the repo-root `.env`, never print it):
@@ -206,11 +207,11 @@ Run with an OpenRouter **inference** key (not a management key — see below), t
 "aren't supported through the native endpoint" for Claude Code. So the runner works with Kimi as-is, and no
 `chat/completions` path is needed for the KIMI bounty. Latency was 2.4–4.2 s per two-turn trial.
 
-**Still pending: per-user key provisioning.** The key in `OPENROUTER_MANAGEMENT_KEY` is an inference key
-(`GET /api/v1/key` → `is_management_key: false`, $10 limit), so `POST /api/v1/keys` returns `401 Invalid API key`
-and `probe:openrouter` fails at its first step. Create a key under **Settings → Management keys** at
-https://openrouter.ai/settings/management-keys and put that in `OPENROUTER_MANAGEMENT_KEY`; re-run
-`pnpm --filter @sente/api run probe:openrouter`.
+**A trap worth keeping:** on that day the key in `OPENROUTER_MANAGEMENT_KEY` was an inference key
+(`GET /api/v1/key` → `is_management_key: false`, $10 limit), so `POST /api/v1/keys` returned
+`401 Invalid API key` and `probe:openrouter` failed at its first step. A management key comes from
+**Settings → Management keys** at https://openrouter.ai/settings/management-keys; production has one,
+and mints each user's key with it (the Credits page, SEN-183, live since 2026-10-09).
 
 ## Shared-key dev mode — SEN-18
 

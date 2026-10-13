@@ -1,19 +1,19 @@
 # The API's state: JSON files and `sente.db`
 
 What `STATE_DIR` holds, which backend reads it, how a store is added to SQLite,
-and how the cut-over and its rollback go. Written 2026-10-13 with SEN-205, the
-first phase: the foundation plus two stores. The rest of the stores follow the
-same pattern and are converted in later issues.
+and how the cut-over and its rollback go. Written 2026-10-13 with SEN-205, which
+converted every store; production cut over to `sqlite` the same day (the
+runbook below, as run).
 
 ## The two backends
 
 With `STATE_DIR` set (`CLAUDE.md` gotcha 14), every store persists there; unset,
 every store is in memory and nothing below applies. `STORE_BACKEND` picks how:
 
-| `STORE_BACKEND`      | Reads and writes                                                                                                                                              |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file` (the default) | One JSON or JSONL file per store, `services/api/src/state/json-file.ts`. What production ran before SEN-205 and what it keeps running until the switch flips. |
-| `sqlite`             | `<STATE_DIR>/sente.db` for every store that has a SQLite implementation. A store not converted yet keeps its file, under either value.                        |
+| `STORE_BACKEND`      | Reads and writes                                                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `file` (the default) | One JSON or JSONL file per store, `services/api/src/state/json-file.ts`. What production ran until the 2026-10-13 cut-over. |
+| `sqlite`             | `<STATE_DIR>/sente.db` for every store (all twelve are converted). What production runs since 2026-10-13.                   |
 
 Anything else refuses to boot, naming the value (`state/store-backend.ts`): a
 typo that fell back to `file` would look like a working API reading the wrong
@@ -195,7 +195,9 @@ shows no running `api` — the lock cannot protect this one case, the check does
 
 Every command from `infra/` on the laptop, with `PROJECT=plenary-anvil-491607-s6`
 and `ZONE=europe-southwest1-a` exported, as for `deploy.sh`. The box is
-`sente-eu`. Not yet run there; rehearsed locally (below).
+`sente-eu`. Run there on 2026-10-13 at 12:48 UTC: 12 of 12 stores verified by
+the import, the live check passed, and the pre-cut-over tarball is in `~` on
+the box. Rehearsed locally first (below).
 
 ```bash
 box() { gcloud compute ssh sente-eu --project "$PROJECT" --zone "$ZONE" --command "$1"; }

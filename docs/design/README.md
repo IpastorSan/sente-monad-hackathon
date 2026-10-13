@@ -1,7 +1,8 @@
 # Goban — Sente's UI direction
 
-Static HTML proposals for the app's redesign. Nothing here is wired into `apps/mobile` yet; review
-first, then port.
+Static HTML proposals for the app's redesign, from before it was ported. The app now carries its
+own versions (`apps/mobile/src/ui/`: `theme.ts`, `goban.tsx`, `SigilBoard`, the fonts), so these
+pages are the design record, not the source of truth.
 
 - `mockups.html`: eight screens (welcome, home, agents, agent, hire/mandate, approve sheet, ledger,
   board), each with notes on what changed from the current app and why.

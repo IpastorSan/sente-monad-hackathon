@@ -105,7 +105,7 @@ authentication. Live, BTC over 24 h:
 - `idx` is the index price, scaled by `price_decimals`. `ppl` is the payment per lot, and `sum`/`div`
   are the cumulative funding sum.
 - **Every market in `GET /v1/pub/context` already has its latest event as `funding`**, next to
-  `funding_interval_sec`. Neither field is in `PerplMarket` in `wire.ts` yet.
+  `funding_interval_sec`. Neither field was in `PerplMarket` in `wire.ts` before SEN-145.
 - On `funding@<chain>`, one interval produces two `mt:10` frames. In run 1 the rate for block
   66253830 was published about 78 blocks early with an estimated `at.t` (`…890946`), then again at
   that block with the exact `at.t` (`…890000`). The frames are keyed by market id, like the

@@ -129,9 +129,9 @@ the plan's P1 (b)/(c) atomic batch, P3 nonce pinning and P4 reserve rule.
 | `perpl.createAccount`   | `0xa8a426c63628989c993ba610b485e346e53903c1187137aa7d71b9fa7559ee9c` | `0x5724a5f3e884d3627dc928420ee80156f09c6f47c9314d4f82e6d1bce86c24f1` |
 | `perpl.allowForwarding` | `0x740f413db5062372296de2427fe0fe0cbf7ac9da1329fb61c61f78c6c6f92289` | `0xa3465ffb70d6c956dbf3151ff06b2cd7656b0217d1d83bef5a1888c82f06c92d` |
 
-The phone has no `verifyPerplOnboard` yet (SEN-98); the script checked each
-envelope with the real `verifyTradeEnvelope` and that every target was AUSD or
-the Exchange.
+The phone had no `verifyPerplOnboard` yet at the time (it has one since SEN-98,
+`trade/flow.ts`); the script checked each envelope with the real
+`verifyTradeEnvelope` and that every target was AUSD or the Exchange.
 
 ### The live `/v1/api-key/payload` responses, verbatim
 
@@ -296,7 +296,8 @@ and was not tested here.
 Key slots: account 1028 now holds 9 of Perpl's 16 (three server read keys from
 three `commit` attempts, the trade key, one harness read key and four
 diagnostic keys from `supersede`). The server's read key was in memory only and
-lost on restart; SEN-174 now persists it, sealed, in `user-venue-secrets.json`.
+lost on restart; SEN-174 now persists it, sealed, in `user-venue-secrets.json`
+(the `user_venue_secrets` table under `STORE_BACKEND=sqlite`).
 
 The phone's verifier (`PERPL_ENROLL_PINNED` in
 `apps/mobile/src/trade/verifyPerpl.ts`) follows the same pins: scope `"3"` for
@@ -392,7 +393,11 @@ The same flow as the P5 run, from the phone's own code:
   also places GTC or post-only limit orders (`placeLimit`), which Portfolio →
   Orders cancels with the same device key (`cancel`). Neither venue offers a
   stop-loss or take-profit order on testnet, so the tickets say so and offer
-  Guardian (spot only) instead. None of this was run live. All of it is gated on
+  Guardian (spot only) instead. The market path ran on production on
+  2026-10-12: a 50 AUSD BTC-PERP long at 2x from the web ticket, through the
+  relay (tx `0xdf8d3f84a394fef60d530987941e52a1c29b810d6e3639c833ead0a5be4cf559`),
+  and every deploy's live check places and cancels a Perpl order the same way.
+  The limit orders have not been run live. All of it is gated on
   `capabilities().venues.perpl` (`USER_TRADING_PERPL`); off, perp markets keep
   pointing at an agent.
 

@@ -155,10 +155,10 @@ patch is keyed to mera 0.2.0: upgrading mera means re-making it with `pnpm patch
 
 ### Perpl trade-key label: `sente.perpl.trade-key.v1`
 
-`apps/mobile/src/auth/perplKey.ts` (SEN-89) derives the phone's Ed25519 Perpl trade key as
+`apps/mobile/src/auth/perplKey.ts` (SEN-89) derives the device's Ed25519 Perpl trade key as
 `HKDF-SHA256(ikm = device key, salt = empty, info = "sente.perpl.trade-key.v1" ‖ lowercase wallet)`.
 `PERPL_TRADE_KEY_LABEL` becomes permanent the moment a key derived under it is enrolled with Perpl.
-Unlike the PRF salts, renaming it cannot lose funds, but every phone then derives a key Perpl does
+Unlike the PRF salts, renaming it cannot lose funds, but every device then derives a key Perpl does
 not recognise: each user must re-enroll, and each enrollment burns one of the account's **16** Perpl
 API-key slots. Treat it like a `sente.prf.v1.*` namespace — add a `.v2` label, never rename this one.
 
@@ -281,13 +281,12 @@ it is a local artifact: regenerate it rather than hand-editing it, and put every
 **The debug APK builds on this machine.** The Android SDK is in `~/Android/Sdk` and `mise.toml` pins
 JDK 21. That pin is load-bearing: Java 26's JNI restriction breaks the CMake configure step.
 
-**THE INSTALLED DEV CLIENT IS OUT OF DATE.** It was last built 2026-09-11, and SEN-24 has since
-added `@shopify/react-native-skia` and `expo-haptics` — both native modules, neither of which is in
-that APK. A dev client missing a native module does not fail to start: Metro serves the new JS to
-the old binary and the app throws at the first call into the missing module. Rebuild and reinstall
-before testing anything on the phone. (This is the same trap SEN-10's `expo-font` sprang, which is
-why the date is written down at all: **every new native dependency invalidates the APK on the
-device**, and only a rebuild fixes it.)
+**Check the date of the dev client on the phone before trusting it.** A dev client missing a
+native module does not fail to start: Metro serves the new JS to the old binary and the app throws
+at the first call into the missing module. SEN-10's `expo-font` and SEN-24's
+`@shopify/react-native-skia` and `expo-haptics` both sprang this trap on a client built before
+them. **Every new native dependency invalidates the APK on the device**, and only a rebuild and
+reinstall fixes it.
 
 ```bash
 cd apps/mobile
@@ -508,7 +507,7 @@ correctly against a stale constant. Consequences:
   in "Kuru's account-id AccountCore" in the same doc. SEN-189 made it a switch:
   `KURU_DEPLOYMENT=set-c|set-d` (and `EXPO_PUBLIC_KURU_DEPLOYMENT` in the app build) picks the
   deployment, and flipping it retires every agent hired on the other one the same way.
-- The phone pins that descriptor too, by hash (`BLOB` in `apps/mobile/src/agents/approval.ts`,
+- The app pins that descriptor too, by hash (`BLOB` in `apps/mobile/src/agents/approval.ts`,
   SEN-142), along with every ABI a policy rule carries. Changing the constant fails
   `approval.test.ts` until the hash follows it, and an app build without the new hash refuses to
   sign amends and revokes that carry the new shape — ship the app with the constant.
@@ -517,8 +516,11 @@ correctly against a stale constant. Consequences:
 
 ### 14. One API process per `STATE_DIR`
 
-With `STATE_DIR` set, the API persists to files there: `user-wallets.json`, `agents.json`,
-`agent-events.jsonl`, `agent-secrets.json`, `value-history.jsonl` (SEN-152), `starter-kits.json` (SEN-170), `profiles.json` (SEN-172), `user-venue-secrets.json` (SEN-174, sealed under `AGENT_SECRETS_KEY`), `agent-runs.jsonl` (SEN-178, run transcripts), `agent-watchers.json` (SEN-182, watchers and their edge state), `creator-fees.json` (SEN-184, what forked agents' fees owe their creators), `credit-keys.json` (SEN-204, each user's OpenRouter key, sealed under `AGENT_SECRETS_KEY`). Each store loads its file once at boot and then writes
+With `STATE_DIR` set, the API persists there, through one of two backends (`STORE_BACKEND`,
+below). Under the `file` backend each store is a file: `user-wallets.json`, `agents.json`,
+`agent-events.jsonl`, `agent-secrets.json`, `value-history.jsonl` (SEN-152), `starter-kits.json` (SEN-170), `profiles.json` (SEN-172), `user-venue-secrets.json` (SEN-174, sealed under `AGENT_SECRETS_KEY`), `agent-runs.jsonl` (SEN-178, run transcripts), `agent-watchers.json` (SEN-182, watchers and their edge state), `creator-fees.json` (SEN-184, what forked agents' fees owe their creators), `credit-keys.json` (SEN-204, each user's OpenRouter key, sealed under `AGENT_SECRETS_KEY`). **Production runs `sqlite`** (since the
+2026-10-13 cut-over, SEN-205): the same twelve stores are tables in `<STATE_DIR>/sente.db`. Either
+way each store loads once at boot and then writes
 from memory, so two processes on one directory silently overwrite each other (lost agents, lost
 wallet bindings, an interleaved event log). SEN-161 enforces a **single writer**: `StateDirLease`
 (`services/api/src/state/state.module.ts`) takes `<STATE_DIR>/api.lock` (pid + hostname) before
@@ -529,12 +531,12 @@ delete the lock file by hand, after checking. This covers the API, the live scri
 first. A second replica will not work just because the lock allows it.
 
 SEN-205 adds `STORE_BACKEND=file|sqlite` (default `file`, anything else refuses to boot). Under
-`sqlite` the converted stores (the agent store, the user-wallet registry, profiles, starter kits,
+`sqlite` every store above (the agent store, the user-wallet registry, profiles, starter kits,
 creator fees, the agent event log, run transcripts, the value history, the watcher store, and —
 still sealed, the import never sees the key — credit keys, agent secrets and user venue secrets)
-live in
+lives in
 `<STATE_DIR>/sente.db` — one `node:sqlite` database, WAL, opened by `SenteDbLease` after the lock
-is held, migrated at boot — and the rest keep their files. `docs/state.md` has the schema pattern,
+is held, migrated at boot. `docs/state.md` has the schema pattern,
 how to convert a store, the import (`state:import-sqlite` locally, `node dist/state-import-sqlite.js`
 in the image; insert-only, run once against a fresh `sente.db`; it leaves the JSON files intact so
 `STORE_BACKEND=file` is the rollback — but only before the first user write under `sqlite`) with the

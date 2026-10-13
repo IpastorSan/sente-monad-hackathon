@@ -161,9 +161,11 @@ Kuru logs at all).
 | KuruAccountCore  | `Deposit` / `Withdrawal` | cumulative custody flow (capital) |
 | KuruAccountCore  | `AccountRegistered`      | account id → address, owner       |
 
-Kuru addresses are the "Set C" Spot V2 deployment; the source of truth is
-`packages/venues/src/kuru/constants.ts` and this file is a copy, because the
-indexer cannot import workspace TS.
+`config.yaml` names Kuru's Set D addresses and `config.setc.yaml` Set C's, the
+deployment production trades and indexes since SEN-189 ("Switching to Set C"
+below). The source of truth is `packages/venues/src/kuru/constants.ts`; the
+indexer's `src/lib/` keeps a copy, because it cannot import workspace TS, and
+`drift:check` compares the two.
 
 ---
 
@@ -630,7 +632,10 @@ that no longer receives commits looks healthy and silently stops updating.
 
 The first deployment (2026-10-09) ran the pre-SEN-171 config on the Development
 tier and hit its 100k-event cap within minutes (§budget). The Kuru-only config
-needs a fresh deployment, and the 30-day clock starts again with it.
+was redeployed the same day (Set D, 49 events at full sync), and the Set C
+indexer below is the one production reads: on 2026-10-12 its endpoint served
+live `Trade` rows, including that day's agent fill. Each deployment starts its
+own 30-day clock.
 
 ### Switching to Set C (SEN-189)
 
@@ -677,9 +682,11 @@ takes the same pair: `ENVIO_CONFIG=config.setc.yaml ENVIO_KURU_DEPLOYMENT=set-c`
 
 ## Open work
 
-1. **Redeploy** the Kuru-only config and watch its processed-event count
-   against §budget.
-2. **Prove the GraphQL queries** above against a live Hasura.
+1. **Watch** the Set C deployment's processed-event count against §budget, and
+   its 30-day clock.
+2. **Prove the other GraphQL queries** above against a live Hasura. The API's
+   own `Account` query is answered live on every deploy (`live-check.sh` reads
+   `GET /leaderboard`); the rest are still written against the schema only.
 3. **Kuru `Withdrawal` has never been observed on chain** (nor, on Set D, `Deposit`) in the windows
    scanned. Its signature comes straight from the SDK ABI and its topic-count
    check is the same shape as `Deposit`, which _was_ observed — but it is

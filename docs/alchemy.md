@@ -15,13 +15,15 @@ Two pieces, kept apart on purpose because they are different kinds of thing:
    to a hired agent's Ledger the moment funds reach its wallet, instead of the
    deposit appearing only when something next polls.
 
-> **WHAT HAS AND HAS NOT BEEN RUN.** As of 2026-09-24 there is **no Alchemy
-> account**. Everything below was built and specced against fakes and the
-> documentation cited inline; the route was exercised live against a locally booted
-> API with a signing key of our own (transcript in "What was verified locally").
-> **No real Alchemy delivery has ever reached this code, and no real Alchemy RPC
-> URL has ever been used.** The runbook is what closes that gap; until someone
-> follows it, treat the live half as unproven.
+> **WHAT HAS AND HAS NOT BEEN RUN.** Since 2026-10-12 production reads Monad
+> through an Alchemy RPC endpoint (`MONAD_TESTNET_RPC_URL`, runbook steps 1–2),
+> with Monad's public RPC as the fallback (`services/api/src/chain/monad-rpc.ts`,
+> SEN-203): before it, the shared public RPC throttled the trade ticket's Perpl
+> account read under load. The webhook half is still unproven: the route is live
+> at `https://api.sente.lol/webhooks/alchemy`, was exercised locally with a
+> signing key of our own (transcript in "What was verified locally"), and **no
+> real Alchemy delivery has reached it**, so deposit notifications are not
+> claimed. Steps 4–8 of the runbook close that gap.
 
 ---
 
@@ -39,8 +41,8 @@ presented as one. Sente's own Alchemy surfaces are exactly three, and only these
 
 | Surface                               | Variable(s)                                                                             | State                                                                             |
 | ------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Monad testnet RPC                     | `MONAD_TESTNET_RPC_URL`                                                                 | code-ready, one line; public RPC today                                            |
-| Notify Address Activity webhook       | `ALCHEMY_WEBHOOK_SIGNING_KEY`, `ALCHEMY_NOTIFY_AUTH_TOKEN`, `ALCHEMY_NOTIFY_WEBHOOK_ID` | built and specced, never run live                                                 |
+| Monad testnet RPC                     | `MONAD_TESTNET_RPC_URL`                                                                 | in production since 2026-10-12, public RPC as the fallback                        |
+| Notify Address Activity webhook       | `ALCHEMY_WEBHOOK_SIGNING_KEY`, `ALCHEMY_NOTIFY_AUTH_TOKEN`, `ALCHEMY_NOTIFY_WEBHOOK_ID` | built and specced; the route is live, no real delivery seen                       |
 | Gas Manager as the ERC-7677 paymaster | `WALLET_PAYMASTER_PROVIDER=alchemy`, `ALCHEMY_RPC_URL`, `ALCHEMY_GAS_POLICY_ID`         | wired before SEN-30 (`wallet/paymaster/erc7677-sponsorship.ts`), never configured |
 
 The third is pre-existing and unrelated to this issue; it is listed so the variable
@@ -54,15 +56,19 @@ names near the top of `.env.example` are not mistaken for the webhook's.
 
 Verified by reading the code, not assumed. `MONAD_TESTNET_RPC_URL` is read at:
 
-| File                                         | What it points                                          |
-| -------------------------------------------- | ------------------------------------------------------- |
-| `wallet/wallet.config.ts:183`                | user smart-account reads, balances, sponsorship         |
-| `gas/gas.config.ts:218`                      | the MON gas drip                                        |
-| `agents/venues/agent-venues.providers.ts:32` | the agents' Kuru and Perpl clients                      |
-| `agents/reputation/erc8004.ts:248`           | the ERC-8004 identity and reputation registries         |
-| `chain/chain.module.ts:25`                   | the consensus service's `eth_getBlockByNumber` fallback |
+| File                                      | What it points                                                                     |
+| ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| `chain/monad-rpc.ts`                      | `monadReadTransport`: the URL first, Monad's public RPC when it fails or throttles |
+| `wallet/wallet.module.ts`                 | the wallet and portfolio reads, through that transport                             |
+| `venues/venues.module.ts`                 | the market-data clients, through that transport                                    |
+| `agents/venues/agent-venues.providers.ts` | the agents' Kuru and Perpl clients, through that transport                         |
+| `wallet/wallet.config.ts`                 | user wallet reads and sponsorship                                                  |
+| `gas/gas.config.ts`                       | the MON gas drip                                                                   |
+| `starter-kit/starter-kit.config.ts`       | the starter kit's sends                                                            |
+| `agents/reputation/erc8004.ts`            | the ERC-8004 identity and reputation registries                                    |
+| `chain/chain.module.ts`                   | the consensus service's `eth_getBlockByNumber` fallback                            |
 
-Set it and all five move together. The scripts follow (`scripts/fund-agent.ts`,
+Set it and all of them move together. The scripts follow (`scripts/fund-agent.ts`,
 `agent-venues-live.ts`, `agent-withdraw-live.ts`, `privy-probe.ts`,
 `privy-sponsor-probe.ts`, `consensus-watch.ts`, plus `packages/venues/scripts/*` and
 `apps/mobile/scripts/claim-ausd.ts`).
@@ -271,8 +277,9 @@ Two residual cases, written down rather than hidden:
 - The same transfer arriving under a **different delivery id at a different index**
   would not be recognised. That needs a log index, and Alchemy's documented `log`
   object does not carry one.
-- The set is lost on restart — but so is the event log (in memory, like every store in
-  this API), so after a restart there is nothing left for a re-delivery to duplicate.
+- The set is lost on restart, while the event log persists under `STATE_DIR`
+  (SEN-48, `docs/state.md`), so a re-delivery straight after a restart would append
+  a second `deposit` for the same transfer.
 
 ### Registration on hire
 
@@ -300,8 +307,9 @@ when the address is registered could produce one.
 
 ## The runbook — Ignacio's half
 
-Nothing here can be done without an Alchemy account, and none of it has been done.
-Each step names which dashboard value becomes which variable.
+Steps 1 to 3 are done (the account, the RPC in production since 2026-10-12, the
+API at `https://api.sente.lol`); steps 4 to 8 are not. Each step names which
+dashboard value becomes which variable.
 
 ### 1. Create the app
 
@@ -492,7 +500,8 @@ describes. Only step 6 does that.
 - **Whether Monad emits anything for a contract-made deposit.** See the `category`
   note above; step 6.4 of the runbook is the measurement.
 - **Idempotency is per process.** Two API replicas would each keep their own `Set`
-  and could both append one delivery. Single-instance today, and the event log is in
-  memory too, so a restart loses both halves together — but a durable log would want
-  the key on its own insert (`UNIQUE (agent_id, dedupe_key)`) rather than beside it,
-  the way `gas/ledger/drip-ledger.ts` describes for the drip.
+  and could both append one delivery. Single-instance today (one writer per
+  `STATE_DIR`, CLAUDE.md gotcha 14), and the event log is durable while the set is
+  not, so a durable key would want to sit on the event's own insert
+  (`UNIQUE (agent_id, dedupe_key)`, which the `agent_events` table does not have yet)
+  rather than beside it, the way `gas/ledger/drip-ledger.ts` describes for the drip.

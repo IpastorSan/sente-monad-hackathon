@@ -16,7 +16,8 @@ faucet, so Sente could not fund users or agents on it. Set C (below, "Addresses"
 still trades: on 2026-10-09 the live script placed a GTC buy, cancelled it, sent
 an IOC buy and an IOC sell and withdrew there. Its faucet still pays 10,000 USDC
 per address every 12 h. So both are pinned, and `KURU_DEPLOYMENT=set-c|set-d`
-(default `set-d`; `EXPO_PUBLIC_KURU_DEPLOYMENT` in the app) picks one:
+(default `set-d` in code; `EXPO_PUBLIC_KURU_DEPLOYMENT` in the app; production
+runs `set-c` since 2026-10-09) picks one:
 
 |                           | Set C                                                                                                                           | Set D                                                                                                           |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -150,8 +151,10 @@ instead of a bare `policy_violation`.
 
 _"Viem-first TypeScript SDK for Kuru contracts."_ Single dependency
 `viem ^2.51.3`. Maintainer `toxicflow-labs`, licence `UNLICENSED`.
-`packages/venues` pins **exactly `0.0.4`** — a `0.0.x` package gives no
-compatibility promise between patches.
+`packages/venues` pinned **exactly `0.0.4`** until SEN-185 — a `0.0.x` package
+gives no compatibility promise between patches — and pins `0.3.0` since, for
+Set D's custody ABI; the Set C fragments it still needs are kept in
+`constants.ts` (`KURU_DEPLOYMENTS`).
 
 **Why a competent search missed it:** up to 0.0.3 the package had **no
 `repository` field and no `homepage`** — nothing linked it back to Kuru — and it
@@ -356,8 +359,11 @@ an order two ways:
    EIP-712 intent; the Relay pays gas.
 
 The adapter uses (1). It produces calls; the caller's submitter lands them. For
-the Kernel account that is one ERC-7579 batch through
-`apps/mobile/src/wallet/batch.ts`, so deposit-then-place is atomic.
+the Kernel account that was one ERC-7579 batch through
+`apps/mobile/src/wallet/batch.ts`, so deposit-then-place was atomic. That account
+is history (CLAUDE.md gotcha 9): today a user's legs are separate
+Privy-sponsored sends from their device-owned wallet (`docs/user-trading.md`),
+and an agent's are plain transactions from its own wallet (`docs/agents.md`).
 
 ### Finding 2 — a Kernel smart account can be the AccountCore root directly
 
