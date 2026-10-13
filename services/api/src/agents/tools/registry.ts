@@ -258,6 +258,20 @@ function orderIntent(
  * buy locks quote at size x price; a sell locks base). On Monad a revert pays
  * the whole gas limit, so these checks save real MON.
  */
+/** `min / price`, rounded up at 10 decimals: the smallest size whose notional clears `min`. */
+function ceilDiv(min: Decimal, price: Decimal): string {
+  const scale = 10n ** 10n;
+  const [mi, mf = ''] = min.split('.');
+  const [pi, pf = ''] = price.split('.');
+  const d = Math.max(mf.length, pf.length);
+  const m = BigInt(mi + mf.padEnd(d, '0'));
+  const p = BigInt(pi + pf.padEnd(d, '0'));
+  const q = (m * scale + p - 1n) / p;
+  const whole = q / scale;
+  const frac = (q % scale).toString().padStart(10, '0').replace(/0+$/u, '');
+  return frac ? `${whole}.${frac}` : `${whole}`;
+}
+
 async function kuruOrderPreflight(
   kuru: KuruToolVenue,
   args: { market: string; side: Side; size: Decimal },
@@ -270,7 +284,9 @@ async function kuruOrderPreflight(
     throw new SenteRefusal(
       'below_min_notional',
       `Kuru's minimum order on ${args.market} is ${listed.minNotional} ${market.quote.symbol}; ` +
-        `this one is ${notional}. Size it up, and make sure AccountCore can back it.`,
+        `this one is ${notional} at ${price}, the price it is checked at (a market order's ` +
+        `slippage limit). Size it up to at least ${ceilDiv(listed.minNotional, price)} ` +
+        `${market.base.symbol}, and make sure AccountCore can back it.`,
     );
   }
   const asset = args.side === 'buy' ? market.quote.symbol : market.base.symbol;

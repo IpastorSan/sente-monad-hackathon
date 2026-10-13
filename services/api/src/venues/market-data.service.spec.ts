@@ -477,6 +477,18 @@ describe('MarketDataService (Kuru)', () => {
       });
     });
 
+    it('flags an order that clears the floor at the fill price but not at its slippage bound', async () => {
+      // 2026-10-13: a WETH sell quoted fine at the bid, and the agent pre-check,
+      // which measures a market order at its slippage limit, refused it.
+      const quote = await service.quote('kuru', 'MON-USDC', {
+        side: 'sell',
+        size: '1.015',
+        maxSlippage: '0.01',
+      });
+      expect(Number(quote.notional)).toBeGreaterThanOrEqual(1);
+      expect(quote).toMatchObject({ worstPrice: '0.9801', minNotionalOk: false });
+    });
+
     it('has no worst price against an empty side', async () => {
       kuru.bookSnapshot.mockResolvedValue(snapshot([], BOOK.asks));
       const quote = await service.quote('kuru', 'MON-USDC', {

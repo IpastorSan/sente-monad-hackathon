@@ -658,6 +658,15 @@ export class MarketDataService {
     const filled = toUnits(simulated.fillableSize, sd);
     // Notional in quote atoms (floored) against the chain's floor, also in atoms.
     const notionalAtoms = x18(simulated.notional) / 10n ** BigInt(SCALE - market.quote.decimals);
+    // The order's notional at worstPrice, the slippage bound it will carry: the
+    // agent pre-check measures a market order there (registry.ts
+    // kuruOrderPreflight), so a quote that only cleared the floor at the fill
+    // price told an agent "fine" for a sell the pre-check then refused.
+    const boundNotionalAtoms =
+      worstPrice === null
+        ? 0n
+        : (toUnits(worstPrice, pd) * wanted * 10n ** BigInt(market.quote.decimals)) /
+          10n ** BigInt(pd + sd);
     return {
       venue: 'kuru',
       symbol: market.symbol,
@@ -673,7 +682,10 @@ export class MarketDataService {
       worstPrice,
       fillableWithinWorstPrice: fromUnits(withinBound, sd),
       partial: withinBound < wanted,
-      minNotionalOk: filled > 0n ? notionalAtoms >= params.minQuoteNotional : false,
+      minNotionalOk:
+        filled > 0n &&
+        notionalAtoms >= params.minQuoteNotional &&
+        boundNotionalAtoms >= params.minQuoteNotional,
       bookAsOf: book.observedAt,
       stale,
     };
