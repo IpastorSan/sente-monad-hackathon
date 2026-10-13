@@ -24,12 +24,23 @@
 // payout written while it runs would be overwritten by its next save. This
 // takes the same STATE_DIR lock (SEN-161) and so refuses to run beside the
 // API: stop it, record the payout, start it again.
+//
+// It reads and writes the ledger the API does: `creator-fees.json`, or the
+// `creator_fees` table in `<dir>/sente.db` under `STORE_BACKEND=sqlite`
+// (SEN-205) — set it here exactly as the API runs. `STATE_DIR` and
+// `STORE_BACKEND` come from the environment, else from the env file (the
+// repo-root `.env`, or `--env-file <path>`). It refuses (exit 2) a backend that
+// does not match the directory: `file` beside a `sente.db`, `sqlite` without one.
 
 import { fromUnits, KURU_TESTNET_TOKENS, toUnits } from '@sente/venues/kuru';
 
-import { CREATOR_FEES_FILE, CreatorFeeLedger } from '../src/fees/creator-fees.ts';
+import { CREATOR_FEES_FILE, FileCreatorFeeLedger } from '../src/fees/creator-fees.ts';
+import { SqliteCreatorFeeLedger } from '../src/fees/sqlite-creator-fees.ts';
+import { SenteDb, senteDbPath } from '../src/state/db/sente-db.ts';
 import { STATE_DIR_VAR, stateDir, statePath } from '../src/state/json-file.ts';
 import { acquireStateDirLock } from '../src/state/state-dir-lock.ts';
+import { backendMismatch, STORE_BACKEND_VAR, storeBackend } from '../src/state/store-backend.ts';
+import { envFileFromArgs, readVar } from './env-file.ts';
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -40,16 +51,31 @@ function flag(name: string): string | undefined {
 }
 
 function main(): number {
-  const stateDirArg = flag('state-dir');
-  const env = stateDirArg ? { [STATE_DIR_VAR]: stateDirArg } : process.env;
+  const envFile = envFileFromArgs();
+  const fromEnv = (name: string): string | undefined =>
+    process.env[name]?.trim() || readVar(envFile, name);
+  const env = {
+    [STATE_DIR_VAR]: flag('state-dir') ?? fromEnv(STATE_DIR_VAR),
+    [STORE_BACKEND_VAR]: fromEnv(STORE_BACKEND_VAR),
+  };
   const dir = stateDir(env);
   const path = statePath(CREATOR_FEES_FILE, env);
   if (!dir || !path) {
     console.error(`no state directory: set ${STATE_DIR_VAR} or pass --state-dir <dir>`);
     return 1;
   }
+  const backend = storeBackend(env);
+  const mismatch = backendMismatch(backend, dir);
+  if (mismatch) {
+    console.error(`Refusing: ${mismatch}`);
+    return 2;
+  }
   acquireStateDirLock(dir);
-  const ledger = new CreatorFeeLedger(path);
+  // Closed by the process exiting: every write below is its own committed transaction.
+  const ledger =
+    backend === 'sqlite'
+      ? new SqliteCreatorFeeLedger(SenteDb.open(senteDbPath(dir)))
+      : new FileCreatorFeeLedger(path);
 
   const creator = flag('creator');
   if (!creator) {

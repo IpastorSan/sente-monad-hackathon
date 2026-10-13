@@ -316,7 +316,7 @@ Caddyfile, `site/` and the web export are copied or built from your working
 tree, not from the image. A rollback that should keep the current web app is
 `SKIP_WEB=1`.
 
-Three things a rollback does **not** touch, deliberately:
+Four things a rollback does **not** touch, deliberately:
 
 - **`/var/lib/sente/state`.** A registered wallet and a hired agent survive. Back
   it up before anything risky, because nothing else can reconstruct it:
@@ -325,7 +325,18 @@ Three things a rollback does **not** touch, deliberately:
     --command 'sudo tar czf ~/sente-state-$(date +%F).tgz -C /var/lib/sente state && ls -l ~/sente-state-*.tgz'
   ```
   Lost it anyway? `pnpm --filter @sente/api run privy:recover` finds a user's
-  wallet again from the device public key.
+  wallet again from the device public key. Under `STORE_BACKEND=sqlite`
+  (SEN-205) the directory also holds `sente.db` and the API's own periodic
+  copies of it in `backups/`; take the `tar` with the API stopped, or pull one
+  of those copies — `docs/state.md`, "Backups".
+- **`STORE_BACKEND`.** It lives in `api.env`, so rolling the image back keeps
+  it. An image older than SEN-205 ignores it and reads the JSON files, which
+  miss everything written under `sqlite` since the cut-over, wallet bindings
+  included (a user who registered since gets a second Privy wallet, SEN-48).
+  Rolling the switch back is safe only before the first user write under
+  `sqlite`; after that, fix forward (`docs/state.md`, "Cut-over and rollback",
+  which is also the runbook for turning it on, and runs the import only once
+  the API is confirmed stopped).
 - **`/opt/sente/api.env`.** Rolling the code back does not roll the secrets back;
   re-run `push-secrets.sh` from the `.env` you want.
 - **the `caddy_data` volume.** Never delete it. It holds the ACME account key and

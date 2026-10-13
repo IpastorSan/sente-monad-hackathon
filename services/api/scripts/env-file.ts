@@ -20,6 +20,18 @@ export function envFileFromArgs(argv: readonly string[] = process.argv): string 
 
 const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
 
+/** `name`'s value in `path`, unquoted, or `undefined` when absent, empty, or the file is missing. */
+export function readVar(path: string, name: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const match = LINE.exec(line);
+    if (match?.[1] !== name) continue;
+    const value = match[2]!.trim().replace(/^["']|["']$/g, '');
+    return value === '' ? undefined : value;
+  }
+  return undefined;
+}
+
 /** Names whose value in `path` is non-empty. */
 export function presentNames(path: string): Set<string> {
   const names = new Set<string>();

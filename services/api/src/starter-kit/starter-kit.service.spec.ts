@@ -3,13 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodeFunctionData, erc20Abi, type Address, type Hash, type Hex } from 'viem';
 
+import { openedDbs } from '../state/db/testing/opened-dbs';
 import { loadStarterKitConfig, type StarterKitConfig } from './starter-kit.config';
 import {
   StarterKitService,
   type StarterKitChain,
   type StarterKitSender,
 } from './starter-kit.service';
-import { StarterKitStore } from './starter-kit.store';
+import { SqliteStarterKitStore } from './sqlite-starter-kit.store';
+import { FileStarterKitStore, hashIp, type StarterKitStore } from './starter-kit.store';
 
 const KEY = `0x${'33'.repeat(32)}`;
 const SENDER = '0x00000000000000000000000000000000000057a7' as Address;
@@ -52,6 +54,33 @@ function chain(
 
 const silent = { log: () => undefined, warn: () => undefined, error: () => undefined };
 
+let dir: string;
+const dbs = openedDbs();
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'starter-kit-'));
+});
+
+afterEach(() => {
+  dbs.closeAll();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** The persistent stores on `dir`; calling one again is a restart. */
+const persistent = {
+  file: (): StarterKitStore => new FileStarterKitStore(join(dir, 'starter-kits.json')),
+  sqlite: (): StarterKitStore => new SqliteStarterKitStore(dbs.reopen(dir)),
+};
+
+/** What every record holds at rest, as text, to search for a leaked IP. */
+const atRest = {
+  file: (): string => readFileSync(join(dir, 'starter-kits.json'), 'utf8'),
+  sqlite: (): string => JSON.stringify(dbs.last!.prepare('SELECT * FROM starter_kits').all()),
+};
+
+/** The store `setup` builds when a test does not pass one; each table row sets it. */
+let defaultStore: () => StarterKitStore = () => new FileStarterKitStore();
+
 function setup(
   options: {
     config?: StarterKitConfig;
@@ -64,7 +93,7 @@ function setup(
   const config =
     options.config ??
     loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: KEY, STARTER_DRIP_DAILY_CAP_USERS: '2' });
-  const store = options.store ?? new StarterKitStore();
+  const store = options.store ?? defaultStore();
   const recording = options.sender ?? recordingSender();
   const service = new StarterKitService({
     config,
@@ -77,7 +106,19 @@ function setup(
   return { service, store, sent: recording.sent };
 }
 
-describe('StarterKitService.grant', () => {
+/**
+ * Every implementation `STATE_DIR` and `STORE_BACKEND` can pick (SEN-205): the
+ * claim is the once-per-user gate and the caps, so each one runs it all.
+ */
+describe.each([
+  ['in memory', (): StarterKitStore => new FileStarterKitStore()],
+  ['FileStarterKitStore', persistent.file],
+  ['SqliteStarterKitStore', persistent.sqlite],
+])('StarterKitService.grant (%s)', (_name, create) => {
+  beforeEach(() => {
+    defaultStore = create;
+  });
+
   it('sends 250 AUSD then 100 USDC, with their measured gas limits, and reports sent', async () => {
     const { service, sent } = setup();
 
@@ -142,34 +183,6 @@ describe('StarterKitService.grant', () => {
     now = new Date('2026-10-10T00:00:01Z');
     await service.grant('carol', ALICE);
     expect(service.status('carol').status).toBe('sent');
-  });
-
-  it('stops at the per-IP cap, counts it across a restart, and keeps no IP at rest (SEN-204)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'starter-kit-ip-'));
-    try {
-      const path = join(dir, 'starter-kits.json');
-      const config = loadStarterKitConfig({
-        STARTER_DRIP_PRIVATE_KEY: KEY,
-        STARTER_DRIP_DAILY_CAP_USERS: '10',
-        STARTER_DRIP_DAILY_CAP_PER_IP: '2',
-      });
-      const first = setup({ config, store: new StarterKitStore(path) });
-      await first.service.grant('alice', ALICE, '203.0.113.7');
-      await first.service.grant('bob', BOB, '203.0.113.7');
-
-      const { service } = setup({ config, store: new StarterKitStore(path) });
-      await service.grant('carol', ALICE, '203.0.113.7');
-      expect(service.status('carol')).toEqual({ status: 'none' });
-      // Another IP, or a register with no IP, is not held back by this one.
-      await service.grant('carol', ALICE, '198.51.100.1');
-      expect(service.status('carol').status).toBe('sent');
-      await service.grant('dave', BOB);
-      expect(service.status('dave').status).toBe('sent');
-
-      expect(readFileSync(path, 'utf8')).not.toContain('203.0.113.7');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it('counts a failed kit against the cap', async () => {
@@ -239,18 +252,14 @@ describe('StarterKitService.grant', () => {
   });
 });
 
-describe('StarterKitStore on disk', () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'starter-kit-'));
-  });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+describe.each([
+  ['FileStarterKitStore', persistent.file, atRest.file],
+  ['SqliteStarterKitStore', persistent.sqlite, atRest.sqlite],
+])('%s across a restart', (_name, open, stored) => {
+  it('remembers a sent kit, so nobody is paid twice', async () => {
+    await setup({ store: open() }).service.grant('alice', ALICE);
 
-  it('remembers a sent kit across a restart, so nobody is paid twice', async () => {
-    const path = join(dir, 'starter-kits.json');
-    await setup({ store: new StarterKitStore(path) }).service.grant('alice', ALICE);
-
-    const { service, sent } = setup({ store: new StarterKitStore(path) });
+    const { service, sent } = setup({ store: open() });
     await service.grant('alice', ALICE);
 
     expect(sent).toEqual([]);
@@ -258,15 +267,37 @@ describe('StarterKitStore on disk', () => {
   });
 
   it('loads a kit a restart interrupted as failed, and does not resend it', async () => {
-    const path = join(dir, 'starter-kits.json');
-    new StarterKitStore(path).claim('alice', ALICE, 50, new Date());
+    open().claim('alice', ALICE, 50, new Date());
 
-    const store = new StarterKitStore(path);
+    const store = open();
     const { service, sent } = setup({ store });
     await service.grant('alice', ALICE);
 
     expect(sent).toEqual([]);
     expect(store.find('alice')).toMatchObject({ status: 'failed', reason: /restart/ });
-    expect(new StarterKitStore(path).find('alice')?.status).toBe('failed');
+    expect(open().find('alice')?.status).toBe('failed');
+  });
+
+  it('stops at the per-IP cap, counts it across a restart, and keeps no IP at rest (SEN-204)', async () => {
+    const config = loadStarterKitConfig({
+      STARTER_DRIP_PRIVATE_KEY: KEY,
+      STARTER_DRIP_DAILY_CAP_USERS: '10',
+      STARTER_DRIP_DAILY_CAP_PER_IP: '2',
+    });
+    const first = setup({ config, store: open() });
+    await first.service.grant('alice', ALICE, '203.0.113.7');
+    await first.service.grant('bob', BOB, '203.0.113.7');
+
+    const { service } = setup({ config, store: open() });
+    await service.grant('carol', ALICE, '203.0.113.7');
+    expect(service.status('carol')).toEqual({ status: 'none' });
+    // Another IP, or a register with no IP, is not held back by this one.
+    await service.grant('carol', ALICE, '198.51.100.1');
+    expect(service.status('carol').status).toBe('sent');
+    await service.grant('dave', BOB);
+    expect(service.status('dave').status).toBe('sent');
+
+    expect(stored()).toContain(hashIp('203.0.113.7'));
+    expect(stored()).not.toContain('203.0.113.7');
   });
 });

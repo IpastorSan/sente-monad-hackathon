@@ -13,15 +13,18 @@
 //
 // A wrong key is FATAL at boot, never an empty store: an empty store here is
 // exactly the free-top-up bug this file exists to close.
+//
+// Erasable syntax and `.ts` specifiers: the SQLite store beside it is loaded by
+// the import script under node's type stripping (CLAUDE.md gotcha 10).
 
 import {
   AGENT_SECRETS_KEY_VAR,
   sealBytes,
   unsealBytes,
   type Sealed,
-} from '../../agents/venues/file-agent-secret-store';
-import { JsonRecordFile } from '../../state/json-file';
-import type { CreditKeyClaim, CreditKeyRecord, CreditKeyStore } from './credit-key-store';
+} from '../../agents/venues/file-agent-secret-store.ts';
+import { JsonRecordFile } from '../../state/json-file.ts';
+import type { CreditKeyClaim, CreditKeyRecord, CreditKeyStore } from './credit-key-store.ts';
 
 /** The file name under `STATE_DIR`. */
 export const CREDIT_KEYS_FILE = 'credit-keys';
@@ -29,29 +32,61 @@ export const CREDIT_KEYS_FILE = 'credit-keys';
 /** Versioned so a later format change can tell old records apart. */
 const keyAad = (userId: string): string => `sente/credit-keys/v1/openrouter/${userId}`;
 
-/** What the file holds per user. */
-interface StoredRecord {
+/** What the file (or the `credit_keys` table) holds per user. */
+export interface SealedCreditKey {
   readonly userId: string;
   readonly hash: string;
   readonly key: Sealed;
   readonly createdAt: Date;
 }
 
+/** A key's sealed record, as both persistent stores write it. */
+export function sealCreditKey(secret: Uint8Array, record: CreditKeyRecord): SealedCreditKey {
+  return {
+    userId: record.userId,
+    hash: record.hash,
+    key: sealBytes(secret, keyAad(record.userId), Buffer.from(record.key, 'utf8')),
+    createdAt: record.createdAt,
+  };
+}
+
+/** The record, decrypted. Throws, naming `where` and the user, on a wrong key or a moved record. */
+export function unsealCreditKey(
+  secret: Uint8Array,
+  stored: SealedCreditKey,
+  where: string,
+): CreditKeyRecord {
+  try {
+    const plain = unsealBytes(secret, keyAad(stored.userId), stored.key);
+    const key = plain.toString('utf8');
+    plain.fill(0);
+    return { userId: stored.userId, hash: stored.hash, key, createdAt: stored.createdAt };
+  } catch (error) {
+    // No detail from `error`: GCM only ever says "unable to authenticate data".
+    throw new Error(
+      `${where}: cannot decrypt user ${stored.userId}'s OpenRouter key with ` +
+        `${AGENT_SECRETS_KEY_VAR}. Refusing to start: an empty store would mint every user ` +
+        'a second funded key. Restore the key that wrote this file.',
+      { cause: error },
+    );
+  }
+}
+
 /** First-write-wins, like the in-memory store, and written through on every claim. */
 export class FileCreditKeyStore implements CreditKeyStore {
-  readonly #file: JsonRecordFile<StoredRecord>;
+  readonly #file: JsonRecordFile<SealedCreditKey>;
   readonly #secret: Buffer;
-  readonly #stored = new Map<string, StoredRecord>();
+  readonly #stored = new Map<string, SealedCreditKey>();
   readonly #byUserId = new Map<string, CreditKeyRecord>();
 
   /** Loads and decrypts eagerly, so a wrong key or a bad file fails the boot. */
   constructor(path: string, secret: Uint8Array) {
     if (secret.length !== 32) throw new Error('the credit keys secret must be 32 bytes');
     this.#secret = Buffer.from(secret);
-    this.#file = new JsonRecordFile<StoredRecord>(path);
+    this.#file = new JsonRecordFile<SealedCreditKey>(path);
     for (const stored of this.#file.load()) {
       this.#stored.set(stored.userId, stored);
-      this.#byUserId.set(stored.userId, this.#unseal(stored));
+      this.#byUserId.set(stored.userId, unsealCreditKey(this.#secret, stored, this.#file.path));
     }
   }
 
@@ -71,13 +106,7 @@ export class FileCreditKeyStore implements CreditKeyStore {
     const existing = this.#byUserId.get(record.userId);
     if (existing) return Promise.resolve({ ok: false, existing });
     const created: CreditKeyRecord = { ...record, createdAt: new Date() };
-    const stored: StoredRecord = {
-      userId: record.userId,
-      hash: record.hash,
-      key: sealBytes(this.#secret, keyAad(record.userId), Buffer.from(record.key, 'utf8')),
-      createdAt: created.createdAt,
-    };
-    this.#stored.set(record.userId, stored);
+    this.#stored.set(record.userId, sealCreditKey(this.#secret, created));
     try {
       this.#file.save([...this.#stored.values()]);
     } catch (error) {
@@ -87,22 +116,5 @@ export class FileCreditKeyStore implements CreditKeyStore {
     }
     this.#byUserId.set(record.userId, created);
     return Promise.resolve({ ok: true, record: created });
-  }
-
-  #unseal(stored: StoredRecord): CreditKeyRecord {
-    try {
-      const plain = unsealBytes(this.#secret, keyAad(stored.userId), stored.key);
-      const key = plain.toString('utf8');
-      plain.fill(0);
-      return { userId: stored.userId, hash: stored.hash, key, createdAt: stored.createdAt };
-    } catch (error) {
-      // No detail from `error`: GCM only ever says "unable to authenticate data".
-      throw new Error(
-        `${this.#file.path}: cannot decrypt user ${stored.userId}'s OpenRouter key with ` +
-          `${AGENT_SECRETS_KEY_VAR}. Refusing to start: an empty store would mint every user ` +
-          'a second funded key. Restore the key that wrote this file.',
-        { cause: error },
-      );
-    }
   }
 }

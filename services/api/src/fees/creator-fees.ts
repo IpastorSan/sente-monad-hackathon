@@ -9,8 +9,9 @@
  * share of each fill, and a periodic, manual payout from the treasury settles
  * it (`scripts/creator-payout.ts` records that transfer).
  *
- * One file, `creator-fees.json` under `STATE_DIR` (CLAUDE.md gotcha 14), two
- * kinds of record:
+ * One file, `creator-fees.json` under `STATE_DIR` (CLAUDE.md gotcha 14), or
+ * the `creator_fees` table under `STORE_BACKEND=sqlite` (SEN-205,
+ * `sqlite-creator-fees.ts`), two kinds of record:
  *
  * - `accrued`: one per fee-paying fill of a forked agent, keyed by the fill's
  *   transaction, agent and asset so a replayed event cannot count twice. The
@@ -96,7 +97,81 @@ export type NewAccrual = Omit<CreatorFeeAccrual, 'kind' | 'id' | 'amountAtoms' |
 
 export type NewPayout = Omit<CreatorFeePayout, 'kind' | 'id' | 'at'> & { readonly at?: Date };
 
-export class CreatorFeeLedger {
+/**
+ * The ledger. `FileCreatorFeeLedger` (in memory without a path) and
+ * `SqliteCreatorFeeLedger` (`STORE_BACKEND=sqlite`, SEN-205); both decide
+ * through the helpers below, so their rules cannot drift apart.
+ */
+export interface CreatorFeeLedger {
+  /**
+   * Records the creator's share of one fill's fee. `null` when there is
+   * nothing to record: a share that floors to zero, or a fill already
+   * recorded for this agent, asset and transaction.
+   */
+  accrue(input: NewAccrual): CreatorFeeAccrual | null;
+  /**
+   * Records a treasury transfer to a creator. Refuses one larger than what is
+   * owed in that asset, or a tx hash already recorded: a payout is entered by
+   * hand, and both are typos worth stopping.
+   */
+  payout(input: NewPayout): CreatorFeePayout;
+  /** Accrued, paid and owed per asset, for one creator, in the order each asset first accrued. */
+  totals(creatorUserId: string): CreatorFeeTotals[];
+  /** One creator's records, newest first. */
+  recent(creatorUserId: string, limit: number): CreatorFeeRecord[];
+  /** Every creator something is owed to, for the payout script. */
+  creators(): string[];
+}
+
+/** The accrual `accrue` records, or `null` for a share that floors to zero. */
+export function newAccrual(input: NewAccrual): CreatorFeeAccrual | null {
+  const amountAtoms = creatorShareAtoms(input.feeAtoms);
+  if (amountAtoms === 0n) return null;
+  return { ...input, kind: 'accrued', id: randomUUID(), amountAtoms, at: input.at ?? new Date() };
+}
+
+/**
+ * The payout `payout` records, after its checks: positive, a well-formed and
+ * not yet recorded tx hash, and no more than `totals` says is owed.
+ */
+export function newPayout(
+  input: NewPayout,
+  txRecorded: boolean,
+  totals: readonly CreatorFeeTotals[],
+): CreatorFeePayout {
+  if (input.amountAtoms <= 0n) throw new Error('a payout must be positive');
+  if (!isHash(input.txHash)) {
+    throw new Error(`"${input.txHash}" is not a transaction hash`);
+  }
+  if (txRecorded) throw new Error(`${input.txHash} is already recorded`);
+  const owed = totals.find((t) => t.asset === input.asset)?.owedAtoms ?? 0n;
+  if (input.amountAtoms > owed) {
+    throw new Error(
+      `${input.creatorUserId} is owed ${owed} ${input.asset} atoms, less than ${input.amountAtoms}`,
+    );
+  }
+  return { ...input, kind: 'payout', id: randomUUID(), at: input.at ?? new Date() };
+}
+
+/** Per-asset totals over one creator's records, in recorded order. */
+export function totalsOf(records: Iterable<CreatorFeeRecord>): CreatorFeeTotals[] {
+  const byAsset = new Map<string, { decimals: number; accrued: bigint; paid: bigint }>();
+  for (const r of records) {
+    const sum = byAsset.get(r.asset) ?? { decimals: r.decimals, accrued: 0n, paid: 0n };
+    if (r.kind === 'accrued') sum.accrued += r.amountAtoms;
+    else sum.paid += r.amountAtoms;
+    byAsset.set(r.asset, sum);
+  }
+  return [...byAsset.entries()].map(([asset, sum]) => ({
+    asset,
+    decimals: sum.decimals,
+    accruedAtoms: sum.accrued,
+    paidAtoms: sum.paid,
+    owedAtoms: sum.accrued - sum.paid,
+  }));
+}
+
+export class FileCreatorFeeLedger implements CreatorFeeLedger {
   readonly #file: JsonRecordFile<CreatorFeeRecord> | undefined;
   readonly #records: CreatorFeeRecord[];
 
@@ -114,14 +189,9 @@ export class CreatorFeeLedger {
     return this.#records.length;
   }
 
-  /**
-   * Records the creator's share of one fill's fee. `null` when there is
-   * nothing to record: a share that floors to zero, or a fill already
-   * recorded for this agent and transaction.
-   */
   accrue(input: NewAccrual): CreatorFeeAccrual | null {
-    const amountAtoms = creatorShareAtoms(input.feeAtoms);
-    if (amountAtoms === 0n) return null;
+    const record = newAccrual(input);
+    if (!record) return null;
     const seen = this.#records.some(
       (r) =>
         r.kind === 'accrued' &&
@@ -130,67 +200,23 @@ export class CreatorFeeLedger {
         r.txHash.toLowerCase() === input.txHash.toLowerCase(),
     );
     if (seen) return null;
-    const record: CreatorFeeAccrual = {
-      ...input,
-      kind: 'accrued',
-      id: randomUUID(),
-      amountAtoms,
-      at: input.at ?? new Date(),
-    };
     this.#append(record);
     return record;
   }
 
-  /**
-   * Records a treasury transfer to a creator. Refuses one larger than what is
-   * owed in that asset, or a tx hash already recorded: a payout is entered by
-   * hand, and both are typos worth stopping.
-   */
   payout(input: NewPayout): CreatorFeePayout {
-    if (input.amountAtoms <= 0n) throw new Error('a payout must be positive');
-    if (!isHash(input.txHash)) {
-      throw new Error(`"${input.txHash}" is not a transaction hash`);
-    }
-    if (this.#records.some((r) => r.txHash.toLowerCase() === input.txHash.toLowerCase())) {
-      throw new Error(`${input.txHash} is already recorded`);
-    }
-    const owed =
-      this.totals(input.creatorUserId).find((t) => t.asset === input.asset)?.owedAtoms ?? 0n;
-    if (input.amountAtoms > owed) {
-      throw new Error(
-        `${input.creatorUserId} is owed ${owed} ${input.asset} atoms, less than ${input.amountAtoms}`,
-      );
-    }
-    const record: CreatorFeePayout = {
-      ...input,
-      kind: 'payout',
-      id: randomUUID(),
-      at: input.at ?? new Date(),
-    };
+    const txRecorded = this.#records.some(
+      (r) => r.txHash.toLowerCase() === input.txHash.toLowerCase(),
+    );
+    const record = newPayout(input, txRecorded, this.totals(input.creatorUserId));
     this.#append(record);
     return record;
   }
 
-  /** Accrued, paid and owed per asset, for one creator. */
   totals(creatorUserId: string): CreatorFeeTotals[] {
-    const byAsset = new Map<string, { decimals: number; accrued: bigint; paid: bigint }>();
-    for (const r of this.#records) {
-      if (r.creatorUserId !== creatorUserId) continue;
-      const sum = byAsset.get(r.asset) ?? { decimals: r.decimals, accrued: 0n, paid: 0n };
-      if (r.kind === 'accrued') sum.accrued += r.amountAtoms;
-      else sum.paid += r.amountAtoms;
-      byAsset.set(r.asset, sum);
-    }
-    return [...byAsset.entries()].map(([asset, sum]) => ({
-      asset,
-      decimals: sum.decimals,
-      accruedAtoms: sum.accrued,
-      paidAtoms: sum.paid,
-      owedAtoms: sum.accrued - sum.paid,
-    }));
+    return totalsOf(this.#records.filter((r) => r.creatorUserId === creatorUserId));
   }
 
-  /** One creator's records, newest first. */
   recent(creatorUserId: string, limit: number): CreatorFeeRecord[] {
     return this.#records
       .filter((r) => r.creatorUserId === creatorUserId)
@@ -198,7 +224,6 @@ export class CreatorFeeLedger {
       .slice(0, limit);
   }
 
-  /** Every creator something is owed to, for the payout script. */
   creators(): string[] {
     return [...new Set(this.#records.map((r) => r.creatorUserId))];
   }

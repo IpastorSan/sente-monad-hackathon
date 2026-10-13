@@ -38,7 +38,7 @@ import {
 import { WalletRefusedError } from './wallet.errors';
 import { loadStarterKitConfig } from '../starter-kit/starter-kit.config';
 import { StarterKitService, type StarterKit } from '../starter-kit/starter-kit.service';
-import { StarterKitStore } from '../starter-kit/starter-kit.store';
+import { FileStarterKitStore } from '../starter-kit/starter-kit.store';
 
 const USER: Principal = { userId: '0x70997970c51812dc3a010c7d01b50e0d17dc79c8' };
 const OTHER: Principal = { userId: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266' };
@@ -815,7 +815,7 @@ describe('UserWalletService and the starter kit (SEN-170)', () => {
     const sent: Address[] = [];
     const starterKit = new StarterKitService({
       config: loadStarterKitConfig({ STARTER_DRIP_PRIVATE_KEY: `0x${'33'.repeat(32)}` }),
-      store: new StarterKitStore(),
+      store: new FileStarterKitStore(),
       sender: {
         address: getAddress('0x00000000000000000000000000000000000057a7'),
         send: (token) => {

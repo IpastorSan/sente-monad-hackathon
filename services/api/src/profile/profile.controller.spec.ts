@@ -17,7 +17,7 @@ import { mintSessionToken } from '../auth/session-token';
 import { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
 import { ProfileController } from './profile.controller';
 import { ProfileService } from './profile.service';
-import { ProfileStore } from './profile.store';
+import { FileProfileStore } from './profile.store';
 
 const SECRET = 'ef'.repeat(32);
 const ORIGINAL = { ...process.env };
@@ -27,7 +27,7 @@ const BOB = '0x' + 'b'.repeat(40);
 describe('ProfileController (SEN-172)', () => {
   let app: INestApplication;
   let base: string;
-  let store: ProfileStore;
+  let store: FileProfileStore;
   let dir: string;
 
   async function boot(service: ProfileService): Promise<void> {
@@ -52,7 +52,7 @@ describe('ProfileController (SEN-172)', () => {
     delete process.env['AUTH_PLACEHOLDER'];
     resetAuthConfig();
     dir = mkdtempSync(join(tmpdir(), 'sente-profile-'));
-    store = new ProfileStore(join(dir, 'profiles.json'));
+    store = new FileProfileStore(join(dir, 'profiles.json'));
     await boot(new ProfileService(store));
   });
 
@@ -158,7 +158,7 @@ describe('ProfileController (SEN-172)', () => {
     expect(file.records).toEqual([
       expect.objectContaining({ userId: ALICE, name: 'Diamond Gecko', avatarSeed: 'r7' }),
     ]);
-    expect(new ProfileStore(join(dir, 'profiles.json')).get(ALICE)).toEqual({
+    expect(new FileProfileStore(join(dir, 'profiles.json')).get(ALICE)).toEqual({
       name: 'Diamond Gecko',
       avatarSeed: 'r7',
     });
@@ -178,9 +178,9 @@ describe('ProfileController (SEN-172)', () => {
   });
 });
 
-describe('ProfileStore', () => {
+describe('FileProfileStore', () => {
   it('stays in memory without a path', () => {
-    const store = new ProfileStore();
+    const store = new FileProfileStore();
     store.set(ALICE, { name: 'Lucky Crab' }, new Date());
     expect(store.path).toBeUndefined();
     expect(store.get(ALICE)).toEqual({ name: 'Lucky Crab', avatarSeed: null });

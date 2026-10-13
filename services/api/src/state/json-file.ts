@@ -80,7 +80,8 @@ export function statePath(name: string, env: Env = process.env): string | undefi
 /** What `save` writes. Checked on load, so a format change is a message rather than a mystery. */
 const ENVELOPE_VERSION = 1;
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 /**
  * A list of records in one JSON file.
@@ -115,7 +116,7 @@ export class JsonRecordFile<T> {
         `${this.path} is not a v${ENVELOPE_VERSION} state file. Refusing to start empty.`,
       );
     }
-    return envelope.records.map((record) => decode(record as JsonValue) as T);
+    return envelope.records.map((record) => decodeValue(record as JsonValue) as T);
   }
 
   /**
@@ -128,7 +129,7 @@ export class JsonRecordFile<T> {
    */
   save(records: readonly T[]): void {
     const text = JSON.stringify(
-      { version: ENVELOPE_VERSION, records: records.map((record) => encode(record)) },
+      { version: ENVELOPE_VERSION, records: records.map((record) => encodeValue(record)) },
       null,
       2,
     );
@@ -163,7 +164,7 @@ function isDate(value: unknown): value is Date {
 }
 
 /** Value -> JSON, tagging what JSON has no room for. See the header. */
-function encode(value: unknown): JsonValue {
+export function encodeValue(value: unknown): JsonValue {
   if (value === null) return null;
   if (typeof value === 'bigint') return { $bigint: value.toString() };
   if (isDate(value)) return { $date: value.toISOString() };
@@ -176,11 +177,11 @@ function encode(value: unknown): JsonValue {
   // as an object property it is dropped below, which is what makes an absent
   // optional field absent again on load rather than present-and-undefined.
   if (value === undefined) return null;
-  if (Array.isArray(value)) return value.map((item) => encode(item));
+  if (Array.isArray(value)) return value.map((item) => encodeValue(item));
   if (typeof value === 'object') {
     const out: Record<string, JsonValue> = {};
     for (const [key, item] of Object.entries(value)) {
-      if (item !== undefined) out[key] = encode(item);
+      if (item !== undefined) out[key] = encodeValue(item);
     }
     return out;
   }
@@ -188,8 +189,8 @@ function encode(value: unknown): JsonValue {
 }
 
 /** JSON -> value, untagging what `encode` tagged. */
-function decode(value: JsonValue): unknown {
-  if (Array.isArray(value)) return value.map((item) => decode(item));
+export function decodeValue(value: JsonValue): unknown {
+  if (Array.isArray(value)) return value.map((item) => decodeValue(item));
   if (value !== null && typeof value === 'object') {
     const keys = Object.keys(value);
     if (keys.length === 1) {
@@ -198,7 +199,7 @@ function decode(value: JsonValue): unknown {
       if (typeof tagged.$date === 'string') return new Date(tagged.$date);
     }
     const out: Record<string, unknown> = {};
-    for (const key of keys) out[key] = decode(value[key] as JsonValue);
+    for (const key of keys) out[key] = decodeValue(value[key] as JsonValue);
     return out;
   }
   return value;

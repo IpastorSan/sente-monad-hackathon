@@ -46,8 +46,8 @@ export interface Sealed {
   readonly data: string;
 }
 
-/** What the file holds per agent. Nothing in it is readable without the key. */
-interface SecretRecord {
+/** What the file (or the `agent_secrets` table) holds per agent. Nothing in it is readable without the key. */
+export interface AgentSecretRecord {
   readonly agentId: string;
   readonly perpl: Sealed;
 }
@@ -124,19 +124,45 @@ export function decodePerplCredentials(plain: Buffer): PerplCredentials {
   }
 }
 
-function seal(key: Uint8Array, agentId: string, credentials: PerplCredentials): Sealed {
-  return sealBytes(key, AAD_PREFIX + agentId, encodePerplCredentials(credentials));
+/** An agent's sealed record, as both persistent stores write it. */
+export function sealAgentSecret(
+  key: Uint8Array,
+  agentId: string,
+  credentials: PerplCredentials,
+): AgentSecretRecord {
+  return {
+    agentId,
+    perpl: sealBytes(key, AAD_PREFIX + agentId, encodePerplCredentials(credentials)),
+  };
 }
 
-/** Throws on a wrong key, a tampered record or a record moved to another agent. */
-function unseal(key: Uint8Array, agentId: string, sealed: Sealed): PerplCredentials {
-  return decodePerplCredentials(unsealBytes(key, AAD_PREFIX + agentId, sealed));
+/**
+ * The record's credentials, sealed. Throws, naming `where` and the agent, on a
+ * wrong key, a tampered record or a record moved to another agent.
+ */
+export function unsealAgentSecret(
+  key: Uint8Array,
+  record: AgentSecretRecord,
+  where: string,
+): PerplCredentials {
+  try {
+    return decodePerplCredentials(unsealBytes(key, AAD_PREFIX + record.agentId, record.perpl));
+  } catch (error) {
+    // Deliberately no detail from `error`: it cannot hold the key, but
+    // "unable to authenticate data" is all GCM ever says anyway.
+    throw new Error(
+      `${where}: cannot decrypt agent ${record.agentId}'s Perpl key with ` +
+        `${AGENT_SECRETS_KEY_VAR}. Refusing to start: a wrong key would re-enroll every agent ` +
+        'and burn Perpl key slots (16 per account). Restore the key that wrote this file.',
+      { cause: error },
+    );
+  }
 }
 
 export class FileAgentSecretStore implements AgentSecretStore {
-  readonly #file: JsonRecordFile<SecretRecord>;
+  readonly #file: JsonRecordFile<AgentSecretRecord>;
   readonly #key: Buffer;
-  readonly #records = new Map<string, SecretRecord>();
+  readonly #records = new Map<string, AgentSecretRecord>();
   /** Decrypted once at load; handed out as sealed copies, like the in-memory store. */
   readonly #perpl = new Map<string, PerplCredentials>();
 
@@ -144,23 +170,10 @@ export class FileAgentSecretStore implements AgentSecretStore {
   constructor(path: string, key: Uint8Array) {
     if (key.length !== 32) throw new Error('the agent secrets key must be 32 bytes');
     this.#key = Buffer.from(key);
-    this.#file = new JsonRecordFile<SecretRecord>(path);
+    this.#file = new JsonRecordFile<AgentSecretRecord>(path);
     for (const record of this.#file.load()) {
-      let credentials: PerplCredentials;
-      try {
-        credentials = unseal(this.#key, record.agentId, record.perpl);
-      } catch (error) {
-        // Deliberately no detail from `error`: it cannot hold the key, but
-        // "unable to authenticate data" is all GCM ever says anyway.
-        throw new Error(
-          `${this.#file.path}: cannot decrypt agent ${record.agentId}'s Perpl key with ` +
-            `${AGENT_SECRETS_KEY_VAR}. Refusing to start: a wrong key would re-enroll every agent ` +
-            'and burn Perpl key slots (16 per account). Restore the key that wrote this file.',
-          { cause: error },
-        );
-      }
       this.#records.set(record.agentId, record);
-      this.#perpl.set(record.agentId, credentials);
+      this.#perpl.set(record.agentId, unsealAgentSecret(this.#key, record, this.#file.path));
     }
   }
 
@@ -182,7 +195,7 @@ export class FileAgentSecretStore implements AgentSecretStore {
   putPerplCredentials(agentId: string, credentials: PerplCredentials): Promise<void> {
     const previousRecord = this.#records.get(agentId);
     const previous = this.#perpl.get(agentId);
-    this.#records.set(agentId, { agentId, perpl: seal(this.#key, agentId, credentials) });
+    this.#records.set(agentId, sealAgentSecret(this.#key, agentId, credentials));
     this.#perpl.set(agentId, sealPerplCredentials(credentials));
     try {
       this.#persist();
@@ -214,7 +227,7 @@ export class FileAgentSecretStore implements AgentSecretStore {
 
   #restore(
     agentId: string,
-    record: SecretRecord | undefined,
+    record: AgentSecretRecord | undefined,
     credentials: PerplCredentials | undefined,
   ): void {
     if (record && credentials) {

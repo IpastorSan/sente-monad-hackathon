@@ -2,19 +2,28 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { openedDbs } from '../../state/db/testing/opened-dbs';
 import { testAgent } from '../tools/testing/agent-fixture';
 import { InMemoryAgentStore, type AgentStore } from './agent-store';
 import { FileAgentStore } from './file-agent-store';
+import { SqliteAgentStore } from './sqlite-agent-store';
 
 let dir: string;
 let path: string;
+const dbs = openedDbs();
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'sente-agents-'));
   path = join(dir, 'agents.json');
 });
 
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  dbs.closeAll();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** A SQLite store on `<dir>/sente.db`; "a restart" is closing it and calling this again. */
+const sqliteStore = (): SqliteAgentStore => new SqliteAgentStore(dbs.reopen(dir));
 
 const second = (patch = {}) =>
   testAgent({
@@ -25,13 +34,14 @@ const second = (patch = {}) =>
   });
 
 /**
- * One table, both implementations: the file-backed store is only ever chosen by
- * `STATE_DIR`, so a behavioural difference would never show up in a spec that
- * ran against the in-memory one alone.
+ * One table, every implementation: the file-backed and SQLite stores are only
+ * ever chosen by `STATE_DIR` and `STORE_BACKEND`, so a behavioural difference
+ * would never show up in a spec that ran against the in-memory one alone.
  */
 describe.each([
   ['InMemoryAgentStore', (): AgentStore => new InMemoryAgentStore()],
   ['FileAgentStore', (): AgentStore => new FileAgentStore(path)],
+  ['SqliteAgentStore', (): AgentStore => sqliteStore()],
 ])('%s', (_name, create) => {
   it('inserts and reads back', async () => {
     const store = create();
@@ -137,12 +147,19 @@ describe.each([
   });
 });
 
-describe('FileAgentStore persistence', () => {
+/**
+ * Persistence, for the two stores that have it. `reopen` is a restart: a new
+ * store over the same file, or a new connection to the same database.
+ */
+describe.each([
+  ['FileAgentStore', (): FileAgentStore => new FileAgentStore(path)],
+  ['SqliteAgentStore', (): SqliteAgentStore => sqliteStore()],
+])('%s persistence', (_name, reopen) => {
   it('still lists the agent with its ids after a restart — the SEN-48 criterion', async () => {
     const agent = testAgent({ erc8004AgentId: '1874' });
-    await new FileAgentStore(path).insert(agent);
+    await reopen().insert(agent);
 
-    const after = new FileAgentStore(path);
+    const after = reopen();
     expect(after.size).toBe(1);
     expect(await after.listByUser('alice')).toEqual([agent]);
     const loaded = (await after.get(agent.id))!;
@@ -153,9 +170,9 @@ describe('FileAgentStore persistence', () => {
 
   it('brings a parsed mandate back as a parsed mandate, bigint atoms and all', async () => {
     const agent = testAgent();
-    await new FileAgentStore(path).insert(agent);
+    await reopen().insert(agent);
 
-    const loaded = (await new FileAgentStore(path).get(agent.id))!;
+    const loaded = (await reopen().get(agent.id))!;
     // `toEqual` already separates 1n from 1, but the atoms are the whole point
     // of storing a PARSED mandate, so say so.
     expect(loaded.mandate).toEqual(agent.mandate);
@@ -174,19 +191,19 @@ describe('FileAgentStore persistence', () => {
     const agent = testAgent({
       gasFunding: { funded: true, txHash: `0x${'a'.repeat(64)}`, amountWei: 10n ** 17n },
     });
-    await new FileAgentStore(path).insert(agent);
+    await reopen().insert(agent);
 
-    const loaded = (await new FileAgentStore(path).get(agent.id))!;
+    const loaded = (await reopen().get(agent.id))!;
     expect(loaded.gasFunding).toEqual(agent.gasFunding);
     expect(loaded.gasFunding!.amountWei).toBe(10n ** 17n);
   });
 
   it('writes an update through, so a revoked agent stays revoked across a restart', async () => {
-    const store = new FileAgentStore(path);
+    const store = reopen();
     await store.insert(testAgent());
     await store.update(testAgent().id, { status: 'revoked', policyCleared: true });
 
-    const after = new FileAgentStore(path);
+    const after = reopen();
     expect((await after.get(testAgent().id))!.status).toBe('revoked');
     expect(await after.listActive()).toEqual([]);
     expect((await after.listAll()).map((a) => a.status)).toEqual(['revoked']);
@@ -194,23 +211,23 @@ describe('FileAgentStore persistence', () => {
 
   it('keeps a schedule across a restart, and a cleared one stays cleared (SEN-67)', async () => {
     const agent = testAgent();
-    await new FileAgentStore(path).insert(agent);
-    await new FileAgentStore(path).update(agent.id, { schedule: { everySeconds: 300 } });
-    expect((await new FileAgentStore(path).get(agent.id))!.schedule).toEqual({
-      everySeconds: 300,
-    });
+    await reopen().insert(agent);
+    await reopen().update(agent.id, { schedule: { everySeconds: 300 } });
+    expect((await reopen().get(agent.id))!.schedule).toEqual({ everySeconds: 300 });
 
-    await new FileAgentStore(path).update(agent.id, { schedule: undefined });
-    expect(await new FileAgentStore(path).get(agent.id)).not.toHaveProperty('schedule');
+    await reopen().update(agent.id, { schedule: undefined });
+    expect(await reopen().get(agent.id)).not.toHaveProperty('schedule');
   });
 
   it('still finds an agent by its MCP token hash after a restart', async () => {
     const agent = testAgent();
-    await new FileAgentStore(path).insert(agent);
+    await reopen().insert(agent);
 
-    expect(await new FileAgentStore(path).findByMcpTokenHash(agent.mcpTokenHash)).toEqual(agent);
+    expect(await reopen().findByMcpTokenHash(agent.mcpTokenHash)).toEqual(agent);
   });
+});
 
+describe('FileAgentStore', () => {
   it('does not keep an agent it could not persist', async () => {
     writeFileSync(join(dir, 'blocked'), '');
     const store = new FileAgentStore(join(dir, 'blocked', 'agents.json'));
@@ -220,5 +237,19 @@ describe('FileAgentStore persistence', () => {
     // the next restart forgets.
     expect(await store.get(testAgent().id)).toBeUndefined();
     expect(await store.findByMcpTokenHash(testAgent().mcpTokenHash)).toBeUndefined();
+  });
+});
+
+describe('SqliteAgentStore', () => {
+  it('keeps the archived flag and the listActive predicate in the columns, not only in data', async () => {
+    // The partial index `agents_listed_active` is what the scheduler's tick and
+    // the leaderboard will scan; a store that updated `data` but not the
+    // columns would list an archived agent as active.
+    const store = sqliteStore();
+    await store.insert(testAgent());
+    await store.update(testAgent().id, { archivedAt: new Date('2026-10-12T00:00:00Z') });
+
+    const row = dbs.last!.prepare('SELECT status, archived_at FROM agents').get();
+    expect(row).toEqual({ status: 'active', archived_at: '2026-10-12T00:00:00.000Z' });
   });
 });

@@ -9,8 +9,8 @@ import { perplAccountReader } from '../agents/venues/perpl-agent';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import type { WriteSpacer } from '../spacing/write-spacer';
-import { statePath } from '../state/json-file';
-import { StateDirLease, StateModule } from '../state/state.module';
+import { SenteDbLease, StateModule } from '../state/state.module';
+import { selectStore, type StoreSelector } from '../state/store-backend';
 import { BUNDLER, type Bundler } from '../wallet/bundler/bundler';
 import { USER_WALLETS, type UserWalletProvider } from '../wallet/user-wallet.provider';
 import { SEND_SPACER } from '../wallet/user-wallet.service';
@@ -33,6 +33,7 @@ import { TradeController, TradingEnabledGuard } from './trade.controller';
 import { TradeService } from './trade.service';
 import { TradeStore } from './trade-store';
 import { FileUserVenueSecretStore, USER_VENUE_SECRETS_FILE } from './file-user-venue-secrets';
+import { SqliteUserVenueSecretStore } from './sqlite-user-venue-secrets';
 import {
   InMemoryUserVenueSecretStore,
   USER_VENUE_SECRETS,
@@ -119,19 +120,26 @@ const enrollPerplProvider: Provider = {
 };
 
 /**
- * In memory unless `STATE_DIR` is set; then sealed on disk under
- * `AGENT_SECRETS_KEY` (SEN-174), so a restart keeps every user's Perpl read key
- * and trade token instead of unlinking them. `agentSecretsKey()` throws without
- * the key, and a wrong key fails the load: both stop the boot.
+ * In memory unless `STATE_DIR` is set; then sealed under `AGENT_SECRETS_KEY`
+ * on disk (SEN-174), or in a table in `sente.db` under `STORE_BACKEND=sqlite`
+ * (SEN-205), so a restart keeps every user's Perpl read key and trade token
+ * instead of unlinking them. `agentSecretsKey()` throws without the key, and a
+ * wrong key fails the load: both stop the boot.
  */
 export function userVenueSecretStore(
+  lease: StoreSelector,
   env: Record<string, string | undefined> = process.env,
 ): UserVenueSecretStore {
-  const path = statePath(USER_VENUE_SECRETS_FILE, env);
-  if (!path) return new InMemoryUserVenueSecretStore();
-  const store = new FileUserVenueSecretStore(path, agentSecretsKey(env));
-  new Logger('UserVenueSecrets').log(`${store.size} user(s)' Perpl keys loaded from ${store.path}`);
-  return store;
+  return selectStore<UserVenueSecretStore>(
+    lease,
+    `${USER_VENUE_SECRETS_FILE}.json`,
+    "user(s)' Perpl keys",
+    {
+      memory: () => new InMemoryUserVenueSecretStore(),
+      file: (path) => new FileUserVenueSecretStore(path, agentSecretsKey(env)),
+      sqlite: (db) => new SqliteUserVenueSecretStore(db, agentSecretsKey(env)),
+    },
+  );
 }
 
 /**
@@ -168,9 +176,9 @@ const authProvider: Provider = { provide: Auth, useClass: RequestContextAuth };
     // One store per process: enrollment writes the read key Portfolio reads (M-T19).
     {
       provide: USER_VENUE_SECRETS,
-      // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
-      inject: [StateDirLease],
-      useFactory: (_lease: StateDirLease) => userVenueSecretStore(),
+      // Injected so the STATE_DIR lock and the database are held before this store opens (SEN-161).
+      inject: [SenteDbLease],
+      useFactory: (lease: SenteDbLease) => userVenueSecretStore(lease),
     },
     PerplEnrollService,
   ],

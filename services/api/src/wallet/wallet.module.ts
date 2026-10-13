@@ -7,9 +7,9 @@ import { monadReadTransport } from '../chain/monad-rpc';
 import { AgentStoreModule } from '../agents/store/agent-store.module';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
-import { statePath } from '../state/json-file';
 import { StarterKitModule } from '../starter-kit/starter-kit.module';
-import { StateDirLease, StateModule } from '../state/state.module';
+import { SenteDbLease, StateModule } from '../state/state.module';
+import { selectStore } from '../state/store-backend';
 import {
   TOKEN_BALANCES,
   ViemTokenBalanceReader,
@@ -40,6 +40,7 @@ import {
   SMART_ACCOUNT_REGISTRY,
 } from './store/smart-account-registry';
 import { FileUserWalletRegistry } from './store/file-user-wallet-registry';
+import { SqliteUserWalletRegistry } from './store/sqlite-user-wallet-registry';
 import {
   InMemoryUserWalletRegistry,
   USER_WALLET_REGISTRY,
@@ -166,15 +167,16 @@ const preparedStoreProvider: Provider = {
  */
 const userWalletRegistryProvider: Provider = {
   provide: USER_WALLET_REGISTRY,
-  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
-  inject: [StateDirLease],
-  useFactory: (_lease: StateDirLease): UserWalletRegistry => {
-    const path = statePath('user-wallets');
-    if (!path) return new InMemoryUserWalletRegistry();
-    const registry = new FileUserWalletRegistry(path);
-    Logger.log(`${registry.size} binding(s) loaded from ${registry.path}`, 'UserWalletRegistry');
-    return registry;
-  },
+  // `SenteDbLease` holds the STATE_DIR lock (through `StateDirLease`) and, under
+  // `STORE_BACKEND=sqlite` (SEN-205), the database; injecting it orders this
+  // registry after both (SEN-161).
+  inject: [SenteDbLease],
+  useFactory: (lease: SenteDbLease): UserWalletRegistry =>
+    selectStore<UserWalletRegistry>(lease, 'user-wallets.json', 'wallet binding(s)', {
+      memory: () => new InMemoryUserWalletRegistry(),
+      file: (path) => new FileUserWalletRegistry(path),
+      sqlite: (db) => new SqliteUserWalletRegistry(db),
+    }),
 };
 
 /**
