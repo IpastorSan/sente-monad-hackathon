@@ -1,27 +1,37 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 
-import { statePath } from '../../state/json-file';
-import { StateDirLease, StateModule } from '../../state/state.module';
+import { SenteDbLease, StateModule } from '../../state/state.module';
+import { selectStore } from '../../state/store-backend';
 import { AGENT_STORE, InMemoryAgentStore, type AgentStore } from './agent-store';
 import { FileAgentStore } from './file-agent-store';
+import { SqliteAgentStore } from './sqlite-agent-store';
 
 /**
- * PERSISTENCE: in memory until the repo has a database (see `agent-store.ts`),
- * EXCEPT when `STATE_DIR` is set — then a JSON file, so a restart between hiring
- * an agent and showing it off does not orphan the agent's funded wallet, its
- * policy id and its ERC-8004 identity (SEN-48).
+ * PERSISTENCE: in memory until `STATE_DIR` is set (see `agent-store.ts`), then
+ * a JSON file, so a restart between hiring an agent and showing it off does not
+ * orphan the agent's funded wallet, its policy id and its ERC-8004 identity
+ * (SEN-48) — or, under `STORE_BACKEND=sqlite`, a table in `<STATE_DIR>/sente.db`
+ * (SEN-205, `state/store-backend.ts`).
  */
 const agentStoreProvider: Provider = {
   provide: AGENT_STORE,
-  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
-  inject: [StateDirLease],
-  useFactory: (_lease: StateDirLease): AgentStore => {
-    const path = statePath('agents');
-    if (!path) return new InMemoryAgentStore();
-    const store = new FileAgentStore(path);
-    Logger.log(`${store.size} agent(s) loaded from ${store.path}`, 'AgentStore');
-    return store;
-  },
+  // `SenteDbLease` holds the STATE_DIR lock (through `StateDirLease`) and the
+  // database, so injecting it is what orders this store after both (SEN-161).
+  inject: [SenteDbLease],
+  useFactory: (lease: SenteDbLease): AgentStore =>
+    selectStore<AgentStore>(lease, 'agents.json', {
+      memory: () => new InMemoryAgentStore(),
+      file: (path) => {
+        const store = new FileAgentStore(path);
+        Logger.log(`${store.size} agent(s) loaded from ${store.path}`, 'AgentStore');
+        return store;
+      },
+      sqlite: (db) => {
+        const store = new SqliteAgentStore(db);
+        Logger.log(`${store.size} agent(s) in ${store.path}`, 'AgentStore');
+        return store;
+      },
+    }),
 };
 
 /**
