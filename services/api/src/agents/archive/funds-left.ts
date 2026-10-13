@@ -27,10 +27,15 @@ export interface FundsCheck {
 }
 
 /**
- * Everything above dust in the agent's wallet, Kuru account and Perpl account,
- * plus every open Perpl position whatever its size. The wallet's native MON is
- * left out: it is the gas the drip sent, a return does not send it home (only
- * ERC-20s are returnable), and every revoked agent keeps some.
+ * Everything above dust in the agent's wallet and Kuru account, plus every
+ * open Perpl position whatever its size. The wallet's native MON is left out:
+ * it is the gas the drip sent, a return does not send it home (only ERC-20s
+ * are returnable), and every revoked agent keeps some.
+ *
+ * Perpl collateral is left out too (SEN-203): Sente has no Perpl withdraw, so
+ * a return cannot move it and refusing on it would make an agent that ever
+ * funded Perpl impossible to archive. It stays in the agent's Perpl account,
+ * which the app says. An open position still blocks: it is live risk.
  */
 export function fundsLeft(portfolio: AgentPortfolioDto): FundsCheck {
   const left: FundsLeft[] = [];
@@ -56,7 +61,6 @@ export function fundsLeft(portfolio: AgentPortfolioDto): FundsCheck {
 
   if (!perpl.ok) unreadable.push('perpl');
   else if (perpl.status === 'ok' || perpl.status === 'not_enrolled') {
-    balances('perpl', perpl.balances);
     for (const position of perpl.positions ?? []) {
       left.push({ where: 'perpl', asset: position.symbol, amount: position.size });
     }
