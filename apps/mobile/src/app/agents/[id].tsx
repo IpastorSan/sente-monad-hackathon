@@ -677,7 +677,7 @@ function Overview({
       <View style={styles.hero}>
         <Text style={text.label}>Balance</Text>
         {portfolio ? (
-          <BigAmounts amounts={agentHoldingAmounts(portfolio)} />
+          <BigAmounts amounts={agentHoldingAmounts(portfolio)} label="Balance" />
         ) : main ? (
           <View style={styles.figure}>
             <BigNumber value={formatAtoms(main.atoms, main.decimals, { group: false })} />

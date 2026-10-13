@@ -3,8 +3,9 @@
  * and a sign-tinted area chart with 1D / 1W / 1M / ALL pills — the `hero-v`
  * block of `docs/design/trading/portfolio.html`.
  *
- * The total is printed exactly, per asset (SEN-210): `25.52 USDC` over
- * `20.89 AUSD`, never the two added up as dollars. The line and the change's
+ * The total is printed exactly, per asset (SEN-210): one asset as the
+ * headline, the others in its dropdown (SEN-213, `BigAmounts`), never added up
+ * as dollars. The line and the change's
  * percent need one number, so they use the dollar sum (USDC and AUSD at $1,
  * spot at its Kuru price); no dollar amount is printed from it.
  *

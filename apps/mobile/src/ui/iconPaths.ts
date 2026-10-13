@@ -13,6 +13,8 @@ export const PATHS = {
   account: 'M16 8a4 4 0 1 1-8 0a4 4 0 1 1 8 0M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6',
   back: 'M15 5l-7 7 7 7',
   chevron: 'M9 5l7 7-7 7',
+  // A dropdown's caret (SEN-213): the chevron turned down.
+  caret: 'M6 9l6 6 6-6',
   close: 'M6 6l12 12M18 6L6 18',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   plus: 'M12 5v14M5 12h14',
