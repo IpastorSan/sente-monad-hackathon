@@ -23,7 +23,13 @@
  * All money is bigint atoms or decimal strings; nothing here goes through a
  * float except the display-only fill percentage.
  */
-import { builderFeeAtoms, fromUnits, precisionDecimals, ratioToDecimal } from '@sente/venues/kuru';
+import {
+  builderFeeAtoms,
+  fromUnits,
+  KURU_DEPLOYMENT,
+  precisionDecimals,
+  ratioToDecimal,
+} from '@sente/venues/kuru';
 
 import { formatPrice } from '../ui/tradingFormat.ts';
 import { groupThousands, normalizeDecimal } from '../agents/amounts.ts';
@@ -722,9 +728,20 @@ export function resultView(
     /** The limit, or the market order's worst price, as a decimal. */
     price: string;
     slippageBps: number;
+    /**
+     * Whether Sente can list (and so cancel) a resting order on this Kuru
+     * deployment. Set C is not catalog-listed (SEN-189): its resting orders
+     * show only as locked balance, with nothing to cancel from (SEN-203).
+     */
+    ordersListed?: boolean;
   },
 ): ResultView {
   const { side, orderType, base, quote, price, slippageBps } = ctx;
+  const ordersListed = ctx.ordersListed ?? KURU_DEPLOYMENT.catalogListed;
+  const restingWhy = (what: string): string =>
+    ordersListed
+      ? `${what} waits at ${priceText(price)} until it fills or you cancel it from Portfolio → Orders.`
+      : `${what} waits at ${priceText(price)} until it fills. On this Kuru deployment Sente cannot list or cancel it; its funds show as locked.`;
   const filled = result.filledSize;
   const requested = result.requestedSize;
   const pct = filledPct(filled, requested);
@@ -762,7 +779,7 @@ export function resultView(
         filledPct: pct,
         fillLine: `Filled ${pct}% · ${resting ? 'rest on the book' : 'rest cancelled'}`,
         why: resting
-          ? `The rest waits at ${priceText(price)} until it fills or you cancel it.`
+          ? restingWhy('The rest')
           : `The price moved past your worst price (${priceText(price)}, max slippage ${slippageText(slippageBps)}) before the rest could fill.`,
         fills,
       };
@@ -776,7 +793,7 @@ export function resultView(
         detail: `${side} at ${priceText(price)} · ${moneyText(mulDecimal(requested, price))} ${quote}`,
         filledPct: pct,
         fillLine: null,
-        why: null,
+        why: restingWhy('It'),
         fills,
       };
     case 'cancelled':

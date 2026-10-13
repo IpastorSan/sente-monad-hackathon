@@ -467,6 +467,10 @@ notifications are not claimed.
   the chain (Kuru's catalog and gateway list only the new deployment), so there
   are no candles and no open-orders list; an agent hired on the other deployment
   is told to amend, and **Amend** moves its markets over (`docs/kuru.md`).
+  Without an open-orders list a resting Kuru order cannot be cancelled from
+  Sente, and a strategy that finds its own resting sell again cannot run: on
+  Set C the catalog withholds Range Trader and offers Mean Reverter on Perpl
+  only, and the API refuses either hire on Kuru (SEN-203).
 - **Passkey providers.** Measured to work: Google Chrome on desktop with Google
   Password Manager (2026-10-09, on production: sign-in, wallet registered,
   starter kit sent). Measured not to: Chromium (no Google Password Manager

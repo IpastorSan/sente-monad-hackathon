@@ -5,9 +5,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { getPreset, listPresets } from './index.ts';
+import { getPreset, isPresetOffered, listPresets, renderPreset } from './index.ts';
 import {
   KURU_DEFAULT_SPOT_MARKET,
+  KURU_OPEN_ORDERS_READABLE,
   KURU_SPOT_MARKETS,
   KURU_SPOT_MARKETS_BY_DEPLOYMENT,
   kuruDeploymentFromEnv,
@@ -57,4 +58,25 @@ test('Guardian starts on cbBTC with BTC-sized placeholders', SET_C, () => {
   assert.equal(r.params['market'], 'cbBTC-USDC');
   assert.equal(r.params['amount'], 0.001);
   assert.ok((r.params['sellBelow'] as number) < (r.params['sellAbove'] as number));
+});
+
+// SEN-203: Set C lists no Kuru open orders, so a preset that must find its own
+// resting sell on Kuru again cannot run there.
+test('Range Trader is withheld and refused on Set C', SET_C, () => {
+  assert.equal(KURU_OPEN_ORDERS_READABLE, false);
+  assert.ok(!listPresets().some((p) => p.id === 'range-trader'));
+  assert.equal(isPresetOffered('range-trader'), false);
+  // Still known by id, for agents already hired from it.
+  assert.equal(getPreset('range-trader')?.name, 'Range Trader');
+  assert.equal(renderPreset('range-trader', {}).ok, false);
+});
+
+test('Mean Reverter trades Perpl only on Set C', SET_C, () => {
+  const def = getPreset('mean-reverter')!;
+  assert.deepEqual(def.venues, ['perpl']);
+  const r = renderPreset('mean-reverter', {});
+  assert.ok(r.ok);
+  assert.equal(r.params['market'], 'BTC-PERP');
+  assert.deepEqual(def.suggestedMandate(r.params).venues, ['perpl']);
+  assert.equal(renderPreset('mean-reverter', { market: 'cbBTC-USDC' }).ok, false);
 });

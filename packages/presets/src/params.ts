@@ -57,6 +57,15 @@ export const KURU_SPOT_MARKETS: readonly string[] =
   KURU_SPOT_MARKETS_BY_DEPLOYMENT[kuruDeploymentFromEnv()];
 
 /**
+ * Whether the active deployment's open orders can be read (SEN-203). Set C is
+ * not catalog-listed (`catalogListed: false` in `@sente/venues/kuru`), so
+ * Kuru's Gateway lists no open orders for it and `get_open_orders` refuses. A
+ * preset whose plan hinges on finding its own resting order on Kuru (Range
+ * Trader, Mean Reverter's spot side) cannot run there.
+ */
+export const KURU_OPEN_ORDERS_READABLE: boolean = kuruDeploymentFromEnv() !== 'set-c';
+
+/**
  * The market a single-market preset starts on, per deployment (SEN-198): a
  * book with resting liquidity, so a fresh hire has something to trade. Set C's
  * MON-USDC book is empty (cbBTC-USDC, WETH-USDC and XAUt-USDC are quoted), so

@@ -128,8 +128,10 @@ all. The first trade on each venue asks you to acknowledge its risks. Your
 wallet approves and deposits into your Kuru account, then places the order; each
 step is a sponsored send. Before your device key signs any step, the app checks
 it against what it computed itself (the contract, the function, the amounts, the
-worst price) and refuses anything it does not recognise. Resting orders cancel
-from **Portfolio → Orders**. cbBTC-USDC, WETH-USDC and XAUt-USDC have bids and
+worst price) and refuses anything it does not recognise. On this Kuru
+deployment a resting limit order cannot be listed or cancelled from Sente: it
+rests until it fills, and its funds show as locked balance (see Known limits).
+cbBTC-USDC, WETH-USDC and XAUt-USDC have bids and
 asks; MON-USDC is empty. Kuru charges Sente's 0.1% builder fee in the asset you
 receive, and the review shows it.
 
@@ -173,8 +175,11 @@ phone and on the web. That has not been confirmed on a real device pair yet.
   because the newest one's test USDC is handed out on request only.** Its four markets (MON, WETH, cbBTC and XAUt
   against USDC) are read from the chain, since Kuru's APIs list only the new
   deployment: they have no price history, and resting orders show as locked
-  balance rather than in **Portfolio → Orders**. An agent hired on the other
-  deployment says so on its page and moves over with **Amend**.
+  balance rather than in **Portfolio → Orders**, so they cannot be cancelled
+  from Sente. For the same reason Range Trader is not offered, and Mean
+  Reverter trades Perpl only: both find their resting target again on each run.
+  An agent hired on the other deployment says so on its page and moves over
+  with **Amend**.
 - **Perps in the browser go through Sente's relay** (above).
 - **No stop-loss or take-profit orders** on either venue.
 - **Credits end at the free tier.** Paid credits are not open on this deployment.

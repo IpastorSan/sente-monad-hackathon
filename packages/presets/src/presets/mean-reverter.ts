@@ -7,6 +7,7 @@ import {
   type CandleWindow,
   formatNumber,
   KURU_DEFAULT_SPOT_MARKET,
+  KURU_OPEN_ORDERS_READABLE,
   klinesHint,
   KURU_SPOT_MARKETS,
   marketAssets,
@@ -36,6 +37,12 @@ const PERP_LEVERAGE = 1;
 /** The app's Standard mandate (apps/mobile/src/agents/presets.ts): 100 held, 50 an order. */
 const STANDARD_DEPOSIT = 100;
 const STANDARD_MAX_ORDER = 50;
+
+/**
+ * Its spot side finds the entry by reading its resting sell back, which Set C
+ * cannot list (SEN-203): there it trades Perpl only, starting on BTC.
+ */
+const SPOT_OFFERED = KURU_OPEN_ORDERS_READABLE;
 
 function isSpot(market: string): boolean {
   return KURU_SPOT_MARKETS.includes(market);
@@ -115,19 +122,21 @@ export const meanReverter: PresetDefinition = {
   tagline: 'Fades sharp moves away from the average, betting on a snap back.',
   description:
     'When price stretches far from its recent average, it takes the other side and sells ' +
-    'once price has taken back part of the move. On Kuru spot it only buys drops; on Perpl it ' +
-    'can also short spikes, at 1x. The target rests on the venue; the stop is checked, not ' +
-    'placed, so a fast move can fill past it. It needs price history to enter; without it, it ' +
-    'waits.',
-  venues: ['kuru', 'perpl'],
+    'once price has taken back part of the move. ' +
+    (SPOT_OFFERED
+      ? 'On Kuru spot it only buys drops; on Perpl it can also short spikes, at 1x. '
+      : 'It trades Perpl perps at 1x, buying drops and shorting spikes. ') +
+    'The target rests on the venue; the stop is checked, not placed, so a fast move can fill ' +
+    'past it. It needs price history to enter; without it, it waits.',
+  venues: SPOT_OFFERED ? ['kuru', 'perpl'] : ['perpl'],
   params: [
     {
       key: 'market',
       label: 'Market',
       type: 'market',
-      venue: 'any',
+      venue: SPOT_OFFERED ? 'any' : 'perpl',
       multiple: false,
-      default: KURU_DEFAULT_SPOT_MARKET,
+      default: SPOT_OFFERED ? KURU_DEFAULT_SPOT_MARKET : 'BTC-PERP',
     },
     {
       key: 'window',

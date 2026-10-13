@@ -2,7 +2,7 @@
  * The preset catalog (SEN-68, plan B-T14a). Static: a preset is code, and a
  * change to what it tells an agent is a version bump, never a data edit.
  */
-import { resolveParams } from './params.ts';
+import { KURU_OPEN_ORDERS_READABLE, resolveParams } from './params.ts';
 import { dcaStacker } from './presets/dca-stacker.ts';
 import { fundingHarvester } from './presets/funding-harvester.ts';
 import { guardian } from './presets/guardian.ts';
@@ -22,12 +22,32 @@ const PRESETS: readonly PresetDefinition[] = [
   meanReverter,
 ];
 
+/**
+ * The presets that can be hired on the active deployment. Range Trader is
+ * withheld while Kuru's open orders cannot be read (Set C, SEN-203): its
+ * target is a resting sell it must find again on every run.
+ */
+const OFFERED: readonly PresetDefinition[] = KURU_OPEN_ORDERS_READABLE
+  ? PRESETS
+  : PRESETS.filter((preset) => preset !== rangeTrader);
+
+/** The hireable catalog, in display order. */
 export function listPresets(): readonly PresetDefinition[] {
-  return PRESETS;
+  return OFFERED;
 }
 
+/**
+ * Any preset by id, offered or not: an agent hired from one still needs its
+ * name and params. Hiring goes through {@link renderPreset}, which only takes
+ * an offered one.
+ */
 export function getPreset(id: string): PresetDefinition | undefined {
   return PRESETS.find((preset) => preset.id === id);
+}
+
+/** Whether `id` can be hired on the active deployment. */
+export function isPresetOffered(id: string): boolean {
+  return OFFERED.some((preset) => preset.id === id);
 }
 
 export type RenderResult =
@@ -45,6 +65,17 @@ export type RenderResult =
 export function renderPreset(id: string, raw: Record<string, unknown>): RenderResult {
   const def = getPreset(id);
   if (!def) return { ok: false, errors: [{ key: 'id', message: `unknown preset ${id}` }] };
+  if (!isPresetOffered(id)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          key: 'id',
+          message: `${def.name} is not available on this Kuru deployment: it cannot read back its resting orders`,
+        },
+      ],
+    };
+  }
   const resolved = resolveParams(def, raw);
   if (!resolved.ok) return resolved;
   const { strategy, systemPrompt } = def.render(resolved.params);
