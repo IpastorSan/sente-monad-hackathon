@@ -18,6 +18,7 @@ import {
 } from '../privy/testing/fake-privy';
 import {
   AgentTransactionSender,
+  InsufficientGasError,
   type AgentChainClient,
   type AgentLog,
   type AgentSendReport,
@@ -95,6 +96,7 @@ function setup(
     handle?: (request: CapturedRequest) => Reply;
     userOpSuccess?: boolean;
     onSent?: (report: AgentSendReport) => void;
+    monWei?: bigint;
   } = {},
 ) {
   const fake = fakePrivy(options.handle);
@@ -110,7 +112,7 @@ function setup(
   let lastUserOp: Hex | undefined;
   const chain: AgentChainClient = {
     pendingNonce: () => Promise.resolve(3),
-    balance: () => Promise.resolve(10n ** 18n),
+    balance: () => Promise.resolve(options.monWei ?? 10n ** 18n),
     fees: () => Promise.resolve({ maxFeePerGas: 102n, maxPriorityFeePerGas: 2n }),
     sendRawTransaction: (raw) => {
       broadcast.push(raw);
@@ -219,6 +221,26 @@ describe('AgentTransactionSender, sponsored (SEN-211)', () => {
     expect(broadcast).toEqual(['0x02f8signed']);
     expect(receipt!.success).toBe(true);
     expect(receipt!.userOpHash).toBeUndefined();
+  });
+
+  it('a fallback the wallet cannot pay for is refused for gas after the sign, never broadcast', async () => {
+    const noTwin = (request: CapturedRequest) =>
+      rpcMethod(request) === 'eth_sendTransaction' ? policyViolation : undefined;
+    const broke = setup({ handle: noTwin, monWei: 0n });
+    await expect(broke.sender.sendAll(WALLET, [APPROVE])).rejects.toBeInstanceOf(
+      InsufficientGasError,
+    );
+    expect(broke.rpc().map(rpcMethod)).toEqual(['eth_sendTransaction', 'eth_signTransaction']);
+    expect(broke.broadcast).toEqual([]);
+
+    // A call the mandate forbids, from the same 0-MON wallet, is still the enclave's refusal.
+    const forbidden = setup({
+      handle: (request) => (rpcMethod(request) ? policyViolation : undefined),
+      monWei: 0n,
+    });
+    await expect(forbidden.sender.sendAll(WALLET, [APPROVE])).rejects.toBeInstanceOf(
+      EnclaveRefusedError,
+    );
   });
 
   it('a call the mandate forbids is refused on both paths, and nothing is broadcast', async () => {

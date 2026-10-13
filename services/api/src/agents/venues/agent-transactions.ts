@@ -311,7 +311,9 @@ export class AgentTransactionSender {
       receipt = await this.#sendSponsored(wallet, tx, this.#sponsored, timing);
       via = receipt ? 'sponsored' : 'signed_after_refusal';
     }
-    receipt ??= await this.#signAndBroadcast(wallet, tx, timing);
+    // A fallback skipped the up-front gas gate (sponsored lists are not gated),
+    // so its one leg is gated between the enclave's yes and the broadcast.
+    receipt ??= await this.#signAndBroadcast(wallet, tx, timing, via === 'signed_after_refusal');
     this.#report(wallet, tx, via, receipt, timing);
     return receipt;
   }
@@ -397,6 +399,7 @@ export class AgentTransactionSender {
     wallet: AgentWalletRef,
     tx: AgentTransaction,
     timing: SendTiming,
+    gateGas = false,
   ): Promise<AgentReceipt> {
     const [pending, fees] = await Promise.all([
       this.#chain.pendingNonce(wallet.address),
@@ -420,6 +423,9 @@ export class AgentTransactionSender {
 
     // A refusal throws here, before anything reaches the chain.
     const signed = await this.#wallets.signTransaction(wallet.walletId, request);
+    // After the sign, so a call the mandate forbids is still reported as that,
+    // not as a gas shortfall; a signature that is never broadcast costs nothing.
+    if (gateGas) await this.#gasGate(wallet, [tx]);
     const hash = await this.#chain.sendRawTransaction(signed);
     timing.submittedAt = Date.now();
     this.#lastNonce.set(wallet.walletId, nonce);
