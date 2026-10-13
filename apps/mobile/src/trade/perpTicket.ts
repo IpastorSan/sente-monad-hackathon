@@ -14,7 +14,8 @@
  * estimate before the fill: it needs the market's maintenance margin, which
  * `/markets` does not send. The position screen shows Perpl's own figure.
  */
-import { shortSize, toUnits, unitsToDecimal } from './ticket.ts';
+import { toUnits, unitsToDecimal } from './ticket.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 
 /** `"0.01"`: 1%, the most a market order may fill away from the mark. */
 export const PERP_MAX_SLIPPAGE = '0.01';
@@ -131,7 +132,7 @@ export function evaluatePerpTicket(input: PerpTicketInput): PerpTicket {
   const marginCents = (notionalCents * 100n + levHundredths - 1n) / levHundredths;
   const notional = cents(notionalCents);
   const margin = cents(marginCents);
-  const sub = `≈ ${shortSize(size)} ${market.base} · ${margin} AUSD margin`;
+  const sub = `≈ ${displayAmount(size)} ${market.base} · ${margin} AUSD margin`;
 
   const availableCents = input.available === null ? null : toUnits(input.available, CENTS);
   if (availableCents !== null && marginCents > availableCents) {

@@ -15,10 +15,11 @@ function balance(symbol: string, raw: bigint, decimals: number): TokenBalance {
   };
 }
 
-test('formatBalance shows a stablecoin to 2 places and MON to 4', () => {
+test('formatBalance shows a stablecoin to 2 places and a token to at most 4', () => {
   assert.equal(formatBalance(balance('AUSD', 1_204_500_000n, 6)), '1,204.50');
   assert.equal(formatBalance(balance('USDC', 0n, 6)), '0.00');
-  assert.equal(formatBalance(balance('MON', 2_500_000_000_000_000_000n, 18)), '2.5000');
+  assert.equal(formatBalance(balance('MON', 2_500_000_000_000_000_000n, 18)), '2.5');
+  assert.equal(formatBalance(balance('MON', 145_249_999_000_000_000n, 18)), '0.1452');
 });
 
 test('formatBalance truncates, so the figure never overstates the balance', () => {
@@ -26,8 +27,9 @@ test('formatBalance truncates, so the figure never overstates the balance', () =
   assert.equal(formatBalance(balance('USDC', 1_999_999n, 6)), '1.99');
 });
 
-test('formatBalance falls back to 2 places for a token it does not know', () => {
-  assert.equal(formatBalance(balance('WETH', 1_500_000n, 6)), '1.50');
+test('formatBalance gives a token it does not know the same 4-place rule', () => {
+  assert.equal(formatBalance(balance('WETH', 1_500_000n, 6)), '1.5');
+  assert.equal(formatBalance(balance('WETH', 13_920_066n, 9)), '0.0139');
 });
 
 test('a balance the API did not send is a dash, never a confident 0.00', () => {

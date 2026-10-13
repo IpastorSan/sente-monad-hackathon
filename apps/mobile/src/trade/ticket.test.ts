@@ -222,8 +222,8 @@ test('a market buy is sized against the worst price, and says so', () => {
   assert.equal(ticket.sizeUnits, 20_273_685_789n);
   assert.equal(ticket.priceUnits, 986_106n);
   assert.equal(ticket.needAtoms, USDC('200'));
-  assert.deepEqual(ticket.cta, { label: 'Buy 202.7 MON', enabled: true });
-  assert.equal(ticket.sub, '≈ 202.7 MON · at 0.9812');
+  assert.deepEqual(ticket.cta, { label: 'Buy 202.7369 MON', enabled: true });
+  assert.equal(ticket.sub, '≈ 202.7369 MON · at 0.9812');
   assert.deepEqual(ticket.disclosure, [
     'Market · est. fill 0.9812 · fee 0.04 USDC',
     'Max slippage 0.5%',
@@ -346,7 +346,7 @@ test('review rows carry the bound the order is signed with', () => {
     [
       ['Est. fill', '0.9812 USDC'],
       ['Worst price', '0.9861 USDC · +0.5%'],
-      ['Size', '202.7 MON'],
+      ['Size', '202.7369 MON'],
       ['You pay at most', '200.00 USDC with fee'],
       ['Fee', '0.04 USDC'],
       ["If it can't fill at 0.9861", 'the rest is cancelled'],
@@ -395,7 +395,7 @@ test('the result says the Sente fee in the asset it was paid in (SEN-195)', () =
       senteFeeAsset: 'cbBTC',
       senteFeeQuote: '0.0143',
     }),
-    '0.00000013 cbBTC (≈ $0.01)',
+    '<0.0001 cbBTC (≈ $0.01)',
   );
   assert.equal(
     senteFeePaidText({ ...result, senteFee: '0.0143', senteFeeAsset: 'USDC' }),
@@ -448,7 +448,7 @@ test('a partial fill says how much, why, and never rounds the percent up', () =>
   assert.equal(view.mark, 'half');
   assert.equal(view.filledPct, 61);
   assert.equal(view.fillLine, 'Filled 61% · rest cancelled');
-  assert.equal(view.detail, 'of 203.8 · at 0.9829 avg');
+  assert.equal(view.detail, 'of 203.83 · at 0.9829 avg');
   assert.match(view.why ?? '', /worst price \(0\.9861, max slippage 0\.5%\)/);
   assert.deepEqual(view.fills[0], { label: '81.48 MON', value: 'at 0.9818 · 80.00 USDC' });
 
@@ -543,6 +543,6 @@ test('the picker lists spot markets whose base you hold', () => {
   ]);
   assert.deepEqual(
     held.map((h) => [h.market.symbol, h.holding]),
-    [['MON-USDC', '412 MON']],
+    [['MON-USDC', '412.0012 MON']],
   );
 });

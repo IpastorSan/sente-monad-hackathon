@@ -192,7 +192,7 @@ test('describeMove turns each Ledger kind into a stone and a line', () => {
     describeMove(
       event('fill', { venue: 'kuru', symbol: 'MON-USDC', side: 'buy', filledSize: '260' }),
     )?.line,
-    'Bought 260 MON-USDC on Kuru',
+    'Bought 260 MON on Kuru',
   );
   assert.equal(
     describeMove(event('refusal', { code: 'policy_violation' }, { layer: 'enclave' }))?.stone,

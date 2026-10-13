@@ -13,6 +13,7 @@ import type { Address } from 'viem';
 
 import type { AuthorizationPayload } from '../auth/deviceKey.ts';
 import { unboundFetch } from '../platform/fetch.ts';
+import { amountFigure } from '../ui/assetAmounts.ts';
 import { API_URL, type SessionAuth } from '../wallet/api.ts';
 import type { PerpsStatusDto } from './perps.ts';
 import type { RunSummary, RunTranscriptPage } from './terminal.ts';
@@ -739,7 +740,9 @@ export type AgentFundsLeft = { where: 'wallet' | 'kuru' | 'perpl'; asset: string
 /** `12.5 USDC in its wallet, 0.1 BTC on Perpl`. */
 export function describeFundsLeft(left: readonly AgentFundsLeft[]): string {
   const place = { wallet: 'in its wallet', kuru: 'on Kuru', perpl: 'on Perpl' } as const;
-  return left.map((f) => `${f.amount} ${f.asset} ${place[f.where] ?? ''}`.trim()).join(', ');
+  return left
+    .map((f) => `${amountFigure(f.amount, f.asset)} ${f.asset} ${place[f.where] ?? ''}`.trim())
+    .join(', ');
 }
 
 /** A non-2xx response, carrying the API's stable `reason` when it sent one. */

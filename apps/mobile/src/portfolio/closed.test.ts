@@ -271,7 +271,7 @@ test('closedRow: exact money, both dates, and hiding keeps the percent', () => {
   assert.ok(p);
   const row = closedRow(p, false);
   assert.equal(row.title, 'MON');
-  assert.equal(row.caption, '10.0000 MON · 1.1000 → 1.3000 · Kuru');
+  assert.equal(row.caption, '10 MON · 1.1000 → 1.3000 · Kuru');
   assert.equal(row.pnl, '+2.00');
   assert.equal(row.tone, 'up');
   assert.equal(row.under, '+18.18% · Sep 20 – Sep 24');

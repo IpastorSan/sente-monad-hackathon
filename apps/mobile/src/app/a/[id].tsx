@@ -39,6 +39,7 @@ import { addressUrl, txUrl } from '@/chain/explorer';
 import { useSession } from '@/session';
 import { amountsText, amountsTone, signedAmountsText } from '@/ui/assetAmounts';
 import { Avatar } from '@/ui/Avatar';
+import { displayAmount } from '@/ui/displayAmount';
 import { shortAddress } from '@/ui/format';
 import { Mark, Pill, Sigil, Stat, Stone } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
@@ -371,7 +372,7 @@ function Fills({ fills }: { fills: readonly PublicFill[] }) {
                   ) : (
                     'Filled '
                   )}
-                  {fill.size} {fill.symbol}
+                  {displayAmount(fill.size)} {fill.symbol}
                   {fill.price ? <Text style={text.dim}> at {fill.price}</Text> : null}
                 </Text>
                 <Text style={text.caption}>

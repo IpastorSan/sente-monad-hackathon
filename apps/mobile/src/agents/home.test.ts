@@ -104,7 +104,7 @@ test('a fill reads as a sentence with its block for the ramp', () => {
     agentId: 'a1',
     at: NOW,
     stone: 'trade',
-    title: 'Range Hunter bought 180 MON-USDC',
+    title: 'Range Hunter bought 180 MON',
     detail: 'at 0.9744 on Kuru',
     block: { number: 42, consensus },
   });
@@ -496,7 +496,17 @@ test('atWork names the quote currency, and gives each asset its own figure on bo
     ).pnl,
     { label: '−0.13 USDC\n+0.96 AUSD', tone: null },
   );
-  assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0', [])).pnl?.label, '0.00');
+  assert.equal(
+    atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0', [])).pnl?.label,
+    '0.00 USDC',
+  );
+  assert.equal(
+    atWork(
+      { mandate: mandate(['perpl', 'kuru']) },
+      day('0', [{ asset: 'AUSD', last24h: '0', allTime: '1' }]),
+    ).pnl?.label,
+    '0.00 AUSD',
+  );
   assert.deepEqual(atWork({ mandate: mandate(['kuru']) }, undefined), { move: null, pnl: null });
 });
 

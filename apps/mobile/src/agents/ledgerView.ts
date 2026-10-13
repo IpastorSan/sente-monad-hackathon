@@ -30,6 +30,7 @@ import {
   signedAmountsText,
   type AssetAmount,
 } from '../ui/assetAmounts.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 import { shortAddress } from '../ui/format.ts';
 import { signedFigure } from '../ui/money.ts';
 
@@ -82,7 +83,7 @@ export function outcome(entry: VerdictEntry): 'up' | 'down' | null {
 
 /** `Bought 180.00 MON` — the base asset of `MON-USDC`, never the pair. */
 export function tradeHeadline(entry: TradeEntry): string {
-  const amount = `${entry.size}${baseOf(entry.market)}`;
+  const amount = `${displayAmount(entry.size)}${baseOf(entry.market)}`;
   if (!entry.filled) return `Didn’t fill: ${verbOf(entry.direction, 'order')} ${amount}`;
   return `${verbOf(entry.direction, 'past')} ${amount}`;
 }

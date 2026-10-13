@@ -20,8 +20,8 @@ import { sumDecimals } from '../agents/ledgerView.ts';
 import type { TickerDto } from '../markets/api.ts';
 import type { Portfolio, PortfolioFill } from '../trade/types.ts';
 import { formatPrice as formatPlaces } from '../ui/chart/geometry.ts';
-import { addAmounts, amountsText, type AssetAmount } from '../ui/assetAmounts.ts';
-import { BALANCE_PLACES } from '../ui/format.ts';
+import { addAmounts, amountFigure, amountsText, type AssetAmount } from '../ui/assetAmounts.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct, maskDigits, pctDirection, type Direction } from '../ui/tradingFormat.ts';
 
@@ -118,18 +118,12 @@ export function money(value: string | null, places = 2): string {
 }
 
 /**
- * A balance in its own token, TRUNCATED to the places `ui/format.ts` gives
- * that token (MON 4, stables 2, anything else 4): a balance is read when
- * deciding what it can cover, so it must never show a hundredth you don't
- * have. Mirrors `formatBalance`, which works on atoms.
+ * A balance in its own token: a stablecoin at 2 places, truncated (a balance
+ * is read when deciding what it can cover, so it never shows a cent you don't
+ * have); any other token at most 4 places (`ui/displayAmount.ts`, SEN-215).
  */
 export function amountText(value: string, symbol: string): string {
-  const places = BALANCE_PLACES[symbol] ?? 4;
-  const parsed = parse(value);
-  if (parsed === null) return value;
-  const drop = Math.max(0, parsed.scale - places);
-  const truncated = { atoms: parsed.atoms / 10n ** BigInt(drop), scale: parsed.scale - drop };
-  return formatPlaces(render(truncated), places) ?? value;
+  return amountFigure(value, symbol);
 }
 
 /** `+11.53` / `−4.10` / `0.00`, at 2 places, floored like `money`. */
@@ -689,13 +683,10 @@ function orderRow(order: OrderDto, tickers: readonly TickerDto[], now: number): 
   const ticker = tickers.find((t) => t.venue === order.venue && t.symbol === order.symbol);
   const market = (spot ? ticker?.last : ticker?.mark) ?? ticker?.last ?? ticker?.mid ?? null;
   const remaining = subDecimal(order.size, order.filledSize) ?? order.size;
-  const places = BALANCE_PLACES[base] ?? 2;
   const kind = `${order.type === 'limit' ? 'Limit' : 'Market'} · ${order.symbol} · ${
     spot ? 'Kuru spot' : 'Perpl'
   }`;
-  const filledLine = `${formatPlaces(order.filledSize, places) ?? order.filledSize} of ${
-    formatPlaces(order.size, places) ?? order.size
-  } filled so far`;
+  const filledLine = `${displayAmount(order.filledSize)} of ${displayAmount(order.size)} filled so far`;
 
   let distance: string | null = null;
   let track: OrderRow['track'] = null;
@@ -795,7 +786,7 @@ function fillRow(fill: PortfolioFill, realised: RealisedByFill): FillRow {
   const spot = fill.venue === 'kuru';
   const base = fill.symbol !== null ? baseOf(fill.symbol) : null;
   const unit = fill.symbol === null ? '' : spot ? ` ${base}` : ` ${fill.symbol}`;
-  const size = spot && base !== null ? amountText(fill.size, base) : fill.size;
+  const size = spot && base !== null ? amountText(fill.size, base) : displayAmount(fill.size);
   const key = `${fill.venue}:${fill.tradeId ?? ''}:${fill.venueTradeId}`;
   const trip = realised.get(key);
   return {
@@ -899,7 +890,7 @@ export function perpDetail(position: PositionDto, hidden = false): PerpDetail {
     pnl: { sign: tone === 'up' ? '+' : tone === 'down' ? MINUS : '', magnitude, tone },
     pct: formatPct(pct),
     pctTone: pctDirection(pct),
-    size: `${shown(position.size, hidden)} ${base} · ${shown(money(notional), hidden)} AUSD`,
+    size: `${shown(displayAmount(position.size), hidden)} ${base} · ${shown(money(notional), hidden)} AUSD`,
     margin: `${shown(money(position.margin), hidden)} AUSD · ${position.leverage}×`,
     funding:
       position.fundingPaid !== null

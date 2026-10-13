@@ -13,6 +13,7 @@ import type { Agent, AgentFill, AgentPortfolioDto } from '../agents/api.ts';
 import { marketFor } from '../agents/mandate.ts';
 import type { PortfolioFill } from '../trade/types.ts';
 import { formatPrice as formatPlaces, priceDecimals } from '../ui/chart/geometry.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPrice, pctChange } from '../ui/tradingFormat.ts';
 
@@ -443,7 +444,7 @@ export function agentStake(portfolio: AgentPortfolioDto | null, market: MarketDt
     const side = position.side === 'long' ? 'Long' : 'Short';
     const entry = formatPrice(position.entryPrice, tick) ?? position.entryPrice;
     return {
-      line: `${side} ${trimZeros(position.size)} ${market.base} ${position.leverage}× from ${entry}`,
+      line: `${side} ${displayAmount(position.size)} ${market.base} ${position.leverage}× from ${entry}`,
       pnl: position.unrealizedPnl,
     };
   }
@@ -453,7 +454,7 @@ export function agentStake(portfolio: AgentPortfolioDto | null, market: MarketDt
   const avg = holding.costBasis.avgPrice;
   const at = avg === null ? '' : ` at ${formatPrice(avg, tick) ?? avg}`;
   return {
-    line: `Holds ${trimZeros(holding.amount)} ${market.base}${at}`,
+    line: `Holds ${displayAmount(holding.amount)} ${market.base}${at}`,
     pnl: holding.costBasis.unrealizedPnl,
   };
 }
@@ -462,10 +463,6 @@ export function agentStake(portfolio: AgentPortfolioDto | null, market: MarketDt
 export function signedAmount(value: Decimal): string | null {
   // The app's one signed formatter (SEN-136), so a stake reads as the cockpit does.
   return signedFigure(value, 2)?.text ?? null;
-}
-
-function trimZeros(value: Decimal): string {
-  return value.includes('.') ? value.replace(/\.?0+$/, '') : value;
 }
 
 // ---------------------------------------------------------------------------
@@ -582,7 +579,7 @@ function candleAt(klines: readonly KlineDto[], at: number): number {
 export function fillLine(fill: MarketFill, tick: Decimal): string {
   const verb = fill.side === 'buy' ? 'bought' : fill.side === 'sell' ? 'sold' : 'filled';
   const price = fill.price === null ? null : (formatPrice(fill.price, tick) ?? fill.price);
-  return `${fill.name} ${verb} ${trimZeros(fill.size)}${price === null ? '' : ` at ${price}`}`;
+  return `${fill.name} ${verb} ${displayAmount(fill.size)}${price === null ? '' : ` at ${price}`}`;
 }
 
 const FILL_DAY_MS = 24 * 60 * 60 * 1000;

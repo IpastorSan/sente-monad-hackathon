@@ -2,7 +2,8 @@
  * The formatting rules every screen shares. Plain node, no React Native, so
  * `format.test.ts` runs with no device.
  */
-import { formatFixedAtoms } from '../agents/amounts.ts';
+import { formatAtoms, formatFixedAtoms } from '../agents/amounts.ts';
+import { displayAmount } from './displayAmount.ts';
 import type { TokenBalance } from '../wallet/api.ts';
 
 /**
@@ -23,14 +24,21 @@ export const BALANCE_PLACES: Record<string, number> = { AUSD: 2, USDC: 2, MON: 4
  *
  * The dash is deliberate: a token missing from the response means the server's
  * token list and ours disagree, and `0.00` would be a confident lie about
- * money. `formatFixedAtoms` truncates, so the figure is never larger than the
- * balance behind it.
+ * money. A stablecoin is truncated (`formatFixedAtoms`), so the figure is
+ * never larger than the balance behind it; any other token follows the one
+ * token rule, at most 4 places (`displayAmount`, SEN-215).
  */
 export function formatBalance(balance: TokenBalance | null): string {
   if (balance === null) return '—';
-  return formatFixedAtoms(balance.raw, balance.decimals, {
-    places: BALANCE_PLACES[balance.symbol] ?? 2,
-  });
+  return formatTokenAtoms(balance.raw, balance.decimals, balance.symbol);
+}
+
+/** `formatBalance` for atoms already in hand: stablecoins truncated to 2, tokens at most 4. */
+export function formatTokenAtoms(atoms: bigint, decimals: number, symbol: string): string {
+  if (symbol === 'USDC' || symbol === 'AUSD') {
+    return formatFixedAtoms(atoms, decimals, { places: BALANCE_PLACES[symbol] ?? 2 });
+  }
+  return displayAmount(formatAtoms(atoms, decimals, { group: false }));
 }
 
 /** `0x1234…abcd`. Lists only — screens that ask for trust show the whole address. */

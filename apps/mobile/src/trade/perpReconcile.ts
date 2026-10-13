@@ -23,6 +23,7 @@ import {
   type PositionLike,
 } from '../portfolio/perplOverlay.ts';
 import { PerplTraderError } from './perplTrader.ts';
+import { displayAmount } from '../ui/displayAmount.ts';
 
 /**
  * One read of the account's position on the market: the position, `null`
@@ -239,7 +240,7 @@ export type CloseNotice = {
 function fillText(order: Order | null, base: string): string | null {
   if (!order || !(Number(order.filledSize) > 0)) return null;
   const at = order.averageFillPrice ? ` at ${order.averageFillPrice}` : '';
-  return `${order.filledSize} ${base}${at}`;
+  return `${displayAmount(order.filledSize)} ${base}${at}`;
 }
 
 export function describeClose(verdict: CloseVerdict, symbol: string, base: string): CloseNotice {
@@ -271,7 +272,7 @@ export function describeClose(verdict: CloseVerdict, symbol: string, base: strin
         title: 'Partly closed',
         detail: `${filled ? `${filled} closed.` : 'Part of it closed.'} ${
           verdict.remaining
-            ? `${verdict.remaining.size} ${base} is still open.`
+            ? `${displayAmount(verdict.remaining.size)} ${base} is still open.`
             : 'The rest is still open.'
         }`,
         txHash: verdict.order?.txHash,

@@ -71,6 +71,7 @@ import { usePolling } from '@/markets/usePolling';
 import { useSession } from '@/session';
 import { Chart } from '@/ui/chart/Chart';
 import { Pill, Stone } from '@/ui/goban';
+import { displayAmount } from '@/ui/displayAmount';
 import { Icon } from '@/ui/icons';
 import {
   Button,
@@ -623,7 +624,7 @@ function AskSheet({
     <Sheet visible={intent !== null} title={`Ask ${agent.name}`} onClose={onClose}>
       <Text style={text.dim}>
         {position
-          ? `About its ${position.side} ${position.base} · ${position.size}. `
+          ? `About its ${position.side} ${position.base} · ${displayAmount(position.size)}. `
           : `About ${symbol}. `}
         It runs now with your words as its instruction, then decides what to do.
       </Text>

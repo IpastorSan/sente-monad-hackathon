@@ -33,7 +33,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { AssetMenu, type Anchor } from './AssetMenu';
-import { placesFor, truncatedAmount, type AssetAmount } from './assetAmounts';
+import { amountFigure, type AssetAmount } from './assetAmounts';
 import { headlineFor } from './headlineAsset';
 import { Icon } from './icons';
 import { Sparkline } from './chart/Sparkline';
@@ -155,8 +155,8 @@ export function BigAmounts({
   return (
     <View style={[styles.bigAmount, style]}>
       <BigNumber
-        value={truncatedAmount(line.amount, line.asset) ?? line.amount}
-        places={placesFor(line.asset, line.amount)}
+        value={amountFigure(line.amount, line.asset).replace(/,/g, '')}
+        places={amountFigure(line.amount, line.asset).split('.')[1]?.length ?? 0}
         size={size}
         blurred={blurred}
       />

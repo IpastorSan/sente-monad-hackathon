@@ -150,10 +150,11 @@ test('USDC and AUSD are $1, other assets take their Kuru last price, the rest ar
   assert.equal(usdPrice('WETH', TICKERS), null);
 });
 
-test('balances truncate to their token places', () => {
+test('stablecoin balances truncate to the cent; tokens show at most 4 places (SEN-215)', () => {
   assert.equal(amountText('0.009', 'AUSD'), '0.00');
   assert.equal(amountText('1284.5', 'AUSD'), '1,284.50');
-  assert.equal(amountText('412.123456', 'MON'), '412.1234');
+  assert.equal(amountText('412.123456', 'MON'), '412.1235');
+  assert.equal(amountText('0.013920066', 'WETH'), '0.0139');
 });
 
 test('holdings: cash per currency, venue cash, spot at the Kuru price, perps as margin + uPnL', () => {
@@ -480,7 +481,7 @@ test('orders: distance to the market, what cancelling returns, when it was place
   assert.equal(row.kind, 'Limit · MON-USDC · Kuru spot');
   assert.equal(row.distance, 'Fills if MON drops 3.18%.');
   assert.equal(row.backToCash, '142.50 USDC');
-  assert.equal(row.filledLine, '0.0000 of 150.0000 filled so far');
+  assert.equal(row.filledLine, '0 of 150 filled so far');
   assert.equal(row.placed, 'Today 09:14 · good till cancelled');
   assert.ok(row.track && row.track.limit < row.track.market);
 
@@ -497,7 +498,7 @@ test('orders: distance to the market, what cancelling returns, when it was place
     NOW,
   );
   assert.equal(sell?.distance, 'At or through the market: it should fill on the next match.');
-  assert.equal(sell?.backToCash, '100.0000 MON');
+  assert.equal(sell?.backToCash, '100 MON');
   assert.deepEqual(orderRows(null, TICKERS, NOW), []);
 });
 
@@ -545,7 +546,7 @@ test('history: fills grouped by UTC day, newest first, with the chain hash', () 
     tx: '0x5d02…e7f9',
     hash: '0x5d02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaae7f9',
   });
-  assert.equal(days[1]?.fills[0]?.title, '412.0000 MON');
+  assert.equal(days[1]?.fills[0]?.title, '412 MON');
   assert.equal(days[2]?.fills[0]?.title, '0.25 ETH-PERP');
   assert.equal(days[2]?.fills[0]?.detail, 'at 2498.00 · Perpl');
   assert.equal(days[2]?.fills[0]?.tx, null);

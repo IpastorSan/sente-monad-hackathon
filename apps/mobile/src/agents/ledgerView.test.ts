@@ -132,9 +132,9 @@ test('with no number, the verdict’s own judgement decides; a flat one did not 
 });
 
 test('a trade reads as a fill report: the base asset, the price and the venue', () => {
-  assert.equal(tradeHeadline(trade()), 'Bought 180.00 MON');
-  assert.equal(tradeHeadline(trade({ direction: 'short' })), 'Sold 180.00 MON');
-  assert.equal(tradeHeadline(trade({ direction: null, market: '—' })), 'Traded 180.00');
+  assert.equal(tradeHeadline(trade()), 'Bought 180 MON');
+  assert.equal(tradeHeadline(trade({ direction: 'short' })), 'Sold 180 MON');
+  assert.equal(tradeHeadline(trade({ direction: null, market: '—' })), 'Traded 180');
   assert.equal(tradeDetail(trade()), 'at 0.9744 · Kuru spot');
   assert.equal(
     tradeDetail(trade({ venue: 'perpl', market: 'BTC-PERP', leverage: 3 })),
@@ -145,7 +145,7 @@ test('a trade reads as a fill report: the base asset, the price and the venue', 
 
 test('an order that did not fill says so plainly, with the venue’s own status', () => {
   const failed = trade({ filled: false, size: '480.00', status: 'failed' });
-  assert.equal(tradeHeadline(failed), 'Didn’t fill: buy 480.00 MON');
+  assert.equal(tradeHeadline(failed), 'Didn’t fill: buy 480 MON');
   assert.equal(tradeDetail(failed), 'at 0.9744 · Kuru spot · failed');
 });
 
