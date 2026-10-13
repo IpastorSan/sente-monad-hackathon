@@ -1,24 +1,28 @@
-import { Logger, Module, type Provider } from '@nestjs/common';
+import { Module, type Provider } from '@nestjs/common';
 
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
-import { statePath } from '../state/json-file';
-import { StateDirLease, StateModule } from '../state/state.module';
+import { SenteDbLease, StateModule } from '../state/state.module';
+import { selectStore } from '../state/store-backend';
 import { ProfileController } from './profile.controller';
 import { ProfileService } from './profile.service';
-import { PROFILE_STORE, ProfileStore } from './profile.store';
+import { FileProfileStore, PROFILE_STORE, type ProfileStore } from './profile.store';
+import { SqliteProfileStore } from './sqlite-profile.store';
 
-/** `profiles.json` under `STATE_DIR`, in memory otherwise, like every other store here. */
+/**
+ * `profiles.json` under `STATE_DIR`, or a table in `sente.db` under
+ * `STORE_BACKEND=sqlite` (SEN-205); in memory otherwise.
+ */
 const storeProvider: Provider = {
   provide: PROFILE_STORE,
-  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
-  inject: [StateDirLease],
-  useFactory: (_lease: StateDirLease): ProfileStore => {
-    const path = statePath('profiles');
-    const store = new ProfileStore(path);
-    if (path) Logger.log(`${store.size} profile(s) loaded from ${store.path}`, 'ProfileStore');
-    return store;
-  },
+  // Injected so the STATE_DIR lock and the database are held before this store opens (SEN-161).
+  inject: [SenteDbLease],
+  useFactory: (lease: SenteDbLease): ProfileStore =>
+    selectStore<ProfileStore>(lease, 'profiles.json', 'profile(s)', {
+      memory: () => new FileProfileStore(),
+      file: (path) => new FileProfileStore(path) as FileProfileStore & { path: string },
+      sqlite: (db) => new SqliteProfileStore(db),
+    }),
 };
 
 const serviceProvider: Provider = {

@@ -4,8 +4,8 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { monadTestnet } from 'viem/chains';
 
 import { NonceManagedSender } from '../gas/sender/nonce-managed-sender';
-import { statePath } from '../state/json-file';
-import { StateDirLease, StateModule } from '../state/state.module';
+import { SenteDbLease, StateModule } from '../state/state.module';
+import { selectStore } from '../state/store-backend';
 import {
   STARTER_KIT_CONFIG,
   describeStarterKitConfig,
@@ -19,7 +19,8 @@ import {
   type StarterKitChain,
   type StarterKitSender,
 } from './starter-kit.service';
-import { STARTER_KIT_STORE, StarterKitStore } from './starter-kit.store';
+import { FileStarterKitStore, STARTER_KIT_STORE, type StarterKitStore } from './starter-kit.store';
+import { SqliteStarterKitStore } from './sqlite-starter-kit.store';
 
 const configProvider: Provider = {
   provide: STARTER_KIT_CONFIG,
@@ -32,19 +33,20 @@ const configProvider: Provider = {
 };
 
 /**
- * File-backed under `STATE_DIR`, so a redeploy does not send everybody a
+ * File-backed under `STATE_DIR` (a table in `sente.db` under
+ * `STORE_BACKEND=sqlite`, SEN-205), so a redeploy does not send everybody a
  * second kit; in memory otherwise, like every other store here.
  */
 const storeProvider: Provider = {
   provide: STARTER_KIT_STORE,
-  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
-  inject: [StateDirLease],
-  useFactory: (_lease: StateDirLease): StarterKitStore => {
-    const path = statePath('starter-kits');
-    const store = new StarterKitStore(path);
-    if (path) Logger.log(`${store.size} record(s) loaded from ${store.path}`, 'StarterKitStore');
-    return store;
-  },
+  // Injected so the STATE_DIR lock and the database are held before this store opens (SEN-161).
+  inject: [SenteDbLease],
+  useFactory: (lease: SenteDbLease): StarterKitStore =>
+    selectStore<StarterKitStore>(lease, 'starter-kits.json', 'starter kit(s)', {
+      memory: () => new FileStarterKitStore(),
+      file: (path) => new FileStarterKitStore(path) as FileStarterKitStore & { path: string },
+      sqlite: (db) => new SqliteStarterKitStore(db),
+    }),
 };
 
 const starterKitProvider: Provider = {

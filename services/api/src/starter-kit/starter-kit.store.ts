@@ -1,9 +1,11 @@
+// Erasable syntax and `.ts` specifiers: the SQLite store beside this file is
+// loaded by the import script under node's type stripping (CLAUDE.md gotcha 10).
 import { createHash } from 'node:crypto';
 
 import type { Address, Hash } from 'viem';
 
-import { utcDay } from '../gas/ledger/drip-ledger';
-import { JsonRecordFile } from '../state/json-file';
+import { utcDay } from '../gas/ledger/drip-ledger.ts';
+import { JsonRecordFile } from '../state/json-file.ts';
 
 /** DI token for the once-per-user record of who got a starter kit. */
 export const STARTER_KIT_STORE = Symbol('STARTER_KIT_STORE');
@@ -42,39 +44,84 @@ export function hashIp(ip: string): string {
   return createHash('sha256').update(`sente/starter-kit/ip/${ip}`).digest('hex');
 }
 
+/** What a `pending` record found at boot becomes: a restart interrupted it mid-send. */
+export function interrupted(record: StarterKitRecord): StarterKitRecord {
+  return {
+    ...record,
+    status: 'failed',
+    reason: 'interrupted by a restart while sending; not retried',
+  };
+}
+
+/** The record `claim` writes. */
+export function pendingKit(
+  userId: string,
+  address: Address,
+  now: Date,
+  ipHash: string | undefined,
+): StarterKitRecord {
+  return {
+    userId,
+    address,
+    status: 'pending',
+    txs: {},
+    ...(ipHash !== undefined ? { ipHash } : {}),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 /**
  * Who has been sent a starter kit (SEN-170): one record per user, ever.
  *
- * Synchronous on purpose, like `JsonRecordFile`: `claim` checks the user, checks
- * the day's cap and writes the record with no `await` in between, so two
- * concurrent registers for one user cannot both claim, and fifty-one users at
- * once cannot all fit under a cap of fifty.
+ * Synchronous on purpose, like `JsonRecordFile` and `node:sqlite`: `claim`
+ * checks the user, checks the day's cap and writes the record with no `await`
+ * in between, so two concurrent registers for one user cannot both claim, and
+ * fifty-one users at once cannot all fit under a cap of fifty.
  *
- * With a path (`STATE_DIR` set) every mutation is written through, so a
- * redeploy does not send a second kit to everybody who already had one. A
- * record still `pending` at boot was interrupted mid-send by the restart: it
- * is loaded as `failed` and never retried, because a transfer may have landed.
+ * Persistent stores write every mutation through, so a redeploy does not send
+ * a second kit to everybody who already had one. A record still `pending` at
+ * boot was interrupted mid-send by the restart: it becomes `failed` and is
+ * never retried, because a transfer may have landed.
+ *
+ * `FileStarterKitStore` (in memory without a path) and `SqliteStarterKitStore`
+ * (`STORE_BACKEND=sqlite`, SEN-205).
  */
-export class StarterKitStore {
+export interface StarterKitStore {
+  find(userId: string): StarterKitRecord | undefined;
+  /**
+   * Records a pending kit for `userId`, unless they already have one, the
+   * day's cap is spent, or (with `ipLimit`) the day's cap for that IP is.
+   * Failed attempts count against both caps: each one may have cost gas.
+   * The caps reset at 00:00 UTC, as the gas drip's does.
+   */
+  claim(
+    userId: string,
+    address: Address,
+    dailyCap: number,
+    now: Date,
+    ipLimit?: StarterKitIpLimit,
+  ): StarterKitClaim;
+  update(userId: string, patch: Partial<Omit<StarterKitRecord, 'userId'>>, now: Date): void;
+}
+
+/** With a path (`STATE_DIR` set) every mutation is written through to `starter-kits.json`. */
+export class FileStarterKitStore implements StarterKitStore {
   readonly #file: JsonRecordFile<StarterKitRecord> | undefined;
   readonly #byUserId = new Map<string, StarterKitRecord>();
 
   constructor(path?: string) {
     this.#file = path ? new JsonRecordFile<StarterKitRecord>(path) : undefined;
-    let interrupted = false;
+    let wasInterrupted = false;
     for (const record of this.#file?.load() ?? []) {
       if (record.status === 'pending') {
-        interrupted = true;
-        this.#byUserId.set(record.userId, {
-          ...record,
-          status: 'failed',
-          reason: 'interrupted by a restart while sending; not retried',
-        });
+        wasInterrupted = true;
+        this.#byUserId.set(record.userId, interrupted(record));
       } else {
         this.#byUserId.set(record.userId, record);
       }
     }
-    if (interrupted) this.#save();
+    if (wasInterrupted) this.#save();
   }
 
   get path(): string | undefined {
@@ -90,11 +137,6 @@ export class StarterKitStore {
     return record ? structuredClone(record) : undefined;
   }
 
-  /**
-   * Records a pending kit for `userId`, unless they already have one, the
-   * day's cap is spent, or (with `ipLimit`) the day's cap for that IP is.
-   * Failed attempts count against both caps: each one may have cost gas.
-   */
   claim(
     userId: string,
     address: Address,
@@ -103,7 +145,6 @@ export class StarterKitStore {
     ipLimit?: StarterKitIpLimit,
   ): StarterKitClaim {
     if (this.#byUserId.has(userId)) return 'exists';
-    // The caps reset at 00:00 UTC, as the gas drip's does.
     const day = utcDay(now);
     const ipHash = ipLimit ? hashIp(ipLimit.ip) : undefined;
     let today = 0;
@@ -116,15 +157,7 @@ export class StarterKitStore {
     if (today >= dailyCap) return 'capped';
     if (ipLimit && fromIp >= ipLimit.cap) return 'ip_capped';
 
-    this.#byUserId.set(userId, {
-      userId,
-      address,
-      status: 'pending',
-      txs: {},
-      ...(ipHash !== undefined ? { ipHash } : {}),
-      createdAt: now,
-      updatedAt: now,
-    });
+    this.#byUserId.set(userId, pendingKit(userId, address, now, ipHash));
     try {
       this.#save();
     } catch (error) {

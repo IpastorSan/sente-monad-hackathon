@@ -9,8 +9,9 @@
 // stripping (CLAUDE.md gotcha 10).
 
 import { migration as m001 } from './001-agents-and-user-wallets.ts';
+import { migration as m002 } from './002-small-stores-and-secrets.ts';
 import type { Migration } from './migration.ts';
 
 export type { Migration } from './migration.ts';
 
-export const MIGRATIONS: readonly Migration[] = [m001];
+export const MIGRATIONS: readonly Migration[] = [m001, m002];

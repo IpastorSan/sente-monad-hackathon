@@ -1,4 +1,6 @@
-import { JsonRecordFile } from '../state/json-file';
+// Erasable syntax and `.ts` specifiers: the SQLite store beside this file is
+// loaded by the import script under node's type stripping (CLAUDE.md gotcha 10).
+import { JsonRecordFile } from '../state/json-file.ts';
 
 /** DI token for the users' profile overrides. */
 export const PROFILE_STORE = Symbol('PROFILE_STORE');
@@ -18,14 +20,50 @@ export interface ProfileRecord {
 export type ProfileView = { name: string | null; avatarSeed: string | null };
 
 /**
- * One record per user who changed their name or avatar.
+ * One record per user who changed their name or avatar. A record that goes
+ * back to both defaults is deleted rather than kept as two nulls.
  *
- * With a path (`STATE_DIR` set) every mutation is written through to
- * `profiles.json`, like the other file-backed stores; in memory otherwise. A
- * record that goes back to both defaults is deleted rather than kept as two
- * nulls.
+ * `FileProfileStore` (in memory without a path) and `SqliteProfileStore`
+ * (`STORE_BACKEND=sqlite`, SEN-205).
  */
-export class ProfileStore {
+export interface ProfileStore {
+  get(userId: string): ProfileView;
+  /** Applies the fields present in `patch` (absent = unchanged) and answers the result. */
+  set(userId: string, patch: Partial<ProfileView>, now: Date): ProfileView;
+}
+
+/**
+ * What `set` does to `previous`, shared by both stores: the next record, the
+ * view to answer, and whether anything changed (nothing changed means nothing
+ * is written; both fields back at the default means the record goes).
+ */
+export function applyProfilePatch(
+  userId: string,
+  previous: ProfileRecord | undefined,
+  patch: Partial<ProfileView>,
+  now: Date,
+): { next: ProfileRecord; view: ProfileView; changed: boolean; empty: boolean } {
+  const next: ProfileRecord = {
+    userId,
+    name: patch.name !== undefined ? patch.name : (previous?.name ?? null),
+    avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : (previous?.avatarSeed ?? null),
+    updatedAt: now,
+  };
+  return {
+    next,
+    view: { name: next.name, avatarSeed: next.avatarSeed },
+    // Nothing changed ("Original" on the original face): no write.
+    changed:
+      next.name !== (previous?.name ?? null) || next.avatarSeed !== (previous?.avatarSeed ?? null),
+    empty: next.name === null && next.avatarSeed === null,
+  };
+}
+
+/**
+ * With a path (`STATE_DIR` set) every mutation is written through to
+ * `profiles.json`, like the other file-backed stores; in memory otherwise.
+ */
+export class FileProfileStore implements ProfileStore {
   readonly #file: JsonRecordFile<ProfileRecord> | undefined;
   readonly #byUserId = new Map<string, ProfileRecord>();
 
@@ -47,25 +85,11 @@ export class ProfileStore {
     return { name: record?.name ?? null, avatarSeed: record?.avatarSeed ?? null };
   }
 
-  /** Applies the fields present in `patch` (absent = unchanged) and answers the result. */
   set(userId: string, patch: Partial<ProfileView>, now: Date): ProfileView {
     const previous = this.#byUserId.get(userId);
-    const next: ProfileRecord = {
-      userId,
-      name: patch.name !== undefined ? patch.name : (previous?.name ?? null),
-      avatarSeed:
-        patch.avatarSeed !== undefined ? patch.avatarSeed : (previous?.avatarSeed ?? null),
-      updatedAt: now,
-    };
-    const view = { name: next.name, avatarSeed: next.avatarSeed };
-    // Nothing changed ("Original" on the original face): no rewrite of the file.
-    if (
-      next.name === (previous?.name ?? null) &&
-      next.avatarSeed === (previous?.avatarSeed ?? null)
-    ) {
-      return view;
-    }
-    if (next.name === null && next.avatarSeed === null) this.#byUserId.delete(userId);
+    const { next, view, changed, empty } = applyProfilePatch(userId, previous, patch, now);
+    if (!changed) return view;
+    if (empty) this.#byUserId.delete(userId);
     else this.#byUserId.set(userId, next);
     try {
       this.#save();
