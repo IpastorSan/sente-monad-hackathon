@@ -731,16 +731,27 @@ describe('UserWalletService and the starter kit (SEN-170)', () => {
   /** A starter kit that records grants and answers a fixed status. */
   function recordingKit(overrides: Partial<StarterKit> = {}) {
     const granted: [string, Address][] = [];
+    const ips: (string | undefined)[] = [];
     const kit: StarterKit = {
-      grant: (userId, address) => {
+      grant: (userId, address, ip) => {
         granted.push([userId, address]);
+        ips.push(ip);
         return Promise.resolve();
       },
       status: () => ({ status: 'pending' }),
       ...overrides,
     };
-    return { kit, granted };
+    return { kit, granted, ips };
   }
+
+  it('hands the client IP to the kit, for its per-IP cap (SEN-204)', async () => {
+    const { kit, ips } = recordingKit();
+    const { service } = setup({ starterKit: kit });
+
+    await service.register(USER, { devicePublicKey: deviceKey.publicKey, ip: '203.0.113.7' });
+
+    expect(ips).toEqual(['203.0.113.7']);
+  });
 
   it('kicks the kit off for the registered wallet, and reports it on the register', async () => {
     const { kit, granted } = recordingKit();

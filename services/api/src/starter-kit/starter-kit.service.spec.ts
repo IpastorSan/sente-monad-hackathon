@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodeFunctionData, erc20Abi, type Address, type Hash, type Hex } from 'viem';
@@ -142,6 +142,34 @@ describe('StarterKitService.grant', () => {
     now = new Date('2026-10-10T00:00:01Z');
     await service.grant('carol', ALICE);
     expect(service.status('carol').status).toBe('sent');
+  });
+
+  it('stops at the per-IP cap, counts it across a restart, and keeps no IP at rest (SEN-204)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'starter-kit-ip-'));
+    try {
+      const path = join(dir, 'starter-kits.json');
+      const config = loadStarterKitConfig({
+        STARTER_DRIP_PRIVATE_KEY: KEY,
+        STARTER_DRIP_DAILY_CAP_USERS: '10',
+        STARTER_DRIP_DAILY_CAP_PER_IP: '2',
+      });
+      const first = setup({ config, store: new StarterKitStore(path) });
+      await first.service.grant('alice', ALICE, '203.0.113.7');
+      await first.service.grant('bob', BOB, '203.0.113.7');
+
+      const { service } = setup({ config, store: new StarterKitStore(path) });
+      await service.grant('carol', ALICE, '203.0.113.7');
+      expect(service.status('carol')).toEqual({ status: 'none' });
+      // Another IP, or a register with no IP, is not held back by this one.
+      await service.grant('carol', ALICE, '198.51.100.1');
+      expect(service.status('carol').status).toBe('sent');
+      await service.grant('dave', BOB);
+      expect(service.status('dave').status).toBe('sent');
+
+      expect(readFileSync(path, 'utf8')).not.toContain('203.0.113.7');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('counts a failed kit against the cap', async () => {

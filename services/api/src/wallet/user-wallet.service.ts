@@ -201,7 +201,8 @@ export class UserWalletService {
    */
   async register(
     principal: Principal,
-    command: { devicePublicKey: string },
+    /** `ip`: the client's, for the starter kit's per-IP cap (SEN-204). */
+    command: { devicePublicKey: string; ip?: string },
   ): Promise<UserWalletView> {
     const devicePublicKey = command.devicePublicKey.trim();
     if (!isDevicePublicKey(devicePublicKey)) {
@@ -212,7 +213,7 @@ export class UserWalletService {
     }
 
     const binding = await this.bindOnce(principal, devicePublicKey);
-    this.kickStarterKit(binding);
+    this.kickStarterKit(binding, command.ip);
     return this.describe(binding);
   }
 
@@ -245,12 +246,12 @@ export class UserWalletService {
    * on, gets it on their next sign-in. Nothing it does can fail the register:
    * `grant` promises never to reject, and this does not take its word for it.
    */
-  private kickStarterKit(binding: UserWalletBinding): void {
+  private kickStarterKit(binding: UserWalletBinding, ip?: string): void {
     if (!this.starterKit) return;
     const report = (error: unknown) =>
       this.logger.error(`starter kit for user=${binding.userId} failed: ${describeError(error)}`);
     try {
-      void this.starterKit.grant(binding.userId, binding.address).catch(report);
+      void this.starterKit.grant(binding.userId, binding.address, ip).catch(report);
     } catch (error) {
       report(error);
     }

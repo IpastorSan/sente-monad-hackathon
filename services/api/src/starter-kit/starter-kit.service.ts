@@ -22,7 +22,7 @@ export interface StarterKit {
    * the returned promise settles when the sends do and never rejects, and the
    * caller does not wait for it.
    */
-  grant(userId: string, address: Address): Promise<void>;
+  grant(userId: string, address: Address, ip?: string): Promise<void>;
   status(userId: string): StarterKitView;
 }
 
@@ -105,14 +105,29 @@ export class StarterKitService implements StarterKit {
     };
   }
 
-  async grant(userId: string, address: Address): Promise<void> {
+  /** `ip`: the register's client IP, for the per-IP daily cap (SEN-204). Absent: no per-IP check. */
+  async grant(userId: string, address: Address, ip?: string): Promise<void> {
     const config = this.#config;
     const sender = this.#sender;
     const chain = this.#chain;
     if (!config.enabled || !sender || !chain) return;
     try {
-      const claim = this.#store.claim(userId, address, config.dailyCapUsers, this.#now());
+      const claim = this.#store.claim(
+        userId,
+        address,
+        config.dailyCapUsers,
+        this.#now(),
+        ip ? { ip, cap: config.dailyCapPerIp } : undefined,
+      );
       if (claim === 'exists') return;
+      if (claim === 'ip_capped') {
+        // No IP in the log line: the operator gets the user, which is enough.
+        this.#log.warn(
+          `starter kit cap of ${config.dailyCapPerIp} users per IP today is spent; user=${userId} ` +
+            'gets none until it resets (00:00 UTC) and they register again',
+        );
+        return;
+      }
       if (claim === 'capped') {
         this.#log.warn(
           `starter kit cap of ${config.dailyCapUsers} users today is spent; user=${userId} ` +
