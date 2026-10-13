@@ -18,6 +18,7 @@
     "lint:fix": "eslint . --fix",
     "claim:ausd": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/claim-ausd.ts",
     "live:flows": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/live-flows.ts",
+    "sponsored:e2e": "KURU_DEPLOYMENT=set-c EXPO_PUBLIC_KURU_DEPLOYMENT=set-c node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/sponsored-agent-e2e.ts",
     "trade:live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=../../.env scripts/trade-live.ts",
     "prf:equivalence": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/prf-equivalence.ts",
     "e2e:web-reload": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/web-reload-e2e.ts"
