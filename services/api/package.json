@@ -31,7 +31,8 @@
     "consensus:watch": "node --env-file-if-exists=../../.env --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/consensus-watch.ts",
     "erc8004:live": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/erc8004-live.ts",
     "mandate:verify": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/mandate-verify.ts",
-    "creator:payout": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/creator-payout.ts"
+    "creator:payout": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/creator-payout.ts",
+    "state:import-sqlite": "node --conditions=source --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/state-import-sqlite.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",
