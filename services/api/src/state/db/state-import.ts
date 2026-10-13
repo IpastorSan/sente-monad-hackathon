@@ -91,22 +91,15 @@ export interface StoreImportReport {
   readonly ok: boolean;
 }
 
-export interface ImportOptions {
-  readonly imports?: readonly StoreImport<unknown>[];
-  /** Report progress; the script prints it, the spec does not. */
-  readonly log?: (line: string) => void;
-}
-
 /**
  * Import every store's file in `dir` into `<dir>/sente.db`. Throws
- * `StateDirLockedError` while another process holds the directory.
+ * `StateDirLockedError` while another process holds the directory. `log`
+ * reports progress; the script prints it, the spec does not.
  */
 export async function importStateToSqlite(
   dir: string,
-  options: ImportOptions = {},
+  log: (line: string) => void = () => {},
 ): Promise<StoreImportReport[]> {
-  const imports = options.imports ?? STORE_IMPORTS;
-  const log = options.log ?? (() => {});
   const root = resolve(dir);
   const lock = acquireStateDirLock(root);
   try {
@@ -114,7 +107,7 @@ export async function importStateToSqlite(
     try {
       log(`Opened ${db.path} (schema v${db.schemaVersion})`);
       const reports: StoreImportReport[] = [];
-      for (const store of imports) {
+      for (const store of STORE_IMPORTS) {
         reports.push(await importStore(db, root, store, log));
       }
       return reports;
@@ -144,30 +137,31 @@ async function importStore(
     log(`${store.name}: no ${store.file} in ${root}, nothing imported`);
   }
 
-  const stored = await table.listAll();
-  const byKey = new Map(stored.map((record) => [store.key(record), canonical(record)]));
+  // Each record's canonical form once, keyed; the comparison and the hashes both read these.
+  const inFile = records ? canonicalByKey(records, store.key) : undefined;
+  const inDb = canonicalByKey(await table.listAll(), store.key);
   let matched = 0;
   let differs = 0;
   let missing = 0;
-  for (const record of records ?? []) {
-    const copy = byKey.get(store.key(record));
+  for (const [key, line] of inFile ?? []) {
+    const copy = inDb.get(key);
     if (copy === undefined) missing += 1;
-    else if (copy === canonical(record)) matched += 1;
+    else if (copy === line) matched += 1;
     else differs += 1;
   }
-  const fileKeys = new Set((records ?? []).map((record) => store.key(record)));
-  const dbOnly = stored.filter((record) => !fileKeys.has(store.key(record))).length;
+  let dbOnly = 0;
+  for (const key of inDb.keys()) if (!inFile?.has(key)) dbOnly += 1;
   return {
     name: store.name,
     file: store.file,
     fileCount: records?.length,
-    dbCount: stored.length,
+    dbCount: inDb.size,
     matched,
     differs,
     missing,
     dbOnly,
-    fileHash: records ? contentHash(records, store.key) : undefined,
-    dbHash: contentHash(stored, store.key),
+    fileHash: inFile ? hashOf(inFile) : undefined,
+    dbHash: hashOf(inDb),
     ok: differs === 0 && missing === 0,
   };
 }
@@ -177,16 +171,21 @@ async function importStore(
  * so the same records hash the same whichever store they came out of.
  */
 export function contentHash<T>(records: readonly T[], key: (record: T) => string): string {
-  const lines = records
-    .map((record) => [key(record), canonical(record)] as const)
+  return hashOf(canonicalByKey(records, key));
+}
+
+function hashOf(canonical: Map<string, string>): string {
+  const lines = [...canonical.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([, line]) => line);
   return createHash('sha256').update(lines.join('\n')).digest('hex');
 }
 
-/** One record as tagged JSON with every object's keys sorted. */
-function canonical(record: unknown): string {
-  return JSON.stringify(sortKeys(encodeValue(record)));
+/** Each record as tagged JSON with every object's keys sorted, by its key. */
+function canonicalByKey<T>(records: readonly T[], key: (record: T) => string): Map<string, string> {
+  return new Map(
+    records.map((record) => [key(record), JSON.stringify(sortKeys(encodeValue(record)))]),
+  );
 }
 
 function sortKeys(value: JsonValue): JsonValue {

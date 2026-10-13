@@ -76,23 +76,26 @@ Copy the agent store. Six places, each with a worked example in the tree:
    table (`001-agents-and-user-wallets.ts`), appended to `MIGRATIONS` in
    `migrations/index.ts`.
 2. **Store** — `<module>/store/sqlite-<store>.ts` implementing the existing
-   interface over a `SenteDb`: prepare the statements in the constructor, keep
-   the file store's exact error messages, `data` through `encodeValue` /
-   `decodeValue`, and two extras the import needs: `put(record)` (an upsert by
-   key) and `listAll()`. Plus `path` and `size` for the boot log. Erasable
-   syntax with `.ts` specifiers, like the file store, so the import script can
-   load it under node's type stripping (`CLAUDE.md` gotcha 10). JSONL stores
+   interface over a `SenteDb`: a `COLUMNS` list and a `row(record)` that fills
+   it, the statements prepared in the constructor from `state/db/row.ts`
+   (`insertSql`, `upsertSql`, `updateSql`; `toDataJson` / `fromRow` /
+   `fromRows` for `data`), the file store's exact error messages, and two
+   extras the import needs: `put(record)` (the upsert) and `listAll()`. Plus
+   `path` and `size`, which `selectStore` logs at boot. Erasable syntax with
+   `.ts` specifiers, like the file store, so the import script can load it
+   under node's type stripping (`CLAUDE.md` gotcha 10). JSONL stores
    (append-only logs) get an `append`-shaped table; `put` is still an upsert on
    whatever key the log has.
 3. **Switch** — in the module, inject `SenteDbLease` instead of `StateDirLease`
-   and wrap the three constructors in `selectStore<Interface>(lease, '<file>',
-{ memory, file, sqlite })` (`agents/store/agent-store.module.ts`). The
-   `file` branch is what the provider did before; keep its log line.
+   and hand the three constructors to
+   `selectStore<Interface>(lease, '<file>', '<noun>', { memory, file, sqlite })`
+   (`agents/store/agent-store.module.ts`); it picks one and logs the
+   persistent choice, so the module's own log line goes.
 4. **Spec** — add the SQLite store as a third row of the existing
    `describe.each` behaviour table and a second row of the persistence table,
-   with a `reopen()` that closes and reopens the database
-   (`agents/store/file-agent-store.spec.ts`). The file-only case (a directory
-   that cannot be written) stays in its own `describe`.
+   built on `state/db/testing/opened-dbs.ts` (`dbs.reopen(dir)` is a restart)
+   as `agents/store/file-agent-store.spec.ts` does. The file-only case (a
+   directory that cannot be written) stays in its own `describe`.
 5. **Import** — one entry in `STORE_IMPORTS` in `state/db/state-import.ts`:
    `{ name, file, load, open, key }`. `loadJsonRecords` covers `.json`
    envelope files; a `.jsonl` store brings its own `load`. Add the name to the

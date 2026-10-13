@@ -1,4 +1,4 @@
-import { Logger, Module, type Provider } from '@nestjs/common';
+import { Module, type Provider } from '@nestjs/common';
 
 import { SenteDbLease, StateModule } from '../../state/state.module';
 import { selectStore } from '../../state/store-backend';
@@ -19,18 +19,10 @@ const agentStoreProvider: Provider = {
   // database, so injecting it is what orders this store after both (SEN-161).
   inject: [SenteDbLease],
   useFactory: (lease: SenteDbLease): AgentStore =>
-    selectStore<AgentStore>(lease, 'agents.json', {
+    selectStore<AgentStore>(lease, 'agents.json', 'agent(s)', {
       memory: () => new InMemoryAgentStore(),
-      file: (path) => {
-        const store = new FileAgentStore(path);
-        Logger.log(`${store.size} agent(s) loaded from ${store.path}`, 'AgentStore');
-        return store;
-      },
-      sqlite: (db) => {
-        const store = new SqliteAgentStore(db);
-        Logger.log(`${store.size} agent(s) in ${store.path}`, 'AgentStore');
-        return store;
-      },
+      file: (path) => new FileAgentStore(path),
+      sqlite: (db) => new SqliteAgentStore(db),
     }),
 };
 

@@ -172,21 +172,10 @@ const userWalletRegistryProvider: Provider = {
   // registry after both (SEN-161).
   inject: [SenteDbLease],
   useFactory: (lease: SenteDbLease): UserWalletRegistry =>
-    selectStore<UserWalletRegistry>(lease, 'user-wallets.json', {
+    selectStore<UserWalletRegistry>(lease, 'user-wallets.json', 'wallet binding(s)', {
       memory: () => new InMemoryUserWalletRegistry(),
-      file: (path) => {
-        const registry = new FileUserWalletRegistry(path);
-        Logger.log(
-          `${registry.size} binding(s) loaded from ${registry.path}`,
-          'UserWalletRegistry',
-        );
-        return registry;
-      },
-      sqlite: (db) => {
-        const registry = new SqliteUserWalletRegistry(db);
-        Logger.log(`${registry.size} binding(s) in ${registry.path}`, 'UserWalletRegistry');
-        return registry;
-      },
+      file: (path) => new FileUserWalletRegistry(path),
+      sqlite: (db) => new SqliteUserWalletRegistry(db),
     }),
 };
 

@@ -14,12 +14,10 @@
 // else STATE_DIR in the repo-root .env (or --env-file). Nothing is printed but
 // paths, counts and hashes.
 
-import { readFileSync } from 'node:fs';
-
 import { STATE_DIR_VAR } from '../src/state/json-file.ts';
 import { STATE_DIR_LOCK_FILE } from '../src/state/state-dir-lock.ts';
 import { importStateToSqlite, type StoreImportReport } from '../src/state/db/state-import.ts';
-import { envFileFromArgs } from './env-file.ts';
+import { envFileFromArgs, readVar } from './env-file.ts';
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -27,24 +25,6 @@ function flag(name: string): string | undefined {
   const value = process.argv[index + 1];
   if (!value || value.startsWith('--')) throw new Error(`--${name} needs a value`);
   return value;
-}
-
-/** `STATE_DIR` from a `.env` file, without loading anything else from it. */
-function stateDirFromEnvFile(path: string): string | undefined {
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return undefined;
-  }
-  for (const line of text.split('\n')) {
-    const match = /^\s*(?:export\s+)?STATE_DIR\s*=(.*)$/.exec(line);
-    if (match) {
-      const value = match[1]!.trim().replace(/^["']|["']$/g, '');
-      if (value) return value;
-    }
-  }
-  return undefined;
 }
 
 function describe(report: StoreImportReport): string {
@@ -63,7 +43,7 @@ async function main(): Promise<number> {
   const dir =
     flag('state-dir') ??
     process.env[STATE_DIR_VAR]?.trim() ??
-    stateDirFromEnvFile(envFileFromArgs());
+    readVar(envFileFromArgs(), STATE_DIR_VAR);
   if (!dir) {
     console.error(
       'No state directory: pass --state-dir <dir>, or set STATE_DIR in the environment or in .env.',
@@ -72,7 +52,7 @@ async function main(): Promise<number> {
   }
 
   console.log(`Importing ${dir} -> sente.db (lock: ${STATE_DIR_LOCK_FILE})`);
-  const reports = await importStateToSqlite(dir, { log: (line) => console.log(`  ${line}`) });
+  const reports = await importStateToSqlite(dir, (line) => console.log(`  ${line}`));
   console.log('');
   for (const report of reports) {
     console.log(`${report.name}\n${describe(report)}\n`);

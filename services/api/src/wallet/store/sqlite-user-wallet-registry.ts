@@ -8,30 +8,39 @@
 // `created: true` has a Privy wallet in hand, and a restart must not disagree.
 //
 // Schema: `state/db/migrations/001-agents-and-user-wallets.ts`; `data` holds
-// the whole binding as tagged JSON (`state/json-file.ts`), the columns serve
-// the lookups. Erasable syntax and `.ts` specifiers so the import script can
-// load it under node's type stripping (CLAUDE.md gotcha 10).
+// the whole binding as tagged JSON (`state/db/row.ts`), the columns serve the
+// lookups. Erasable syntax and `.ts` specifiers so the import script can load
+// it under node's type stripping (CLAUDE.md gotcha 10).
 
 import type { StatementSync } from 'node:sqlite';
 
+import { fromRow, fromRows, insertSql, toDataJson, upsertSql } from '../../state/db/row.ts';
 import type { SenteDb } from '../../state/db/sente-db.ts';
-import { decodeValue, encodeValue, type JsonValue } from '../../state/json-file.ts';
 import type {
   UserWalletBindResult,
   UserWalletBinding,
   UserWalletRegistry,
 } from './user-wallet-registry.ts';
 
-const COLUMNS = 'user_id, wallet_id, address, device_public_key, created_at, data';
+const TABLE = 'user_wallets';
+const COLUMNS = [
+  'user_id',
+  'wallet_id',
+  'address',
+  'device_public_key',
+  'created_at',
+  'data',
+] as const;
 
-function row(binding: UserWalletBinding): [string, string, string, string, string, string] {
+/** The values of {@link COLUMNS}, in order. */
+function row(binding: UserWalletBinding): string[] {
   return [
     binding.userId,
     binding.walletId,
     binding.address,
     binding.devicePublicKey,
     binding.createdAt.toISOString(),
-    JSON.stringify(encodeValue(binding)),
+    toDataJson(binding),
   ];
 }
 
@@ -45,13 +54,8 @@ export class SqliteUserWalletRegistry implements UserWalletRegistry {
 
   constructor(db: SenteDb) {
     this.#db = db;
-    this.#insert = db.prepare(`INSERT INTO user_wallets (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`);
-    this.#upsert = db.prepare(
-      `INSERT INTO user_wallets (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?) ` +
-        'ON CONFLICT (user_id) DO UPDATE SET wallet_id = excluded.wallet_id, ' +
-        'address = excluded.address, device_public_key = excluded.device_public_key, ' +
-        'created_at = excluded.created_at, data = excluded.data',
-    );
+    this.#insert = db.prepare(insertSql(TABLE, COLUMNS));
+    this.#upsert = db.prepare(upsertSql(TABLE, COLUMNS, 'user_id'));
     this.#find = db.prepare('SELECT data FROM user_wallets WHERE user_id = ?');
     this.#all = db.prepare('SELECT data FROM user_wallets ORDER BY created_at, rowid');
     this.#count = db.prepare('SELECT count(*) AS n FROM user_wallets');
@@ -68,12 +72,12 @@ export class SqliteUserWalletRegistry implements UserWalletRegistry {
   }
 
   async find(userId: string): Promise<UserWalletBinding | undefined> {
-    return this.#one(this.#find.get(userId));
+    return fromRow(this.#find.get(userId));
   }
 
   async bind(binding: Omit<UserWalletBinding, 'createdAt'>): Promise<UserWalletBindResult> {
     return this.#db.transaction((): UserWalletBindResult => {
-      const existing = this.#one(this.#find.get(binding.userId));
+      const existing = fromRow<UserWalletBinding>(this.#find.get(binding.userId));
       if (existing) {
         // Exact string compare, as in the other two: both halves are the
         // canonical base64 SPKI DER `authorization-key.ts` produces.
@@ -82,7 +86,7 @@ export class SqliteUserWalletRegistry implements UserWalletRegistry {
       }
       const created: UserWalletBinding = { ...binding, createdAt: new Date() };
       this.#insert.run(...row(created));
-      return { ok: true, binding: this.#one(this.#find.get(binding.userId))!, created: true };
+      return { ok: true, binding: created, created: true };
     });
   }
 
@@ -93,12 +97,6 @@ export class SqliteUserWalletRegistry implements UserWalletRegistry {
 
   /** Every binding, oldest first. For the import's verification. */
   async listAll(): Promise<UserWalletBinding[]> {
-    return this.#all.all().map((found) => this.#one(found)!);
-  }
-
-  #one(found: Record<string, unknown> | undefined): UserWalletBinding | undefined {
-    return found
-      ? (decodeValue(JSON.parse(String(found['data'])) as JsonValue) as UserWalletBinding)
-      : undefined;
+    return fromRows(this.#all.all());
   }
 }

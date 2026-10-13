@@ -8,26 +8,41 @@
 // Schema: `state/db/migrations/001-agents-and-user-wallets.ts`. The columns
 // exist for the lookups (`user_id`, `address_key`, `mcp_token_hash`, the
 // `listActive` predicate, `created_at` for the order); `data` holds the whole
-// record as the tagged JSON `state/json-file.ts` writes, so a parsed mandate's
-// bigint atoms and every `Date` come back as what they were, and a field added
-// to `AgentRecord` persists with no change here.
+// record as the tagged JSON `state/json-file.ts` writes (`state/db/row.ts`),
+// so a parsed mandate's bigint atoms and every `Date` come back as what they
+// were, and a field added to `AgentRecord` persists with no change here.
 //
 // Erasable syntax and `.ts` specifiers, like `file-agent-store.ts`, so the
 // import script can load it under node's type stripping (CLAUDE.md gotcha 10).
 
 import type { StatementSync } from 'node:sqlite';
 
+import {
+  fromRow,
+  fromRows,
+  insertSql,
+  toDataJson,
+  updateSql,
+  upsertSql,
+} from '../../state/db/row.ts';
 import type { SenteDb } from '../../state/db/sente-db.ts';
-import { decodeValue, encodeValue, type JsonValue } from '../../state/json-file.ts';
 import { addressKey, type AgentPatch, type AgentRecord, type AgentStore } from './agent-store.ts';
 
-const COLUMNS =
-  'id, user_id, address_key, mcp_token_hash, status, archived_at, created_at, updated_at, data';
+const TABLE = 'agents';
+const COLUMNS = [
+  'id',
+  'user_id',
+  'address_key',
+  'mcp_token_hash',
+  'status',
+  'archived_at',
+  'created_at',
+  'updated_at',
+  'data',
+] as const;
 
-/** The nine values of {@link COLUMNS}, in order. */
-function row(
-  record: AgentRecord,
-): [string, string, string, string, string, string | null, string, string, string] {
+/** The values of {@link COLUMNS}, in order. */
+function row(record: AgentRecord): (string | null)[] {
   return [
     record.id,
     record.userId,
@@ -37,7 +52,7 @@ function row(
     record.archivedAt ? record.archivedAt.toISOString() : null,
     record.createdAt.toISOString(),
     record.updatedAt.toISOString(),
-    JSON.stringify(encodeValue(record)),
+    toDataJson(record),
   ];
 }
 
@@ -60,21 +75,9 @@ export class SqliteAgentStore implements AgentStore {
 
   constructor(db: SenteDb) {
     this.#db = db;
-    const placeholders = COLUMNS.split(', ')
-      .map(() => '?')
-      .join(', ');
-    this.#insert = db.prepare(`INSERT INTO agents (${COLUMNS}) VALUES (${placeholders})`);
-    this.#upsert = db.prepare(
-      `INSERT INTO agents (${COLUMNS}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ` +
-        'user_id = excluded.user_id, address_key = excluded.address_key, ' +
-        'mcp_token_hash = excluded.mcp_token_hash, status = excluded.status, ' +
-        'archived_at = excluded.archived_at, created_at = excluded.created_at, ' +
-        'updated_at = excluded.updated_at, data = excluded.data',
-    );
-    this.#update = db.prepare(
-      'UPDATE agents SET user_id = ?, address_key = ?, mcp_token_hash = ?, status = ?, ' +
-        'archived_at = ?, created_at = ?, updated_at = ?, data = ? WHERE id = ?',
-    );
+    this.#insert = db.prepare(insertSql(TABLE, COLUMNS));
+    this.#upsert = db.prepare(upsertSql(TABLE, COLUMNS, 'id'));
+    this.#update = db.prepare(updateSql(TABLE, COLUMNS, 'id'));
     this.#get = db.prepare('SELECT data FROM agents WHERE id = ?');
     this.#hasId = db.prepare('SELECT 1 FROM agents WHERE id = ?');
     this.#hasToken = db.prepare('SELECT 1 FROM agents WHERE mcp_token_hash = ?');
@@ -118,49 +121,37 @@ export class SqliteAgentStore implements AgentStore {
   }
 
   async get(id: string): Promise<AgentRecord | undefined> {
-    return this.#one(this.#get.get(id));
+    return fromRow(this.#get.get(id));
   }
 
   async listByUser(userId: string): Promise<AgentRecord[]> {
-    return this.#many(this.#byUser.all(userId));
+    return fromRows(this.#byUser.all(userId));
   }
 
   async listActive(): Promise<AgentRecord[]> {
-    return this.#many(this.#active.all());
+    return fromRows(this.#active.all());
   }
 
   async listAll(): Promise<AgentRecord[]> {
-    return this.#many(this.#all.all());
+    return fromRows(this.#all.all());
   }
 
   async findByMcpTokenHash(hash: string): Promise<AgentRecord | undefined> {
-    return this.#one(this.#byToken.get(hash));
+    return fromRow(this.#byToken.get(hash));
   }
 
   async findByAddress(address: string): Promise<AgentRecord | undefined> {
-    return this.#one(this.#byAddress.get(addressKey(address)));
+    return fromRow(this.#byAddress.get(addressKey(address)));
   }
 
   async update(id: string, patch: AgentPatch): Promise<AgentRecord> {
     return this.#db.transaction(() => {
-      const existing = this.#one(this.#get.get(id));
+      const existing = fromRow<AgentRecord>(this.#get.get(id));
       if (!existing) throw new Error(`no agent ${id}`);
-      const next: AgentRecord = { ...existing, ...patch };
+      const next: AgentRecord = { ...existing, ...structuredClone(patch) };
       const [, ...values] = row(next);
       this.#update.run(...values, id);
-      // Read back rather than return `next`: what the caller gets is exactly
-      // what the next boot will read, and a fresh copy.
-      return this.#one(this.#get.get(id))!;
+      return next;
     });
-  }
-
-  #one(found: Record<string, unknown> | undefined): AgentRecord | undefined {
-    return found
-      ? (decodeValue(JSON.parse(String(found['data'])) as JsonValue) as AgentRecord)
-      : undefined;
-  }
-
-  #many(rows: Record<string, unknown>[]): AgentRecord[] {
-    return rows.map((found) => this.#one(found)!);
   }
 }

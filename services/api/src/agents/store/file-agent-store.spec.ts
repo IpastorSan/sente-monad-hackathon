@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SenteDb, senteDbPath } from '../../state/db/sente-db';
+import { openedDbs } from '../../state/db/testing/opened-dbs';
 import { testAgent } from '../tools/testing/agent-fixture';
 import { InMemoryAgentStore, type AgentStore } from './agent-store';
 import { FileAgentStore } from './file-agent-store';
@@ -10,7 +10,7 @@ import { SqliteAgentStore } from './sqlite-agent-store';
 
 let dir: string;
 let path: string;
-const open: SenteDb[] = [];
+const dbs = openedDbs();
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'sente-agents-'));
@@ -18,17 +18,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const db of open.splice(0)) db.close();
+  dbs.closeAll();
   rmSync(dir, { recursive: true, force: true });
 });
 
 /** A SQLite store on `<dir>/sente.db`; "a restart" is closing it and calling this again. */
-function sqliteStore(): SqliteAgentStore {
-  for (const db of open.splice(0)) db.close();
-  const db = SenteDb.open(senteDbPath(dir));
-  open.push(db);
-  return new SqliteAgentStore(db);
-}
+const sqliteStore = (): SqliteAgentStore => new SqliteAgentStore(dbs.reopen(dir));
 
 const second = (patch = {}) =>
   testAgent({
@@ -254,7 +249,7 @@ describe('SqliteAgentStore', () => {
     await store.insert(testAgent());
     await store.update(testAgent().id, { archivedAt: new Date('2026-10-12T00:00:00Z') });
 
-    const row = open[0]!.prepare('SELECT status, archived_at FROM agents').get();
+    const row = dbs.last!.prepare('SELECT status, archived_at FROM agents').get();
     expect(row).toEqual({ status: 'active', archived_at: '2026-10-12T00:00:00.000Z' });
   });
 });

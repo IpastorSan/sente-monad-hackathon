@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { getAddress } from 'viem';
 
-import { SenteDb, senteDbPath } from '../../state/db/sente-db';
+import { openedDbs } from '../../state/db/testing/opened-dbs';
 import { FileUserWalletRegistry } from './file-user-wallet-registry';
 import { SqliteUserWalletRegistry } from './sqlite-user-wallet-registry';
 import {
@@ -29,7 +29,7 @@ function binding(patch: Partial<Omit<UserWalletBinding, 'createdAt'>> = {}) {
 
 let dir: string;
 let path: string;
-const open: SenteDb[] = [];
+const dbs = openedDbs();
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'sente-registry-'));
@@ -37,17 +37,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const db of open.splice(0)) db.close();
+  dbs.closeAll();
   rmSync(dir, { recursive: true, force: true });
 });
 
 /** A SQLite registry on `<dir>/sente.db`; "a restart" is closing it and calling this again. */
-function sqliteRegistry(): SqliteUserWalletRegistry {
-  for (const db of open.splice(0)) db.close();
-  const db = SenteDb.open(senteDbPath(dir));
-  open.push(db);
-  return new SqliteUserWalletRegistry(db);
-}
+const sqliteRegistry = (): SqliteUserWalletRegistry =>
+  new SqliteUserWalletRegistry(dbs.reopen(dir));
 
 /**
  * Every implementation must answer identically — the file-backed and SQLite

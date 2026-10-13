@@ -5,22 +5,17 @@ import { join } from 'node:path';
 import { storeBackend } from '../store-backend';
 import { MIGRATIONS, type Migration } from './migrations';
 import { IN_MEMORY, SenteDb, senteDbPath } from './sente-db';
+import { openedDbs } from './testing/opened-dbs';
 
 let dir: string;
-const open: SenteDb[] = [];
-
-/** Every database a test opens is closed after it, whether it passed or not. */
-function opened(db: SenteDb): SenteDb {
-  open.push(db);
-  return db;
-}
+const dbs = openedDbs();
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'sente-db-'));
 });
 
 afterEach(() => {
-  for (const db of open.splice(0)) db.close();
+  dbs.closeAll();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -32,7 +27,7 @@ const tables = (db: SenteDb): string[] =>
 
 describe('migrations', () => {
   it('apply every migration to a fresh in-memory database, in order', () => {
-    const db = opened(SenteDb.open(IN_MEMORY));
+    const db = dbs.open(IN_MEMORY);
 
     expect(db.schemaVersion).toBe(MIGRATIONS.length);
     expect(MIGRATIONS.map((m) => m.id)).toEqual(MIGRATIONS.map((_m, i) => i + 1));
@@ -46,22 +41,22 @@ describe('migrations', () => {
   });
 
   it('are idempotent: reopening the same file applies nothing', () => {
-    const path = senteDbPath(dir);
-    const first = opened(SenteDb.open(path));
+    const first = dbs.reopen(dir);
     expect(first.migrate()).toEqual([]);
-    first.close();
 
-    const second = opened(SenteDb.open(path));
+    const second = dbs.reopen(dir);
     expect(second.schemaVersion).toBe(MIGRATIONS.length);
     expect(second.migrate()).toEqual([]);
   });
 
   it('refuse a migration that was edited after it ran', () => {
-    const path = senteDbPath(dir);
-    opened(SenteDb.open(path)).close();
+    dbs.reopen(dir);
+    dbs.closeAll();
 
     const edited: Migration[] = [{ ...MIGRATIONS[0]!, name: 'something-else' }];
-    expect(() => SenteDb.open(path, edited)).toThrow(/recorded as "agents-and-user-wallets"/);
+    expect(() => SenteDb.open(senteDbPath(dir), edited)).toThrow(
+      /recorded as "agents-and-user-wallets"/,
+    );
   });
 
   it('refuse a database written by a newer build', () => {
@@ -70,7 +65,7 @@ describe('migrations', () => {
       ...MIGRATIONS,
       { id: MIGRATIONS.length + 1, name: 'future', sql: 'CREATE TABLE future (x TEXT)' },
     ];
-    opened(SenteDb.open(path, newer)).close();
+    SenteDb.open(path, newer).close();
 
     expect(() => SenteDb.open(path, MIGRATIONS)).toThrow(/newer build/);
   });
@@ -83,7 +78,7 @@ describe('migrations', () => {
 
 describe('pragmas', () => {
   it('open a WAL database with foreign keys on and a busy timeout', () => {
-    const db = opened(SenteDb.open(senteDbPath(dir)));
+    const db = dbs.reopen(dir);
 
     expect(db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     expect(db.prepare('PRAGMA synchronous').get()).toEqual({ synchronous: 2 });
@@ -92,7 +87,7 @@ describe('pragmas', () => {
   });
 
   it('creates STATE_DIR when it does not exist yet', () => {
-    const db = opened(SenteDb.open(senteDbPath(join(dir, 'fresh', 'state'))));
+    const db = dbs.reopen(join(dir, 'fresh', 'state'));
     expect(existsSync(db.path)).toBe(true);
   });
 });
@@ -100,7 +95,7 @@ describe('pragmas', () => {
 describe('transaction', () => {
   const count = (db: SenteDb) => Number(db.prepare('SELECT count(*) AS n FROM t').get()!['n']);
   const withTable = () => {
-    const db = opened(SenteDb.open(IN_MEMORY));
+    const db = dbs.open(IN_MEMORY);
     db.exec('CREATE TABLE t (v TEXT)');
     return db;
   };
@@ -183,7 +178,7 @@ describe('transaction', () => {
 
 describe('backupTo', () => {
   it('writes a consistent copy that opens on its own', () => {
-    const db = opened(SenteDb.open(senteDbPath(dir)));
+    const db = dbs.reopen(dir);
     db.prepare(
       'INSERT INTO user_wallets (user_id, wallet_id, address, device_public_key, created_at, data) ' +
         "VALUES ('alice', 'w1', '0xabc', 'key', '2026-10-13T00:00:00.000Z', '{}')",
@@ -192,7 +187,7 @@ describe('backupTo', () => {
     const copy = join(dir, 'backups', 'sente-copy.db');
     db.backupTo(copy);
 
-    const restored = opened(SenteDb.open(copy));
+    const restored = dbs.open(copy);
     expect(restored.schemaVersion).toBe(MIGRATIONS.length);
     expect(restored.prepare('SELECT user_id FROM user_wallets').all()).toEqual([
       { user_id: 'alice' },

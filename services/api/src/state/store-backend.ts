@@ -8,12 +8,11 @@
 // back to `file` would look like a working API reading the wrong store.
 //
 // Without `STATE_DIR` the value is irrelevant — every store stays in memory.
-//
-// Erasable syntax only (CLAUDE.md gotcha 10): the import script reads this.
 
+import { Logger } from '@nestjs/common';
 import { join } from 'node:path';
 
-import type { SenteDb } from './db/sente-db.ts';
+import type { SenteDb } from './db/sente-db';
 
 export const STORE_BACKEND_VAR = 'STORE_BACKEND';
 
@@ -34,7 +33,7 @@ export function storeBackend(env: Env = process.env): StoreBackend {
   );
 }
 
-/** What a store provider needs to pick an implementation: `StateDirLease.dir` and `SenteDbLease.db`. */
+/** What a store provider needs to pick an implementation: `SenteDbLease` is one. */
 export interface StoreSelector {
   /** `STATE_DIR`, resolved; `undefined` keeps every store in memory. */
   readonly dir: string | undefined;
@@ -42,29 +41,33 @@ export interface StoreSelector {
   readonly db: SenteDb | undefined;
 }
 
+/** What a persistent store reports at boot: where it is and how many records it holds. */
+export interface Persisted {
+  readonly path: string;
+  readonly size: number;
+}
+
 export interface StoreChoice<T> {
   memory: () => T;
   /** Gets `<STATE_DIR>/<file>`. */
-  file: (path: string) => T;
-  sqlite: (db: SenteDb) => T;
+  file: (path: string) => T & Persisted;
+  sqlite: (db: SenteDb) => T & Persisted;
 }
 
 /**
  * The switch, in one place: every converted store's provider is
- * `selectStore(lease, 'agents.json', { memory, file, sqlite })`. A store with no
- * SQLite implementation yet passes `sqlite: undefined`-free `file` only through
- * `selectFileStore` and keeps its file under both backends.
+ * `selectStore(lease, 'agents.json', 'agent(s)', { memory, file, sqlite })`,
+ * and the persistent choices are logged here so each module does not write
+ * its own line.
  */
-export function selectStore<T>(lease: StoreSelector, file: string, choice: StoreChoice<T>): T {
-  if (lease.db) return choice.sqlite(lease.db);
-  return selectFileStore(lease, file, choice);
-}
-
-/** The pre-SEN-205 switch: in memory without `STATE_DIR`, else the file. */
-export function selectFileStore<T>(
-  lease: Pick<StoreSelector, 'dir'>,
+export function selectStore<T>(
+  lease: StoreSelector,
   file: string,
-  choice: Pick<StoreChoice<T>, 'memory' | 'file'>,
+  noun: string,
+  choice: StoreChoice<T>,
 ): T {
-  return lease.dir ? choice.file(join(lease.dir, file)) : choice.memory();
+  if (!lease.dir) return choice.memory();
+  const store = lease.db ? choice.sqlite(lease.db) : choice.file(join(lease.dir, file));
+  Logger.log(`${store.size} ${noun} in ${store.path}`, 'StateStore');
+  return store;
 }
