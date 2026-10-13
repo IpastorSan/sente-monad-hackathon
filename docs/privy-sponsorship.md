@@ -224,7 +224,185 @@ What it means:
    already-delegated wallet 72 ms apart both landed (c2, as in run 3).
 4. **A sponsored agent never needs MON** for a contract call: `actualGasCost` 0,
    paid from Privy's credits. The native-MON Kuru deposit is the exception —
-   its value is the agent's own MON.
+   its value is the agent's own MON, and a delegated wallet under 10 MON cannot
+   send it at all (run 5, 7b and 7e).
+
+### Run 5 — 2026-10-13, the whole agent lifecycle through the product (SEN-212)
+
+Run 4 asked whether the enclave binds a sponsored send. This run asks whether
+the product works end to end with `AGENT_SPONSORED_SENDS=1`: a local API
+(`nest build`, fresh `STATE_DIR`, `STORE_BACKEND=sqlite`, `KURU_DEPLOYMENT=set-c`,
+the repo `.env` with every shared sender key blanked — gas drip, starter kit,
+ERC-8004 — so nothing collides with the box), driven the way the phone and an
+outside MCP client drive it. One throwaway user (a fresh secp256k1 sign-in key
+and P-256 device key, `POST /wallet/register`) and one **device-owned** agent,
+the production shape: every amend and revoke was prepared by the API, checked
+by the app's own `approval.ts` mirror and signed with the device key. Every
+agent action went through `/mcp` with the agent's token — the tools the runner
+uses — not through raw Privy calls.
+
+```bash
+pnpm --filter @sente/mobile run sponsored:e2e -- --api http://localhost:3712 \
+  --api-log <the API's stdout> --state-dir <its STATE_DIR> --phase <phase>
+# phases: setup hire fund kuru perpl forbidden amend mon signpath fallback
+#         monrefusal return revoke sweep — some need the API restarted with
+#         other flags; the script header says which
+```
+
+`apps/mobile/scripts/sponsored-agent-e2e.ts` refuses any API under `sente.lol`
+and keeps its two throwaway keys in `.secrets/` (0600, never printed). It reads
+each leg back from the API's own log line (`[AgentTransactions] sponsored ok …`,
+added for this run) and then off the chain: the `UserOperationEvent` for that
+user operation, its `success`, its `sender`, `paymaster` and `actualGasCost`.
+
+User wallet `0x85fa81E5c73370015F46a02f02B02140540aF34c`, agent
+`0x298804B8266eE0A83408af25fF415c2A6FC198c1` (`<privy-sen212-agent-wallet-id>`),
+mandate: Kuru Set C cbBTC-USDC and MON-USDC (deposits ≤ 25 USDC and ≤ 0.05 MON),
+Perpl BTC-PERP (≤ 100 AUSD collateral, 2x), orders ≤ 30 USDC, `returnTo` the
+user wallet. The agent held **0 MON from hire to step 7**.
+
+| #   | Step                                                                       | Result                                                                                                                                                                                                                                                                                                     | Agent MON             | Latency                           |
+| --- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------- |
+| 1   | hire (device-owned)                                                        | **pass**. Policy 35 rules: 17 `eth_signTransaction`, **17 `eth_sendTransaction` twins**, 1 typed-data; `sponsoredSends: true` on the stored record; no code at the address. Set C needs no deposit-pin amend                                                                                               | 0                     | 1.14 s                            |
+| 2   | fund 25 USDC + 100 AUSD from the user wallet (`fundAgent`, the Fund sheet) | **pass**. `0x69b45146…3a53`, `0xdd138993…36c6`                                                                                                                                                                                                                                                             | 0 → 0                 | 1.4 s, 4.9 s                      |
+| 3a  | Kuru `deposit` 20 USDC                                                     | **pass**, 2 legs. approve: userOp `0x9478743d…0671` in `0x1dfa1a28a6a2310cc910cfc4b12abc3809dc8196c48ac01135c3369bf00c87d4`, a **type-4 bundle carrying the EIP-7702 authorization** to Kernel `0xd6ce…5b28` (the delegation); deposit: userOp `0x22332679…3634` in `0xe83fd9ac…5349`. Both `success=true` | 0 → 0                 | 1.85 s + 1.03 s                   |
+| 3b  | Kuru `place_market` buy 0.00015413 cbBTC (13 USDC)                         | **pass**, filled at 84,348.32. Sente-fee approval userOp `0xfaf7ea18…636d` in `0x15798c23…327d`; order userOp `0x7917b1bb…bf89` in `0xb56bc1888930ad38357998ebf6df62f27f1ff2cfc37a485caca0e4389aa3f0f5`. Ledger: `order` + `fill` events with that tx hash, consensus `Verified`                           | 0 → 0                 | tool 2.5 s                        |
+| 3c  | Kuru `place_market` sell 0.00015396 cbBTC                                  | **pass**, filled at 83,969.9. userOp `0x2c438b5b…d8f9` in `0x55a79f8dd0f9195d5f980390efb6c639f4ad19b540666cfe9cff7e5b38ff8310`; `fill` event with that hash                                                                                                                                                | 0 → 0                 | tool 1.4 s                        |
+| 4a  | Perpl onboarding (`POST /agents/:id/perpl/onboard`)                        | **FAIL, then pass after a fix**. First `needs_gas`: "needs 0.04331 MON … holds 0 MON" — the onboarder's own gate ignored sponsorship. Fixed (below): approve `0x255d2395…c065`, createAccount `0x1270b4f2…76dc`, allowOrderForwarding `0xc0d20194…9766`, all sponsored, account 1240, key enrolled         | 0 → 0                 | 6.0 s for all three               |
+| 4b  | Perpl `place_market` 0.00001 BTC-PERP at 1x, then `close_position`         | **pass**: filled 83,369, closed 83,374.7, no positions after. Off chain, so no agent transaction                                                                                                                                                                                                           | 0 → 0                 | 1.8 s, 2.8 s                      |
+| 5a  | over-cap `deposit` 26 USDC through `/mcp` (`AGENT_PRECHECK=off`)           | **pass**: "Refused by the Privy enclave (policy_violation)"                                                                                                                                                                                                                                                | 0 → 0                 | 0.75–0.92 s                       |
+| 5b  | buy on WETH-USDC, a market the mandate never names                         | **pass**: refused by the enclave                                                                                                                                                                                                                                                                           | 0 → 0                 | 0.70 s                            |
+| 5c  | the same straight at `eth_sendTransaction` with the agent key              | **pass**: approve over the cap, approve on AUSD (a token the mandate never names), USDC `transfer` to `0xdEaD` — each `400 policy_violation` on the send path. Agent nonce 1 → 1; the only user operation from the agent in the window is the allowed probe below                                          | 0 → 0                 | 0.37–0.47 s                       |
+| 6   | amend (device-signed), then a 1 USDC deposit                               | **pass**: 35 rules, every twin present, record `true`; approve `0x549ab688…5bbe`, deposit `0x0b3b06f0…da04`, sponsored                                                                                                                                                                                     | 0 → 0                 | amend 0.79 s; legs 1.57 s, 1.12 s |
+| 7a  | treasury sends the delegated agent 0.05 MON, gas 21,000                    | **reverted**, out of gas (`0xd8c294ab…c9bb`): the delegated account runs Kernel's code on receive. `eth_estimateGas` 22,707; sent with 60,000 it landed (`0xa97956ff…08ac`)                                                                                                                                | 0 → 0.05              |                                   |
+| 7b  | sponsored native-MON `deposit` 0.01 on MON-USDC                            | **FAIL**: Privy accepted it (userOp `0xea311e13…f65d`), neither Alchemy nor Pimlico ever saw it again, the tool gave up after 60 s ("did not surface on chain"). Nothing moved. Now refused up front (below)                                                                                               | 0.05 → 0.05           | 61 s                              |
+| 7c  | sponsored USDC deposit from the delegated wallet holding MON               | **pass**, MON untouched                                                                                                                                                                                                                                                                                    | 0.05 → 0.05           | 1.1–1.5 s per leg                 |
+| 7d  | flag **off** (rollback): signed `withdraw` 1 USDC from the delegated agent | **pass**: `0x322f1f30…17b3`, paid 0.0153 MON. The sign path works on a delegated wallet that holds MON                                                                                                                                                                                                     | 0.15 → 0.1347         | 0.76 s                            |
+| 7e  | flag off: signed native-MON deposit 0.005                                  | **reverted**: `0xfddc0b5e…a4fd`, trace `"error":"reserve balance violation"`; 0.0257 MON of gas burnt                                                                                                                                                                                                      | 0.1347 → 0.1089       |                                   |
+| 7f  | amend with the flag off, then flag on: `withdraw` 1 USDC                   | **pass**: policy 18 rules (no twins), record `false`; the sponsored send was refused, the sign path carried it (`signed_after_refusal`, `0x1ea7c99c…a7c`), paid in MON                                                                                                                                     | 0.1089 → 0.0936       | 1.14 s (+0.36 s for the refusal)  |
+| 7g  | amend with the flag on again, then `withdraw` 1 USDC                       | **pass**: twins back, sponsored again (userOp `0x1dc4217d…6da7`)                                                                                                                                                                                                                                           | 0.0936 → 0.0936       | 1.59 s                            |
+| 7h  | after the fix: native-MON `deposit`                                        | **pass**: refused `native_mon_reserve` before anything was signed                                                                                                                                                                                                                                          | unchanged             | 4 ms                              |
+| 8a  | `POST /agents/:id/return` on the active agent                              | **pass**, 4 sponsored legs: Kuru withdraw + transfer of 24.888936 USDC (`0x95537cd5…7292`), the same for 1 sat of cbBTC. `monSpent: "0"`; the 0.0936 MON is not swept, by design                                                                                                                           | unchanged             | 5.75 s for four legs              |
+| 8b  | revoke (device-signed), then return 2 USDC                                 | **pass**: policy left with 12 rules, the 6 recovery rules and their 6 twins; the return to the owner went sponsored (`0xe549d02d…eddb`)                                                                                                                                                                    | unchanged             | revoke 0.41 s; return 1.74 s      |
+| 8c  | archive                                                                    | **pass**, 200: MON (0.0936) is ignored, Perpl collateral (99.999 AUSD) is excluded (SEN-203), no positions                                                                                                                                                                                                 | 0.0936 left, for good |                                   |
+
+**Latency.** 20 sponsored legs: Privy answered in a median of **698 ms**
+(549–1,094; the delegating first one was the slowest), and the operation was
+read off `UserOperationEvent` a median **417 ms** later (69–1,082) — about
+**1.2 s per leg**, 1.85 s at worst. A signed leg is ~0.3 s + ~0.4 s. A fallback
+(a refused sponsored try, then the sign path) adds ~0.36 s. A Kuru deposit is
+two legs and a market order one or two, so a write tool takes 1.4–3 s.
+
+**Who paid.** Every one of the 20 operations: `actualGasCost` 0, `paymaster`
+`0x0`, `sender` the agent — Privy's credits through Alchemy's bundler
+(`sponsorship_provider: "alchemy"` on the raw response; three different bundler
+EOAs carried them, one operation per bundle). The agent's MON never moved on a
+sponsored leg. What it cost the sponsor, measured on chain: `actualGasUsed`
+122,530–519,796 per operation (4.48 M in all), and the bundles themselves — on
+Monad charged at their gas limit — **0.751 MON for the 20, about 0.038 MON per
+leg**, against 0.015–0.026 MON for the same calls signed. Budget the credits
+for roughly **1.5–2× the MON** the drip-funded path spent. The dashboard is the
+authority on what Privy actually bills.
+
+The raw sponsored response, for the record (one allowed `approve`, 617 ms):
+`{"method":"eth_sendTransaction","data":{"hash":"","caip2":"eip155:10143","user_operation_hash":"0x8794…29a5","sponsorship_provider":"alchemy","transaction_request":{…},"transaction_id":"…"}}`.
+
+**Spend.** Treasury: 0.188 MON (two funding transfers, the reverted one's gas,
+a top-up for step 7, its own gas) and 0.111 USDC (trading fees and spread; the
+rest came back). AUSD came from Agora's faucet straight to the throwaway user,
+not the treasury, and its 9,900 left over went to the treasury: net **+9,900
+AUSD**. Left behind: 0.0936 MON in the revoked, archived agent (unrecoverable,
+see below) and 99.999 AUSD in its Perpl account 1240 (no Perpl withdraw).
+
+#### What it found, and what changed (branch `test/SEN-212-sponsored-e2e`)
+
+1. **Bug: a 0-MON sponsored agent could not open its Perpl account.**
+   `AgentPerplOnboarder` priced the three legs in the agent's own MON and
+   answered `needs_gas` forever; `ReturnFundsService` did the same
+   (`return_gas_insufficient`). Both now step aside when
+   `AgentTransactionSender.sponsorsGasFor(agent)` — sends are sponsored **and**
+   the agent's live policy has the twins. An agent whose policy predates the
+   flag still signs, so it is still gated.
+2. **Platform limit: a delegated agent can never move native MON.** Monad's
+   reserve balance forbids an EIP-7702-delegated account to go below 10 MON,
+   with no exception (gotcha 12). Signed, the deposit reverts and burns gas
+   (7e); sponsored, Privy accepts it and the bundler silently drops it (7b).
+   The `deposit` tool now refuses a native-MON deposit from an agent whose gas
+   is sponsored as `native_mon_reserve`, before anything is signed, precheck on
+   or off.
+3. **Product: no MON drip under the flag.** MON sent to such an agent could
+   only be stranded: nothing it may do needs it, returns never sweep it, and it
+   cannot leave. A hire with the flag on records `gasFunding.reason:
+"gas_sponsored"` instead of spending `GAS_DRIP_AGENT_AMOUNT_MON`.
+4. **A fallback the agent cannot pay for** used to reach the RPC and fail as
+   the bare "Missing or invalid parameters"; it is now an `InsufficientGasError`
+   after the enclave signs and before anything is broadcast (a forbidden call
+   is still the enclave's refusal).
+5. **Observability**: the API logs every agent transaction's path
+   (`sponsored`, `signed`, `signed_after_refusal`), user operation, bundle and
+   timings — the source of the latency figures above.
+
+Also learned, no code needed: MON sent TO a delegated wallet needs more than
+21,000 gas (7a). The agent drip already picks its limit by `eth_getCode`
+(`GAS_DRIP_GAS_LIMIT_CONTRACT`, 46,000), `agent:fund` refuses MON to an address
+with code, and the app's Fund sheet sends sponsored, sized by the bundler.
+
+#### Verdict, and how to turn it on
+
+**Safe to enable in production once this branch is merged and deployed with the
+web app and a new APK.** Sponsorship worked for every agent write the product
+makes — Kuru deposit, fee approve, market buy and sell, withdraw, return,
+Perpl's three onboarding legs, before and after an amend and after a revoke —
+from a wallet holding 0 MON, and the enclave refused every forbidden call on
+the send path exactly as on the sign path. Without the fixes it is not safe:
+an AUSD-funded agent could not open Perpl.
+
+1. Merge `test/SEN-212-sponsored-e2e`, and ship the **APK** first or together:
+   an app build without SEN-211's `approval.ts` refuses to sign an amend or a
+   **revoke** of a policy carrying the twins. `deploy.sh` ships the web build
+   with the API, so the web app follows on its own.
+2. Change the one line of copy that becomes false,
+   `apps/mobile/src/howItWorks/content.ts`: "Agents are separate wallets and
+   pay their own gas in MON."
+3. Check the Privy dashboard's gas credits for Monad testnet (about 0.04 MON
+   equivalent per agent transaction).
+4. Put `AGENT_SPONSORED_SENDS=1` in the repo `.env`, then:
+
+   ```bash
+   cd infra
+   DRY_RUN=1 ./push-secrets.sh          # AGENT_SPONSORED_SENDS must be listed as sent (it is in api-env.allowlist)
+   PROJECT=… ZONE=… ./push-secrets.sh
+   PROJECT=… ZONE=… ./deploy.sh         # recreates the API container; the flag is read at boot
+   ```
+
+   The boot log says `agents: transactions Privy-sponsored (AGENT_SPONSORED_SENDS)`;
+   each transaction then logs `[AgentTransactions] sponsored ok …`.
+
+5. **Existing agents need an amend to get sponsorship, and nothing breaks
+   meanwhile.** Every agent hired before the flag has no twins: its sends are
+   refused on the sponsored path and carried by the sign path, paid in its own
+   MON, as today (`signed_after_refusal` in the log). They are device-owned, so
+   only their owners can amend them — any mandate edit approved in the app
+   compiles the twins (there is no bulk path; gotcha 13). On the box, the
+   active ones without twins:
+
+   ```sql
+   SELECT id, user_id FROM agents
+   WHERE status = 'active' AND archived_at IS NULL
+     AND coalesce(json_extract(data, '$.sponsoredSends'), 0) != 1;
+   ```
+
+   Revoked agents need nothing new: their returns keep signing with their MON.
+
+6. Rolling back is removing the flag and redeploying, with one cost: agents
+   hired under it got no drip and are delegated, so on the sign path they pay
+   gas from MON they do not have until someone funds them (with more than
+   21,000 gas, 7a).
+
+Not exercised here: the ERC-8004 mandate anchor (its registrar key was blanked
+locally with the other sender keys; `mandate-anchor.spec.ts` covers hashing the
+twins), the model-driven runner (the tools are the same ones `/mcp` serves), Kuru Set D,
+and a Kuru `cancel` (a `batch`, the same rule shape as an order).
 
 ## The human step, and its exact wording
 
@@ -432,6 +610,7 @@ Everything the two probes set out to ask is answered:
 | Does typed data still `ecrecover` once delegated? | yes, 65 bytes `r‖s‖v` (gotcha 9 holds)                            |
 | Does a second sponsored send work?                | not within ~1.5 s of the DELEGATING one; freely afterwards        |
 | Who pays?                                         | Privy's prepaid credits; `actualGasCost` at the EntryPoint is 0   |
+| An agent's whole lifecycle, 0 MON? (run 5)        | yes, after SEN-212's fixes; native MON can never leave it         |
 
 What is still open, and neither is this document's to close:
 
