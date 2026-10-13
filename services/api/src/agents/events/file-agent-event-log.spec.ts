@@ -2,14 +2,26 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { openedDbs } from '../../state/db/testing/opened-dbs';
 import { InMemoryAgentEventLog, type AgentEventLog } from './agent-event-log';
+import { CreatorFeeEventLog } from './creator-fee-event-log';
 import { FileAgentEventLog } from './file-agent-event-log';
+import { SqliteAgentEventLog } from './sqlite-agent-event-log';
 
 const quiet = { warn: jest.fn(), error: jest.fn() };
 
 let dir: string;
 let path: string;
 const open: FileAgentEventLog[] = [];
+const dbs = openedDbs();
+
+/** A SQLite log on `<dir>/sente.db`; "a restart" is calling this again. */
+function sqliteLog(maxPerAgent?: number): SqliteAgentEventLog {
+  return new SqliteAgentEventLog(dbs.reopen(dir), {
+    logger: quiet,
+    ...(maxPerAgent === undefined ? {} : { maxPerAgent }),
+  });
+}
 
 function fileLog(maxPerAgent?: number): FileAgentEventLog {
   const log = new FileAgentEventLog(path, {
@@ -33,6 +45,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const log of open.splice(0)) log.close();
+  dbs.closeAll();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -41,6 +54,7 @@ afterEach(() => {
 describe.each<[string, () => AgentEventLog]>([
   ['InMemoryAgentEventLog', () => new InMemoryAgentEventLog()],
   ['FileAgentEventLog', () => fileLog()],
+  ['SqliteAgentEventLog', () => sqliteLog()],
 ])('%s list semantics', (_name, make) => {
   it('stamps seq and at, and filters by run, kind and position', async () => {
     const log = make();
@@ -213,5 +227,106 @@ describe('FileAgentEventLog', () => {
     expect(stored.seq).toBe(1);
     expect(quiet.error).toHaveBeenCalledWith(expect.stringMatching(/not written/));
     expect(await log.list('a')).toHaveLength(1);
+  });
+});
+
+// What a restart keeps, for both persistent logs: the file one and the SQLite one.
+describe.each<[string, (maxPerAgent?: number) => AgentEventLog & { size: number }]>([
+  ['FileAgentEventLog', (max) => fileLog(max)],
+  ['SqliteAgentEventLog', (max) => sqliteLog(max)],
+])('%s across a restart', (_name, make) => {
+  /** Closes the file log; the SQLite one is closed by the next `make`. */
+  const restart = (log: AgentEventLog) => {
+    if (log instanceof FileAgentEventLog) log.close();
+  };
+
+  it('keeps events, frozen, and carries seq on', async () => {
+    const first = make();
+    await first.append({ agentId: 'a', runId: 'r', kind: 'order', detail: { amountAtoms: 25n } });
+    await first.append({ agentId: 'b', kind: 'fill', detail: {} });
+    restart(first);
+
+    const second = make();
+    expect(second.size).toBe(2);
+    const [stored] = await second.list('a');
+    expect(stored).toMatchObject({ seq: 1, runId: 'r', detail: { amountAtoms: '25' } });
+    expect(Object.isFrozen(stored)).toBe(true);
+    expect(Object.isFrozen(stored!.detail)).toBe(true);
+    expect((await second.append({ agentId: 'a', kind: 'thesis', detail: {} })).seq).toBe(3);
+    expect((await second.list('a', { afterSeq: 2 })).map((e) => e.seq)).toEqual([3]);
+  });
+
+  it('holds the per-agent cap and reports what it dropped (SEN-129)', async () => {
+    const first = make(2);
+    for (let i = 1; i <= 4; i += 1) {
+      await first.append({ agentId: 'a', kind: 'order', detail: {}, at: i * 100 });
+    }
+    await first.append({ agentId: 'b', kind: 'order', detail: {}, at: 500 });
+    expect(await first.truncation('a')).toEqual({ evicted: 2, newestEvictedAt: 200 });
+    restart(first);
+
+    const second = make(2);
+    expect((await second.list('a')).map((e) => e.seq)).toEqual([3, 4]);
+    expect((await second.list('b')).map((e) => e.seq)).toEqual([5]);
+    expect(await second.truncation('a')).toEqual({ evicted: 2, newestEvictedAt: 200 });
+    expect(await second.truncation('b')).toEqual({ evicted: 0, newestEvictedAt: null });
+    await second.append({ agentId: 'a', kind: 'order', detail: {}, at: 600 });
+    expect(await second.truncation('a')).toEqual({ evicted: 3, newestEvictedAt: 300 });
+  });
+
+  it('never hands out a seq twice, even after the newest events of an agent are gone', async () => {
+    const first = make(1);
+    await first.append({ agentId: 'a', kind: 'order', detail: {} });
+    await first.append({ agentId: 'a', kind: 'order', detail: {} });
+    restart(first);
+    const second = make(1);
+    expect((await second.append({ agentId: 'b', kind: 'order', detail: {} })).seq).toBe(3);
+  });
+
+  it('runs the creator-fee decorator over it unchanged', async () => {
+    const accrue = jest.fn();
+    const log = new CreatorFeeEventLog(
+      make(),
+      { accrue },
+      { get: () => Promise.resolve(undefined) },
+    );
+    const fill = await log.append({ agentId: 'a', kind: 'fill', detail: { venue: 'kuru' } });
+    expect(await log.list('a')).toEqual([fill]);
+    expect(await log.truncation('a')).toEqual({ evicted: 0, newestEvictedAt: null });
+  });
+});
+
+describe('SqliteAgentEventLog', () => {
+  it('pages the last events of one kind or one run through the indexes', async () => {
+    const log = sqliteLog();
+    for (let i = 0; i < 5; i += 1) {
+      await log.append({ agentId: 'a', runId: `r${i % 2}`, kind: 'run', detail: { i } });
+      await log.append({ agentId: 'a', runId: `r${i % 2}`, kind: 'order', detail: { i } });
+    }
+    const [last] = await log.list('a', { kind: 'run', limit: 1 });
+    expect(last!.detail).toEqual({ i: 4 });
+    expect((await log.list('a', { runId: 'r1', kind: 'order' })).map((e) => e.seq)).toEqual([4, 8]);
+    expect((await log.list('a', { runId: 'r0', afterSeq: 1, limit: 2 })).map((e) => e.seq)).toEqual(
+      [2, 5],
+    );
+  });
+
+  it('keeps a whole history it has read current through appends and evictions', async () => {
+    const log = sqliteLog(3);
+    await log.append({ agentId: 'a', kind: 'order', detail: {} });
+    const first = await log.list('a');
+    first.pop(); // the caller's copy, not the cache
+    for (let i = 0; i < 4; i += 1) await log.append({ agentId: 'a', kind: 'order', detail: {} });
+    const cached = await log.list('a');
+    expect(cached.map((e) => e.seq)).toEqual([3, 4, 5]);
+    expect(await sqliteLog(3).list('a')).toEqual(cached);
+  });
+
+  it('resolves an append whose write fails, and logs it', async () => {
+    const log = sqliteLog();
+    dbs.closeAll();
+    const stored = await log.append({ agentId: 'a', kind: 'order', detail: {} });
+    expect(stored).toMatchObject({ agentId: 'a', kind: 'order' });
+    expect(quiet.error).toHaveBeenCalledWith(expect.stringMatching(/not written/));
   });
 });

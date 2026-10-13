@@ -10,8 +10,9 @@
 
 import { migration as m001 } from './001-agents-and-user-wallets.ts';
 import { migration as m002 } from './002-small-stores-and-secrets.ts';
+import { migration as m003 } from './003-append-logs.ts';
 import type { Migration } from './migration.ts';
 
 export type { Migration } from './migration.ts';
 
-export const MIGRATIONS: readonly Migration[] = [m001, m002];
+export const MIGRATIONS: readonly Migration[] = [m001, m002, m003];

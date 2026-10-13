@@ -24,14 +24,18 @@ way — runs the migrations, and closes the database with a WAL checkpoint on
 shutdown.
 
 Converted so far: the agent store (`agents/store/sqlite-agent-store.ts`), the
-user-wallet registry (`wallet/store/sqlite-user-wallet-registry.ts`), and, in
+user-wallet registry (`wallet/store/sqlite-user-wallet-registry.ts`); in
 migration 2, the profiles (`profile/sqlite-profile.store.ts`), the starter kits
 (`starter-kit/sqlite-starter-kit.store.ts`), the creator fee ledger
 (`fees/sqlite-creator-fees.ts`, which `creator:payout` also opens under
 `sqlite`), and the three stores sealed under `AGENT_SECRETS_KEY`: the credit
 keys (`credits/store/sqlite-credit-key-store.ts`), the agent secrets
 (`agents/venues/sqlite-agent-secret-store.ts`) and the user venue secrets
-(`trade/sqlite-user-venue-secrets.ts`).
+(`trade/sqlite-user-venue-secrets.ts`); and, in migration 3, the three
+append-only logs: the agent event log
+(`agents/events/sqlite-agent-event-log.ts`), run transcripts
+(`agents/runner/transcript/sqlite-run-transcript-store.ts`) and the value
+history (`portfolio/history/sqlite-value-history-store.ts`).
 
 The sealed stores keep a two-layer shape: `state/db/record-table.ts` moves the
 file's sealed records in and out of the table as they are (that is all the
@@ -81,6 +85,38 @@ database written by a newer build (a recorded id the code does not have).
 **Never edit a migration that has run anywhere**; a fix is a new migration.
 `sente-db.spec.ts` applies the whole registry to a fresh in-memory database.
 
+### The append-only logs
+
+`agent-events.jsonl`, `agent-runs.jsonl` and `value-history.jsonl` become
+`agent_events` (+ `agent_event_truncation`), `agent_runs` + `agent_run_entries`
+and `value_history` (`migrations/003-append-logs.ts`). Their `data` is the
+line's payload as plain JSON, as in the files, not the tagged JSON of the
+record stores: everything in them is JSON-safe before it is stored.
+
+- **Event log.** `seq` is the table's AUTOINCREMENT key, so it carries on
+  across restarts and the import (which keeps the file's numbers) and is never
+  reused. `list` keeps the exact paging (`afterSeq` + `limit` takes the first
+  page after the cursor, `limit` alone the last page) through
+  `(agent_id, seq)`, `(agent_id, kind, seq)` and `(agent_id, run_id, seq)`.
+  The per-agent cap deletes the oldest rows as each append lands and adds them
+  to `agent_event_truncation`, so `truncation` survives a restart without the
+  file's compaction header. An agent's whole history, once read, is cached in
+  memory and kept current by `append`: the resting-fill watcher reads every
+  agent's history every 15 s, and at the 10k cap an uncached read parses 10k
+  rows (~25 ms). Filtered reads always query.
+- **Run transcripts.** Still the in-memory store serving every read (the runner
+  records synchronously and a live run is streamed by cursor); the tables are
+  the journal it reads back at boot. A run the cap evicts is deleted with its
+  entries at once. Every entry is now a durable commit, where the file was not
+  fsynced.
+- **Value history.** Queried per call. `(kind, subject_id, at, dup)` is unique
+  and is also the order: `dup` numbers a subject's snapshots at the same
+  millisecond in arrival order, which is the file store's tie order. The cap
+  is applied on append.
+
+A failed write is logged and the caller carries on, as with the files: an
+event or a transcript line records something that already happened.
+
 ## Adding a store
 
 Copy the agent store. Six places, each with a worked example in the tree:
@@ -111,8 +147,11 @@ Copy the agent store. Six places, each with a worked example in the tree:
    directory that cannot be written) stays in its own `describe`.
 5. **Import** — one entry in `STORE_IMPORTS` in `state/db/state-import.ts`:
    `{ name, file, load, open, key }`. `loadJsonRecords` covers `.json`
-   envelope files; a `.jsonl` store brings its own `load`. Add the name to the
-   "covers every converted store" assertion in `state-import.spec.ts`.
+   envelope files; a `.jsonl` store brings its own `load`, streamed with
+   `state/jsonl.ts#readJsonlLines` and applying the file store's own line
+   checks and caps, and sets `ordered: true` so the check also proves the
+   table reads back in the file's order. Add the name to the "covers every
+   converted store" assertion in `state-import.spec.ts`.
 6. **Docs** — the "converted so far" line above and gotcha 14.
 
 A store that two services write together is the reason `transaction` exists:
@@ -154,7 +193,17 @@ content hashes (sha256 over the records' canonical tagged JSON), how many are
 identical, and how many the table holds that the file does not — records the
 API wrote under `sqlite` since the copy, which is why a re-run is safe and
 changes nothing. It exits 1 if any file record is missing from or differs in
-its table.
+its table, or, for a log, reads back out of the file's order.
+
+The logs are loaded as their file stores would load them at boot, without
+touching the files: the same per-agent and per-subject caps (what the event
+cap drops is carried into `agent_event_truncation`), a torn last line skipped
+and left in place, a corrupt line elsewhere refused. A log record is keyed by
+what identifies it (an event's `seq`; a run's id and an entry's `seq`; a
+snapshot's subject, `at` and `dup`), so a re-run skips what is already there.
+One edge: an event the cap evicted under `sqlite` since the first copy is not
+resurrected by a re-run, and the re-run reports it missing. Measured on a
+laptop: 300k events and 400k snapshots import and verify in about 7 s.
 
 Rollback: `STORE_BACKEND=file`, restart. Anything written under `sqlite` after
 the cut-over stays in `sente.db` and is not in the files; to carry it back,

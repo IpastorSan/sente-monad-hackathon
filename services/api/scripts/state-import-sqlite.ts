@@ -35,7 +35,7 @@ function describe(report: StoreImportReport): string {
   const table = `${report.name}: ${report.dbCount} record(s), sha256 ${report.dbHash}`;
   const check = report.ok
     ? `OK — ${report.matched} identical${report.dbOnly ? `, ${report.dbOnly} only in the table (written under sqlite since)` : ''}`
-    : `MISMATCH — ${report.matched} identical, ${report.differs} differ, ${report.missing} missing, ${report.dbOnly} only in the table`;
+    : `MISMATCH — ${report.matched} identical, ${report.differs} differ, ${report.missing} missing, ${report.dbOnly} only in the table${report.inOrder ? '' : ', OUT OF ORDER'}`;
   return `  ${file}\n  ${table}\n  ${check}`;
 }
 

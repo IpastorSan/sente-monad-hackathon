@@ -78,7 +78,7 @@ const COMPACT_RATIO = 1.5;
 const COMPACT_SLACK = 1_000;
 const DECIMAL = /^-?\d+(\.\d+)?$/;
 
-type Line = { k: HistoryKind; id: string; s: ValueSnapshot };
+export type Line = { k: HistoryKind; id: string; s: ValueSnapshot };
 
 export class InMemoryValueHistoryStore implements ValueHistoryStore {
   readonly #bySubject = new Map<string, ValueSnapshot[]>();
@@ -267,7 +267,7 @@ function subjectKey(kind: HistoryKind, id: string): string {
   return `${kind}:${id}`;
 }
 
-function parseLine(text: string): Line | 'torn' | 'wrong-version' {
+export function parseLine(text: string): Line | 'torn' | 'wrong-version' {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

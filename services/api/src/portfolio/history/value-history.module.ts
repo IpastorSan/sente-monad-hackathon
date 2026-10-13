@@ -1,6 +1,4 @@
-import { join } from 'node:path';
-
-import { Logger, Module, type Provider } from '@nestjs/common';
+import { Module, type Provider } from '@nestjs/common';
 
 import { AGENT_EVENTS, type AgentEventLog } from '../../agents/events/agent-event-log';
 import { AgentsModule } from '../../agents/agents.module';
@@ -8,7 +6,8 @@ import { AgentPortfolioService } from '../../agents/portfolio/portfolio.service'
 import { AGENT_STORE, type AgentStore } from '../../agents/store/agent-store';
 import { Auth, RequestContextAuth } from '../../auth/principal';
 import { SessionAuthGuard } from '../../auth/session-auth.guard';
-import { StateDirLease, StateModule } from '../../state/state.module';
+import { SenteDbLease, StateModule } from '../../state/state.module';
+import { selectStore } from '../../state/store-backend';
 import { TradingEnabledGuard } from '../../trade/trade.controller';
 import { TRADE_CONFIG, type TradeConfig } from '../../trade/trade.config';
 import { TradeModule } from '../../trade/trade.module';
@@ -17,6 +16,7 @@ import { MarketDataService } from '../../venues/market-data.service';
 import { VenuesModule } from '../../venues/venues.module';
 import { PortfolioModule } from '../portfolio.module';
 import { UserPortfolioService } from '../portfolio.service';
+import { SqliteValueHistoryStore } from './sqlite-value-history-store';
 import { AgentHistoryController, PortfolioHistoryController } from './value-history.controller';
 import {
   loadValueHistoryConfig,
@@ -33,17 +33,21 @@ import {
   type ValueHistoryStore,
 } from './value-history.store';
 
-/** In memory unless `STATE_DIR` is set; then `value-history.jsonl` there, so a restart keeps the chart. */
+/**
+ * In memory unless `STATE_DIR` is set; then `value-history.jsonl` there, or a
+ * table in `sente.db` under `STORE_BACKEND=sqlite` (SEN-205), so a restart
+ * keeps the chart.
+ */
 const storeProvider: Provider = {
   provide: VALUE_HISTORY_STORE,
-  // StateDirLease: the file opens only once this process holds the STATE_DIR lock (SEN-161).
-  inject: [StateDirLease],
-  useFactory: (lease: StateDirLease): ValueHistoryStore => {
-    if (!lease.dir) return new InMemoryValueHistoryStore();
-    const store = new FileValueHistoryStore(join(lease.dir, VALUE_HISTORY_FILE));
-    Logger.log(`${store.size} value snapshot(s) loaded from ${store.path}`, 'ValueHistory');
-    return store;
-  },
+  // SenteDbLease: the store opens only once this process holds the STATE_DIR lock (SEN-161).
+  inject: [SenteDbLease],
+  useFactory: (lease: SenteDbLease): ValueHistoryStore =>
+    selectStore<ValueHistoryStore>(lease, VALUE_HISTORY_FILE, 'value snapshot(s)', {
+      memory: () => new InMemoryValueHistoryStore(),
+      file: (path) => new FileValueHistoryStore(path),
+      sqlite: (db) => new SqliteValueHistoryStore(db),
+    }),
 };
 
 const readersProvider: Provider = {

@@ -72,13 +72,13 @@ import {
   type AgentEventQuery,
   type AgentEventTruncation,
   type NewAgentEvent,
-} from './agent-event-log';
+} from './agent-event-log.ts';
 
 /** The file name under `STATE_DIR`. */
 export const AGENT_EVENTS_FILE = 'agent-events.jsonl';
 
 /** The `v` of every line. Checked on load, so a format change is a message rather than a mystery. */
-const LINE_VERSION = 1;
+export const LINE_VERSION = 1;
 
 /** Compact at boot above `COMPACT_RATIO * kept + COMPACT_SLACK` lines. */
 const COMPACT_RATIO = 1.5;
@@ -247,7 +247,7 @@ export class FileAgentEventLog implements AgentEventLog {
  * One line -> its event (or a compaction's truncation record), `torn` when it
  * does not parse as one, `wrong-version` for another `v`.
  */
-function parseLine(
+export function parseLine(
   line: string,
 ): AgentEvent | Map<string, AgentEventTruncation> | 'torn' | 'wrong-version' {
   let parsed: unknown;
@@ -290,7 +290,7 @@ function parseTruncated(value: unknown): Map<string, AgentEventTruncation> | 'to
  * The newest `max` events of each agent, in `seq` order — what the in-memory
  * log will hold — and, per agent, what that leaves out.
  */
-function keepNewest(
+export function keepNewest(
   events: readonly AgentEvent[],
   max: number,
 ): { kept: AgentEvent[]; dropped: Map<string, AgentEventTruncation> } {
