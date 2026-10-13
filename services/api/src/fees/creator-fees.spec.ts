@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { CreatorFeeLedger, creatorShareAtoms, type NewAccrual } from './creator-fees';
+import { openedDbs } from '../state/db/testing/opened-dbs';
+import {
+  creatorShareAtoms,
+  FileCreatorFeeLedger,
+  type CreatorFeeLedger,
+  type NewAccrual,
+} from './creator-fees';
+import { SqliteCreatorFeeLedger } from './sqlite-creator-fees';
 
 const TX = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
 
@@ -39,15 +46,30 @@ describe('creatorShareAtoms', () => {
   });
 });
 
-describe('CreatorFeeLedger', () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'sente-creator-fees-'));
-  });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+let dir: string;
+const dbs = openedDbs();
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'sente-creator-fees-'));
+});
+
+afterEach(() => {
+  dbs.closeAll();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** A SQLite ledger on `<dir>/sente.db`; calling it again is a restart. */
+const sqliteLedger = () => new SqliteCreatorFeeLedger(dbs.reopen(dir));
+
+/** Every implementation `STATE_DIR` and `STORE_BACKEND` can pick, through one table (SEN-205). */
+describe.each([
+  ['in memory', (): CreatorFeeLedger => new FileCreatorFeeLedger()],
+  ['FileCreatorFeeLedger', (): CreatorFeeLedger => new FileCreatorFeeLedger(join(dir, 'c.json'))],
+  ['SqliteCreatorFeeLedger', (): CreatorFeeLedger => sqliteLedger()],
+])('%s', (_name, create) => {
 
   it('accrues each fill once, keyed by agent and transaction', () => {
-    const ledger = new CreatorFeeLedger();
+    const ledger = create();
     expect(ledger.accrue(fill())!.amountAtoms).toBe(10_500n);
     expect(ledger.accrue(fill({ txHash: TX(1).toUpperCase().replace('0X', '0x') }))).toBeNull();
     expect(ledger.accrue(fill({ txHash: TX(2) }))!.amountAtoms).toBe(10_500n);
@@ -59,7 +81,7 @@ describe('CreatorFeeLedger', () => {
   });
 
   it('owed is accrued less paid, per creator and per asset', () => {
-    const ledger = new CreatorFeeLedger();
+    const ledger = create();
     ledger.accrue(fill());
     ledger.accrue(fill({ creatorUserId: 'other', txHash: TX(2) }));
     ledger.payout({
@@ -79,7 +101,7 @@ describe('CreatorFeeLedger', () => {
   });
 
   it('keeps each asset apart: a buy’s base fee and a sell’s USDC fee (SEN-195)', () => {
-    const ledger = new CreatorFeeLedger();
+    const ledger = create();
     // 13 cbBTC atoms, the live Set C buy's fee (tx 0xca084e71…): 3 atoms owed.
     ledger.accrue(fill({ asset: 'cbBTC', decimals: 8, feeAtoms: 13n, txHash: TX(1) }));
     ledger.accrue(fill({ txHash: TX(2) }));
@@ -106,7 +128,7 @@ describe('CreatorFeeLedger', () => {
   });
 
   it('refuses a payout above what is owed, a repeated tx, or a malformed hash', () => {
-    const ledger = new CreatorFeeLedger();
+    const ledger = create();
     ledger.accrue(fill());
     const payout = {
       creatorUserId: 'creator',
@@ -126,11 +148,25 @@ describe('CreatorFeeLedger', () => {
     );
   });
 
-  it('survives a restart: atoms and dates come back as bigint and Date', () => {
-    const path = join(dir, 'creator-fees.json');
-    const first = new CreatorFeeLedger(path);
+  it('answers recent records newest first, a tie in recorded order', () => {
+    const ledger = create();
+    const at = (s: string) => new Date(`2026-10-0${s}T12:00:00Z`);
+    ledger.accrue(fill({ txHash: TX(1), at: at('1') }));
+    ledger.accrue(fill({ txHash: TX(2), at: at('3') }));
+    ledger.accrue(fill({ txHash: TX(3), at: at('2') }));
+    ledger.accrue(fill({ txHash: TX(4), at: at('3') }));
+    expect(ledger.recent('creator', 3).map((r) => r.txHash)).toEqual([TX(2), TX(4), TX(3)]);
+  });
+});
+
+describe.each([
+  ['FileCreatorFeeLedger', () => new FileCreatorFeeLedger(join(dir, 'creator-fees.json'))],
+  ['SqliteCreatorFeeLedger', () => sqliteLedger()],
+])('%s across a restart', (_name, open) => {
+  it('keeps every record: atoms and dates come back as bigint and Date', () => {
+    const first = open();
     first.accrue(fill({ at: new Date('2026-10-09T12:00:00Z') }));
-    const second = new CreatorFeeLedger(path);
+    const second = open();
     expect(second.size).toBe(1);
     const [record] = second.recent('creator', 1);
     expect(record!.amountAtoms).toBe(10_500n);

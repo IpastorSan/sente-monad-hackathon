@@ -24,12 +24,19 @@
 // payout written while it runs would be overwritten by its next save. This
 // takes the same STATE_DIR lock (SEN-161) and so refuses to run beside the
 // API: stop it, record the payout, start it again.
+//
+// It reads and writes the ledger the API does: `creator-fees.json`, or the
+// `creator_fees` table in `<dir>/sente.db` under `STORE_BACKEND=sqlite`
+// (SEN-205) — set it here exactly as the API runs.
 
 import { fromUnits, KURU_TESTNET_TOKENS, toUnits } from '@sente/venues/kuru';
 
-import { CREATOR_FEES_FILE, CreatorFeeLedger } from '../src/fees/creator-fees.ts';
+import { CREATOR_FEES_FILE, FileCreatorFeeLedger } from '../src/fees/creator-fees.ts';
+import { SqliteCreatorFeeLedger } from '../src/fees/sqlite-creator-fees.ts';
+import { SenteDb, senteDbPath } from '../src/state/db/sente-db.ts';
 import { STATE_DIR_VAR, stateDir, statePath } from '../src/state/json-file.ts';
 import { acquireStateDirLock } from '../src/state/state-dir-lock.ts';
+import { storeBackend } from '../src/state/store-backend.ts';
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -49,7 +56,11 @@ function main(): number {
     return 1;
   }
   acquireStateDirLock(dir);
-  const ledger = new CreatorFeeLedger(path);
+  // Closed by the process exiting: every write below is its own committed transaction.
+  const ledger =
+    storeBackend() === 'sqlite'
+      ? new SqliteCreatorFeeLedger(SenteDb.open(senteDbPath(dir)))
+      : new FileCreatorFeeLedger(path);
 
   const creator = flag('creator');
   if (!creator) {

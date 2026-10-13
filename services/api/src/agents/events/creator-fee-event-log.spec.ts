@@ -2,7 +2,7 @@ import { parseMandate } from '@sente/mandate';
 import { KURU_TESTNET_MARKETS, KURU_TESTNET_TOKENS } from '@sente/venues/kuru';
 import { getAddress } from 'viem';
 
-import { CreatorFeeLedger } from '../../fees/creator-fees';
+import { FileCreatorFeeLedger } from '../../fees/creator-fees';
 import { InMemoryAgentStore, type AgentRecord } from '../store/agent-store';
 import { EXPIRES_IN_A_YEAR } from '../testing/mandate-expiry';
 import { InMemoryAgentEventLog, type NewAgentEvent } from './agent-event-log';
@@ -69,7 +69,7 @@ async function harness() {
   await agents.insert({ ...record('fork', 'forker', 'source'), mcpTokenHash: 'h2' });
   await agents.insert({ ...record('self-fork', 'creator', 'source'), mcpTokenHash: 'h3' });
   await agents.insert({ ...record('original', 'forker'), mcpTokenHash: 'h4' });
-  const ledger = new CreatorFeeLedger();
+  const ledger = new FileCreatorFeeLedger();
   const log = new CreatorFeeEventLog(new InMemoryAgentEventLog(), ledger, agents);
   return { ledger, log };
 }

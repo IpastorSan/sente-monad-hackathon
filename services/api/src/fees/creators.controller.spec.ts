@@ -6,7 +6,7 @@ import { authConfig, resetAuthConfig } from '../auth/auth.config';
 import { Auth, RequestContextAuth } from '../auth/principal';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { mintSessionToken } from '../auth/session-token';
-import { CREATOR_FEES, CreatorFeeLedger } from './creator-fees';
+import { CREATOR_FEES, FileCreatorFeeLedger } from './creator-fees';
 import { CreatorsController } from './creators.controller';
 
 const SECRET = 'ef'.repeat(32);
@@ -18,13 +18,13 @@ const TX = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
 describe('CreatorsController (SEN-184)', () => {
   let app: INestApplication;
   let base: string;
-  let ledger: CreatorFeeLedger;
+  let ledger: FileCreatorFeeLedger;
 
   beforeEach(async () => {
     process.env['AUTH_SESSION_SECRET'] = SECRET;
     delete process.env['AUTH_PLACEHOLDER'];
     resetAuthConfig();
-    ledger = new CreatorFeeLedger();
+    ledger = new FileCreatorFeeLedger();
     const moduleRef = await Test.createTestingModule({
       controllers: [CreatorsController],
       providers: [
