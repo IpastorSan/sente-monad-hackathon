@@ -543,8 +543,8 @@ export interface AgentResponseDto {
   gasFunded: boolean;
   /**
    * Only when `gasFunded` is false. A stable string: one of
-   * `AGENT_DRIP_REFUSAL_REASONS` (gas/gas.errors.ts), `gas_drip_unavailable`
-   * or `drip_pending`.
+   * `AGENT_DRIP_REFUSAL_REASONS` (gas/gas.errors.ts), `gas_drip_unavailable`,
+   * `drip_pending`, or `gas_sponsored` (SEN-212: Privy pays its gas, so no drip).
    */
   gasFundingReason?: string;
   /** The drip transaction, when one was broadcast. */

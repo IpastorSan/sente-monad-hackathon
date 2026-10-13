@@ -1430,6 +1430,30 @@ describe('AgentsService', () => {
       expect(revoked.sponsoredSends).toBe(true);
     });
 
+    it('sends no MON drip: Privy pays, and MON would be stranded (SEN-212)', async () => {
+      const drips: unknown[] = [];
+      const gas: AgentGasFunder = {
+        dripToAgent: (command) => {
+          drips.push(command);
+          return Promise.resolve({ funded: false, reason: 'daily_cap_reached', message: 'unused' });
+        },
+      };
+      const service = new AgentsService(
+        new InMemoryAgentStore(),
+        new FakeAgentWalletProvider(),
+        new ServerMandateOwners(),
+        gas,
+      );
+      const { agent } = await service.hire(ALICE, hireInput());
+
+      expect(drips).toEqual([]);
+      expect(agent.gasFunding).toEqual({ funded: false, reason: 'gas_sponsored' });
+      expect(toAgentResponse(agent)).toMatchObject({
+        gasFunded: false,
+        gasFundingReason: 'gas_sponsored',
+      });
+    });
+
     it('off, an amend records that the policy no longer has them', async () => {
       const { service, store, wallets } = setup();
       const { agent } = await service.hire(ALICE, hireInput());
