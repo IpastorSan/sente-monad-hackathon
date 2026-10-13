@@ -4,6 +4,7 @@ import {
   describeAgentScheduleConfig,
   loadAgentRunnerConfig,
   loadAgentScheduleConfig,
+  runTimeoutMsFor,
 } from './runner.config';
 
 describe('loadAgentRunnerConfig', () => {
@@ -11,6 +12,7 @@ describe('loadAgentRunnerConfig', () => {
     expect(loadAgentRunnerConfig({})).toEqual({
       tickSeconds: undefined,
       timeoutMs: AGENT_RUNNER_DEFAULTS.timeoutMs,
+      kimiTimeoutMs: 480_000,
       maxIterations: 12,
       maxTokens: 16_384,
       writeSpacingMs: 5_000,
@@ -34,18 +36,29 @@ describe('loadAgentRunnerConfig', () => {
   it('reads the loop bounds and the write spacing, 0 included', () => {
     const config = loadAgentRunnerConfig({
       AGENT_RUN_TIMEOUT_MS: '60000',
+      AGENT_RUN_TIMEOUT_MS_KIMI: '300000',
       AGENT_RUN_MAX_ITERATIONS: '4',
       AGENT_RUN_MAX_TOKENS: '2048',
       AGENT_WRITE_SPACING_MS: '0',
     });
     expect(config).toMatchObject({
       timeoutMs: 60_000,
+      kimiTimeoutMs: 300_000,
       maxIterations: 4,
       maxTokens: 2048,
       writeSpacingMs: 0,
     });
     expect(() => loadAgentRunnerConfig({ AGENT_RUN_MAX_ITERATIONS: '0' })).toThrow();
     expect(() => loadAgentRunnerConfig({ AGENT_RUN_TIMEOUT_MS: '100' })).toThrow();
+    expect(() => loadAgentRunnerConfig({ AGENT_RUN_TIMEOUT_MS_KIMI: '1000000' })).toThrow(
+      /AGENT_RUN_TIMEOUT_MS_KIMI/,
+    );
+  });
+
+  it('gives Kimi runs the Kimi budget and every other model the default one', () => {
+    const config = loadAgentRunnerConfig({});
+    expect(runTimeoutMsFor(config, 'moonshotai/kimi-k2.6')).toBe(480_000);
+    expect(runTimeoutMsFor(config, 'anthropic/claude-sonnet-5')).toBe(180_000);
   });
 
   it('thinking is off unless AGENT_RUNNER_THINKING=adaptive; a typo fails', () => {

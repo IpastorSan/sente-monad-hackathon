@@ -10,6 +10,11 @@ export interface AgentRunnerConfig {
   readonly tickSeconds: number | undefined;
   /** Wall-clock budget for one run, enforced with an AbortController. */
   readonly timeoutMs: number;
+  /**
+   * The same budget for a Kimi K2.6 run, which reasons on every turn at about
+   * 65 tokens/s (SEN-209). `runTimeoutMsFor` picks between the two.
+   */
+  readonly kimiTimeoutMs: number;
   /** Model requests per run: the Tool Runner's `max_iterations`. */
   readonly maxIterations: number;
   /** `max_tokens` on every request. */
@@ -42,10 +47,21 @@ export const AGENT_RUNNER_DEFAULTS = {
   // Twelve model turns and a few spaced writes fit comfortably; a hung
   // upstream does not hold the agent's run slot for the SDK's 10 minutes.
   timeoutMs: 180_000,
+  // SEN-209: measured 2026-10-13 through OpenRouter on Moonshot's endpoint,
+  // Kimi K2.6 generates ~65 tokens/s and reasons before every answer: a read
+  // turn takes 5-15 s, a turn that plans watchers or an order 15-40 s (1,000
+  // to 2,650 tokens). A dozen such turns plus the spaced writes do not fit in
+  // 180 s: every scheduled Kimi run that day timed out, some between a buy
+  // and its target sell. Eight minutes holds a full run with several slow
+  // turns, or one turn that spends all of max_tokens. Sonnet, which finishes
+  // in 60-85 s, keeps the tighter bound against a hung upstream.
+  kimiTimeoutMs: 480_000,
   maxIterations: 12,
   // Kimi K2.6 reasons before it answers, and the reasoning counts here: on
   // 2026-10-12 a watcher-woken run spent all of 4096 thinking about watcher
-  // edges and ended on max_tokens. Only what is generated is billed.
+  // edges and ended on max_tokens. Only what is generated is billed. At
+  // Kimi's ~65 tokens/s a turn that uses all of it takes about four minutes,
+  // one more reason its run budget is eight (SEN-209).
   maxTokens: 16_384,
   // SEN-3: a second sign 5 s after the first was refused by the rolling cap;
   // one straight after was not. Not tied to GAS_DRIP_SENDER_SPACING_MS (2 s, Monad's reserve window, SEN-16); this one covers Privy's lag.
@@ -74,7 +90,8 @@ function integer(
  * agents on a timer (or not). Every variable is optional.
  *
  * - `AGENT_TICK_SECONDS`: unset, empty, `0` or `off` = no scheduler; else ≥ 30.
- * - `AGENT_RUN_TIMEOUT_MS`, `AGENT_RUN_MAX_ITERATIONS`, `AGENT_RUN_MAX_TOKENS`.
+ * - `AGENT_RUN_TIMEOUT_MS`, `AGENT_RUN_TIMEOUT_MS_KIMI`, `AGENT_RUN_MAX_ITERATIONS`,
+ *   `AGENT_RUN_MAX_TOKENS`.
  * - `AGENT_WRITE_SPACING_MS`: 0 turns spacing off.
  * - `AGENT_RUNNER_THINKING`: `off` (default) or `adaptive`.
  */
@@ -96,6 +113,10 @@ export function loadAgentRunnerConfig(env: NodeJS.ProcessEnv = process.env): Age
       min: 5_000,
       max: 600_000,
     }),
+    kimiTimeoutMs: integer(env, 'AGENT_RUN_TIMEOUT_MS_KIMI', AGENT_RUNNER_DEFAULTS.kimiTimeoutMs, {
+      min: 5_000,
+      max: 900_000,
+    }),
     maxIterations: integer(env, 'AGENT_RUN_MAX_ITERATIONS', AGENT_RUNNER_DEFAULTS.maxIterations, {
       min: 1,
       max: 50,
@@ -112,13 +133,19 @@ export function loadAgentRunnerConfig(env: NodeJS.ProcessEnv = process.env): Age
   };
 }
 
+/** The wall-clock budget of one run of `model`. */
+export function runTimeoutMsFor(config: AgentRunnerConfig, model: string): number {
+  return model.startsWith('moonshotai/kimi-') ? config.kimiTimeoutMs : config.timeoutMs;
+}
+
 /** Boot-time line. Loud when the scheduler is on, since it spends users' credits unprompted. */
 export function describeAgentRunnerConfig(
   config: AgentRunnerConfig,
   logger: { log(message: string): void; warn(message: string): void },
 ): void {
   const base =
-    `agent runner: timeout ${config.timeoutMs} ms, ${config.maxIterations} iterations, ` +
+    `agent runner: timeout ${config.timeoutMs} ms (Kimi ${config.kimiTimeoutMs} ms), ` +
+    `${config.maxIterations} iterations, ` +
     `write spacing ${config.writeSpacingMs} ms, thinking ${config.thinking ? 'adaptive' : 'off'}`;
   if (config.tickSeconds === undefined) {
     logger.log(`${base}, default cadence off (AGENT_TICK_SECONDS unset)`);

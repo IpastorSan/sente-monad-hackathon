@@ -2,6 +2,7 @@ import { Logger, type LoggerService } from '@nestjs/common';
 
 import { CreditsRefusedError } from '../../credits/credits.errors';
 import { AgentRefusedError } from '../agents.errors';
+import { InFlight } from './agent-runner.service';
 import { GATED_TOOLS } from '../tools/gate';
 import { MON_USDC } from '../tools/testing/agent-fixture';
 import { SENTE_PREAMBLE } from './prompt';
@@ -261,7 +262,41 @@ describe('AgentRunnerService', () => {
     const started = Date.now();
     const result = await h.run();
     expect(result.stopReason).toBe('timeout');
+    expect(result.error).toBe(
+      'the 0.1 s run budget ran out while the model worked on turn 1 (0 s in)',
+    );
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('a timed-out run keeps what it did, and says which turn the budget ran out on', async () => {
+    const h = await runnerHarness({
+      responses: [assistant([toolUse('tu_1', 'record_thesis', THESIS)], 'tool_use'), 'hang'],
+      config: { timeoutMs: 150 },
+    });
+    const result = await h.run();
+    expect(result).toMatchObject({ stopReason: 'timeout', iterations: 1, toolCalls: 1 });
+    expect(result.error).toMatch(
+      /run budget ran out while the model worked on turn 2 \(\d+ s in\)$/,
+    );
+    expect(result.events.map((e) => e.kind)).toEqual(['thesis', 'run']);
+    const { entries } = h.transcripts.read(h.agent.id, result.runId)!;
+    expect(entries.map((e) => e.kind)).toContain('tool_result');
+    expect(entries.at(-1)).toMatchObject({ kind: 'end', stopReason: 'timeout', toolCalls: 1 });
+  });
+
+  it('gives a Kimi run its own, longer budget (SEN-209)', async () => {
+    const config = { timeoutMs: 100, kimiTimeoutMs: 300 };
+    const kimi = await runnerHarness({
+      agent: { model: 'moonshotai/kimi-k2.6' },
+      responses: ['hang'],
+      config,
+    });
+    const sonnet = await runnerHarness({ responses: ['hang'], config });
+    const [kimiRun, sonnetRun] = await Promise.all([kimi.run(), sonnet.run()]);
+    expect(kimiRun).toMatchObject({ stopReason: 'timeout' });
+    expect(kimiRun.error).toMatch(/^the 0.3 s run budget ran out/);
+    expect(kimiRun.durationMs).toBeGreaterThanOrEqual(300);
+    expect(sonnetRun.error).toMatch(/^the 0.1 s run budget ran out/);
   });
 
   it('refuses with credits_unconfigured when there is no management key, and frees the slot', async () => {
@@ -389,5 +424,23 @@ describe('AgentRunnerService', () => {
     expect(printed.length).toBeGreaterThan(0);
     expect(everything).not.toContain(FIRST_USER_KEY);
     expect(everything).not.toContain('PLAINTEXT');
+  });
+});
+
+describe('InFlight (SEN-209)', () => {
+  it('names the tools still running, then the next model turn once they all report back', () => {
+    let now = 0;
+    const inFlight = new InFlight(() => now);
+    expect(inFlight.describe()).toBe('before the first model turn began');
+    inFlight.awaitModel(1);
+    now = 40_000;
+    expect(inFlight.describe()).toBe('while the model worked on turn 1 (40 s in)');
+    inFlight.runTools(1, ['record_thesis', 'place_market']);
+    now = 46_000;
+    inFlight.toolDone('record_thesis');
+    expect(inFlight.describe()).toBe("while turn 1's place_market ran (6 s in)");
+    inFlight.toolDone('place_market');
+    now = 58_000;
+    expect(inFlight.describe()).toBe('while the model worked on turn 2 (12 s in)');
   });
 });

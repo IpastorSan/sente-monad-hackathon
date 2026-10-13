@@ -853,7 +853,7 @@ What is left out:
 | `end_turn`, `stop_sequence`                              | The model finished.                                              |
 | `refusal`, `max_tokens`, `model_context_window_exceeded` | The model stopped for that reason. Recorded, not hidden.         |
 | `max_iterations`                                         | The loop hit its cap while the model still wanted tools.         |
-| `timeout`                                                | The wall-clock budget (`AGENT_RUN_TIMEOUT_MS`) ran out.          |
+| `timeout`                                                | The wall-clock budget ran out; `error` says on which turn.       |
 | `agent_revoked`                                          | Revoked while the run was open.                                  |
 | `credits_exhausted`                                      | OpenRouter's 402 (or a 403 about the key limit), or a spent key. |
 | `model_error`                                            | Any other API failure; `error` says which.                       |
@@ -963,6 +963,9 @@ previous run is still open is skipped.
 The other knobs:
 
 - `AGENT_RUN_TIMEOUT_MS`, default 180000;
+- `AGENT_RUN_TIMEOUT_MS_KIMI`, default 480000: Kimi K2.6 reasons on every
+  turn at about 65 tokens/s, so a turn takes 5–60 s where Sonnet's take a few
+  (SEN-209);
 - `AGENT_RUN_MAX_ITERATIONS`, default 12;
 - `AGENT_RUN_MAX_TOKENS`, default 16384;
 - `AGENT_RUNNER_THINKING`, default `off`.

@@ -32,7 +32,7 @@ import {
   type AnthropicClientFactory,
 } from './openrouter-client';
 import { renderSystemPrompt, renderTickMessage } from './prompt';
-import { AGENT_RUNNER_CONFIG, type AgentRunnerConfig } from './runner.config';
+import { AGENT_RUNNER_CONFIG, runTimeoutMsFor, type AgentRunnerConfig } from './runner.config';
 import { RUN_TRANSCRIPTS, type RunTranscriptStore } from './transcript/run-transcript-store';
 import {
   entriesOfTurn,
@@ -206,13 +206,16 @@ export class AgentRunnerService {
     });
     if (options.wake) record({ kind: 'note', text: redact(wakeNote(options.wake), [key]) });
     let thinkingTurns = 0;
-    const observe: ToolObserver = ({ tool, toolUseId, outcome }) =>
+    const inFlight = new InFlight();
+    const observe: ToolObserver = ({ tool, toolUseId, outcome }) => {
+      inFlight.toolDone(tool);
       record({
         kind: 'tool_result',
         tool,
         ...(toolUseId ? { toolUseId } : {}),
         ...summariseOutcome(outcome, [key]),
       });
+    };
 
     const before = await this.creditsView(principal);
 
@@ -239,18 +242,22 @@ export class AgentRunnerService {
         record({ kind: 'note', text: redact(text, [key]) }),
       );
       const abort = new AbortController();
-      let timedOut = false;
+      const timeoutMs = runTimeoutMsFor(this.config, agent.model);
+      // What the run was doing when the budget ran out, read at that moment:
+      // a tool still running finishes afterwards, and the SDK's own error
+      // ("Request was aborted.") says nothing about where the time went.
+      let timedOut: string | undefined;
       let revoked = false;
       const timer = setTimeout(() => {
-        timedOut = true;
+        timedOut = `the ${timeoutMs / 1000} s run budget ran out ${inFlight.describe()}`;
         abort.abort();
-      }, this.config.timeoutMs);
+      }, timeoutMs);
 
       try {
         const ctx = this.tools.context(agent, { runId });
         const snapshot = await this.snapshot(ctx);
         record({ kind: 'note', text: snapshotNote(snapshot) });
-        const client = this.clientFor(key, { timeoutMs: this.config.timeoutMs });
+        const client = this.clientFor(key, { timeoutMs });
         // The intersection carries OpenRouter's `provider` through the SDK,
         // which serialises the whole params object (docs/openrouter.md).
         // `stream?: false` selects the overload that yields whole messages.
@@ -275,6 +282,7 @@ export class AgentRunnerService {
           ...AGENT_MODEL_REQUEST_EXTRAS[agent.model],
         };
         const runner = client.beta.messages.toolRunner(params, { signal: abort.signal });
+        inFlight.awaitModel(1);
 
         for await (const message of runner) {
           iterations += 1;
@@ -285,6 +293,15 @@ export class AgentRunnerService {
           const turn = entriesOfTurn(message, iterations, [key]);
           if (turn.some((entry) => entry.kind === 'thinking')) thinkingTurns += 1;
           turn.forEach(record);
+          inFlight.runTools(
+            iterations,
+            // A name the model made up never runs, so it never reports back.
+            message.content.flatMap((block) =>
+              block.type === 'tool_use' && GATED_TOOLS.some((tool) => tool.name === block.name)
+                ? [block.name]
+                : [],
+            ),
+          );
           for (const block of message.content) {
             if (block.type !== 'tool_use') continue;
             toolCalls += 1;
@@ -312,7 +329,7 @@ export class AgentRunnerService {
         if (stopReason === 'model_error' && (await this.exhausted(principal))) {
           stopReason = 'credits_exhausted';
         }
-        error = errorText(caught, key);
+        error = stopReason === 'timeout' && timedOut ? timedOut : errorText(caught, key);
       } finally {
         clearTimeout(timer);
       }
@@ -538,6 +555,47 @@ export class AgentRunnerService {
       depth: Object.fromEntries(markets.map((m, i) => [`${m.venue}:${m.market}`, depths[i]])),
       ...(smartMoney !== undefined ? { smartMoney } : {}),
     };
+  }
+}
+
+/**
+ * Where a run is between its model turns and its tools, so a run that times
+ * out can say which one held it (SEN-209). The tools a turn asked for run all
+ * at once; the next model turn starts when the last of them reports back.
+ */
+export class InFlight {
+  private turn = 0;
+  private since = 0;
+  private tools: string[] = [];
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  awaitModel(turn: number): void {
+    this.turn = turn;
+    this.tools = [];
+    this.since = this.now();
+  }
+
+  runTools(turn: number, tools: readonly string[]): void {
+    this.turn = turn;
+    this.tools = [...tools];
+    this.since = this.now();
+  }
+
+  toolDone(tool: string): void {
+    const at = this.tools.indexOf(tool);
+    if (at === -1) return;
+    this.tools.splice(at, 1);
+    if (this.tools.length === 0) this.awaitModel(this.turn + 1);
+  }
+
+  /** E.g. "while the model worked on turn 4 (52 s in)". */
+  describe(): string {
+    const seconds = Math.max(0, Math.round((this.now() - this.since) / 1000));
+    if (this.turn === 0) return 'before the first model turn began';
+    return this.tools.length > 0
+      ? `while turn ${this.turn}'s ${this.tools.join(', ')} ran (${seconds} s in)`
+      : `while the model worked on turn ${this.turn} (${seconds} s in)`;
   }
 }
 

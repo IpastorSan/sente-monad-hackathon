@@ -207,7 +207,27 @@ Run with an OpenRouter **inference** key (not a management key — see below), t
 "aren't supported through the native endpoint" for Claude Code. So the runner works with Kimi as-is, and no
 `chat/completions` path is needed for the KIMI bounty. Latency was 2.4–4.2 s per two-turn trial.
 
-**A trap worth keeping:** on that day the key in `OPENROUTER_MANAGEMENT_KEY` was an inference key
+### Kimi's speed on a real run — SEN-209
+
+A runner-shaped request (the 21 tools, the preamble, a Range Trader prompt and a heartbeat wake,
+`max_tokens: 16384`), replayed with canned tool results on 2026-10-13 through Moonshot's endpoint:
+
+| Turn                                 | Output tokens (reasoning included) | Time    |
+| ------------------------------------ | ---------------------------------- | ------- |
+| Read (`get_klines`, `list_watchers`) | 210–960                            | 4–15 s  |
+| Plan (`set_watchers`, end of run)    | 1,000–2,650                        | 14–41 s |
+
+That is about 65 tokens/s, every turn reasons, and a three- or four-turn trial took 32–57 s
+where a trading run takes up to twelve turns. On the 180 s budget Sonnet runs in, every scheduled Kimi
+run that day timed out, so Kimi has its own budget (`AGENT_RUN_TIMEOUT_MS_KIMI`, 480 s). What did
+not help:
+
+- `reasoning: {effort: 'low'}`, `{max_tokens: 1024}` and `{enabled: false}` on `/v1/messages`: Kimi
+  still reasoned 300–2,500 tokens a turn.
+- `provider: {sort: 'throughput'}` landed on CoreWeave: about 180 tokens/s on one trial, 47 on the
+  next, so it is no steadier than the Moonshot pin.
+
+the key in `OPENROUTER_MANAGEMENT_KEY` was an inference key
 (`GET /api/v1/key` → `is_management_key: false`, $10 limit), so `POST /api/v1/keys` returned
 `401 Invalid API key` and `probe:openrouter` failed at its first step. A management key comes from
 **Settings → Management keys** at https://openrouter.ai/settings/management-keys; production has one,
