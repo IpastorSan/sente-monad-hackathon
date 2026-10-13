@@ -49,6 +49,7 @@ import {
   KURU_WITHDRAW_TO_WALLET_RULE,
   readBackCaps,
   returnableTokens,
+  withSponsoredSends,
 } from './policy.ts';
 import { canonicalize } from './privy/canonicalize.ts';
 import type { PolicyCondition, PolicyRule } from './privy/policy-types.ts';
@@ -682,4 +683,41 @@ test('the builder ABIs decode what the venue adapter emits, field names included
 test('a revoked agent keeps no builder rule', () => {
   const revoked = compileRevocationRules(demoMandate({ returnTo: OWNER }));
   assert.equal(readBackCaps(revoked).kuruBuilder, null);
+});
+
+test('without sponsoredSends the policy is exactly what it was before SEN-211', () => {
+  const mandate = { ...demoMandate(), returnTo: OWNER };
+  assert.deepEqual(compileMandate(mandate, { sponsoredSends: false }), compileMandate(mandate));
+  assert.ok(compileMandate(mandate).every((rule) => rule.method !== 'eth_sendTransaction'));
+});
+
+test('sponsoredSends: an eth_sendTransaction twin of every transaction rule, conditions unchanged', () => {
+  const mandate = { ...demoMandate(), returnTo: OWNER };
+  const plain = compileMandate(mandate);
+  const sponsored = compileMandate(mandate, { sponsoredSends: true });
+  assert.deepEqual(sponsored.slice(0, plain.length), plain);
+  const signRules = plain.filter((rule) => rule.method === 'eth_signTransaction');
+  const twins = sponsored.slice(plain.length);
+  assert.equal(twins.length, signRules.length);
+  // The typed-data enrollment rule has no sponsored form.
+  assert.ok(plain.some((rule) => rule.method === 'eth_signTypedData_v4'));
+  twins.forEach((twin, i) => {
+    assert.equal(twin.method, 'eth_sendTransaction');
+    assert.equal(twin.action, 'ALLOW');
+    assert.deepEqual(twin.conditions, signRules[i]!.conditions);
+    assert.ok(twin.name.endsWith(' (sponsored)'));
+    assert.ok(twin.name.length <= 50, twin.name);
+  });
+  // Twins name the same caps, so the read-back is unchanged.
+  assert.deepEqual(readBackCaps(sponsored), readBackCaps(plain));
+});
+
+test('sponsoredSends on a revocation: the recovery rules and their twins, nothing else', () => {
+  const mandate = { ...demoMandate(), returnTo: OWNER };
+  const plain = compileRevocationRules(mandate);
+  assert.deepEqual(
+    compileRevocationRules(mandate, { sponsoredSends: true }),
+    withSponsoredSends(plain),
+  );
+  assert.equal(compileRevocationRules(mandate, { sponsoredSends: true }).length, plain.length * 2);
 });

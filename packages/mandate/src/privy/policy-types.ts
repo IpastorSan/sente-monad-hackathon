@@ -28,7 +28,12 @@
  */
 import { getAddress, type Abi } from 'viem';
 
-export type PolicyMethod = 'eth_signTransaction' | 'eth_signTypedData_v4';
+/**
+ * `eth_sendTransaction` is the Privy-sponsored path (SEN-211): a rule binds
+ * only its own method, so a policy that lets an agent send sponsored repeats
+ * each transaction rule under it ({@link withSponsoredSends} in policy.ts).
+ */
+export type PolicyMethod = 'eth_signTransaction' | 'eth_sendTransaction' | 'eth_signTypedData_v4';
 
 export type PolicyOperator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in';
 
