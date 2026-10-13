@@ -119,7 +119,9 @@ describe('importStateToSqlite', () => {
 
   it('refuses while another process holds the STATE_DIR lock', async () => {
     await writeFiles();
-    const lock = acquireStateDirLock(dir, { pid: process.pid + 1, isAlive: () => true });
+    // Another host's lock is never taken over, whatever its pid, so this cannot
+    // depend on which pids happen to be alive on the box running the suite.
+    const lock = acquireStateDirLock(dir, { hostname: 'another-host' });
     try {
       await expect(importStateToSqlite(dir)).rejects.toThrow(StateDirLockedError);
     } finally {
