@@ -88,6 +88,7 @@ function harness(
   };
   const chain: AgentChainClient = {
     pendingNonce: () => Promise.resolve(broadcasts),
+    balance: () => Promise.resolve(10n ** 20n),
     fees: () => Promise.resolve({ maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }),
     sendRawTransaction: () =>
       Promise.resolve(`0x${(++broadcasts).toString(16).padStart(64, '0')}` as Hex),

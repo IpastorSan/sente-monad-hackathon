@@ -28,6 +28,7 @@ import { isPositiveDecimal } from './decimal';
 import {
   ENCLAVE_REFUSAL_MESSAGE,
   findEnclaveRefusal,
+  findSenteRefusal,
   modelSafeMessage,
   SenteRefusal,
 } from './refusals';
@@ -152,14 +153,21 @@ async function fail(
   error: unknown,
   intent?: Intent,
 ): Promise<ToolOutcome> {
-  if (error instanceof SenteRefusal) {
+  const refusal = findSenteRefusal(error);
+  if (refusal) {
     await record(ctx, {
       kind: 'refusal',
       layer: 'sente',
       tool: tool.name,
-      detail: { code: error.code, message: error.message, precheck: ctx.precheck, args, intent },
+      detail: {
+        code: refusal.code,
+        message: refusal.message,
+        precheck: ctx.precheck,
+        args,
+        intent,
+      },
     });
-    return { ok: false, message: error.message, refusal: { layer: 'sente', code: error.code } };
+    return { ok: false, message: refusal.message, refusal: { layer: 'sente', code: refusal.code } };
   }
 
   const enclave = findEnclaveRefusal(error);
