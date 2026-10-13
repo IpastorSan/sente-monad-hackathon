@@ -62,7 +62,8 @@ export class SqliteValueHistoryStore implements ValueHistoryStore {
   readonly #dropOldest: StatementSync;
   readonly #list: StatementSync;
   readonly #last: StatementSync;
-  readonly #ids: StatementSync;
+  /** Subjects by kind, first seen first (the in-memory store's Map order), so `ids` is no scan. */
+  readonly #ids = new Map<HistoryKind, Set<string>>();
   readonly #all: StatementSync;
   readonly #count: StatementSync;
 
@@ -92,14 +93,17 @@ export class SqliteValueHistoryStore implements ValueHistoryStore {
       'SELECT data FROM value_history WHERE kind = ? AND subject_id = ? ' +
         'ORDER BY at DESC, dup DESC LIMIT 1',
     );
-    // First seen first, as the in-memory store's Map keeps its keys.
-    this.#ids = db.prepare(
-      'SELECT subject_id FROM value_history WHERE kind = ? GROUP BY subject_id ORDER BY min(seq)',
-    );
     this.#all = db.prepare(
       'SELECT kind, subject_id, dup, data FROM value_history ORDER BY kind, subject_id, at, dup',
     );
     this.#count = db.prepare('SELECT count(*) AS n FROM value_history');
+    // Seeded once, first seen first; `append` and `put` add each new subject after.
+    const seed = db.prepare(
+      'SELECT kind, subject_id FROM value_history GROUP BY kind, subject_id ORDER BY min(seq)',
+    );
+    for (const row of seed.all()) {
+      this.#seen(String(row['kind']) as HistoryKind, String(row['subject_id']));
+    }
   }
 
   get path(): string {
@@ -118,6 +122,7 @@ export class SqliteValueHistoryStore implements ValueHistoryStore {
         const over = Number(this.#countSubject.get(kind, id)!['n']) - this.#max;
         if (over > 0) this.#dropOldest.run(kind, id, over);
       });
+      this.#seen(kind, id);
     } catch (error) {
       // A missed point is a gap in a chart, not lost money (as in the file store).
       this.#logger.error(
@@ -136,12 +141,13 @@ export class SqliteValueHistoryStore implements ValueHistoryStore {
   }
 
   ids(kind: HistoryKind): string[] {
-    return this.#ids.all(kind).map((row) => String(row['subject_id']));
+    return [...(this.#ids.get(kind) ?? [])];
   }
 
   /** For `state/db/state-import.ts`: a snapshot at its place, as an upsert. */
   put(record: ValueHistoryRecord): void {
     this.#put(record);
+    this.#seen(record.k, record.id);
   }
 
   /** Every snapshot, by subject, then oldest first: what `put` takes. */
@@ -156,6 +162,12 @@ export class SqliteValueHistoryStore implements ValueHistoryStore {
 
   #put(record: ValueHistoryRecord): void {
     this.#insert.run(record.k, record.id, record.s.at, record.n, JSON.stringify(record.s));
+  }
+
+  #seen(kind: HistoryKind, id: string): void {
+    let ids = this.#ids.get(kind);
+    if (!ids) this.#ids.set(kind, (ids = new Set()));
+    ids.add(id);
   }
 }
 
