@@ -100,6 +100,25 @@ export interface AgentsConfig {
   mandateOwner: AgentMandateOwnerMode;
 }
 
+/** `AGENTS_MAX_PER_USER`'s default: active and revoked agents, archived ones not counted (SEN-204). */
+export const DEFAULT_MAX_AGENTS_PER_USER = 10;
+
+/**
+ * `AGENTS_MAX_PER_USER`: how many unarchived agents one user may hold. Every
+ * hire is a Privy wallet, a policy and a gas drip, so an unbounded count is a
+ * free way to drain the drip and the Privy quota. Throws on a value that is
+ * not a positive integer, so a typo fails the boot rather than lifting the cap.
+ */
+export function maxAgentsPerUser(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env['AGENTS_MAX_PER_USER']?.trim();
+  if (!raw) return DEFAULT_MAX_AGENTS_PER_USER;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`AGENTS_MAX_PER_USER must be a positive integer (unset means ${DEFAULT_MAX_AGENTS_PER_USER})`);
+  }
+  return value;
+}
+
 /**
  * `AGENT_MANDATE_OWNER`, and why `server` cannot boot in production.
  *

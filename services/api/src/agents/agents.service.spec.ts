@@ -16,6 +16,7 @@ import type { IpRateLimiter } from '../gas/rate-limit/ip-rate-limiter';
 import type { SenderPool } from '../gas/sender/sender-pool';
 import { InMemoryUserWalletRegistry } from '../wallet/store/user-wallet-registry';
 import { UnconfiguredAgentWalletProvider } from './agent-wallet.provider';
+import { DEFAULT_MAX_AGENTS_PER_USER, maxAgentsPerUser } from './agents.config';
 import {
   AgentRefusedError,
   AgentWalletsUnconfiguredError,
@@ -326,6 +327,53 @@ describe('AgentsService', () => {
         mandate: mandateInput(),
       });
       expect(withheld.agent.preset).toEqual({ ...privateSource.agent.preset, customized: true });
+    });
+  });
+
+  describe('the per-user agent cap (SEN-204)', () => {
+    const saved = process.env['AGENTS_MAX_PER_USER'];
+    beforeEach(() => {
+      process.env['AGENTS_MAX_PER_USER'] = '2';
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env['AGENTS_MAX_PER_USER'];
+      else process.env['AGENTS_MAX_PER_USER'] = saved;
+    });
+
+    it('refuses a hire and a fork past the cap, before any Privy call', async () => {
+      const { service, wallets } = setup();
+      const first = await service.hire(ALICE, hireInput({ public: true }));
+      await service.hire(ALICE, hireInput());
+
+      const hire = await refusal(service.hire(ALICE, hireInput()));
+      expect(hire.reason).toBe('agent_limit_reached');
+      expect(hire.message).toMatch(/limit is 2/);
+      const fork = await refusal(service.fork(ALICE, first.agent.id, { mandate: mandateInput() }));
+      expect(fork.reason).toBe('agent_limit_reached');
+      expect(wallets.provisioned).toHaveLength(2);
+
+      // Per user: another caller is untouched.
+      await expect(service.hire(BOB, hireInput())).resolves.toBeDefined();
+    });
+
+    it('counts revoked agents, and archiving one makes room', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      await service.hire(ALICE, hireInput());
+      await service.revoke(ALICE, agent.id);
+      expect((await refusal(service.hire(ALICE, hireInput()))).reason).toBe('agent_limit_reached');
+
+      await store.update(agent.id, { archivedAt: new Date() });
+      await expect(service.hire(ALICE, hireInput())).resolves.toBeDefined();
+    });
+
+    it('defaults to 10 and refuses a value that is not a positive integer', () => {
+      expect(maxAgentsPerUser({})).toBe(DEFAULT_MAX_AGENTS_PER_USER);
+      expect(DEFAULT_MAX_AGENTS_PER_USER).toBe(10);
+      expect(maxAgentsPerUser({ AGENTS_MAX_PER_USER: '3' })).toBe(3);
+      for (const bad of ['0', '-1', '2.5', 'ten']) {
+        expect(() => maxAgentsPerUser({ AGENTS_MAX_PER_USER: bad })).toThrow(/positive integer/);
+      }
     });
   });
 

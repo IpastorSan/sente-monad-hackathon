@@ -26,7 +26,7 @@ import {
   type AgentWalletProvider,
   type ProvisionedAgentWallet,
 } from './agent-wallet.provider';
-import { AGENT_MODELS, isAgentModel } from './agents.config';
+import { AGENT_MODELS, isAgentModel, maxAgentsPerUser } from './agents.config';
 import {
   AgentRefusedError,
   AgentWalletsUnconfiguredError,
@@ -281,6 +281,12 @@ export class AgentsService {
    * given for.
    */
   private readonly prepared = new PreparedApprovals<MandateChangeContext>();
+  /**
+   * `AGENTS_MAX_PER_USER` (SEN-204), read when Nest builds the service so a
+   * bad value fails the boot. Read here rather than injected because the
+   * constructor's optional tail is already long and positional.
+   */
+  private readonly maxAgentsPerUser = maxAgentsPerUser();
 
   constructor(
     @Inject(AGENT_STORE) private readonly store: AgentStore,
@@ -403,6 +409,7 @@ export class AgentsService {
     }
     // Before the mandate, like the model: a local refusal never creates a Privy object.
     const text = resolveHireText(input);
+    await this.assertUnderAgentLimit(principal);
     const mandate = await this.parseFor(principal, input.mandate);
     const { rules, kuruBuilder } = this.compile(mandate);
     const id = randomUUID();
@@ -479,6 +486,7 @@ export class AgentsService {
         `agent ${sourceId} is revoked, so its strategy is no longer running and cannot be forked`,
       );
     }
+    await this.assertUnderAgentLimit(principal);
     const mandate = await this.parseFor(principal, input.mandate);
     const { rules, kuruBuilder } = this.compile(mandate);
     const id = randomUUID();
@@ -537,6 +545,26 @@ export class AgentsService {
         `${source.public ? 'copied' : 'not copied: the source is private'})`,
     );
     return this.completeHire(principal, agent, mcpToken);
+  }
+
+  /**
+   * Refuses a hire or fork past `AGENTS_MAX_PER_USER` (SEN-204). Active and
+   * revoked agents count; archived ones do not, so archiving is the way to
+   * make room. Checked before the wallet is provisioned, not under a lock, so
+   * hires racing in parallel can overshoot by the number in flight; each still
+   * needs its own mandate parse and Privy round trip, which keeps that small.
+   */
+  private async assertUnderAgentLimit(principal: Principal): Promise<void> {
+    const held = (await this.store.listByUser(principal.userId)).filter(
+      (agent) => agent.archivedAt === undefined,
+    ).length;
+    if (held >= this.maxAgentsPerUser) {
+      throw new AgentRefusedError(
+        'agent_limit_reached',
+        `you already have ${held} agents (the limit is ${this.maxAgentsPerUser}); revoke and ` +
+          'archive one to hire another',
+      );
+    }
   }
 
   /**
