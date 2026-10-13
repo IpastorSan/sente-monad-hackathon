@@ -12,13 +12,14 @@ import { PROFILE_STORE, type ProfileStore } from '../../profile/profile.store';
 import { AGENT_EVENTS, type AgentEventLog } from '../events/agent-event-log';
 import { marketFills } from '../events/market-fills';
 import { summariseEvents } from '../events/summary';
-import { AgentPortfolioService } from '../portfolio/portfolio.service';
+import { AgentPortfolioService, holdingAmounts } from '../portfolio/portfolio.service';
 import { AGENT_STORE, type AgentStore } from '../store/agent-store';
 import {
   isPublished,
   PUBLIC_RECENT_LIMIT,
   toPublicAgent,
   type PublicAgentDto,
+  type PublicBalanceDto,
 } from './public-agent.dto';
 
 /** How long one answer is served to everyone who asks. */
@@ -90,11 +91,12 @@ export class PublicAgentService {
 
   async #balance(
     agent: Parameters<AgentPortfolioService['portfolio']>[0],
-  ): Promise<{ approxUsd: string; note: string } | null> {
+  ): Promise<PublicBalanceDto | null> {
     if (!this.portfolios) return null;
     try {
-      const { totals } = await this.portfolios.portfolio(agent);
-      return { approxUsd: totals.approxUsd, note: totals.note };
+      const portfolio = await this.portfolios.portfolio(agent);
+      const { totals } = portfolio;
+      return { approxUsd: totals.approxUsd, amounts: holdingAmounts(portfolio), note: totals.note };
     } catch (error) {
       this.#logger.warn(`public agent ${agent.id}: balance unreadable (${String(error)})`);
       return null;

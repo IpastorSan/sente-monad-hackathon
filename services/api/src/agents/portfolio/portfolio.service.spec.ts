@@ -16,6 +16,7 @@ import {
   AGENT_PORTFOLIO_TTL_MS,
   AgentPortfolioService,
   agentPortfolioReaders,
+  holdingAmounts,
   type AgentPortfolioReaders,
 } from './portfolio.service';
 import type { KuruAccountVenue, PerplAccountVenue } from './venue-reads';
@@ -207,6 +208,13 @@ describe('AgentPortfolioService (SEN-78)', () => {
       byQuote: { USDC: '180', AUSD: '330' },
     });
     expect(p.totals.note).toContain('≈ $');
+    // SEN-210: the same holdings exactly, per asset, MON as itself rather than at its mark.
+    // USDC: 50 wallet + 100 Kuru; AUSD: 20 wallet + 300 Perpl + 10 uPnL; MON: 10.
+    expect(holdingAmounts(p)).toEqual([
+      { asset: 'USDC', amount: '150' },
+      { asset: 'AUSD', amount: '330' },
+      { asset: 'MON', amount: '10' },
+    ]);
   });
 
   it('values a holding across wallet, account and orders, uPnL on the covered size only', async () => {

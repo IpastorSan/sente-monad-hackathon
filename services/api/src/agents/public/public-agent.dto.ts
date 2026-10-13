@@ -113,15 +113,34 @@ export interface PublicAgentDto {
   copies: number;
   /** Only when the owner published it; `null` otherwise. */
   prompt: { systemPrompt: string; strategy: string } | null;
-  /** The agent page's figures, from the same event-log summary. Quote units, decimal strings. */
-  pnl: { allTime: string; last24h: string; allTimePartial: boolean };
+  /**
+   * The agent page's figures, from the same event-log summary. Quote units,
+   * decimal strings; `byAsset` (SEN-210) splits them per asset so the page
+   * never shows USDC and AUSD added up as one figure.
+   */
+  pnl: {
+    allTime: string;
+    last24h: string;
+    allTimePartial: boolean;
+    byAsset: { asset: string; last24h: string; allTime: string }[];
+  };
   counts: { trades: number; held: number; theses: number };
-  /** `null` when the wallet could not be read just now. */
-  balance: { approxUsd: string; note: string } | null;
+  /**
+   * `null` when the wallet could not be read just now. `amounts` (SEN-210) is
+   * what it holds, exactly, per asset: the stables in the wallet and venue
+   * accounts (perps at margin plus P&L) and each spot token as itself.
+   */
+  balance: PublicBalanceDto | null;
   fills: PublicFillDto[];
   refusals: PublicRefusalDto[];
   /** ISO 8601: the answer is cached, so this is also its age. */
   generatedAt: string;
+}
+
+export interface PublicBalanceDto {
+  approxUsd: string;
+  amounts: { asset: string; amount: string }[];
+  note: string;
 }
 
 /** Every top-level key the response may carry. The spec pins the response to exactly these. */
@@ -172,7 +191,7 @@ export interface PublicAgentInputs {
   /** Refusal events, oldest first, as the log lists them. */
   refusals: readonly AgentEvent[];
   copies: number;
-  balance: { approxUsd: string; note: string } | null;
+  balance: PublicBalanceDto | null;
   now: number;
 }
 
@@ -211,10 +230,19 @@ export function toPublicAgent(input: PublicAgentInputs): PublicAgentDto {
       allTime: summary.pnl.allTime,
       last24h: summary.pnl.last24h,
       allTimePartial: summary.pnl.allTimePartial === true,
+      byAsset: summary.pnl.byAsset.map(({ asset, last24h, allTime }) => ({
+        asset,
+        last24h,
+        allTime,
+      })),
     },
     counts: { trades: summary.trades, held: summary.held, theses: summary.theses },
     balance: input.balance
-      ? { approxUsd: input.balance.approxUsd, note: input.balance.note }
+      ? {
+          approxUsd: input.balance.approxUsd,
+          amounts: input.balance.amounts.map(({ asset, amount }) => ({ asset, amount })),
+          note: input.balance.note,
+        }
       : null,
     fills: input.fills.slice(0, PUBLIC_RECENT_LIMIT).map((fill) => ({
       venue: fill.venue,

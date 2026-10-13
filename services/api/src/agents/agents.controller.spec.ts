@@ -510,7 +510,11 @@ describe('AgentsController', () => {
         trades: 1,
         held: 0,
         theses: 1,
-        pnl: { last24h: '4.95', allTime: '4.95' },
+        pnl: {
+          last24h: '4.95',
+          allTime: '4.95',
+          byAsset: [{ asset: 'USDC', last24h: '4.95', allTime: '4.95' }],
+        },
         largestOrderNotional: '42.5',
         mandateSince: new Date(alpha.createdAt).getTime(),
         // The verdict, not the run after it — shaped like an /events item, ramp included.
@@ -555,7 +559,12 @@ describe('AgentsController', () => {
 
       const [summary] = (await h.controller.summaries()).summaries;
 
-      expect(summary!.pnl).toEqual({ last24h: '3', allTime: '3', allTimePartial: true });
+      expect(summary!.pnl).toEqual({
+        last24h: '3',
+        allTime: '3',
+        allTimePartial: true,
+        byAsset: [{ asset: 'USDC', last24h: '3', allTime: '3' }],
+      });
     });
 
     it('marks the counts partial on the wire once the log has dropped events (SEN-159)', async () => {

@@ -57,6 +57,13 @@ const PNL_ASSETS: ReadonlySet<string> = new Set(['USDC', PERPL_PNL_ASSET]);
 
 const ZERO: Scaled = { units: 0n, scale: 0 };
 
+/** One asset's share of an agent's realised P&L (SEN-210). */
+export interface AssetPnl {
+  readonly asset: string;
+  readonly last24h: string;
+  readonly allTime: string;
+}
+
 export interface AgentEventSummary {
   /** `fill` events: orders that landed, at least partly. */
   readonly trades: number;
@@ -82,6 +89,13 @@ export interface AgentEventSummary {
     readonly last24h: string;
     readonly allTime: string;
     readonly allTimePartial?: true;
+    /**
+     * The same two figures per asset (SEN-210), so a Kuru and Perpl agent's
+     * P&L can be shown as `+0.96 AUSD · −0.13 USDC` instead of a sum of two
+     * different tokens. Only assets with a settled verdict appear, in the
+     * order their first verdict settled.
+     */
+    readonly byAsset: AssetPnl[];
   };
   /** Quote units, decimal string; `null` when no landed order carries a notional. */
   readonly largestOrderNotional: string | null;
@@ -114,6 +128,7 @@ export function summariseEvents(
   let theses = 0;
   let allTime = ZERO;
   let last24h = ZERO;
+  const byAsset = new Map<string, { last24h: Scaled; allTime: Scaled }>();
   let largest: string | null = null;
   let lastEvent: AgentEvent | null = null;
   const since = now - SUMMARY_DAY_MS;
@@ -133,8 +148,15 @@ export function summariseEvents(
       case 'verdict': {
         const pnl = verdictPnl(event);
         if (pnl === undefined) break;
+        const asset = event.detail['pnlAsset'] as string;
+        const own = byAsset.get(asset) ?? { last24h: ZERO, allTime: ZERO };
         allTime = addScaled(allTime, pnl);
-        if (event.at >= since) last24h = addScaled(last24h, pnl);
+        own.allTime = addScaled(own.allTime, pnl);
+        if (event.at >= since) {
+          last24h = addScaled(last24h, pnl);
+          own.last24h = addScaled(own.last24h, pnl);
+        }
+        byAsset.set(asset, own);
         break;
       }
       case 'order': {
@@ -160,6 +182,11 @@ export function summariseEvents(
       last24h: decimalString(last24h),
       allTime: decimalString(allTime),
       ...(truncation.evicted > 0 ? { allTimePartial: true as const } : {}),
+      byAsset: [...byAsset].map(([asset, pnl]) => ({
+        asset,
+        last24h: decimalString(pnl.last24h),
+        allTime: decimalString(pnl.allTime),
+      })),
     },
     largestOrderNotional: largest,
     lastEvent,

@@ -373,6 +373,35 @@ function totals(
   };
 }
 
+/**
+ * What the agent holds, exactly, per asset (SEN-210): USDC in its wallet and
+ * Kuru account, AUSD in its wallet and Perpl account plus its perps'
+ * unrealised P&L (what closing them hands back), and each spot token as
+ * itself rather than valued at a mark. A failed section is left out, as in
+ * `totals`. Assets that sum to zero are dropped.
+ */
+export function holdingAmounts(
+  portfolio: Pick<AgentPortfolioDto, 'wallet' | 'kuru' | 'perpl' | 'holdings'>,
+): { asset: string; amount: Decimal }[] {
+  const { wallet, kuru, perpl, holdings } = portfolio;
+  const walletBalances = wallet.ok ? wallet.balances : [];
+  const kuruBalances = kuru.ok ? kuru.balances : [];
+  const usdc = sum([
+    find(walletBalances, 'USDC')?.total ?? '0',
+    find(kuruBalances, 'USDC')?.total ?? '0',
+  ]);
+  const ausd = sum([
+    find(walletBalances, 'AUSD')?.total ?? '0',
+    ...(perpl.ok && 'balances' in perpl ? perpl.balances.map((b) => b.total) : []),
+    ...(perpl.ok && perpl.status === 'ok' ? perpl.positions.map((p) => p.unrealizedPnl) : []),
+  ]);
+  return [
+    { asset: 'USDC', amount: usdc },
+    { asset: 'AUSD', amount: ausd },
+    ...holdings.map((h) => ({ asset: h.asset, amount: h.amount })),
+  ].filter(({ amount }) => decimalOf(amount)?.units !== 0n);
+}
+
 function find<T extends BalanceDto>(balances: readonly T[], asset: string): T | undefined {
   return balances.find((balance) => balance.asset === asset);
 }
