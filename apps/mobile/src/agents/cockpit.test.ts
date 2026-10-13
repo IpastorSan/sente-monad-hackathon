@@ -219,6 +219,7 @@ test('positionRows: explained Kuru holdings and Perpl positions, with the latest
   const [row] = rows;
   assert.equal(row?.detail, '180 MON @ 0.9744 · Kuru');
   assert.equal(row?.pnl, '+1.22');
+  assert.equal(row?.quote, 'USDC');
   assert.equal(row?.pct, '+0.70%');
   assert.equal(row?.thesis, 'Range again.');
   assert.deepEqual(row?.levels, { target: '1.0036', stop: '0.9452' });

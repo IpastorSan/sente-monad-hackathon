@@ -494,7 +494,7 @@ test('atWork names the quote currency, and gives each asset its own figure on bo
         { asset: 'USDC', last24h: '-0.13', allTime: '0' },
       ]),
     ).pnl,
-    { label: '−0.13 USDC · +0.96 AUSD', tone: null },
+    { label: '−0.13 USDC\n+0.96 AUSD', tone: null },
   );
   assert.equal(atWork({ mandate: mandate(['kuru', 'perpl']) }, day('0', [])).pnl?.label, '0.00');
   assert.deepEqual(atWork({ mandate: mandate(['kuru']) }, undefined), { move: null, pnl: null });

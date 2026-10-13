@@ -834,7 +834,7 @@ function PositionCard({ row, agentId }: { row: PositionRow; agentId: string }) {
                 row.tone === 'down' && text.down,
               ]}
             >
-              {row.pnl ?? '—'}
+              {row.pnl !== null ? `${row.pnl} ${row.quote}` : '—'}
             </Text>
             {row.pct ? (
               <Text

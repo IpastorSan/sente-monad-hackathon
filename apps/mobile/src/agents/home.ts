@@ -32,6 +32,7 @@ import {
 import type { Portfolio } from '../trade/types.ts';
 import {
   addAmounts,
+  amountsText,
   amountsTone,
   roundsToZero,
   signedAmountsText,
@@ -458,7 +459,7 @@ export function greeting(hour: number): string {
 /** One agent's card under "Your agents at work": its last move and its day. */
 export type AgentAtWork = {
   move: Move | null;
-  /** `+18.22 USDC`, `−4.10 AUSD`, `+0.96 AUSD · −0.13 USDC` for an agent on both venues. */
+  /** `+18.22 USDC`, `−4.10 AUSD`, `−0.13 USDC\n+0.96 AUSD` (a line each) on both venues. */
   pnl: { label: string; tone: 'up' | 'down' | null } | null;
 };
 
@@ -476,7 +477,9 @@ export function atWork(
   const move = summary?.lastEvent ? describeMove(summary.lastEvent) : null;
   const amounts = pnlAmounts(summary?.pnl, agent.mandate.venues, 'last24h');
   if (amounts === null) return { move, pnl: null };
-  return { move, pnl: { label: signedAmountsText(amounts), tone: amountsTone(amounts) } };
+  // One asset per line: the card is narrow, and a figure cut off mid-asset says nothing.
+  const label = amountsText(amounts, { signed: true, separator: '\n' });
+  return { move, pnl: { label, tone: amountsTone(amounts) } };
 }
 
 // ---------------------------------------------------------------------------

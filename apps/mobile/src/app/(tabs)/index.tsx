@@ -856,7 +856,7 @@ function AgentCard({
               pnl.tone === 'up' && text.up,
               pnl.tone === 'down' && text.down,
             ]}
-            numberOfLines={1}
+            numberOfLines={pnl.label.split('\n').length}
           >
             {hidden ? maskDigits(pnl.label) : pnl.label}
           </Text>
@@ -1032,6 +1032,7 @@ const styles = StyleSheet.create({
     color: color.textDim,
     flexShrink: 1,
     marginLeft: 8,
+    textAlign: 'right',
   },
   // The strip bleeds to the screen edge, as in the study, so the next card
   // peeks out and says the row scrolls.

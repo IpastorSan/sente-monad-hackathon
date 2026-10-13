@@ -380,6 +380,8 @@ export type PositionRow = {
   detail: string;
   /** `+1.22`, or `null` when nothing prices it. */
   pnl: string | null;
+  /** What `pnl` is in: the market's quote (`USDC` on Kuru, `AUSD` on Perpl). */
+  quote: string;
   /** `+0.70%` of the cost, or `null`. */
   pct: string | null;
   tone: Tone;
@@ -427,6 +429,7 @@ export function positionRows(
         side: position.side,
         detail: `${position.size} ${base} @ ${position.entryPrice} · Perpl ${position.leverage}×`,
         pnl: pnlLabel(position.unrealizedPnl),
+        quote: position.quote,
         pct: percentOf(position.unrealizedPnl, cost),
         tone: pnlTone(position.unrealizedPnl, PNL_LABEL_PLACES),
         entry: position.entryPrice,
@@ -449,6 +452,7 @@ export function positionRows(
       side: 'long',
       detail: `${holding.amount} ${holding.asset}${avgPrice !== null ? ` @ ${avgPrice}` : ''} · Kuru`,
       pnl: unrealizedPnl !== null ? pnlLabel(unrealizedPnl) : null,
+      quote: holding.market.split('-')[1] ?? 'USDC',
       pct:
         unrealizedPnl !== null && avgPrice !== null
           ? percentOf(unrealizedPnl, covered * Number(avgPrice))
@@ -501,7 +505,7 @@ export function bestTrades(trades: readonly SettledTrade[], limit = 3): BestTrad
       return {
         seq: trade.seq,
         title: `Trade #${index + 1}${what ? ` · ${what}` : ''}`,
-        pnl: pnlLabel(trade.pnl),
+        pnl: `${pnlLabel(trade.pnl)}${trade.asset !== null ? ` ${trade.asset}` : ''}`,
         caption: [
           trade.holdMs !== null ? `held ${formatDuration(trade.holdMs)}` : null,
           shortDate(trade.at),

@@ -345,10 +345,10 @@ export default function PortfolioScreen() {
 /** What the total leaves out, said under it rather than folded silently into the number. */
 function totalNote(held: Holdings, agentsLoading: boolean) {
   const parts = [
-    'The chart and its change add USDC and AUSD at $1 and other tokens at their Kuru price.',
+    'The bar and the chart add USDC and AUSD at $1 and other tokens at their Kuru price.',
   ];
   if (held.unpriced.length > 0) {
-    parts.push(`The chart leaves out ${held.unpriced.join(', ')}: no Kuru price.`);
+    parts.push(`They leave out ${held.unpriced.join(', ')}: no Kuru price.`);
   }
   const unread = held.unread.filter((s) => s !== 'wallet').map((s) => VENUE_NAME[s]);
   if (unread.length > 0) parts.push(`Leaves out ${unread.join(' and ')}: it didn’t answer.`);
