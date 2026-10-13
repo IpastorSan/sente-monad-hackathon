@@ -17,6 +17,8 @@ export interface AgentRunnerConfig {
   readonly kimiTimeoutMs: number;
   /** Model requests per run: the Tool Runner's `max_iterations`. */
   readonly maxIterations: number;
+  /** The same cap for a Kimi K2.6 run; `maxIterationsFor` picks between the two. */
+  readonly kimiMaxIterations: number;
   /** `max_tokens` on every request. */
   readonly maxTokens: number;
   /**
@@ -57,6 +59,12 @@ export const AGENT_RUNNER_DEFAULTS = {
   // in 60-85 s, keeps the tighter bound against a hung upstream.
   kimiTimeoutMs: 480_000,
   maxIterations: 12,
+  // Kimi checks before it acts: on 2026-10-13 a manual "buy 10 USDC of WETH,
+  // then sell it back" spent eight turns on quotes and the minimum notional,
+  // deposited, bought, and hit the 12-turn limit with the sell still to place.
+  // A turn that only reads is short (that run's twelve took 159 s), so the
+  // eight-minute budget, not this cap, stays the real bound on a slow run.
+  kimiMaxIterations: 24,
   // Kimi K2.6 reasons before it answers, and the reasoning counts here: on
   // 2026-10-12 a watcher-woken run spent all of 4096 thinking about watcher
   // edges and ended on max_tokens. Only what is generated is billed. At
@@ -91,6 +99,7 @@ function integer(
  *
  * - `AGENT_TICK_SECONDS`: unset, empty, `0` or `off` = no scheduler; else ≥ 30.
  * - `AGENT_RUN_TIMEOUT_MS`, `AGENT_RUN_TIMEOUT_MS_KIMI`, `AGENT_RUN_MAX_ITERATIONS`,
+ *   `AGENT_RUN_MAX_ITERATIONS_KIMI`,
  *   `AGENT_RUN_MAX_TOKENS`.
  * - `AGENT_WRITE_SPACING_MS`: 0 turns spacing off.
  * - `AGENT_RUNNER_THINKING`: `off` (default) or `adaptive`.
@@ -121,6 +130,12 @@ export function loadAgentRunnerConfig(env: NodeJS.ProcessEnv = process.env): Age
       min: 1,
       max: 50,
     }),
+    kimiMaxIterations: integer(
+      env,
+      'AGENT_RUN_MAX_ITERATIONS_KIMI',
+      AGENT_RUNNER_DEFAULTS.kimiMaxIterations,
+      { min: 1, max: 50 },
+    ),
     maxTokens: integer(env, 'AGENT_RUN_MAX_TOKENS', AGENT_RUNNER_DEFAULTS.maxTokens, {
       min: 256,
       max: 64_000,
@@ -133,9 +148,18 @@ export function loadAgentRunnerConfig(env: NodeJS.ProcessEnv = process.env): Age
   };
 }
 
+function isKimi(model: string): boolean {
+  return model.startsWith('moonshotai/kimi-');
+}
+
 /** The wall-clock budget of one run of `model`. */
 export function runTimeoutMsFor(config: AgentRunnerConfig, model: string): number {
-  return model.startsWith('moonshotai/kimi-') ? config.kimiTimeoutMs : config.timeoutMs;
+  return isKimi(model) ? config.kimiTimeoutMs : config.timeoutMs;
+}
+
+/** The model-turn cap of one run of `model`. */
+export function maxIterationsFor(config: AgentRunnerConfig, model: string): number {
+  return isKimi(model) ? config.kimiMaxIterations : config.maxIterations;
 }
 
 /** Boot-time line. Loud when the scheduler is on, since it spends users' credits unprompted. */
@@ -145,7 +169,7 @@ export function describeAgentRunnerConfig(
 ): void {
   const base =
     `agent runner: timeout ${config.timeoutMs} ms (Kimi ${config.kimiTimeoutMs} ms), ` +
-    `${config.maxIterations} iterations, ` +
+    `${config.maxIterations} iterations (Kimi ${config.kimiMaxIterations}), ` +
     `write spacing ${config.writeSpacingMs} ms, thinking ${config.thinking ? 'adaptive' : 'off'}`;
   if (config.tickSeconds === undefined) {
     logger.log(`${base}, default cadence off (AGENT_TICK_SECONDS unset)`);

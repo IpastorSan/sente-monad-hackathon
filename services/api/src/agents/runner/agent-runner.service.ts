@@ -32,7 +32,12 @@ import {
   type AnthropicClientFactory,
 } from './openrouter-client';
 import { renderSystemPrompt, renderTickMessage } from './prompt';
-import { AGENT_RUNNER_CONFIG, runTimeoutMsFor, type AgentRunnerConfig } from './runner.config';
+import {
+  AGENT_RUNNER_CONFIG,
+  maxIterationsFor,
+  runTimeoutMsFor,
+  type AgentRunnerConfig,
+} from './runner.config';
 import { RUN_TRANSCRIPTS, type RunTranscriptStore } from './transcript/run-transcript-store';
 import {
   entriesOfTurn,
@@ -277,7 +282,7 @@ export class AgentRunnerService {
               }),
             },
           ],
-          max_iterations: this.config.maxIterations,
+          max_iterations: maxIterationsFor(this.config, agent.model),
           ...(this.config.thinking ? { thinking: { type: 'adaptive' as const } } : {}),
           ...AGENT_MODEL_REQUEST_EXTRAS[agent.model],
         };

@@ -5,6 +5,7 @@ import {
   loadAgentRunnerConfig,
   loadAgentScheduleConfig,
   runTimeoutMsFor,
+  maxIterationsFor,
 } from './runner.config';
 
 describe('loadAgentRunnerConfig', () => {
@@ -14,6 +15,7 @@ describe('loadAgentRunnerConfig', () => {
       timeoutMs: AGENT_RUNNER_DEFAULTS.timeoutMs,
       kimiTimeoutMs: 480_000,
       maxIterations: 12,
+      kimiMaxIterations: 24,
       maxTokens: 16_384,
       writeSpacingMs: 5_000,
       thinking: false,
@@ -139,5 +141,13 @@ describe('loadAgentScheduleConfig (SEN-71)', () => {
     expect(lines[0]).toMatch(/poll every 15 s.*manually only/);
     expect(lines[1]).toMatch(/every 300 s/);
     expect(lines[2]).toMatch(/scheduler off/);
+  });
+});
+
+describe('maxIterationsFor', () => {
+  it('gives Kimi its own turn cap and every other model the default', () => {
+    const config = loadAgentRunnerConfig({ AGENT_RUN_MAX_ITERATIONS_KIMI: '30' });
+    expect(maxIterationsFor(config, 'moonshotai/kimi-k2.6')).toBe(30);
+    expect(maxIterationsFor(config, 'anthropic/claude-sonnet-5')).toBe(12);
   });
 });
