@@ -536,7 +536,8 @@ live in
 `<STATE_DIR>/sente.db` — one `node:sqlite` database, WAL, opened by `SenteDbLease` after the lock
 is held, migrated at boot — and the rest keep their files. `docs/state.md` has the schema pattern,
 how to convert a store, the import (`state:import-sqlite` locally, `node dist/state-import-sqlite.js`
-in the image; it leaves the JSON files intact so `STORE_BACKEND=file` is the rollback) with the
+in the image; insert-only, run once against a fresh `sente.db`; it leaves the JSON files intact so
+`STORE_BACKEND=file` is the rollback — but only before the first user write under `sqlite`) with the
 production runbook, and backups (`VACUUM INTO` into `<STATE_DIR>/backups` at boot and every
 `BACKUP_INTERVAL_MINUTES`; never a bare `cp` of a live WAL database).
 

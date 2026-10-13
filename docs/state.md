@@ -20,8 +20,9 @@ typo that fell back to `file` would look like a working API reading the wrong
 store. The switch is read once, at boot, by `SenteDbLease`
 (`state/state.module.ts`), which opens the database only after `StateDirLease`
 holds `api.lock` — the same single-writer rule as the files, enforced the same
-way — runs the migrations, and closes the database with a WAL checkpoint on
-shutdown.
+way — runs the migrations, checkpoints the WAL on shutdown, and closes the
+database only when the process exits, so an agent run still in flight after
+the HTTP server stops can finish writing its transcript and events.
 
 Converted so far: the agent store (`agents/store/sqlite-agent-store.ts`), the
 user-wallet registry (`wallet/store/sqlite-user-wallet-registry.ts`); in
@@ -130,11 +131,12 @@ Copy the agent store. Six places, each with a worked example in the tree:
    it, the statements prepared in the constructor from `state/db/row.ts`
    (`insertSql`, `upsertSql`, `updateSql`; `toDataJson` / `fromRow` /
    `fromRows` for `data`), the file store's exact error messages, and two
-   extras the import needs: `put(record)` (the upsert) and `listAll()`. Plus
+   extras the import needs: `put(record)` (a write by key; the import calls it
+   only for keys the table does not hold) and `listAll()`. Plus
    `path` and `size`, which `selectStore` logs at boot. Erasable syntax with
    `.ts` specifiers, like the file store, so the import script can load it
    under node's type stripping (`CLAUDE.md` gotcha 10). JSONL stores
-   (append-only logs) get an `append`-shaped table; `put` is still an upsert on
+   (append-only logs) get an `append`-shaped table; `put` still writes by
    whatever key the log has.
 3. **Switch** — in the module, inject `SenteDbLease` instead of `StateDirLease`
    and hand the three constructors to
@@ -179,8 +181,15 @@ The runtime image carries `dist/` only, so the same code is also compiled into
 it: `src/state-import-sqlite.ts` → `node dist/state-import-sqlite.js
 [--state-dir <dir>]`, which reads `STATE_DIR` from the environment. On the box
 it runs as a one-off container of the `api` service — same image, same
-`STATE_DIR`, same bind mount, same uid 1000, same `hostname: sente-api` the
-lock records — so it needs nothing the deploy did not already ship.
+`STATE_DIR`, same bind mount, same uid 1000 — so it needs nothing the deploy did
+not already ship.
+
+That one-off container also has the API's `hostname: sente-api` and runs node
+as pid 1, which is exactly what the lock reads as "a previous incarnation of
+this container" (`state/state-dir-lock.ts`): it would take over the lock of an
+API that is still running. `docker compose run` has no `--hostname` to tell
+them apart (Compose 5.5), so step 2 refuses to start unless `docker compose ps`
+shows no running `api` — the lock cannot protect this one case, the check does.
 
 ### The production runbook
 
@@ -199,11 +208,12 @@ box() { gcloud compute ssh sente-eu --project "$PROJECT" --zone "$ZONE" --comman
 box 'cd /opt/sente && sudo docker compose stop api'
 box 'sudo tar czf ~/sente-state-pre-sqlite-$(date +%F-%H%M).tgz -C /var/lib/sente state && ls -l ~/sente-state-pre-sqlite-*.tgz'
 
-# 2. The import. Takes the lock, copies, verifies, releases. Expect
-#    "All N store(s) verified." and exit 0; on exit 1 stop here (the API is
-#    still on `file`, so `box 'cd /opt/sente && sudo docker compose start api'`
-#    is the whole rollback).
-box 'cd /opt/sente && sudo docker compose run --rm --no-deps api node dist/state-import-sqlite.js'
+# 2. The import, ONCE, against a fresh sente.db (there is none before this
+#    step). Refuses unless the API is stopped (see above); then takes the lock,
+#    copies, verifies, releases. Expect "All N store(s) verified." and exit 0;
+#    on exit 1 stop here (the API is still on `file`, so
+#    `box 'cd /opt/sente && sudo docker compose start api'` is the whole rollback).
+box 'cd /opt/sente && test -z "$(sudo docker compose ps -q --status running api)" && sudo docker compose run --rm --no-deps api node dist/state-import-sqlite.js'
 
 # 3. Flip the switch: STORE_BACKEND=sqlite in the repo .env (BACKUP_INTERVAL_MINUTES
 #    and BACKUP_KEEP too, if not the defaults), then deliver it.
@@ -224,19 +234,29 @@ box 'sleep 30; sudo docker logs --tail 80 sente-api 2>&1 | grep -E "StateDb|Stat
 
 `docker compose run` gives the one-off container a generated name, so it does
 not collide with `container_name: sente-api`, and `--no-deps` keeps it from
-touching Caddy. A re-run of step 2 is safe at any point the API is stopped.
+touching Caddy.
 
-What the script does: takes `api.lock` (it refuses while the API or anything
-else holds the directory), opens or creates `sente.db` and migrates it, and for
-each store in `STORE_IMPORTS` loads the file as the file store would (a bad
-file fails, it does not import empty), upserts every record in one
-transaction, reads the table back and compares it with the file record by
-record. It prints, per store, the file's and the table's record counts and
-content hashes (sha256 over the records' canonical tagged JSON), how many are
-identical, and how many the table holds that the file does not — records the
-API wrote under `sqlite` since the copy, which is why a re-run is safe and
-changes nothing. It exits 1 if any file record is missing from or differs in
-its table, or, for a log, reads back out of the file's order.
+Run the import once, against a fresh `sente.db`. To redo it (a failed step 2,
+a change of plan before step 4), stop the API and move `sente.db`,
+`sente.db-wal` and `sente.db-shm` aside first, then run step 2 again. A re-run
+over a database the API has written is not destructive — it never overwrites a
+row — but it cannot tell a row the API deleted (an evicted run or snapshot)
+from one never imported, and adds those back.
+
+What the script does: takes `api.lock` (it refuses while another live process
+holds the directory — except the one-off container case above), opens or
+creates `sente.db` and migrates it, and for each store in `STORE_IMPORTS` loads
+the file as the file store would (a bad file fails, it does not import empty),
+inserts, in one transaction, every record whose key the table does not hold
+yet, reads the table back and compares it with the file record by record. It
+is insert-only: a re-run only adds what is missing; it never overwrites a row
+the API wrote. It prints, per store, the file's and the table's record counts
+and content hashes (sha256 over the records' canonical tagged JSON), how many
+it wrote, how many are identical, how many the API has changed since
+(`changedSince`, left as the API wrote them) and how many the table holds that
+the file does not (records the API wrote under `sqlite` since the copy). It
+exits 1 if any file record is missing from its table, or, for a log, reads
+back out of the file's order.
 
 The logs are loaded as their file stores would load them at boot, without
 touching the files: the same per-agent and per-subject caps (what the event
@@ -249,17 +269,31 @@ resurrected by a re-run, and the re-run reports it missing. Measured on a
 laptop: 300k events and 400k snapshots import and verify in about 7 s.
 
 Rollback: `STORE_BACKEND=file` in the repo .env, `./push-secrets.sh`, then
-`box 'cd /opt/sente && sudo docker compose up -d --force-recreate api'`. Anything
-written under `sqlite` after the cut-over stays in `sente.db` and is not in the
-files; to carry it back, there is no reverse import yet — restore the file
-backup you took, or leave `sqlite` on and fix forward. A later `./deploy.sh`
-keeps whichever value `api.env` has; it never resets the switch.
+`box 'cd /opt/sente && sudo docker compose up -d --force-recreate api'`. It is
+safe only before the first user write under `sqlite`. Anything written after
+the cut-over stays in `sente.db` and is not in the files, and there is no
+reverse import. That includes wallet bindings: a user who registered under
+`sqlite` has no binding in `user-wallets.json`, so after a rollback their next
+`POST /wallet/register` mints a second Privy wallet and the first one's funds
+stop being reachable from the product (SEN-48). Once users have written,
+leave `sqlite` on and fix forward. A later `./deploy.sh` keeps whichever value
+`api.env` has; it never resets the switch.
+
+The other way round, booting under `sqlite` before the import has run refuses:
+`SenteDbLease` will not serve an empty `user_wallets` table beside a
+`user-wallets.json` that holds bindings, and names the import.
+
+`privy:recover --apply` and `creator:payout` write the same stores outside the
+API. They read `STORE_BACKEND` like `STATE_DIR` (environment, else the env
+file) and exit 2 when it does not match the directory: `file` beside a
+`sente.db`, or `sqlite` without one.
 
 Rehearsed 2026-10-13, locally: `node dist/state-import-sqlite.js` from a
 `nest build` against a seeded temp `STATE_DIR` (verified, idempotent on a
 re-run, exit 2 with no directory, exit 1 on a held lock), then the compiled API
-booted on it under `sqlite` and took its boot backup; and step 2 verbatim,
-`docker compose run --rm --no-deps api node dist/state-import-sqlite.js`, in a
+booted on it under `sqlite` and took its boot backup; and step 2's import
+command, `docker compose run --rm --no-deps api node dist/state-import-sqlite.js`
+(before the `docker compose ps` guard was added in front of it), in a
 copy of `infra/docker-compose.yml` pointed at a local image built by the
 Dockerfile, a scratch env file and a scratch state directory.
 

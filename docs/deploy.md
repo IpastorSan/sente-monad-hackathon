@@ -331,9 +331,12 @@ Four things a rollback does **not** touch, deliberately:
   of those copies — `docs/state.md`, "Backups".
 - **`STORE_BACKEND`.** It lives in `api.env`, so rolling the image back keeps
   it. An image older than SEN-205 ignores it and reads the JSON files, which
-  miss everything written under `sqlite` since the cut-over: roll the switch
-  back first (`docs/state.md`, "Cut-over and rollback", which is also the
-  runbook for turning it on).
+  miss everything written under `sqlite` since the cut-over, wallet bindings
+  included (a user who registered since gets a second Privy wallet, SEN-48).
+  Rolling the switch back is safe only before the first user write under
+  `sqlite`; after that, fix forward (`docs/state.md`, "Cut-over and rollback",
+  which is also the runbook for turning it on, and runs the import only once
+  the API is confirmed stopped).
 - **`/opt/sente/api.env`.** Rolling the code back does not roll the secrets back;
   re-run `push-secrets.sh` from the `.env` you want.
 - **the `caddy_data` volume.** Never delete it. It holds the ACME account key and
