@@ -462,7 +462,8 @@ DRY_RUN=1 ./push-secrets.sh                      # KURU_DEPLOYMENT must be liste
 PROJECT=… ZONE=… ./push-secrets.sh
 
 # 3. Build the web app for the same deployment and ship it with the API.
-#    deploy.sh passes KURU_DEPLOYMENT through as EXPO_PUBLIC_KURU_DEPLOYMENT.
+#    deploy.sh passes KURU_DEPLOYMENT (the environment's, else the repo .env's)
+#    through as EXPO_PUBLIC_KURU_DEPLOYMENT, and refuses to run without one.
 KURU_DEPLOYMENT=set-c EXPO_PUBLIC_USER_TRADING=1 PROJECT=… ZONE=… ./deploy.sh
 
 # 4. Read it back: capabilities must say set-c, the pins are Set C's.

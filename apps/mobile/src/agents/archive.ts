@@ -11,9 +11,11 @@ import type { AgentFundsLeft, AgentPortfolioDto, BalanceDto } from './api.ts';
 export const ARCHIVE_DUST = 0.01;
 
 /**
- * Everything above dust in the wallet (gas MON aside), the Kuru account and
- * the Perpl account, plus every open Perpl position. `null` when the
- * portfolio is not loaded or a section failed: then only the server knows.
+ * Everything above dust in the wallet (gas MON aside) and the Kuru account,
+ * plus every open Perpl position. Perpl collateral does not count: Sente has
+ * no Perpl withdraw, so it stays in the agent's Perpl account (SEN-203; see
+ * {@link perplCollateralOf}). `null` when the portfolio is not loaded or a
+ * section failed: then only the server knows.
  */
 export function fundsLeftOf(
   portfolio: AgentPortfolioDto | null | undefined,
@@ -30,9 +32,23 @@ export function fundsLeftOf(
   add('kuru', portfolio.kuru.balances);
   const perpl = portfolio.perpl;
   if (perpl.status === 'ok' || perpl.status === 'not_enrolled') {
-    add('perpl', perpl.balances);
     for (const p of perpl.positions ?? [])
       left.push({ where: 'perpl', asset: p.symbol, amount: p.size });
   }
   return left;
+}
+
+/**
+ * Collateral above dust in the agent's Perpl account: what stays there when
+ * it is archived, since no return can withdraw it. Empty when there is none
+ * or the section is not readable.
+ */
+export function perplCollateralOf(
+  portfolio: AgentPortfolioDto | null | undefined,
+): AgentFundsLeft[] {
+  const perpl = portfolio?.perpl;
+  if (!perpl?.ok || (perpl.status !== 'ok' && perpl.status !== 'not_enrolled')) return [];
+  return perpl.balances
+    .filter((b) => Number(b.total) >= ARCHIVE_DUST)
+    .map((b) => ({ where: 'perpl' as const, asset: b.asset, amount: b.total }));
 }

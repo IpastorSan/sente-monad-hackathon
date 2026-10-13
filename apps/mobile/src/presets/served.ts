@@ -21,6 +21,7 @@
  */
 import {
   getPreset,
+  isPresetOffered,
   type ParamSpec,
   type Params,
   type PresetDefinition,
@@ -92,7 +93,8 @@ export function servedDefinition(bundled: PresetDefinition, served: PresetDto): 
 export function hirePresetFrom(id: string, served: readonly PresetDto[] | null): HirePreset {
   const bundled = getPreset(id);
   if (served === null) {
-    return bundled
+    // Only a preset this deployment offers (SEN-203): the API would refuse the rest.
+    return bundled && isPresetOffered(id)
       ? { kind: 'ready', def: bundled, dto: presetToDto(bundled), source: 'bundled' }
       : { kind: 'missing' };
   }

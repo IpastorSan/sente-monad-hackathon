@@ -12,6 +12,7 @@ import {
   closeOverlay,
   closeVerdict,
   describeClose,
+  openAfterError,
   openOverlay,
   openVerdict,
   outcomeUnknown,
@@ -211,4 +212,31 @@ test('only an order that may have executed unseen is read back', () => {
   assert.ok(!outcomeUnknown(new PerplTraderError('leverage 0')));
   assert.ok(!outcomeUnknown(new PerplNoPositionError('BTC-PERP')));
   assert.ok(!outcomeUnknown(new PerplOrderRejectedError('Perpl gateway refused the order', 0)));
+});
+
+test('an open whose outcome is unknown is checked, never called failed (SEN-203)', () => {
+  const lost = new Error('Perpl order rq 7 timed out');
+  // Sent, outcome unknown: read Perpl's position back first.
+  assert.deepEqual(openAfterError({ error: lost, sent: true }), { kind: 'read-back' });
+  // Read back and still pending: "Check again", not "didn't go through".
+  assert.deepEqual(openAfterError({ error: lost, sent: true, verdict: { kind: 'pending' } }), {
+    kind: 'unconfirmed',
+  });
+  const opened = position();
+  assert.deepEqual(
+    openAfterError({ error: lost, sent: true, verdict: { kind: 'open', position: opened } }),
+    { kind: 'landed', position: opened },
+  );
+});
+
+test('an open that was refused, or never left the device, failed', () => {
+  const lost = new Error('socket closed');
+  assert.deepEqual(openAfterError({ error: lost, sent: false }), { kind: 'failed' });
+  assert.deepEqual(
+    openAfterError({ error: new PerplOrderRejectedError('PriceOutOfRange', 3), sent: true }),
+    { kind: 'failed' },
+  );
+  assert.deepEqual(openAfterError({ error: new PerplTraderError('leverage 0'), sent: true }), {
+    kind: 'failed',
+  });
 });

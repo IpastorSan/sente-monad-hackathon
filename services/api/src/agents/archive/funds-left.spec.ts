@@ -52,6 +52,24 @@ describe('fundsLeft (SEN-197)', () => {
     );
   });
 
+  it('lets Perpl collateral stay, but not an open Perpl position (SEN-203)', () => {
+    const perpl = (positions: never[]) =>
+      portfolio({
+        perpl: {
+          ok: true,
+          status: 'ok',
+          accountId: '9',
+          balances: [balance('AUSD', '100')],
+          positions,
+          openOrders: [],
+        },
+      });
+    expect(fundsLeft(perpl([]))).toEqual({ left: [], unreadable: [] });
+    expect(fundsLeft(perpl([{ symbol: 'BTC', size: '0.01' } as never])).left).toEqual([
+      { where: 'perpl', asset: 'BTC', amount: '0.01' },
+    ]);
+  });
+
   it('reports a section it could not read', () => {
     const check = fundsLeft(
       portfolio({ kuru: { ok: false, error: 'rpc' }, perpl: { ok: false, error: 'socket' } }),

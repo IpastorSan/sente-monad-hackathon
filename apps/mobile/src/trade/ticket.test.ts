@@ -492,6 +492,31 @@ test('filled and resting results', () => {
   assert.equal(filledPct('0', '150'), 0);
 });
 
+test('a resting order is promised a cancel only where Sente can list it (SEN-203)', () => {
+  const result: KuruPlaceResult = {
+    status: 'resting',
+    requestedSize: '150',
+    filledSize: '0',
+    fee: '0',
+    feeAsset: 'USDC',
+    fills: [],
+  };
+  const ctx = { ...CTX, orderType: 'limit', price: '0.95' } as const;
+  assert.equal(
+    resultView(result, { ...ctx, ordersListed: true }).why,
+    'It waits at 0.9500 until it fills or you cancel it from Portfolio → Orders.',
+  );
+  const setC = resultView(result, { ...ctx, ordersListed: false }).why ?? '';
+  assert.doesNotMatch(setC, /cancel it from/);
+  assert.match(setC, /cannot list or cancel it/);
+
+  const partial = resultView(
+    { ...result, status: 'partially_filled', filledSize: '50', avgPrice: '0.95', fills: FILLS },
+    { ...ctx, ordersListed: false },
+  );
+  assert.match(partial.why ?? '', /^The rest waits at 0\.9500 until it fills\. .*cannot list/);
+});
+
 test('funds name where the money is; steps read as stones', () => {
   assert.deepEqual(
     fundsLines([

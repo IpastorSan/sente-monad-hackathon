@@ -10,7 +10,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { AgentsApiError, describeAgentsError, describeFundsLeft } from '@/agents/api';
 import type { Agent, AgentFundsLeft, AgentPortfolioDto } from '@/agents/api';
-import { fundsLeftOf } from '@/agents/archive';
+import { fundsLeftOf, perplCollateralOf } from '@/agents/archive';
 import { useSession } from '@/session';
 import { isoDate } from '@/ui/format';
 import { Button, Notice, Sheet, type NoticeTone } from '@/ui/kit';
@@ -63,6 +63,15 @@ export function ArchiveAgent({
 
   const left = refusedLeft ?? fundsLeftOf(portfolio);
   const holding = left !== null && left.length > 0;
+  // No return can withdraw from Perpl, so its collateral does not block an
+  // archive (SEN-203); the sheet says where it stays.
+  const perplKept = perplCollateralOf(portfolio);
+  const perplNote =
+    perplKept.length > 0 ? (
+      <Text style={[text.caption, styles.after]}>
+        {`${perplKept.map((f) => `${f.amount} ${f.asset}`).join(', ')} stays in the agent’s Perpl account. Sente cannot withdraw from Perpl, so Return funds does not move it and archiving leaves it there.`}
+      </Text>
+    ) : null;
 
   const archive = async () => {
     setBusy(true);
@@ -112,6 +121,7 @@ export function ArchiveAgent({
                 ? `It still holds ${describeFundsLeft(left)}. Send it home, then archive the agent.`
                 : 'It still holds funds. Send them home, then archive the agent.'}
             </Text>
+            {perplNote}
             <Button
               label="Return funds"
               kind="primary"
@@ -133,6 +143,7 @@ export function ArchiveAgent({
               stay as they are, and its public page keeps working. You can unarchive it any time
               from Agents → Yours → Archived.
             </Text>
+            {perplNote}
             {error ? <Notice tone={error.tone} title={error.title} detail={error.detail} /> : null}
             <Button
               label="Archive agent"

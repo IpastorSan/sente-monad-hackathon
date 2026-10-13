@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { fundsLeftOf } from './archive.ts';
+import { fundsLeftOf, perplCollateralOf } from './archive.ts';
 import type { AgentPortfolioDto } from './api.ts';
 
 const bal = (asset: string, total: string) => ({
@@ -49,4 +49,27 @@ test('names what is left in the wallet, on Kuru and on Perpl', () => {
 test('does not guess when the portfolio is missing or a section failed', () => {
   assert.equal(fundsLeftOf(undefined), null);
   assert.equal(fundsLeftOf(portfolio({ kuru: { ok: false, error: 'rpc' } })), null);
+});
+
+test('Perpl collateral stays and does not block; an open position does (SEN-203)', () => {
+  const perpl = (positions: { symbol: string; size: string }[]) =>
+    portfolio({
+      perpl: {
+        ok: true,
+        status: 'ok',
+        accountId: '9',
+        balances: [bal('AUSD', '100'), bal('USDC', '0.001')],
+        positions: positions as never,
+        openOrders: [],
+      },
+    });
+  assert.deepEqual(fundsLeftOf(perpl([])), []);
+  assert.deepEqual(perplCollateralOf(perpl([])), [
+    { where: 'perpl', asset: 'AUSD', amount: '100' },
+  ]);
+  assert.deepEqual(fundsLeftOf(perpl([{ symbol: 'BTC', size: '0.01' }])), [
+    { where: 'perpl', asset: 'BTC', amount: '0.01' },
+  ]);
+  assert.deepEqual(perplCollateralOf(portfolio()), []);
+  assert.deepEqual(perplCollateralOf(undefined), []);
 });

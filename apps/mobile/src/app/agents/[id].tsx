@@ -76,6 +76,7 @@ import { fundAgent } from '@/agents/initialFunding';
 import { perpsFundHint } from '@/agents/perps';
 import { PerpsStatus } from '@/agents/PerpsStatus';
 import { RiskConfirm } from '@/agents/Risks';
+import { describeReturn } from '@/agents/returnOutcome';
 import { ShareLinkButton } from '@/agents/ShareLink';
 import { alreadyRunning, liveRun, runningLine, waitForRunStart } from '@/agents/runState';
 import type { RunSummary } from '@/agents/terminal';
@@ -469,7 +470,9 @@ export default function AgentScreen() {
             agent.policyCleared === false
               ? 'The agent won’t run again, but its wallet policy still holds the old rules. Revoke again to clear it.'
               : 'It can’t trade, deposit or approve anything again — revoking is permanent. Its ' +
-                'policy keeps only the way out, so you can still send its funds back to your wallet.'
+                'policy keeps only the way out, so you can still send its wallet and Kuru funds ' +
+                'back to your wallet. Collateral in its Perpl account stays there: Sente cannot ' +
+                'withdraw from Perpl.'
           }
         >
           <ArchiveAgent
@@ -1263,8 +1266,9 @@ function MandateCard({
               />
             </ButtonRow>
             <Text style={[text.caption, styles.after]}>
-              Return sends everything back to your wallet. Revoke stops it for good; its funds stay
-              returnable.
+              Return sends its wallet and Kuru funds back to your wallet. Revoke stops it for good
+              but closes nothing: have it close its positions and cancel its orders first. Its
+              wallet and Kuru funds stay returnable; collateral in its Perpl account stays there.
             </Text>
           </>
         ) : (
@@ -1676,36 +1680,10 @@ function ReturnSheet({
     setError(null);
     try {
       const result = await api.returnFunds(agent.id);
-      const moved = result.assets.filter((asset) => asset.returned?.success);
-      const failed = result.assets.filter((asset) => asset.returned && !asset.returned.success);
-      const summary = moved.map((asset) => `${asset.returned!.amount} ${asset.asset}`).join(', ');
-      if (failed.length > 0) {
-        // Gotcha 8's corollary: each leg is its own transaction, so some can land
-        // while others revert. Saying "sent" here would be a lie about money.
-        setError({
-          tone: 'error',
-          title: 'Part of it didn’t go through',
-          detail:
-            `${failed.map((asset) => asset.asset).join(', ')} reverted on chain, so that part ` +
-            `didn’t move${summary ? `. ${summary} did` : ''}. Try again.`,
-        });
-        return;
-      }
-      onDone(
-        moved.length > 0
-          ? {
-              tone: 'ok',
-              title: `Sent ${summary} back to your wallet`,
-              detail: `Gas cost the agent ${result.monSpent} MON. Balances update once the chain catches up.`,
-            }
-          : {
-              tone: 'info',
-              title: 'There was nothing to send back',
-              detail:
-                'This agent holds no tokens. Its leftover MON stays with it: no rule lets an ' +
-                'agent move native MON, so gas cannot be swept.',
-            },
-      );
+      const outcome = describeReturn(result);
+      // A reverted leg stays on the sheet: saying "sent" would be a lie about money.
+      if (outcome.tone === 'error') setError(outcome);
+      else onDone(outcome);
     } catch (caught) {
       setError({ tone: 'error', ...describeAgentsError(caught) });
     } finally {
@@ -1717,7 +1695,8 @@ function ReturnSheet({
     <Sheet visible={visible} title={`Return ${agent.name}’s funds`} onClose={onClose}>
       <Text style={text.body}>
         Everything this agent holds — in its wallet and as free Kuru collateral — goes back to your
-        own wallet. Collateral reserved by a resting order stays until that order is cancelled.
+        own wallet. Collateral reserved by a resting order stays until that order is cancelled, and
+        collateral in its Perpl account stays there: Sente cannot withdraw from Perpl.
       </Text>
       <Row label="To your wallet" value={exit ? shortAddress(exit) : '—'} mono />
       <Text style={[text.caption, styles.after]}>
@@ -1837,8 +1816,13 @@ function RevokeSheet({
         approve with. This can’t be undone.
       </Text>
       <Text style={[text.dim, styles.after]}>
-        What it keeps is the way out: funds stay in its wallet until you send them back with “Return
-        funds”, which still works afterwards. Its leftover MON stays with it.
+        Revoking does not close its positions or cancel its orders, and afterwards it can’t. If it
+        holds a Perpl position or has orders resting, have it close and cancel them first.
+      </Text>
+      <Text style={[text.dim, styles.after]}>
+        What it keeps is the way out: its wallet and Kuru funds can go back with “Return funds”,
+        which still works afterwards. Collateral in its Perpl account stays there, and its leftover
+        MON stays with it.
       </Text>
       {signs ? (
         <>

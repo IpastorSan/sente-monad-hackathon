@@ -123,6 +123,37 @@ export function openVerdict(before: PositionLike | null, after: PositionRead): O
 }
 
 /**
+ * What the perp ticket says after an open threw (SEN-203). Only a refusal
+ * (nothing sent, or Perpl rejected it) is "didn't go through"; an order that
+ * may have been sent is `landed` when Perpl's position shows it and otherwise
+ * `unconfirmed` — checked again, never invited to be placed twice. A limit is
+ * read back the same way (a fill shows as a position), but a limit that rests
+ * moves no position, so for it `unconfirmed` also points at its open orders.
+ */
+export type OpenAfterError =
+  | { kind: 'failed' }
+  | { kind: 'read-back' }
+  | { kind: 'landed'; position: Position }
+  | { kind: 'unconfirmed' };
+
+/**
+ * `sent`: whether the order could have left this device (a trader was open).
+ * `verdict`: Perpl's position read back, once there is one.
+ */
+export function openAfterError(input: {
+  error: unknown;
+  sent: boolean;
+  verdict?: OpenVerdict;
+}): OpenAfterError {
+  const { error, sent, verdict } = input;
+  if (!sent || !outcomeUnknown(error)) return { kind: 'failed' };
+  if (verdict === undefined) return { kind: 'read-back' };
+  return verdict.kind === 'open'
+    ? { kind: 'landed', position: verdict.position }
+    : { kind: 'unconfirmed' };
+}
+
+/**
  * Re-reads Perpl's position on a market until `decide` stops answering
  * `pending`, waiting `delaysMs[i]` before read `i`. Returns the last verdict,
  * so a caller still holding `pending` after the last read says "checking",
