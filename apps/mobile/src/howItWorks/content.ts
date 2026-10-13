@@ -128,7 +128,7 @@ export const SECTIONS: readonly HelpSection[] = [
         question: 'Why don’t I need MON for gas?',
         body: [
           'Privy sponsors the gas for sends from your wallet. A sponsored transfer was measured landing from a wallet holding 0 MON. The first sponsored send gives the wallet an EIP-7702 delegation; its address stays the same.',
-          'Agents are separate wallets and pay their own gas in MON.',
+          'Agents are separate wallets, and Privy sponsors their gas too: a whole agent lifecycle (Kuru deposit, buy and sell, Perpl setup, return of funds, revoke) was measured from an agent wallet holding 0 MON, with the mandate still refusing what it forbids. Agents hired before sponsorship pay their own MON until their next amend.',
         ],
       },
       {
