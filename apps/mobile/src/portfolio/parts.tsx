@@ -212,10 +212,13 @@ function Leverage({ n }: { n: number | null }) {
 /** P&L amount and percent in the direction colour; hidden keeps only the percent. */
 function PnlLine({
   pnl,
+  unit,
   pct,
   hidden,
 }: {
   pnl: string | null;
+  /** The asset the P&L is in, so the figure is never a bare number. */
+  unit: string;
   pct: number | null;
   hidden: boolean;
 }) {
@@ -223,7 +226,7 @@ function PnlLine({
   const tone = pct !== null ? pctDirection(pct) : toneOf(pnl);
   return (
     <Text style={[text.dim, text.num, { color: TONE[tone] }]}>
-      {pnl !== null && !hidden ? `${signedMoney(pnl)} · ` : ''}
+      {pnl !== null && !hidden ? `${signedMoney(pnl)} ${unit} · ` : ''}
       {pct !== null ? formatPct(pct) : ''}
     </Text>
   );
@@ -371,7 +374,7 @@ export function PerpPositionRow({
           {shown(amountText(value, 'AUSD'), hidden)} <Text style={text.dim}>AUSD</Text>
         </>
       }
-      under={<PnlLine pnl={pnl} pct={pct} hidden={hidden} />}
+      under={<PnlLine pnl={pnl} unit="AUSD" pct={pct} hidden={hidden} />}
       onPress={onPress}
       last={last}
     />
@@ -459,7 +462,7 @@ export function AgentsGroup({
                   <Text style={text.dim}>{row.unit}</Text>
                 </>
               }
-              under={<PnlLine pnl={row.pnl} pct={row.pct} hidden={hidden} />}
+              under={<PnlLine pnl={row.pnl} unit={row.unit} pct={row.pct} hidden={hidden} />}
               onPress={() => onOpen(row.agentId)}
               chevron
               last={last}
