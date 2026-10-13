@@ -44,10 +44,11 @@ import {
   type PerpOrderType,
   type PerpSide,
 } from '@/trade/perpTicket';
+import type { PositionLike } from '@/portfolio/perplOverlay';
 import {
+  openAfterError,
   openOverlay,
   openVerdict,
-  outcomeUnknown,
   positionOn,
   reconcile,
   RECONCILE_DELAYS_MS,
@@ -102,6 +103,11 @@ type Stage =
   | { kind: 'checking' }
   /** Its confirmation was lost, but Perpl lists the position it opened. */
   | { kind: 'landed'; position: Position }
+  /**
+   * Sent, and Perpl has not shown what it did yet (SEN-203): "Check again",
+   * never "didn't go through". `before` is the position before the order.
+   */
+  | { kind: 'unconfirmed'; before: PositionLike | null; message: string }
   | { kind: 'error'; title: string; detail: string };
 
 /** The ticket for one Perpl market, behind the setup gate. */
@@ -322,11 +328,50 @@ function Ticket({
     return true;
   });
 
-  const confirm = async () => {
-    const size = ticket.size;
+  /** A trader signed by this device's Perpl key, or `null` before sign-in. */
+  const openTrader = () => {
     const derive = session.auth.perplTradeKey;
     const wallet = session.wallet.wallet;
-    if (size === null || derive === null || wallet === null) {
+    if (derive === null || wallet === null) return null;
+    const key = derive(wallet.address);
+    // The trader keeps its own copy; this one goes now.
+    const trader = createAppPerplTrader({ credentials: { apiKey, secretKey: key.secretKey } });
+    key.secretKey.fill(0);
+    return trader;
+  };
+  // Perpl's position on the market, re-read until it shows what the order did.
+  const readBack = (live: ReturnType<typeof createAppPerplTrader>, before: PositionLike | null) =>
+    reconcile({
+      read: async () => positionOn(await live.positions(market.symbol), market.symbol),
+      decide: (after) => openVerdict(before, after),
+      delaysMs: RECONCILE_DELAYS_MS,
+    });
+  const landed = (position: Position, before: PositionLike | null) => {
+    recordPerpl(openOverlay({ kind: 'open', position }, market.symbol, before, Date.now()));
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setStage({ kind: 'landed', position });
+    user.polled.refresh();
+  };
+
+  /** "Check again" on an unconfirmed open: one more read-back, nothing sent. */
+  const checkAgain = async (before: PositionLike | null, message: string) => {
+    setStage({ kind: 'checking' });
+    let trader: ReturnType<typeof createAppPerplTrader> | null = null;
+    try {
+      trader = openTrader();
+      const verdict = trader ? await readBack(trader, before) : undefined;
+      if (verdict?.kind === 'open') landed(verdict.position, before);
+      else setStage({ kind: 'unconfirmed', before, message });
+    } catch {
+      setStage({ kind: 'unconfirmed', before, message });
+    } finally {
+      trader?.release();
+    }
+  };
+
+  const confirm = async () => {
+    const size = ticket.size;
+    if (size === null || session.auth.perplTradeKey === null || session.wallet.wallet === null) {
       setStage({
         kind: 'error',
         title: 'Sign in first',
@@ -340,18 +385,9 @@ function Ticket({
     // seen once Perpl lists something different (SEN-202).
     const before = perplPositionOn(user.portfolio, symbol);
     let trader: ReturnType<typeof createAppPerplTrader> | null = null;
-    // Perpl's position on the market, re-read until it shows what the order did.
-    const readBack = (live: NonNullable<typeof trader>) =>
-      reconcile({
-        read: async () => positionOn(await live.positions(symbol), symbol),
-        decide: (after) => openVerdict(before, after),
-        delaysMs: RECONCILE_DELAYS_MS,
-      });
     try {
-      const key = derive(wallet.address);
-      // The trader keeps its own copy; this one goes now.
-      trader = createAppPerplTrader({ credentials: { apiKey, secretKey: key.secretKey } });
-      key.secretKey.fill(0);
+      trader = openTrader();
+      if (trader === null) throw new Error('Sign in with your passkey before trading.');
       const order = limit
         ? await trader.placeLimit({
             symbol: market.symbol,
@@ -374,28 +410,26 @@ function Ticket({
       // Perpl's own read is in, the position page says "Updating…", not "none".
       if (filled) recordPerpl({ kind: 'pending', symbol, at: Date.now(), before });
       setStage({ kind: 'done', order });
-      if (filled) recordPerpl(openOverlay(await readBack(trader), symbol, before, Date.now()));
+      if (filled)
+        recordPerpl(openOverlay(await readBack(trader, before), symbol, before, Date.now()));
       user.polled.refresh();
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       // Sent, but its confirmation was lost: Perpl's position says whether it
-      // filled. A limit may rest instead, so only a market order is read back.
-      if (!limit && trader && outcomeUnknown(error)) {
+      // filled. Until it does the outcome is unknown, never "failed" (SEN-203);
+      // a limit is read back too, since a fill shows as a position.
+      let next = openAfterError({ error, sent: trader !== null });
+      if (next.kind === 'read-back' && trader) {
         setStage({ kind: 'checking' });
-        const verdict = await readBack(trader);
-        if (verdict.kind === 'open') {
-          recordPerpl(openOverlay(verdict, symbol, before, Date.now()));
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          setStage({ kind: 'landed', position: verdict.position });
-          user.polled.refresh();
-          return;
-        }
+        next = openAfterError({ error, sent: true, verdict: await readBack(trader, before) });
+      }
+      if (next.kind === 'landed') {
+        landed(next.position, before);
+        return;
       }
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      setStage({
-        kind: 'error',
-        title: 'The order didn’t go through',
-        detail: error instanceof Error ? error.message : String(error),
-      });
+      if (next.kind === 'unconfirmed') setStage({ kind: 'unconfirmed', before, message });
+      else setStage({ kind: 'error', title: 'The order didn’t go through', detail: message });
     } finally {
       trader?.release();
     }
@@ -427,6 +461,33 @@ function Ticket({
             The order’s confirmation didn’t arrive. Reading your position back from Perpl to see
             whether it filled.
           </Text>
+        </View>
+      </Frame>
+    );
+  }
+  if (stage.kind === 'unconfirmed') {
+    const { before, message } = stage;
+    return (
+      <Frame onClose={onClose} embedded={embedded}>
+        <Text style={[text.display, styles.title]}>Not confirmed yet</Text>
+        <Text style={[text.body, styles.spaced]}>
+          {limit
+            ? 'The order was sent, but Perpl hasn’t confirmed it. If it was placed, it rests in Portfolio → Orders, or shows as a position once it fills.'
+            : 'The order was sent, but Perpl hasn’t confirmed it and doesn’t list a new position yet.'}
+        </Text>
+        <Text style={[text.caption, styles.spacedSm]}>
+          {`Check again before you place it a second time, or you may open twice. (${message})`}
+        </Text>
+        <View style={styles.spaced}>
+          <ButtonRow>
+            <Button kind="soft" label="Not now" onPress={onClose} style={styles.grow} />
+            <Button
+              kind="primary"
+              label="Check again"
+              onPress={() => void checkAgain(before, message)}
+              style={styles.grow}
+            />
+          </ButtonRow>
         </View>
       </Frame>
     );
