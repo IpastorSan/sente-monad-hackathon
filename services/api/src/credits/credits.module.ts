@@ -24,7 +24,11 @@ import {
   loadCreditsPurchaseConfig,
   type CreditsPurchaseConfig,
 } from './purchase/credits-purchase.service';
-import { CREDIT_KEYS, InMemoryCreditKeyStore } from './store/credit-key-store';
+import { agentSecretsKey } from '../agents/venues/file-agent-secret-store';
+import { statePath } from '../state/json-file';
+import { StateDirLease, StateModule } from '../state/state.module';
+import { CREDIT_KEYS, InMemoryCreditKeyStore, type CreditKeyStore } from './store/credit-key-store';
+import { CREDIT_KEYS_FILE, FileCreditKeyStore } from './store/file-credit-key-store';
 
 const configProvider: Provider = {
   provide: CREDITS_CONFIG,
@@ -69,10 +73,26 @@ const paymentsProvider: Provider = {
   useClass: NoCreditPayments,
 };
 
-/** PERSISTENCE: in memory until the repo has a database — see `store/credit-key-store.ts`. */
+/**
+ * `credit-keys.json` under `STATE_DIR`, sealed under `AGENT_SECRETS_KEY`
+ * (SEN-204); in memory otherwise. In memory, every restart let every user mint
+ * a second funded key.
+ */
+export function creditKeyStore(
+  env: Record<string, string | undefined> = process.env,
+): CreditKeyStore {
+  const path = statePath(CREDIT_KEYS_FILE, env);
+  if (!path) return new InMemoryCreditKeyStore();
+  const store = new FileCreditKeyStore(path, agentSecretsKey(env));
+  new Logger('CreditKeyStore').log(`${store.size} OpenRouter key(s) loaded from ${store.path}`);
+  return store;
+}
+
 const storeProvider: Provider = {
   provide: CREDIT_KEYS,
-  useClass: InMemoryCreditKeyStore,
+  // Injected only so the STATE_DIR lock is held before this file opens (SEN-161).
+  inject: [StateDirLease],
+  useFactory: (_lease: StateDirLease): CreditKeyStore => creditKeyStore(),
 };
 
 /** AUTH: the shared seam, exactly as `WalletModule` binds it. */
@@ -87,6 +107,7 @@ const authProvider: Provider = {
  * runner gets the key; nothing over HTTP ever does.
  */
 @Module({
+  imports: [StateModule],
   controllers: [CreditsController],
   providers: [
     configProvider,
