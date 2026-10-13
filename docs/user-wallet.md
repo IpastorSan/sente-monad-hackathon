@@ -1,7 +1,7 @@
 # The user's wallet (SEN-40)
 
-Every signed-in user gets **one Privy server wallet whose owner is their phone's
-`device` P-256 key** (SEN-38). The API creates it, reads it, and **cannot sign
+Every signed-in user gets **one Privy server wallet whose owner is their device's
+`device` P-256 key** (SEN-38; the same derivation on Android and on the web). The API creates it, reads it, and **cannot sign
 for it** — the owner key never leaves the device, and Privy enforces the owner's
 signature on its side (SEN-39 measured all three cases live:
 `docs/privy-sponsorship.md`, checks 4a–4c).
@@ -112,20 +112,21 @@ wallet and hides whatever the first one holds. Two guards:
 Recovery is deliberately out of scope (SEN-40's notes): the honest answer to a
 new device key today is a refusal, not a silently-minted second wallet.
 
-**The registry is in memory**, the repo's current standard — and the cost is
-higher here than for the Kernel registry, which is worth saying out loud: a lost
-binding means the next register creates a _second_ wallet and the funded one is
-orphaned. The wallet itself survives in Privy, owned by the same device key, but
-nothing remembers its id. Point `USER_WALLET_REGISTRY` at a real store before
-anything of value lands in a user wallet.
+**The registry persists under `STATE_DIR`** (SEN-48: `user-wallets.json`, or
+the `user_wallets` table under `STORE_BACKEND=sqlite`, which production runs),
+and the reason is worth saying out loud: a lost binding means the next register
+creates a _second_ wallet and the funded one is orphaned. The wallet itself
+survives in Privy, owned by the same device key, but nothing remembers its id.
+`privy:recover` finds it again from the device public key, and `docs/deploy.md`
+says why the state directory is never touched by a rollback.
 
 ## Configuration
 
 `PRIVY_APP_ID` and `PRIVY_APP_SECRET`, and nothing else — the two authorization
 keys in `.env` belong to agent wallets. Set neither and `POST /wallet/register`
 refuses with `user_wallets_unconfigured`; set one and boot fails naming the
-other. Balances are read over `MONAD_TESTNET_RPC_URL` (viem's public default
-when unset).
+other. Balances are read over `MONAD_TESTNET_RPC_URL` with Monad's public RPC as
+the fallback (`chain/monad-rpc.ts`; the public RPC alone when unset).
 
 ## Verified live, 2026-09-18
 
@@ -168,8 +169,10 @@ reads `MON=0 USDC=1 AUSD=0`, matching what that doc recorded.
   SEN-42's sends do, and they must read the **user-operation** receipt, because
   that is what a sponsored send returns.
 - **EIP-7702 delegation now measured: the address survives**, but the account
-  gains code (`0xef0100…`) on its first sponsored send. Still unanswered, and it
-  matters: whether `eth_signTypedData_v4` stays `ecrecover`-able once the
-  address has code (CLAUDE.md gotcha 9 depends on it for Perpl enrollment).
+  gains code (`0xef0100…`) on its first sponsored send. Whether
+  `eth_signTypedData_v4` stays `ecrecover`-able once the address has code was
+  answered by run 3 of `docs/privy-sponsorship.md`: it does, and the P5 run in
+  `docs/user-trading.md` enrolled a Perpl trade key from a delegated wallet
+  (CLAUDE.md gotcha 9).
 - **Recovery**: adding a second device key to the owner quorum, authorized by
   the first. Not implemented; `device_key_mismatch` is the current answer.

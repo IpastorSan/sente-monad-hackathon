@@ -846,8 +846,11 @@ survived an expired mandate. Tx hashes are in `docs/agents.md`.
 
 ## Kuru's account-id AccountCore: both custody calls name a third party (SEN-185)
 
-Kuru's current deployment (`docs/kuru.md`, "Set D") replaced the two calls the
-rules above relied on:
+Kuru's listed deployment (`docs/kuru.md`, "Set D") replaced the two calls the
+rules above relied on. Production trades Set C again since SEN-189
+(`KURU_DEPLOYMENT=set-c`), where the rules above still apply as written; the
+compiler pins what the active deployment needs, and the retirement mechanism
+at the end of this section works in either direction.
 
 | Set C                                    | Set D                                                              | What the policy must now pin     |
 | ---------------------------------------- | ------------------------------------------------------------------ | -------------------------------- |
@@ -927,10 +930,13 @@ pins too.
 
 ### Re-PATCHing the agents hired before it
 
-Every live agent policy names the Set-C AccountCore and books, so **no existing
-agent can trade, deposit or withdraw on Kuru until its policy is re-PATCHed**
-(CLAUDE.md gotcha 13). The stored mandate names Set-C addresses too, which
-`parseMandate` now refuses by name ("the cbBTC-USDC book Kuru retired on
+Written for the move to Set D; since SEN-189 flipped production back to Set C,
+the same applies to any agent hired on the other deployment (`kuruRetired`
+names whichever books the active deployment retired). For the Set D move:
+every live agent policy named the Set-C AccountCore and books, so **no existing
+agent could trade, deposit or withdraw on Kuru until its policy was re-PATCHed**
+(CLAUDE.md gotcha 13). The stored mandate named Set-C addresses too, which
+`parseMandate` refuses by name ("the cbBTC-USDC book Kuru retired on
 2026-09-25; name WBTC-USDC (0x8661…) instead").
 
 - **What the owner sees.** `GET /agents/:id` carries `kuruRetired: { message,
@@ -1034,12 +1040,15 @@ The phone pins both new ABIs by hash (`kuruBuilderBatch`, `kuruApproveBuilder` i
 and rate it was built with (`EXPO_PUBLIC_KURU_BUILDER_*`). It also accepts the
 same policy without them, which is narrower.
 
-**Unverified live: whether Privy matches the builder overloads.** The plain
-`batch` rule (two overloads, an order `tuple[]`) has signed on 10143 since SEN-6.
-The builder overloads add a bare `tuple` parameter, which no rule here has
-decoded yet. The probe is `agent:venues-live -- --skip-perpl --builder` (see
-`docs/agents.md`, "The Sente fee on agents' Kuru orders"). If Privy refuses the
-ABI at PATCH or answers the bid with `policy_violation`:
+**Verified live on 2026-10-12: Privy matches the builder overloads.** The plain
+`batch` rule (two overloads, an order `tuple[]`) had signed on 10143 since
+SEN-6; the builder overloads add a bare `tuple` parameter, and
+`agent:venues-live -- --skip-perpl --builder --builder-take` (see
+`docs/agents.md`, "The Sente fee on agents' Kuru orders") had the enclave sign
+the `approveBuilder` leg, a builder-overload bid and its cancel on Set C, and a
+taker fill paid the fee (`0xca084e71…`, `docs/kuru.md`). Kept for a future ABI
+change, if Privy ever refuses the ABI at PATCH or answers a bid with
+`policy_violation`:
 
 - Set `KURU_BUILDER_AGENTS=0`. Agents' policies then compile without the fee
   rules, `AgentRecord.kuruBuilder` stays unset, and agents trade through the

@@ -178,9 +178,9 @@ The harness, all local, nothing deployed:
   resident key, user verification, and `hasPrf: true` or `false`;
 - a page init script wrapping `navigator.credentials.create/get` to count ceremonies.
 
-The web page renders only once Skia's CanvasKit is loaded (SEN-164, not done on this
-branch); the harness preloaded `canvaskit-wasm` in its served `index.html` for that, and
-changed nothing else. The ceremony counts in this table predate SEN-176; the current ones
+The web page renders only once Skia's CanvasKit is loaded (SEN-164, which had not landed
+when this was measured); the harness preloaded `canvaskit-wasm` in its served `index.html`
+for that, and changed nothing else. The ceremony counts in this table predate SEN-176; the current ones
 are in the next section.
 
 | Scenario                                         | Ceremonies the page ran              | Result                                                                                                                                                                                             |
@@ -292,15 +292,16 @@ directly, and the proxy reaches testnet only.
 
 On a machine with Chrome signed in to the Google account that holds the phone's passkey:
 
-1. Serve the export on a real `sente.lol` origin: either deploy (SEN-168), or map
-   `sente.lol` to 127.0.0.1 in `/etc/hosts`, serve `apps/mobile/dist-web` over HTTPS with
-   a certificate Chrome trusts (e.g. Caddy `tls internal`, root trusted), and **remove the
-   hosts entry afterwards**. An `--ignore-certificate-errors-spki-list` launch flag works
-   too, as above. The API must be reachable at the build's `EXPO_PUBLIC_API_URL`
-   (default `https://api.sente.lol`).
-2. **Chrome + GPM:** Create passkey, save it to Google Password Manager, confirm Home.
-   Record whether Chrome offered GPM and how many prompts appeared: one if GPM evaluates
-   both PRF salts at creation, two if not (SEN-176).
+1. ~~Serve the export on a real `sente.lol` origin.~~ Done: the web app is deployed at
+   `https://sente.lol` (SEN-168). For a local build instead, map `sente.lol` to 127.0.0.1
+   in `/etc/hosts`, serve `apps/mobile/dist-web` over HTTPS with a certificate Chrome
+   trusts (e.g. Caddy `tls internal`, root trusted), and **remove the hosts entry
+   afterwards**; an `--ignore-certificate-errors-spki-list` launch flag works too, as
+   above. The API must be reachable at the build's `EXPO_PUBLIC_API_URL` (default
+   `https://api.sente.lol`).
+2. ~~Chrome + GPM.~~ Done 2026-10-09 on production: Chrome offered Google Password
+   Manager, one PIN prompt covered both salts, the wallet registered and the starter kit
+   arrived (the provider matrix above).
 3. **SEN-176 with an existing GPM passkey** (one made before SEN-176): note the EOA and the
    Privy wallet address on Home from the current production build, then sign in on this
    build. Record the prompt count (one expected) and confirm **both addresses are the same**.

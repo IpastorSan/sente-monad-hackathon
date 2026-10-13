@@ -1,9 +1,10 @@
 # infra — the sente.lol host
 
-A single GCE box running Caddy in Docker. Its first job is the two WebAuthn
+A single GCE box (`sente-eu`, `europe-southwest1-a`, since 2026-10-09; the
+scripts default to it) running Caddy in Docker. Its first job is the two WebAuthn
 association files; since SEN-51 it also runs `services/api` behind Caddy on
 `api.sente.lol`, and since SEN-168 it serves the Expo web export on the apex,
-everywhere except `/.well-known/*`.
+everywhere except `/.well-known/*` and `/download/*` (the Android APK).
 
 **The runbook is `../docs/deploy.md`.** This file is about the host and the
 association files; that one is about deploying the API, the secrets, the release
@@ -51,8 +52,8 @@ to `apps/mobile/android/app/debug.keystore`; the release keystore was generated
 into `apps/mobile/keystores/` (gitignored, documented in the README committed
 there). Package name is `lol.sente.app`.
 
-`deploy.sh` refuses to run while `site/.well-known/` contains `REPLACE_`. Two
-values must come from elsewhere:
+`deploy.sh` warns while `site/.well-known/` contains `REPLACE_`, and `verify.sh`
+fails on it. The two values came from elsewhere:
 
 **Android only. iOS is out of scope**, deliberately: the `associated-domains`
 entitlement needs a paid Apple Developer Program membership, and building or

@@ -4,19 +4,23 @@ How Sente gets somewhere a stranger can use it: the API on HTTPS at
 `api.sente.lol`, a release APK a judge installs without a dev client or Metro
 (SEN-51), and the same app in a browser at `https://sente.lol` (SEN-168).
 
-> **NOTHING IN THIS FILE HAS BEEN EXECUTED.** The machinery is written and, where
-> it could be, verified locally — see [What has and has not
-> run](#what-has-and-has-not-run) at the bottom for the exact line. Read that
-> section before you trust any sentence above it.
+> Live since 2026-10-09 (SEN-51): `deploy.sh` is what every production deploy
+> runs, and the box has moved once since (to `sente-eu` in Madrid, the same
+> day). [What has and has not run](#what-has-and-has-not-run) at the bottom is
+> the local verification record from before that first deploy, kept as history.
 
 ## The shape of it
 
-One GCE box, `sente-web`, which already exists and already holds a Let's Encrypt
+One GCE box, `sente-eu` (`europe-southwest1-a`, 34.175.150.91, e2-small; the
+scripts default to it), which already exists and already holds a Let's Encrypt
 certificate for `sente.lol` in a named Docker volume. Do not rebuild it: losing
-`caddy_data` means re-issuing certificates and burning rate limit.
+`caddy_data` means re-issuing certificates and burning rate limit. It replaced
+`sente-web` in `us-central1` on 2026-10-09, because Perpl testnet answers its
+trading socket with `451 country is blocked` from US IPs; state and certificates
+moved with it.
 
 ```
-                       ┌──────────────────────── sente-web (e2-micro, Debian 12)
+                       ┌──────────────────────── sente-eu (e2-small, Debian 12)
   api.sente.lol ──TLS──┤  caddy  ──http──>  api  (sente-api:<git sha>)
   sente.lol     ──TLS──┤    │                │
   www.sente.lol ──TLS──┘    ├─ /srv/site     ├── env_file /opt/sente/api.env   0600 root
@@ -38,10 +42,12 @@ certificate for `sente.lol` in a named Docker volume. Do not rebuild it: losing
   `/perpl/{api,ws}/*` proxies Perpl testnet for the web build, which Perpl
   refuses as a browser origin (SEN-175, [`web.md`](web.md#perpl-through-sentes-proxy-sen-175)).
 - **`/var/lib/sente/state`** — `STATE_DIR` (SEN-48). A host directory, bind
-  mounted, owned by uid 1000. It holds the user-wallet registry and the agent
-  store. Losing it is not "register again": the next `POST /wallet/register`
-  mints a **second** Privy wallet and whatever the first one holds becomes
-  unreachable from the product.
+  mounted, owned by uid 1000. It holds every persistent store — since
+  2026-10-13 as one SQLite database, `sente.db`, plus its `backups/`
+  (`STORE_BACKEND=sqlite`, SEN-205, [`state.md`](state.md)); before that, and
+  still under `STORE_BACKEND=file`, one JSON file per store. Losing it is not
+  "register again": the next `POST /wallet/register` mints a **second** Privy
+  wallet and whatever the first one holds becomes unreachable from the product.
 - **`/opt/sente/api.env`** — the secrets, 0600 root:root, delivered by
   `infra/push-secrets.sh`. Never committed, never in an image layer, never a
   build arg.
@@ -85,7 +91,8 @@ Three ways a secret gets out that this setup closes by shape, not by discipline:
 ## Deploying, in order
 
 Every step is a command you run; nothing is implicit. `PROJECT` is the GCP
-project id, `ZONE` defaults to `us-central1-a`.
+project id (`plenary-anvil-491607-s6`), `ZONE` defaults to `europe-southwest1-a`
+and `NAME` to `sente-eu`.
 
 ### 0. Prerequisites, once
 
@@ -100,18 +107,18 @@ project id, `ZONE` defaults to `us-central1-a`.
 
 ### 1. DNS — before anything touches Caddy
 
-At the registrar for `sente.lol`, add the API's name pointing at the box's
-external IP — the same IP `@` and `www` already use, which as of 2026-09-24 is
-**35.202.26.61** (resolved publicly; `gcloud` could not be reached to confirm it
-against the instance, so check it rather than trust this line):
+At the registrar for `sente.lol`, the API's name points at the box's external
+IP — the same IP `@` and `www` use. Since the move to `sente-eu` on 2026-10-09
+that is **34.175.150.91** (before it, `sente-web`'s 35.202.26.61); a box move
+means changing all three records:
 
 ```
-A   api   35.202.26.61
+A   api   34.175.150.91
 ```
 
 ```bash
 # Authoritative: ask the instance.
-gcloud compute instances describe sente-web --project "$PROJECT" --zone "$ZONE" \
+gcloud compute instances describe sente-eu --project "$PROJECT" --zone "$ZONE" \
   --format='value(networkInterfaces[0].accessConfigs[0].natIP)'
 
 # Then wait for the record. This machine has no `dig`, hence the second form —
@@ -119,9 +126,6 @@ gcloud compute instances describe sente-web --project "$PROJECT" --zone "$ZONE" 
 dig +short api.sente.lol
 getent ahostsv4 api.sente.lol | awk '{print $1}' | sort -u
 ```
-
-`api.sente.lol` does not resolve today; `sente.lol` and `www.sente.lol` both
-answer 35.202.26.61.
 
 Caddy asks for a certificate for `api.sente.lol` the moment it loads the new
 Caddyfile, and ACME validates over the public name. A name that does not reach
@@ -206,7 +210,7 @@ stops there has still replaced the containers; re-run the checks alone with
 If the API comes up unhealthy, its boot log says which variable it refused:
 
 ```bash
-gcloud compute ssh sente-web --project "$PROJECT" --zone "$ZONE" \
+gcloud compute ssh sente-eu --project "$PROJECT" --zone "$ZONE" \
   --command 'sudo docker logs --tail 50 sente-api'
 ```
 
@@ -303,14 +307,15 @@ deposit will ever appear on a Ledger, and `smoke.sh` says so when it sees a 503.
 ### 7. Rolling back
 
 ```bash
-gcloud compute ssh sente-web --project "$PROJECT" --zone "$ZONE" \
+gcloud compute ssh sente-eu --project "$PROJECT" --zone "$ZONE" \
   --command 'sudo docker image ls sente-api'        # the deploy history
 SENTE_API_TAG=<an older sha> PROJECT=… ZONE=… ./deploy.sh
 ```
 
 `SENTE_API_TAG` makes `deploy.sh` skip the build and use an image already on the
-box. `docker image prune -f` in the deploy removes **dangling** images only, so
-every `sente-api:<sha>` stays and the rollback targets survive. If you have
+box. The deploy prunes dangling images and keeps only the running `sente-api`
+tag plus the two newest others (about 1 GB each; the box's disk filled with
+them on 2026-10-09), so a rollback target older than that is gone. If you have
 rolled the Caddyfile or the site back too, check out the older commit first — the
 Caddyfile, `site/` and the web export are copied or built from your working
 tree, not from the image. A rollback that should keep the current web app is
@@ -321,7 +326,7 @@ Four things a rollback does **not** touch, deliberately:
 - **`/var/lib/sente/state`.** A registered wallet and a hired agent survive. Back
   it up before anything risky, because nothing else can reconstruct it:
   ```bash
-  gcloud compute ssh sente-web --project "$PROJECT" --zone "$ZONE" \
+  gcloud compute ssh sente-eu --project "$PROJECT" --zone "$ZONE" \
     --command 'sudo tar czf ~/sente-state-$(date +%F).tgz -C /var/lib/sente state && ls -l ~/sente-state-*.tgz'
   ```
   Lost it anyway? `pnpm --filter @sente/api run privy:recover` finds a user's
@@ -454,10 +459,12 @@ in it trust the internal CA and resolve `sente.lol` to localhost.
 
 Kuru runs two testnet deployments (`docs/kuru.md`): Set D, the one it lists, whose
 USDC only Kuru can mint, and Set C, the previous one, whose faucet still pays.
-`KURU_DEPLOYMENT` (set-d by default) decides which one the API, the policy
+`KURU_DEPLOYMENT` (`set-d` when unset in code; `deploy.sh` refuses to build the
+web app without an explicit value, SEN-203) decides which one the API, the policy
 compiler, the scripts, the drift check and the live check use; the app is built
 with the same `EXPO_PUBLIC_KURU_DEPLOYMENT` and turns manual Kuru trading off when
-`/trade/capabilities` names the other. To move production to Set C:
+`/trade/capabilities` names the other. **Production has traded Set C since
+2026-10-09** (SEN-189); these are the steps that moved it:
 
 ```bash
 # 1. Fund the senders with Set C USDC (10,000 a claim, 12 h cooldown per key).
@@ -663,45 +670,50 @@ open an account and Kuru's minimum notional is 10 USDC, so a judge can hire an
 agent straight away. `GET /wallet` reports it as
 `starterKit: { status: 'none' | 'pending' | 'sent' | 'failed' | 'disabled', ausdTx?, usdcTx? }`.
 
-- **Kuru USDC changed (SEN-185).** The kit sends Kuru's CURRENT USDC
-  (`0xA402…fEF1`), which has no public faucet: the starter wallet holds none until
-  Kuru sends some, and a wallet short of either token sends nothing. Until it is
-  funded, set `STARTER_DRIP_USDC=0` to send the AUSD alone.
+- **Which USDC follows `KURU_DEPLOYMENT`** (SEN-185, SEN-189). The kit sends the
+  active deployment's USDC: on Set C (production) the faucet funds the starter
+  wallet (`pnpm run kuru:faucet -- --key starter`); Set D's USDC (`0xA402…fEF1`)
+  has no public faucet, so there the wallet holds none until Kuru sends some,
+  and a wallet short of either token sends nothing. Until it is funded, set
+  `STARTER_DRIP_USDC=0` to send the AUSD alone.
 - **Its own key.** Boot refuses a `STARTER_DRIP_PRIVATE_KEY` that is also in
   `GAS_DRIP_PRIVATE_KEYS` or is an `ERC8004_*` key: two senders on one key share
   a nonce sequence neither tracks. Unset, the kit is off (`disabled`) and
   registration is unchanged.
-- **Once per user, across redeploys.** `<STATE_DIR>/starter-kits.json` records
-  every kit. It is kicked off on every successful register, never awaited, and
-  the record makes it once: a user the daily cap turned away (`none`) gets it on
-  a later sign-in after 00:00 UTC.
+- **Once per user, across redeploys.** The starter-kit store
+  (`<STATE_DIR>/starter-kits.json`, or the `starter_kits` table under
+  `STORE_BACKEND=sqlite`) records every kit. It is kicked off on every
+  successful register, never awaited, and the record makes it once: a user the
+  daily cap turned away (`none`) gets it on a later sign-in after 00:00 UTC.
+- **Bounded (SEN-204).** `STARTER_DRIP_DAILY_CAP_USERS` (default 20) users a
+  day in all, `STARTER_DRIP_DAILY_CAP_PER_IP` (default 5) per client IP — the
+  IP is read from `X-Forwarded-For` only behind `TRUST_PROXY_HOPS`, and the
+  record keeps a hash of it — and `STARTER_KIT_ENABLED=false` is the kill
+  switch, with the key still set.
 - **No retries.** A short starter wallet fails the kit before anything is sent;
   a reverted or unconfirmed transfer fails it after. A kit a restart caught
   mid-send loads as `failed`. Re-sending is a manual decision: delete the user's
-  record from the file with the API stopped.
+  record from the store with the API stopped.
 - **Funding.** Per user: the two token amounts plus gas at the explicit limits,
   82,000 (AUSD) + 72,000 (USDC). Monad charges the limit, so at ~100 gwei that
-  is about 0.016 MON per user, about 0.8 MON for a full day's cap of 50.
+  is about 0.016 MON per user, about 0.32 MON for a full day's cap of 20.
 
 ## Decisions still open
 
-1. **The per-IP rate limit collapses behind the proxy.** `@Ip()` resolves to
-   Express's `req.ip`, which without `app.set('trust proxy', …)` is the socket's
-   peer — Caddy. So `GAS_DRIP_RATE_LIMIT_MAX` becomes one shared bucket for
-   everyone instead of per caller. It fails **closed**: the per-address and
-   per-user caps in the drip ledger are untouched, so nothing can be drained, but
-   five judges in the same minute would see refusals. The fix is one line in
-   `services/api/src/main.ts` and it is deliberately not in this branch (SEN-51
-   is `infra/`, `docs/` and a Dockerfile). Decide before demo day.
+1. ~~The per-IP rate limit collapses behind the proxy.~~ Decided: `TRUST_PROXY_HOPS`
+   (`services/api/src/main.ts`) sets Express's `trust proxy` to the number of
+   proxies in front of the API — 1 behind Caddy — so `@Ip()` reads the caller
+   rather than Caddy, and the gas drip's per-IP bucket and the starter kit's
+   per-IP cap (SEN-204) count per caller. `0` or unset keeps the socket peer,
+   which fails **closed** (one shared bucket), never open.
 2. **`/opt/sente/api.env` versus Secret Manager.** The file is reviewable in
    full, has one owner and one mode, and needs nothing enabled. Secret Manager
    gives rotation, audit and versioning, and needs an API enabled, a service
    account binding and a fetch-on-boot shim. For one demo box the file is the
    right size of answer; for anything long-lived it is not.
-3. **e2-micro capacity.** 1 GB of RAM, shared vCPU, no swap by default, now
-   running Caddy _and_ Node. It should fit — the API idles around 150–250 MB —
-   but it is unmeasured on this box. Cheap insurance: a 1 GB swap file. Bumping
-   to `e2-small` leaves the free tier.
+3. ~~e2-micro capacity.~~ `sente-eu` is an e2-small (2 GB), outside the free
+   tier; `provision.sh` still defaults to `e2-micro` for a fresh box. The image
+   is still built on the laptop, not on the box.
 4. ~~Where the APK is hosted~~ — decided: `sente.lol/download/sente.apk`, above.
 5. **`AGENT_TICK_SECONDS` on the box.** No longer what makes agents run on their
    own: since SEN-67/SEN-71 each agent carries its own schedule, polled every
@@ -717,7 +729,14 @@ agent straight away. `GET /wallet` reports it as
 
 ## What has and has not run
 
-Written and **verified locally**, 2026-09-24, on this branch:
+**History.** This section is the verification record from before the first
+production deploy (2026-10-09, SEN-51: `sente-api:432cd4e` at
+`https://api.sente.lol`, the web export at `https://sente.lol`, `verify.sh` and
+`smoke.sh` passing from outside). Everything the "NOT RUN" list below names has
+run on the box since, except a real Alchemy delivery and the release APK's
+fingerprint comparison against the served file, which `smoke.sh` now does.
+
+Written and **verified locally**, 2026-09-24, on that branch:
 
 | Verified                                                                                                                                                       | How                                                                                                                                                                                                                  |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -766,8 +785,7 @@ Perpl testnet; `CURL_HOME` holding `insecure` and `resolve` lines for both hosts
 | tight                                                          | `Origin: https://evil.example` 403; `/perpl/` and `/perpl/index.html` 404; `/health` still reaches the API block; apex `assetlinks.json` 200 JSON, `/.well-known/does-not-exist` 404                                   |
 | `verify.sh`'s seven Perpl checks pass, and fail on the mistake | all seven pass; a copy without `header_up Origin` and the `Expose-Headers` line fails exactly the socket check (403) and the `Date` check                                                                              |
 
-**NOT RUN. Nothing has been deployed, and nothing about the live box has
-changed:**
+**NOT RUN as of 2026-09-24 (history; see the note at the top of this section):**
 
 - `provision.sh`, `deploy.sh`, `push-secrets.sh` (outside `DRY_RUN=1`) — never
   executed against `sente-web`. No `gcloud` command that changes state was run,

@@ -65,7 +65,7 @@ Everything runs on Monad testnet; the tokens have no value.
   endpoint lets your own AI client drive one agent under the same checks. Any
   agent can be forked under your own mandate (its prompt only if its owner
   published it), and a Top board ranks agents from an Envio index of Kuru fills
-  (not yet served by a live index, see below).
+  (live, with few trades to rank; see below).
 - **AI credits.** Each user gets their own OpenRouter key with a one-off 10 USD
   free tier; the Credits screen shows what each agent and run spent.
 - **Profiles.** A generated avatar and name per wallet, editable on Account.
@@ -178,8 +178,8 @@ an agent's own wallet) opens the Perpl account, enrolls its keys and is the Kuru
 path; its routes remain until they are removed (SEN-45).
 
 API surface, all of it behind a session bearer token except `/health`, `/auth`,
-`/presets`, `/mcp` (its own per-agent token) and the Alchemy webhook (its own
-signature):
+`/presets`, `/public/agents/:id`, `/mcp` (its own per-agent token) and the
+Alchemy webhook (its own signature):
 
 ```
 POST /auth/challenge · POST /auth/session          sign a nonce, get a token
@@ -195,6 +195,8 @@ GET  /agents/:id/events · /agents/:id/runs         the Agent Ledger and run tra
 POST /agents/:id/mandate/prepare · PATCH .../mandate
 POST /agents/:id/revoke/prepare   · POST .../revoke · POST .../return
 POST /agents/:id/run · PATCH .../schedule · PUT .../watchers · POST .../fork
+POST /agents/:id/archive · POST .../unarchive       a stopped, emptied agent
+GET  /public/agents/:id                            an agent's public page, no session
 GET  /presets · GET /leaderboard · GET /chain/blocks/:n/consensus
 GET  /credits · POST /credits/provision · GET/PATCH /profile · POST /gas/drip
 GET  /creators/me/fees                             what forks of your agents owe you
@@ -420,10 +422,11 @@ under Monad's 10 MON reserve can only send again after ~3 blocks, so every gas d
 goes through a reserve-aware dispatcher. [`docs/monad-testnet-assets.md`](docs/monad-testnet-assets.md),
 [`CLAUDE.md`](CLAUDE.md) gotchas 4 and 12.
 
-**Checks.** On 2026-10-12 root `typecheck` and `test` passed — 3,469 API (two
-jest projects), 1,362 mobile, 191 `@sente/venues`, 76 `@sente/presets`, 143
-`@sente/mandate` — and `check:indexer` runs the Envio indexer's own 29 tests from
-a clean `npm ci`. Passing unit tests say nothing about drift in the live services;
+**Checks.** On 2026-10-13 root `test` passed — 3,887 API, 1,789 mobile, 191
+`@sente/venues`, 78 `@sente/presets`, 143 `@sente/mandate`, counting the tests
+that passed when each package's script ran its suite on Set D and the Set C
+subset again — and `check:indexer` runs the Envio indexer's own 29 tests from a
+clean `npm ci`. Passing unit tests say nothing about drift in the live services;
 that is what `drift:check` and `live-check.sh` are for (above).
 
 ---
@@ -527,8 +530,10 @@ notifications are not claimed.
   agents' own event logs, labelled and unranked.
 - **Some state is still in memory, and there is one writer.** Wallets, agents,
   event logs, run transcripts, watchers, venue keys and the rest persist under
-  `STATE_DIR`; auth challenges and prepared operations do not survive a restart,
-  and only one API process may hold the directory.
+  `STATE_DIR` — in production as one SQLite database, `sente.db`
+  (`STORE_BACKEND=sqlite` since 2026-10-13, [`docs/state.md`](docs/state.md));
+  auth challenges and prepared operations do not survive a restart, and only
+  one API process may hold the directory.
 - **`AGENT_PRECHECK=off` and `AGENT_MANDATE_OWNER=server` are demo switches.** The
   first removes layer 1 so the enclave can be seen refusing alone; the second
   restores the weaker pre-Phase-3 ownership so the scripted demo can act as the

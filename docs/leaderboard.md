@@ -170,20 +170,17 @@ again. `AgentStore` is read through `listActive()` for the same reason.
 
 ## Verification
 
-| Check                                              | Command                                               | State                                                                                                                       |
-| -------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| API typecheck                                      | `mise exec -- pnpm --filter @sente/api run typecheck` | pass                                                                                                                        |
-| API specs (metrics, n < 3, client, service, route) | `mise exec -- pnpm --filter @sente/api run test`      | pass (54 leaderboard, 1450 total, 2026-10-09)                                                                               |
-| Mobile specs (row formatting)                      | `mise exec -- pnpm --filter @sente/mobile run test`   | pass                                                                                                                        |
-| Root typecheck / lint                              | `mise exec -- pnpm run typecheck`, `… run lint`       | pass                                                                                                                        |
-| Live query against a running indexer               | `envio dev` + `curl localhost:3000/leaderboard`       | **not run** — the first Envio deployment hit its event cap before this was tried, and the Kuru-only one is not deployed yet |
+| Check                                              | Command                                               | State                                                                                                                |
+| -------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| API typecheck                                      | `mise exec -- pnpm --filter @sente/api run typecheck` | pass                                                                                                                 |
+| API specs (metrics, n < 3, client, service, route) | `mise exec -- pnpm --filter @sente/api run test`      | pass (2026-10-13)                                                                                                    |
+| Mobile specs (row formatting)                      | `mise exec -- pnpm --filter @sente/mobile run test`   | pass                                                                                                                 |
+| Root typecheck / lint                              | `mise exec -- pnpm run typecheck`, `… run lint`       | pass                                                                                                                 |
+| Live query against the deployed indexer            | `GET /leaderboard` on production (`live-check.sh`)    | pass — the Set C Kuru-only indexer on Envio Cloud answers it after every deploy; on 2026-10-12 it returned live rows |
 
-**What is not proven:** the GraphQL document has been executed only against the
-recording `fetch` in `indexer.spec.ts`. It is written against the generated
-schema (`Account`, `balances`, `_in`, `limit`) — none of which SEN-171 removed —
-but has never been answered by a live Hasura. The first thing to do once the indexer
-is deployed is run it and compare one agent's `n` against the Ledger's own
-fills.
+**What is not proven:** the agent's `n` on the board has not yet been compared
+against the Ledger's own fills for one agent; testnet Kuru volume on Set C is
+small, so the ranked rows are few.
 
 Related: `docs/indexer.md` (the entities and their semantics),
 `docs/agents.md` (the mandate and the venue accounts).

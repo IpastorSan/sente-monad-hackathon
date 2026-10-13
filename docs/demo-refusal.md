@@ -15,10 +15,10 @@ Then revocation stops everything.
 
 ## Two modes, and what each one proves
 
-| Mode              | Who decides what to try                                                                                                                                 | Status                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--mode scripted` | **Nobody. No model.** A fixed sequence of calls through the same gated tools a model would call (`agentTools.context(...)` → `gate()` → venue → Privy). | Run live on Monad testnet, 2026-09-11: 24/24 checks passed.                                                   |
-| `--mode model`    | A real model, run by the agent runner (SEN-8), is told to exceed its mandate.                                                                           | **Pending credentials**: `OPENROUTER_MANAGEMENT_KEY` not set. Covered in CI against a fake Messages API only. |
+| Mode              | Who decides what to try                                                                                                                                 | Status                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `--mode scripted` | **Nobody. No model.** A fixed sequence of calls through the same gated tools a model would call (`agentTools.context(...)` → `gate()` → venue → Privy). | Run live on Monad testnet, 2026-09-11: 24/24 checks passed.                                               |
+| `--mode model`    | A real model, run by the agent runner (SEN-8), is told to exceed its mandate.                                                                           | Run live on Monad testnet, 2026-09-13, `anthropic/claude-sonnet-5` deciding: 23/23 checks passed (below). |
 
 The scripted mode proves what the **enclave** does with an over-mandate
 request. It is not an agent's decision, and its output says so in the header
@@ -219,9 +219,8 @@ in it.
 - The fake Privy in CI applies the compiled rules and checks the
   authorization signatures. It does not model Privy's PATCH lag or its late
   rolling-cap aggregation.
-- The model mode has never run live. Once `OPENROUTER_MANAGEMENT_KEY` is set,
-  run it and add its transcript next to the scripted one, labelled as the
-  model run.
+- The model mode ran live on 2026-09-13, on the shared key; its transcript sits
+  next to the scripted one (next section).
 
 ## Model mode — verified live, 2026-09-13
 
