@@ -814,8 +814,16 @@ export class AgentsService {
     }
   }
 
-  /** Never throws: an unfunded agent is still hired, and says why. */
+  /**
+   * Never throws: an unfunded agent is still hired, and says why.
+   *
+   * No drip with `AGENT_SPONSORED_SENDS` (SEN-212): Privy pays the agent's gas,
+   * and MON sent to it would be stranded — its first sponsored send
+   * EIP-7702-delegates the wallet, and Monad's reserve balance then forbids a
+   * delegated account to move native MON while it holds under 10 MON.
+   */
   private async fundGas(principal: Principal, agent: AgentRecord): Promise<AgentGasFunding> {
+    if (this.sponsoredSends) return { funded: false, reason: 'gas_sponsored' };
     if (!this.gas) return { funded: false, reason: 'gas_drip_unavailable' };
     try {
       const outcome = await this.gas.dripToAgent({

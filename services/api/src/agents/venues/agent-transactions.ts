@@ -189,6 +189,25 @@ export function agentUserOperationClient(
 /** The wait before retrying a sponsored send refused for a stale EIP-7702 nonce. */
 export const SPONSORED_NONCE_RETRY_MS = 4_000;
 
+/**
+ * One transaction the sender put on chain, for the logs (SEN-212): which path
+ * it took and how long each half took. `signed_after_refusal` is a sponsored
+ * send the policy refused and the sign path then carried, paid in the agent's
+ * own MON — an agent whose policy predates `AGENT_SPONSORED_SENDS`.
+ */
+export interface AgentSendReport {
+  readonly walletId: string;
+  readonly to: Address;
+  readonly via: 'sponsored' | 'signed' | 'signed_after_refusal';
+  readonly transactionHash: Hex;
+  readonly userOpHash?: Hex;
+  readonly success: boolean;
+  /** From the first request to Privy until it answered (sponsored) or the broadcast returned. */
+  readonly submitMs: number;
+  /** From that answer until the outcome was read off the chain. */
+  readonly confirmMs: number;
+}
+
 export interface AgentTransactionSenderOptions {
   readonly wallets: AgentWalletProvider;
   readonly chain: AgentChainClient;
@@ -201,6 +220,14 @@ export interface AgentTransactionSenderOptions {
   readonly sponsored?: AgentUserOperationClient;
   /** Defaults to {@link SPONSORED_NONCE_RETRY_MS}. */
   readonly sponsoredRetryMs?: number;
+  /** Told about every transaction that reached the chain, after its outcome is known. */
+  readonly onSent?: (report: AgentSendReport) => void;
+}
+
+/** When one send started, and when it was handed over (0 until it is). */
+interface SendTiming {
+  readonly startedAt: number;
+  submittedAt: number;
 }
 
 export class AgentTransactionSender {
@@ -209,6 +236,7 @@ export class AgentTransactionSender {
   readonly #chainId: number;
   readonly #sponsored: AgentUserOperationClient | undefined;
   readonly #sponsoredRetryMs: number;
+  readonly #onSent: ((report: AgentSendReport) => void) | undefined;
   /** The tail of each wallet's queue. */
   readonly #tails = new Map<string, Promise<unknown>>();
   /**
@@ -224,11 +252,23 @@ export class AgentTransactionSender {
     this.#chainId = options.chainId ?? AGENT_CHAIN_ID;
     this.#sponsored = options.wallets.sendSponsoredTransaction ? options.sponsored : undefined;
     this.#sponsoredRetryMs = options.sponsoredRetryMs ?? SPONSORED_NONCE_RETRY_MS;
+    this.#onSent = options.onSent;
   }
 
   /** Whether transactions go out Privy-sponsored (SEN-211). */
   get sponsored(): boolean {
     return this.#sponsored !== undefined;
+  }
+
+  /**
+   * Whether Privy pays this agent's gas (SEN-212): sends are sponsored AND its
+   * live policy carries the sponsored twins. Then the agent's MON decides
+   * nothing, and a MON gate in front of a send would refuse what Privy would
+   * have paid for. An agent whose policy predates the flag falls back to
+   * signing, paid in its own MON, so its gate stays.
+   */
+  sponsorsGasFor(agent: { readonly sponsoredSends?: boolean }): boolean {
+    return this.sponsored && agent.sponsoredSends === true;
   }
 
   /**
@@ -264,11 +304,43 @@ export class AgentTransactionSender {
   }
 
   async #sendOne(wallet: AgentWalletRef, tx: AgentTransaction): Promise<AgentReceipt> {
+    const timing = { startedAt: Date.now(), submittedAt: 0 };
+    let via: AgentSendReport['via'] = 'signed';
+    let receipt: AgentReceipt | null = null;
     if (this.#sponsored) {
-      const receipt = await this.#sendSponsored(wallet, tx, this.#sponsored);
-      if (receipt) return receipt;
+      receipt = await this.#sendSponsored(wallet, tx, this.#sponsored, timing);
+      via = receipt ? 'sponsored' : 'signed_after_refusal';
     }
-    return this.#signAndBroadcast(wallet, tx);
+    // A fallback skipped the up-front gas gate (sponsored lists are not gated),
+    // so its one leg is gated between the enclave's yes and the broadcast.
+    receipt ??= await this.#signAndBroadcast(wallet, tx, timing, via === 'signed_after_refusal');
+    this.#report(wallet, tx, via, receipt, timing);
+    return receipt;
+  }
+
+  #report(
+    wallet: AgentWalletRef,
+    tx: AgentTransaction,
+    via: AgentSendReport['via'],
+    receipt: AgentReceipt,
+    timing: SendTiming,
+  ): void {
+    if (!this.#onSent) return;
+    const submittedAt = timing.submittedAt || timing.startedAt;
+    try {
+      this.#onSent({
+        walletId: wallet.walletId,
+        to: tx.to,
+        via,
+        transactionHash: receipt.transactionHash,
+        ...(receipt.userOpHash ? { userOpHash: receipt.userOpHash } : {}),
+        success: receipt.success,
+        submitMs: submittedAt - timing.startedAt,
+        confirmMs: Date.now() - submittedAt,
+      });
+    } catch {
+      // A report is for the logs; it never fails a transaction that landed.
+    }
   }
 
   /**
@@ -279,6 +351,7 @@ export class AgentTransactionSender {
     wallet: AgentWalletRef,
     tx: AgentTransaction,
     userOps: AgentUserOperationClient,
+    timing: SendTiming,
   ): Promise<AgentReceipt | null> {
     const send = this.#wallets.sendSponsoredTransaction!.bind(this.#wallets);
     const call = {
@@ -299,6 +372,7 @@ export class AgentTransactionSender {
       if (error instanceof EnclaveRefusedError) return null;
       throw error;
     }
+    timing.submittedAt = Date.now();
     if (!sent.userOpHash) {
       // Privy broadcast a plain transaction instead of bundling one: follow it.
       if (sent.transactionHash) return this.#chain.waitForReceipt(sent.transactionHash);
@@ -321,7 +395,12 @@ export class AgentTransactionSender {
     };
   }
 
-  async #signAndBroadcast(wallet: AgentWalletRef, tx: AgentTransaction): Promise<AgentReceipt> {
+  async #signAndBroadcast(
+    wallet: AgentWalletRef,
+    tx: AgentTransaction,
+    timing: SendTiming,
+    gateGas = false,
+  ): Promise<AgentReceipt> {
     const [pending, fees] = await Promise.all([
       this.#chain.pendingNonce(wallet.address),
       this.#chain.fees(),
@@ -344,7 +423,11 @@ export class AgentTransactionSender {
 
     // A refusal throws here, before anything reaches the chain.
     const signed = await this.#wallets.signTransaction(wallet.walletId, request);
+    // After the sign, so a call the mandate forbids is still reported as that,
+    // not as a gas shortfall; a signature that is never broadcast costs nothing.
+    if (gateGas) await this.#gasGate(wallet, [tx]);
     const hash = await this.#chain.sendRawTransaction(signed);
+    timing.submittedAt = Date.now();
     this.#lastNonce.set(wallet.walletId, nonce);
     return this.#chain.waitForReceipt(hash);
   }

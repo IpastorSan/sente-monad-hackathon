@@ -1,3 +1,4 @@
+import { NATIVE_TOKEN } from '@sente/venues/kuru';
 import { PerplNoPositionError } from '@sente/venues/perpl';
 import { InvalidInputRpcError, RpcRequestError } from 'viem';
 
@@ -26,6 +27,7 @@ async function harness(
     agent?: Partial<AgentRecord>;
     marketData?: ToolMarketData;
     sellMaxBelowMarkPct?: number;
+    sponsorsGas?: (agent: AgentRecord) => boolean;
   } = {},
 ) {
   const store = new InMemoryAgentStore();
@@ -44,6 +46,7 @@ async function harness(
     ...(options.sellMaxBelowMarkPct !== undefined
       ? { sellMaxBelowMarkPct: options.sellMaxBelowMarkPct }
       : {}),
+    ...(options.sponsorsGas ? { sponsorsGas: options.sponsorsGas } : {}),
   });
   const ctx = tools.context(agent, { runId: 'run-1' });
   const call = (name: string, args: unknown, context: ToolContext = ctx) =>
@@ -1050,6 +1053,51 @@ describe('gate', () => {
     );
     expect(uncapped.refusal?.code).toBe('market_not_allowed');
     expect(h.kuru.writes()).toHaveLength(1);
+  });
+
+  describe('a native-MON deposit by an agent Privy sponsors (SEN-212)', () => {
+    // MON-USDC with a MON deposit cap as well as the USDC one.
+    const withMonCap = (): Partial<AgentRecord> => {
+      const base = testAgent();
+      return {
+        mandate: {
+          ...base.mandate,
+          kuru: {
+            ...base.mandate.kuru,
+            maxDepositAtoms: { ...base.mandate.kuru.maxDepositAtoms, [NATIVE_TOKEN]: 10n ** 18n },
+          },
+        },
+      };
+    };
+
+    it.each([true, false])(
+      'is refused as native_mon_reserve, precheck %s, and signs nothing',
+      async (precheck) => {
+        const h = await harness({ precheck, agent: withMonCap(), sponsorsGas: () => true });
+        await h.thesis();
+
+        const outcome = refused(
+          await h.call('deposit', { market: MON_USDC, asset: 'MON', amount: '0.5' }),
+        );
+        expect(outcome.refusal).toEqual({ layer: 'sente', code: 'native_mon_reserve' });
+        expect(outcome.message).toContain('10 MON reserve');
+        expect(h.kuru.writes()).toEqual([]);
+      },
+    );
+
+    it('leaves ERC-20 deposits alone, and native MON to an agent that pays its own gas', async () => {
+      const sponsored = await harness({ agent: withMonCap(), sponsorsGas: () => true });
+      await sponsored.thesis();
+      expect(
+        (await sponsored.call('deposit', { market: MON_USDC, asset: 'USDC', amount: '25' })).ok,
+      ).toBe(true);
+
+      const unsponsored = await harness({ agent: withMonCap(), sponsorsGas: () => false });
+      await unsponsored.thesis();
+      expect(
+        (await unsponsored.call('deposit', { market: MON_USDC, asset: 'MON', amount: '0.5' })).ok,
+      ).toBe(true);
+    });
   });
 
   describe('a Kuru deposit before the pinning amend (SEN-188)', () => {

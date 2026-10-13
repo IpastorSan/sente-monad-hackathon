@@ -252,6 +252,24 @@ describe('AgentPerplOnboarder — gas', () => {
     ]);
   });
 
+  it('leaves gas to the sender when Privy sponsors the agent (SEN-212)', async () => {
+    // Gated: 0 MON stops the opening at the onboarder's own check.
+    const gated = await perplOnboardingWorld({ ausd: 100, mon: 0 });
+    expect((await gated.onboarder.ensure(gated.agent, 'fund')).state).toBe('needs_gas');
+
+    // Sponsored: the onboarder hands the legs on. This world's sender is NOT
+    // sponsored, so it is the sender's own gate that answers — proof that the
+    // onboarder no longer refuses what a sponsored sender would have paid for.
+    const sponsored = await perplOnboardingWorld({
+      ausd: 100,
+      mon: 0,
+      onboarder: { sponsorsGas: () => true },
+    });
+    const status = await sponsored.onboarder.ensure(sponsored.agent, 'fund');
+    expect(status.state).toBe('failed');
+    expect((status as { message: string }).message).toContain('Nothing was signed');
+  });
+
   it('the same shortfall twice is one Ledger row, not one per retry', async () => {
     const w = await perplOnboardingWorld({ ausd: 100, mon: 0.01, onboarder: { retryMs: 0 } });
     await w.onboarder.ensure(w.agent, 'fund');

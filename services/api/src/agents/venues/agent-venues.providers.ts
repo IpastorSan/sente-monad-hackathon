@@ -87,10 +87,18 @@ export const agentVenuesProviders: Provider[] = [
       new Logger('AgentsConfig').log(
         `agents: transactions ${sponsored ? 'Privy-sponsored (AGENT_SPONSORED_SENDS)' : 'signed and broadcast, agent pays gas'}`,
       );
+      const logger = new Logger('AgentTransactions');
       return new AgentTransactionSender({
         wallets,
         chain: agentChainClient(client),
         ...(sponsored ? { sponsored: agentUserOperationClient(client) } : {}),
+        // SEN-212: which path each transaction took, and how long it took.
+        onSent: (sent) =>
+          logger.log(
+            `${sent.via} ${sent.success ? 'ok' : 'FAILED'} wallet ${sent.walletId} to ${sent.to}: ` +
+              `tx ${sent.transactionHash}${sent.userOpHash ? ` userOp ${sent.userOpHash}` : ''}, ` +
+              `submit ${sent.submitMs} ms, confirm ${sent.confirmMs} ms`,
+          ),
       });
     },
   },
@@ -129,6 +137,7 @@ export const agentVenuesProviders: Provider[] = [
       AGENT_PERPL_CONTEXT,
       WriteSpacer,
       AgentTools,
+      AgentTransactionSender,
     ],
     useFactory: (
       accounts: PerplAgentAccounts,
@@ -139,6 +148,7 @@ export const agentVenuesProviders: Provider[] = [
       context: PerplContextSource,
       spacer: WriteSpacer,
       tools: AgentTools,
+      sender: AgentTransactionSender,
     ) =>
       new AgentPerplOnboarder({
         accounts,
@@ -151,6 +161,8 @@ export const agentVenuesProviders: Provider[] = [
         // outside, the per-agent write lock inside (runner/write-spacing.ts).
         exclusive: (agentId, task) => spacer.run(agentId, () => tools.writeLock.run(agentId, task)),
         logger: new Logger('PerplOnboarding'),
+        // SEN-212: a sponsored agent opens its Perpl account with no MON.
+        sponsorsGas: (agent) => sender.sponsorsGasFor(agent),
       }),
   },
   {

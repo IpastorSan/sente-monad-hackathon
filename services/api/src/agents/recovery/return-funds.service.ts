@@ -165,7 +165,7 @@ export interface ReturnVenues {
 }
 
 /** The slice of {@link AgentTransactionSender} this needs. */
-export type ReturnSender = Pick<AgentTransactionSender, 'sendAll'>;
+export type ReturnSender = Pick<AgentTransactionSender, 'sendAll' | 'sponsorsGasFor'>;
 
 /** The slice of {@link AgentsService} this needs: ownership, and nothing else. */
 export type ReturnAgents = Pick<AgentsService, 'get'>;
@@ -385,7 +385,8 @@ export class ReturnFundsService {
    *
    * Monad charges the gas LIMIT (gotcha 4), so the budget is the measured limits
    * of the legs planned, not an estimate of what they will use. Returns the MON
-   * balance it read, which is also the "before" of `monSpent`.
+   * balance it read, which is also the "before" of `monSpent`. An agent whose
+   * gas Privy sponsors (SEN-211) is not gated: its MON pays for nothing here.
    */
   private async gasGate(agent: AgentRecord, plans: AssetPlan[]): Promise<bigint> {
     const gas = plans.reduce(
@@ -396,7 +397,7 @@ export class ReturnFundsService {
       0n,
     );
     const mon = await this.chain.monBalance(agent.address);
-    if (gas === 0n) return mon;
+    if (gas === 0n || this.sender.sponsorsGasFor(agent)) return mon;
     const need = gas * (await this.chain.maxFeePerGas());
     if (mon >= need) return mon;
     throw new AgentRefusedError(

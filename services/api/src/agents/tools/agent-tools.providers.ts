@@ -33,6 +33,7 @@ import {
   type AgentRunnerConfig,
 } from '../runner/runner.config';
 import { AGENT_STORE, type AgentStore } from '../store/agent-store';
+import { AgentTransactionSender } from '../venues/agent-transactions';
 import { AgentVenues } from '../venues/agent-venues';
 import { WatcherService } from '../watchers/watcher.service';
 import { AgentTools } from './context';
@@ -155,6 +156,7 @@ export const agentToolsProviders: Provider[] = [
       WatcherService,
       AGENT_KURU_BUILDER,
       AGENT_RUNNER_CONFIG,
+      AgentTransactionSender,
     ],
     useFactory: (
       store: AgentStore,
@@ -165,6 +167,7 @@ export const agentToolsProviders: Provider[] = [
       watchers: WatcherService,
       kuruBuilder: KuruBuilderConfig | null,
       runner: AgentRunnerConfig,
+      sender: AgentTransactionSender,
     ) =>
       new AgentTools({
         store,
@@ -178,6 +181,8 @@ export const agentToolsProviders: Provider[] = [
         watchers,
         // SEN-200: set_watchers tells the agent when nothing will check them.
         cadenceSeconds: (agent) => cadenceSecondsOf(agent, runner.tickSeconds),
+        // SEN-212: a sponsored agent is refused native-MON deposits up front.
+        sponsorsGas: (agent) => sender.sponsorsGasFor(agent),
         venuesFor: (agent) =>
           venues.forAgent(
             { agentId: agent.id, walletId: agent.walletId, address: agent.address },

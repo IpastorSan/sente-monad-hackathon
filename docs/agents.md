@@ -120,6 +120,20 @@ credits pay and the agent needs no MON for a contract call. Measured live in
   Kernel (`0xd6ce…5b28`). Privy does it without consulting the wallet's
   policy. The address does not change, `eth_signTransaction` still works
   afterwards, and typed-data signatures still `ecrecover` (gotcha 9).
+- **No MON at all (SEN-212).** `AgentTransactionSender.sponsorsGasFor(agent)`
+  — sponsored sends on AND the agent's live policy has the twins — turns off
+  every MON gate in front of a send: the list gate, the Perpl onboarder's
+  (`needs_gas`) and the return's (`return_gas_insufficient`). Such an agent is
+  hired with no drip (`gasFunding.reason: "gas_sponsored"`), and the `deposit`
+  tool refuses native MON as `native_mon_reserve`: a delegated wallet under
+  10 MON cannot move native MON (gotcha 12), so a signed MON deposit reverts
+  and a sponsored one is dropped by the bundler. A fallback leg the agent's MON
+  cannot pay for is refused as `InsufficientGasError` after the enclave signs
+  and before anything is broadcast.
+- **Logs.** Every agent transaction logs its path (`sponsored`, `signed`,
+  `signed_after_refusal`), user operation, bundle and timings under
+  `AgentTransactions`. The whole lifecycle, measured live with an agent holding
+  0 MON, is run 5 in `docs/privy-sponsorship.md`.
 
 ### Perpl credentials
 
@@ -178,9 +192,8 @@ drip** (SEN-14): every hire sends the new wallet `GAS_DRIP_AGENT_AMOUNT_MON`
 through the reserve-aware dispatcher (CLAUDE.md gotcha 12). It was sized from
 this live check, whose one pass cost the agent 0.138 MON (below), and the
 SEN-18/19 run below confirms one run of that shape costs about 0.10 MON.
-With `AGENT_SPONSORED_SENDS=1` the drip is still sent: it is what the sign-path
-fallback pays with, and the native-MON Kuru deposit spends the agent's own MON
-either way.
+With `AGENT_SPONSORED_SENDS=1` no drip is sent (SEN-212): Privy pays, and MON
+in a delegated agent's wallet could never leave it.
 
 For development, `pnpm --filter @sente/api run agent:fund -- --to <addr>
 --mon … --ausd … --usdc …` funds an agent from `TREASURY_PRIVATE_KEY`:

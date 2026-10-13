@@ -472,7 +472,11 @@ Every gas drip, the user `drip()` (SEN-16) and the agent drips (SEN-14) alike, g
 
 Monad's `eth_call` accepts a single below-reserve transfer; whether it flags the second one inside
 the window is unmeasured. EIP-7702-delegated EOAs get no exception at all: their balance cannot
-drop below 10 MON.
+drop below 10 MON. Measured in SEN-212 on a Privy-delegated agent holding 0.13 MON: a signed native
+deposit reverted with `reserve balance violation` (gas still charged), and the same call sent
+sponsored was accepted by Privy and then silently dropped by the bundler. So a delegated wallet
+under 10 MON can never move native MON. Sending MON TO one needs more than 21,000 gas (22,707
+estimated): the delegate's code runs on receive, and 21,000 reverts out of gas.
 
 **Do not blame this rule for a refused second sponsored send.** SEN-42 measured the one that looks
 like it and is not: a Privy-sponsored send fired 1 ms after the previous one is refused with

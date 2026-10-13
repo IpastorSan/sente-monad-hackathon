@@ -81,6 +81,13 @@ export interface ToolContext {
    * only by hand (SEN-200). Absent: unknown, and the tools say nothing of it.
    */
   readonly cadenceSeconds?: CadenceOf;
+  /**
+   * Whether Privy pays this agent's gas (SEN-212,
+   * `AgentTransactionSender.sponsorsGasFor`). Such an agent's wallet is
+   * EIP-7702-delegated, and Monad's reserve balance then forbids it from
+   * moving native MON below 10 MON. Absent: never.
+   */
+  readonly sponsorsGas?: (agent: AgentRecord) => boolean;
 }
 
 /** The agent's cadence in seconds, or null for manual-only: the scheduler's `cadenceOf`. */
@@ -99,6 +106,7 @@ export interface AgentToolsOptions {
   readonly marketData?: ToolMarketData;
   readonly watchers?: ToolWatchers;
   readonly cadenceSeconds?: CadenceOf;
+  readonly sponsorsGas?: (agent: AgentRecord) => boolean;
 }
 
 /**
@@ -136,6 +144,7 @@ export class AgentTools {
       marketData,
       watchers,
       cadenceSeconds,
+      sponsorsGas,
     } = this.#options;
     return {
       agent,
@@ -151,6 +160,7 @@ export class AgentTools {
       ...(marketData ? { marketData } : {}),
       ...(watchers ? { watchers } : {}),
       ...(cadenceSeconds ? { cadenceSeconds } : {}),
+      ...(sponsorsGas ? { sponsorsGas } : {}),
     };
   }
 }

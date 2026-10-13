@@ -17,7 +17,11 @@ export type AgentStatus = (typeof AGENT_STATUSES)[number];
  * still in progress).
  */
 export type AgentGasFundingReason =
-  AgentDripRefusalReason | 'gas_drip_unavailable' | 'drip_pending';
+  | AgentDripRefusalReason
+  | 'gas_drip_unavailable'
+  | 'drip_pending'
+  /** SEN-212: hired with `AGENT_SPONSORED_SENDS`; Privy pays its gas, so no MON is sent. */
+  | 'gas_sponsored';
 
 /**
  * The agent's mandate as last anchored on chain (SEN-194): the hashes written
