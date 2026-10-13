@@ -44,6 +44,7 @@ import {
   type PriceBook,
   type Valuation,
 } from './valuation';
+import { redactError } from '../../common/redact-error';
 import type { HistoryRange, ValueHistoryDto } from './value-history.dto';
 import type { HistoryKind, ValueHistoryStore } from './value-history.store';
 
@@ -163,7 +164,7 @@ export class ValueHistoryService {
   tick(): Promise<TickResult> {
     this.#ticking ??= this.#tick()
       .catch((error: unknown) => {
-        this.#logger.error(`value history tick failed: ${String(error)}`);
+        this.#logger.error(`value history tick failed: ${redactError(error)}`);
         return { users: 0, agents: 0 };
       })
       .finally(() => {
@@ -197,7 +198,7 @@ export class ValueHistoryService {
           .agentPortfolio(agent)
           .then(agentValuation)
           .catch((error: unknown) => {
-            this.#logger.warn(`agent ${agent.id}: portfolio read failed: ${String(error)}`);
+            this.#logger.warn(`agent ${agent.id}: portfolio read failed: ${redactError(error)}`);
             return null;
           });
         agentValues.set(agent.id, value);
@@ -230,7 +231,7 @@ export class ValueHistoryService {
         } catch (error) {
           // No wallet registered: nothing to value, and nothing to retry each tick.
           if (error instanceof WalletRefusedError) this.#tracked.delete(userId);
-          else this.#logger.warn(`user ${userId}: portfolio read failed: ${String(error)}`);
+          else this.#logger.warn(`user ${userId}: portfolio read failed: ${redactError(error)}`);
           continue;
         }
         prices ??= this.#readers.kuruTickers().then(priceBook, () => null);

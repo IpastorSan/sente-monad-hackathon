@@ -209,7 +209,9 @@ export function loadStarterKitConfig(env: Env = process.env): StarterKitConfig {
 /** Boot-time summary, logged once. Never logs the key; the sender address is logged by the module. */
 export function describeStarterKitConfig(config: StarterKitConfig, logger: Logger): void {
   if (!config.enabled) {
-    logger.log('the starter kit is off (STARTER_DRIP_PRIVATE_KEY unset, or STARTER_KIT_ENABLED=false)');
+    logger.log(
+      'the starter kit is off (STARTER_DRIP_PRIVATE_KEY unset, or STARTER_KIT_ENABLED=false)',
+    );
     return;
   }
   const kit = config.tokens

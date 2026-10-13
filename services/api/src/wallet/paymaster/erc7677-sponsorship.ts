@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { createClient, http, hexToBigInt, numberToHex, type Address, type Hex } from 'viem';
 import { monadTestnet } from 'viem/chains';
 
+import { redactError } from '../../common/redact-error';
 import { ENTRY_POINT } from '../bundler/pimlico-bundler';
 import {
   SponsorshipUnavailableError,
@@ -70,7 +71,7 @@ export class Erc7677Sponsorship implements Sponsorship {
         ],
       });
     } catch (error) {
-      throw new SponsorshipUnavailableError(this.name, `${method} failed: ${describe(error)}`);
+      throw new SponsorshipUnavailableError(this.name, `${method} failed: ${redactError(error)}`);
     }
 
     if (!response.paymaster || !response.paymasterData) {
@@ -142,8 +143,4 @@ function toWire(userOperation: PartialUserOperation): Record<string, unknown> {
     wire.factoryData = userOperation.factoryData;
   }
   return wire;
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

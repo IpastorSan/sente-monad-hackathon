@@ -114,7 +114,9 @@ export function maxAgentsPerUser(env: NodeJS.ProcessEnv = process.env): number {
   if (!raw) return DEFAULT_MAX_AGENTS_PER_USER;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`AGENTS_MAX_PER_USER must be a positive integer (unset means ${DEFAULT_MAX_AGENTS_PER_USER})`);
+    throw new Error(
+      `AGENTS_MAX_PER_USER must be a positive integer (unset means ${DEFAULT_MAX_AGENTS_PER_USER})`,
+    );
   }
   return value;
 }

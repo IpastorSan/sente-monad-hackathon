@@ -35,6 +35,7 @@ import type { Address } from 'viem';
 
 import type { AgentEventLog } from '../events/agent-event-log';
 import { recordVerdictFor } from '../events/settle-fill';
+import { redactError } from '../../common/redact-error';
 import type { AgentRecord, AgentStore } from '../store/agent-store';
 import type { KeyedMutex } from '../tools/keyed-mutex';
 import { laterFillEvent, restingKuruOrders, tradeKeyOf, type RestingOrder } from './resting-orders';
@@ -187,7 +188,7 @@ export class RestingFillWatcher {
   poll(): Promise<RestingFillPoll> {
     this.#polling ??= this.#poll()
       .catch((error: unknown) => {
-        this.#logger.error(`poll failed: ${String(error)}`);
+        this.#logger.error(`poll failed: ${redactError(error)}`);
         return { watched: 0, recorded: 0 };
       })
       .finally(() => {
@@ -273,7 +274,9 @@ export class RestingFillWatcher {
         fills = await this.#options.source.makerFills(symbol, start, end);
       } catch (error) {
         // Stop here and keep what was read: the next poll resumes at `start`.
-        this.#logger.warn(`${symbol}: could not read blocks ${start}..${end}: ${String(error)}`);
+        this.#logger.warn(
+          `${symbol}: could not read blocks ${start}..${end}: ${redactError(error)}`,
+        );
         break;
       }
       for (const fill of fills) {
@@ -315,7 +318,9 @@ export class RestingFillWatcher {
     } catch (error) {
       // Nothing is lost: an unrecorded fill is read again from the cursor
       // kept by its last recorded fill after a restart, and skipped by its key.
-      this.#logger.error(`could not record later fills for agent ${agentId}: ${String(error)}`);
+      this.#logger.error(
+        `could not record later fills for agent ${agentId}: ${redactError(error)}`,
+      );
     }
     return recorded;
   }
@@ -353,7 +358,7 @@ export class RestingFillWatcher {
       if (id !== 0n) this.#accounts.set(key, id);
       return id;
     } catch (error) {
-      this.#logger.warn(`could not read ${agent.id}'s Kuru account id: ${String(error)}`);
+      this.#logger.warn(`could not read ${agent.id}'s Kuru account id: ${redactError(error)}`);
       return 0n;
     }
   }

@@ -99,6 +99,7 @@ import {
 } from './perpl-planner';
 import { fundsAfter, TradeOutcomes } from './outcome';
 import { StepExecutor } from './step-executor';
+import { redactError } from '../common/redact-error';
 import { TRADE_CONFIG, type TradeConfig } from './trade.config';
 import { TradeStore, type StepStatus, type Trade, type TradeStep } from './trade-store';
 import { USER_VENUE_SECRETS, type UserVenueSecretStore } from './user-venue-secrets';
@@ -319,7 +320,7 @@ export class TradeService {
     // The executor records every outcome itself and rejects only on the count
     // checked above, so this catch is for the unforeseen.
     this.executor.execute(claimed, signatures).catch((error: unknown) => {
-      this.logger.error(`trade ${tradeId}: the executor failed: ${describe(error)}`);
+      this.logger.error(`trade ${tradeId}: the executor failed: ${redactError(error)}`);
     });
     return toView(this.store.get(principal.userId, tradeId) ?? claimed);
   }
@@ -406,7 +407,7 @@ export class TradeService {
         // As in the executor's hook: the step landed either way.
         this.logger.error(
           `trade ${trade.id} step ${step.index} settled ${step.status}, but reading its ` +
-            `outcome failed: ${describe(error)}`,
+            `outcome failed: ${redactError(error)}`,
         );
       }
     }
@@ -435,7 +436,7 @@ export class TradeService {
     const { error: _stale, ...rest } = step;
     if (step.userOpHash) {
       const receipt = await this.bundler.receipt(step.userOpHash).catch((error: unknown) => {
-        this.logger.debug(`reconcile ${step.userOpHash}: ${describe(error)}`);
+        this.logger.debug(`reconcile ${step.userOpHash}: ${redactError(error)}`);
         return null;
       });
       if (!receipt) return undefined;
@@ -455,7 +456,7 @@ export class TradeService {
       // A plain broadcast, not a user operation: its own receipt decides.
       const hash = step.transactionHash;
       const receipt = await this.client.getTransactionReceipt({ hash }).catch((error: unknown) => {
-        this.logger.debug(`reconcile tx ${hash}: ${describe(error)}`);
+        this.logger.debug(`reconcile tx ${hash}: ${redactError(error)}`);
         return null;
       });
       if (!receipt) return undefined;
@@ -654,8 +655,4 @@ function notFound(tradeId: string): TradeRefusedError {
 
 function expired(tradeId: string): TradeRefusedError {
   return new TradeRefusedError('trade_expired', `Trade ${tradeId} expired; prepare it again`);
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
