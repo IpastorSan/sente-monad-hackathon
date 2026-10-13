@@ -330,6 +330,55 @@ describe('AgentsService', () => {
     });
   });
 
+  describe('rollingCap, which nothing enforces (SEN-204)', () => {
+    const CAP = { windowSeconds: 3600, capAtoms: '2000000000', token: USDC };
+
+    it('refuses a hire or a fork that sets one, before any Privy call', async () => {
+      const { service, wallets } = setup();
+      const hire = await refusal(
+        service.hire(ALICE, hireInput({ mandate: mandateInput({ rollingCap: CAP }) })),
+      );
+      expect(hire.reason).toBe('mandate_invalid');
+      expect(hire.message).toMatch(/rollingCap is not enforced/);
+
+      const { agent } = await service.hire(ALICE, hireInput({ public: true }));
+      const fork = await refusal(
+        service.fork(BOB, agent.id, { mandate: mandateInput({ rollingCap: CAP }) }),
+      );
+      expect(fork.reason).toBe('mandate_invalid');
+      expect(wallets.provisioned).toHaveLength(1);
+    });
+
+    it('still amends an older agent that carries one unchanged, and refuses a changed one', async () => {
+      const { service, store } = setup();
+      const { agent } = await service.hire(ALICE, hireInput());
+      // An agent hired before SEN-204, with a cap on its stored mandate.
+      await store.update(agent.id, {
+        mandate: parseMandate({ ...mandateInput(), rollingCap: CAP }),
+      });
+
+      const kept = await service.amendMandate(
+        ALICE,
+        agent.id,
+        mandateInput({ rollingCap: { ...CAP, token: USDC.toLowerCase() } }),
+      );
+      expect(kept.mandate.rollingCap?.capAtoms).toBe(2_000_000_000n);
+
+      const changed = await refusal(
+        service.amendMandate(
+          ALICE,
+          agent.id,
+          mandateInput({ rollingCap: { ...CAP, capAtoms: '9000000000' } }),
+        ),
+      );
+      expect(changed.reason).toBe('mandate_invalid');
+      // Dropping it is always fine.
+      expect((await service.amendMandate(ALICE, agent.id, mandateInput())).mandate.rollingCap).toBe(
+        undefined,
+      );
+    });
+  });
+
   describe('the per-user agent cap (SEN-204)', () => {
     const saved = process.env['AGENTS_MAX_PER_USER'];
     beforeEach(() => {

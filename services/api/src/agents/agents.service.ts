@@ -254,6 +254,33 @@ interface MandateChangeContext {
   kuruBuilder?: AgentRecord['kuruBuilder'];
 }
 
+/**
+ * SEN-204: `rollingCap` parses, but nothing enforces it — no Privy aggregation
+ * is compiled for it (`compileRollingCap` is unused) and the pre-check does not
+ * count it — so a mandate that adds or changes one is refused rather than
+ * stored as a limit the owner would believe in. An amend that carries an
+ * existing agent's cap back unchanged still passes, so an agent hired with one
+ * before this can still be amended.
+ */
+function assertNoNewRollingCap(mandate: Mandate, current: Mandate | undefined): void {
+  const next = mandate.rollingCap;
+  if (!next) return;
+  const kept = current?.rollingCap;
+  if (
+    kept &&
+    kept.windowSeconds === next.windowSeconds &&
+    kept.capAtoms === next.capAtoms &&
+    isAddressEqual(kept.token, next.token)
+  ) {
+    return;
+  }
+  throw new AgentRefusedError(
+    'mandate_invalid',
+    'invalid mandate: rollingCap is not enforced yet (neither the enclave nor the pre-check ' +
+      'counts it), so it is refused rather than stored as a limit; leave it out',
+  );
+}
+
 /** The slice of `GasDripService` hiring needs. */
 export type AgentGasFunder = Pick<GasDripService, 'dripToAgent'>;
 
@@ -913,7 +940,7 @@ export class AgentsService {
           `agent ${id} is revoked; revocation is permanent, so hire a new agent`,
         );
       }
-      const mandate = await this.parseFor(principal, rawMandate);
+      const mandate = await this.parseFor(principal, rawMandate, agent.mandate);
       const { rules, kuruBuilder } = this.compile(mandate, agent.address);
       try {
         await this.wallets.updatePolicy(agent.policyId, rules);
@@ -1027,7 +1054,7 @@ export class AgentsService {
         `agent ${id} is revoked; revocation is permanent, so hire a new agent`,
       );
     }
-    const mandate = await this.parseFor(principal, rawMandate);
+    const mandate = await this.parseFor(principal, rawMandate, agent.mandate);
     // The SAME compiler the one-step path and the hire use: what the owner
     // approves has to be what the enclave would have been given anyway.
     const { rules, kuruBuilder } = this.compile(mandate, agent.address);
@@ -1275,8 +1302,9 @@ export class AgentsService {
    * The comparison is `isAddressEqual`, not string equality: the client's copy
    * came back through JSON and a caller may well have lowercased it.
    */
-  private async parseFor(principal: Principal, raw: unknown): Promise<Mandate> {
+  private async parseFor(principal: Principal, raw: unknown, current?: Mandate): Promise<Mandate> {
     const mandate = this.parse(raw);
+    assertNoNewRollingCap(mandate, current);
     await this.assertPerplCanOpen(mandate);
     const resolved = await this.returnAddressFor(principal);
     if (!resolved) {

@@ -58,7 +58,6 @@ function body(over: Record<string, unknown> = {}): Record<string, unknown> {
       },
       perpl: { maxCollateralAtoms: '500000000', maxLeverage: 5, markets: [] },
       maxOrderNotional: '250',
-      rollingCap: { windowSeconds: 3600, capAtoms: '2000000000', token: USDC },
     },
     ...over,
   };
@@ -124,7 +123,7 @@ describe('AgentsController', () => {
     const wire = JSON.parse(JSON.stringify(hired)) as typeof hired;
     expect(wire.agent.mandate.kuru.maxDepositAtoms[USDC]).toBe('1000000000');
     expect(wire.agent.mandate.perpl.maxCollateralAtoms).toBe('500000000');
-    expect(wire.agent.mandate.rollingCap?.capAtoms).toBe('2000000000');
+    expect(wire.agent.mandate.rollingCap).toBeUndefined();
     expect(parseMandate(wire.agent.mandate)).toEqual(parseMandate(body()['mandate']));
     expect(wire.agent).toMatchObject({
       status: 'active',

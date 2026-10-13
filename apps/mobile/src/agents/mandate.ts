@@ -473,16 +473,9 @@ export function describeMandate(mandate: AgentMandate): MandateLimit[] {
     enforcer: 'sente',
   });
 
-  if (mandate.rollingCap) {
-    const token = tokenFor(mandate.rollingCap.token);
-    const symbol = token?.symbol ?? mandate.rollingCap.token;
-    limits.push({
-      id: 'rollingCap',
-      label: `${symbol} approved per ${Math.round(mandate.rollingCap.windowSeconds / 3600)} h`,
-      value: `${token ? formatAtoms(mandate.rollingCap.capAtoms, token.decimals) : mandate.rollingCap.capAtoms.toString()} ${symbol}`,
-      enforcer: 'enclave',
-    });
-  }
+  // No `rollingCap` row (SEN-204): nothing enforces it — no Privy aggregation is
+  // compiled for it — so labelling it as the enclave's would be a false limit.
+  // The API refuses a new one; an older agent's is simply not listed.
 
   limits.push({
     id: 'expiresAt',
