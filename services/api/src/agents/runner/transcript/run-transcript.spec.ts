@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type { BetaMessage } from '@anthropic-ai/sdk/resources/beta/messages';
 
+import { openedDbs } from '../../../state/db/testing/opened-dbs';
 import { FileRunTranscriptStore } from './file-run-transcript-store';
 import {
   entriesOfTurn,
@@ -16,6 +17,7 @@ import {
   summariseOutcome,
 } from './run-transcript';
 import { InMemoryRunTranscriptStore, TRANSCRIPT_FULL_NOTE } from './run-transcript-store';
+import { SqliteRunTranscriptStore } from './sqlite-run-transcript-store';
 
 const quiet = { warn: () => {}, error: () => {} };
 
@@ -243,16 +245,50 @@ describe('InMemoryRunTranscriptStore', () => {
   });
 });
 
-describe('FileRunTranscriptStore', () => {
+// What a restart keeps, for both persistent stores. `make` opens the store on
+// `dir`; each call after the first is a restart (it closes what came before).
+type Persistent = InMemoryRunTranscriptStore & { size: number };
+const dbs = openedDbs();
+const persistentStores: [string, (dir: string, maxRuns?: number) => Persistent][] = [
+  [
+    'FileRunTranscriptStore',
+    (dir, maxRuns) => {
+      const store = new FileRunTranscriptStore(join(dir, 'agent-runs.jsonl'), {
+        logger: quiet,
+        ...(maxRuns ? { maxRuns } : {}),
+      });
+      fileStores.push(store);
+      return store;
+    },
+  ],
+  [
+    'SqliteRunTranscriptStore',
+    (dir, maxRuns) =>
+      new SqliteRunTranscriptStore(dbs.reopen(dir), {
+        logger: quiet,
+        ...(maxRuns ? { maxRuns } : {}),
+      }),
+  ],
+];
+const fileStores: FileRunTranscriptStore[] = [];
+
+describe.each(persistentStores)('%s across a restart', (_name, open) => {
   let dir: string;
+  const make = (maxRuns?: number) => {
+    for (const store of fileStores.splice(0)) store.close();
+    return open(dir, maxRuns);
+  };
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'sente-runs-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    for (const store of fileStores.splice(0)) store.close();
+    dbs.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   it('reads its runs back after a restart; an open run comes back interrupted', () => {
-    const path = join(dir, 'agent-runs.jsonl');
-    const first = new FileRunTranscriptStore(path, { logger: quiet });
+    const first = make();
     first.start(START);
     first.append('run-1', { kind: 'note', text: 'hello' }, 2_000);
     first.append('run-1', {
@@ -273,9 +309,9 @@ describe('FileRunTranscriptStore', () => {
       outputTokens: 3,
       stopReason: 'tool_use',
     });
-    first.close();
 
-    const second = new FileRunTranscriptStore(path, { logger: quiet });
+    const second = make();
+    expect(second.size).toBe(2);
     expect(second.list('agent-1')).toMatchObject([
       { runId: 'run-2', status: 'interrupted', iterations: 1, inputTokens: 7, lastSeq: 1 },
       { runId: 'run-1', status: 'ended', stopReason: 'end_turn', lastSeq: 2 },
@@ -285,8 +321,72 @@ describe('FileRunTranscriptStore', () => {
       at: 2_000,
       text: 'hello',
     });
-    second.close();
   });
+
+  it('streams a live run from a cursor, and keeps only the last runs per agent', () => {
+    const first = make(2);
+    for (const runId of ['run-a', 'run-b', 'run-c']) {
+      first.start({ ...START, runId });
+      first.append(runId, { kind: 'note', text: `${runId} 1` });
+    }
+    // The agent page polls a running run with the last seq it has seen.
+    first.append('run-c', { kind: 'note', text: 'run-c 2' });
+    expect(first.read('agent-1', 'run-c', 1)!.entries.map((e) => e.seq)).toEqual([2]);
+    expect(first.read('agent-1', 'run-c', 1)!.run.status).toBe('running');
+
+    const second = make(2);
+    expect(second.list('agent-1').map((r) => r.runId)).toEqual(['run-c', 'run-b']);
+    expect(second.read('agent-1', 'run-a')).toBeUndefined();
+    expect(second.read('agent-1', 'run-c', 1)!.entries.map((e) => e.seq)).toEqual([2]);
+    // Appending carries the run's seq on after a restart's read-back.
+    second.start({ ...START, runId: 'run-d' });
+    expect(
+      make(2)
+        .list('agent-1')
+        .map((r) => r.runId),
+    ).toEqual(['run-d', 'run-c']);
+  });
+});
+
+describe('SqliteRunTranscriptStore', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sente-runs-'));
+  });
+  afterEach(() => {
+    dbs.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('deletes an evicted run and its entries from the table', () => {
+    const store = new SqliteRunTranscriptStore(dbs.reopen(dir), { maxRuns: 1, logger: quiet });
+    store.start(START);
+    store.append('run-1', { kind: 'note', text: 'gone' });
+    store.start({ ...START, runId: 'run-2' });
+    const db = dbs.last!;
+    expect(db.prepare('SELECT run_id FROM agent_runs').all()).toEqual([{ run_id: 'run-2' }]);
+    expect(db.prepare('SELECT count(*) AS n FROM agent_run_entries').get()).toEqual({ n: 0 });
+  });
+
+  it('logs a write that fails and carries the run on in memory', () => {
+    const error = jest.fn();
+    const store = new SqliteRunTranscriptStore(dbs.reopen(dir), {
+      logger: { warn: quiet.warn, error },
+    });
+    dbs.closeAll();
+    store.start(START);
+    store.append('run-1', { kind: 'note', text: 'kept in memory' });
+    expect(store.read('agent-1', 'run-1')!.entries).toHaveLength(1);
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/could not write/));
+  });
+});
+
+describe('FileRunTranscriptStore', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sente-runs-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it('compacts evicted runs away at boot and skips a torn line', () => {
     const path = join(dir, 'agent-runs.jsonl');

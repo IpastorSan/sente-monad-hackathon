@@ -9,8 +9,17 @@
 // stripping (CLAUDE.md gotcha 10).
 
 import { migration as m001 } from './001-agents-and-user-wallets.ts';
+import { migration as m003 } from './003-append-logs.ts';
 import type { Migration } from './migration.ts';
 
 export type { Migration } from './migration.ts';
 
-export const MIGRATIONS: readonly Migration[] = [m001];
+/**
+ * MERGE PLACEHOLDER (SEN-205, branch feat/SEN-205-stores-b): id 2 belongs to a
+ * store group converted in parallel. This stand-in only keeps the ids
+ * consecutive on this branch; drop it when that branch's 002 lands. It must
+ * never reach a database that matters.
+ */
+const m002: Migration = { id: 2, name: 'reserved-for-parallel-branch', sql: 'SELECT 1' };
+
+export const MIGRATIONS: readonly Migration[] = [m001, m002, m003];

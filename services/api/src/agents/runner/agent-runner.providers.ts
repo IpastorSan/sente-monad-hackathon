@@ -1,9 +1,8 @@
-import { join } from 'node:path';
-
 import { Logger, type Provider } from '@nestjs/common';
 
 import { CreditsModule } from '../../credits/credits.module';
-import { StateDirLease } from '../../state/state.module';
+import { SenteDbLease } from '../../state/state.module';
+import { selectStore } from '../../state/store-backend';
 import { AgentRunScheduler } from './agent-run.scheduler';
 import { AgentRunnerService } from './agent-runner.service';
 import { ANTHROPIC_CLIENT_FACTORY, defaultAnthropicClientFactory } from './openrouter-client';
@@ -23,6 +22,7 @@ import {
   FileRunTranscriptStore,
   RUN_TRANSCRIPTS_FILE,
 } from './transcript/file-run-transcript-store';
+import { SqliteRunTranscriptStore } from './transcript/sqlite-run-transcript-store';
 import {
   InMemoryRunTranscriptStore,
   RUN_TRANSCRIPTS,
@@ -63,15 +63,16 @@ export const agentRunnerProviders: Provider[] = [
   },
   {
     // SEN-178: the run transcripts behind the agent page's terminal. On disk
-    // under STATE_DIR, opened only once this process holds its lock (SEN-161).
+    // under STATE_DIR (a JSONL file, or `sente.db` under STORE_BACKEND=sqlite,
+    // SEN-205), opened only once this process holds its lock (SEN-161).
     provide: RUN_TRANSCRIPTS,
-    inject: [StateDirLease],
-    useFactory: (lease: StateDirLease): RunTranscriptStore => {
-      if (!lease.dir) return new InMemoryRunTranscriptStore();
-      const store = new FileRunTranscriptStore(join(lease.dir, RUN_TRANSCRIPTS_FILE));
-      Logger.log(`${store.size} run transcript(s) loaded from ${store.path}`, 'RunTranscripts');
-      return store;
-    },
+    inject: [SenteDbLease],
+    useFactory: (lease: SenteDbLease): RunTranscriptStore =>
+      selectStore<RunTranscriptStore>(lease, RUN_TRANSCRIPTS_FILE, 'run transcript(s)', {
+        memory: () => new InMemoryRunTranscriptStore(),
+        file: (path) => new FileRunTranscriptStore(path),
+        sqlite: (db) => new SqliteRunTranscriptStore(db),
+      }),
   },
   AgentRunnerService,
   ScheduleGuard,

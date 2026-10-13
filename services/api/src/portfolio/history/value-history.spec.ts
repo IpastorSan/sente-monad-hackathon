@@ -13,6 +13,7 @@ import type { Trade } from '../../trade/trade-store';
 import type { AgentPortfolioDto, TickerDto } from '../../venues/dto/markets.dto';
 import { WalletRefusedError } from '../../wallet/wallet.errors';
 import type { PortfolioDto } from '../dto/portfolio.dto';
+import { openedDbs } from '../../state/db/testing/opened-dbs';
 import { downsample, MAX_POINTS, RANGE_MS, windowStart } from './downsample';
 import { agentValuation, priceBook, userValuation } from './valuation';
 import { AgentHistoryController, PortfolioHistoryController } from './value-history.controller';
@@ -24,9 +25,11 @@ import {
   ValueHistoryService,
   type ValueHistoryReaders,
 } from './value-history.service';
+import { SqliteValueHistoryStore } from './sqlite-value-history-store';
 import {
   FileValueHistoryStore,
   InMemoryValueHistoryStore,
+  type ValueHistoryStore,
   type ValueSnapshot,
 } from './value-history.store';
 
@@ -242,6 +245,99 @@ describe('the store', () => {
     expect(reopened.list('user', 'alice')[0]?.at).toBe(1_090);
     reopened.close();
     expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(10);
+  });
+});
+
+describe.each<[string, (dir: string, maxPerSubject?: number) => ValueHistoryStore]>([
+  ['InMemoryValueHistoryStore', (_dir, max) => new InMemoryValueHistoryStore(max)],
+  [
+    'FileValueHistoryStore',
+    (dir, max) =>
+      new FileValueHistoryStore(join(dir, 'value-history.jsonl'), {
+        logger: quiet,
+        ...(max ? { maxPerSubject: max } : {}),
+      }),
+  ],
+  [
+    'SqliteValueHistoryStore',
+    (dir, max) =>
+      new SqliteValueHistoryStore(storeDbs.reopen(dir), {
+        logger: quiet,
+        ...(max ? { maxPerSubject: max } : {}),
+      }),
+  ],
+])('%s', (_name, make) => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'value-history-'));
+  });
+  afterEach(() => {
+    storeDbs.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keeps each subject apart, by time, arrival order on a tie', () => {
+    const store = make(dir);
+    store.append('user', 'u', { at: 2, usd: '2' });
+    store.append('user', 'u', { at: 1, usd: '1' });
+    store.append('user', 'u', { at: 2, usd: '2b', partial: true });
+    store.append('user', 'u', { at: 3, usd: '3' });
+    store.append('agent', 'u', { at: 3, usd: '3' });
+    store.append('user', 'v', { at: 9, usd: '9' });
+    expect(store.list('user', 'u')).toEqual([
+      { at: 1, usd: '1' },
+      { at: 2, usd: '2' },
+      { at: 2, usd: '2b', partial: true },
+      { at: 3, usd: '3' },
+    ]);
+    expect(store.last('agent', 'u')?.usd).toBe('3');
+    expect(store.last('agent', 'nobody')).toBeUndefined();
+    expect(store.list('agent', 'nobody')).toEqual([]);
+    expect(store.ids('user')).toEqual(['u', 'v']);
+    expect(store.ids('agent')).toEqual(['u']);
+  });
+
+  it('drops the oldest past the per-subject cap, a late old point included', () => {
+    const store = make(dir, 3);
+    for (let at = 1; at <= 4; at += 1) store.append('user', 'u', { at, usd: String(at) });
+    store.append('user', 'u', { at: 0, usd: 'late' });
+    store.append('user', 'w', { at: 1, usd: '1' });
+    expect(store.list('user', 'u').map((s) => s.at)).toEqual([2, 3, 4]);
+    expect(store.list('user', 'w').map((s) => s.at)).toEqual([1]);
+  });
+});
+
+const storeDbs = openedDbs();
+
+describe('SqliteValueHistoryStore', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'value-history-'));
+  });
+  afterEach(() => {
+    storeDbs.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keeps history across a restart, the partial flag and the cap included', () => {
+    const first = new SqliteValueHistoryStore(storeDbs.reopen(dir), { maxPerSubject: 10 });
+    for (let i = 0; i < 25; i += 1) first.append('user', 'alice', { at: i, usd: String(i) });
+    first.append('agent', 'a-1', { at: 2, usd: '3', partial: true });
+
+    const second = new SqliteValueHistoryStore(storeDbs.reopen(dir), { maxPerSubject: 10 });
+    expect(second.size).toBe(11);
+    expect(second.list('user', 'alice')[0]).toEqual({ at: 15, usd: '15' });
+    expect(second.list('agent', 'a-1')).toEqual([{ at: 2, usd: '3', partial: true }]);
+  });
+
+  it('logs a write that fails rather than failing the tick', () => {
+    const error = jest.fn();
+    const store = new SqliteValueHistoryStore(storeDbs.reopen(dir), {
+      logger: { warn: quiet.warn, error },
+    });
+    storeDbs.closeAll();
+    store.append('user', 'alice', { at: 1, usd: '1' });
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/not written/));
   });
 });
 

@@ -1,5 +1,3 @@
-import { join } from 'node:path';
-
 import { Logger, type Provider } from '@nestjs/common';
 
 import {
@@ -8,7 +6,8 @@ import {
   type KuruBuilderConfig,
 } from '../../fees/kuru-builder.config';
 import { FeesModule } from '../../fees/fees.module';
-import { StateDirLease } from '../../state/state.module';
+import { SenteDbLease } from '../../state/state.module';
+import { selectStore } from '../../state/store-backend';
 import { MarketDataService } from '../../venues/market-data.service';
 import { VenuesModule } from '../../venues/venues.module';
 
@@ -17,6 +16,7 @@ import { CREATOR_FEES, type CreatorFeeLedger } from '../../fees/creator-fees';
 import { AGENT_EVENTS, InMemoryAgentEventLog, type AgentEventLog } from '../events/agent-event-log';
 import { CreatorFeeEventLog } from '../events/creator-fee-event-log';
 import { AGENT_EVENTS_FILE, FileAgentEventLog } from '../events/file-agent-event-log';
+import { SqliteAgentEventLog } from '../events/sqlite-agent-event-log';
 import {
   createErc8004Client,
   describeErc8004Config,
@@ -75,30 +75,27 @@ const erc8004Provider: Provider = {
  * also what publishes it to the Reputation Registry, so the Tool Runner and the
  * MCP server both get it without a second call site (see `ReputationEventLog`).
  *
- * With `STATE_DIR` set the log is an append-only JSONL file there (SEN-65), so
- * the Ledger and the cost basis it feeds survive a restart; unset, it stays in
- * memory as before.
+ * With `STATE_DIR` set the log is an append-only JSONL file there (SEN-65), or
+ * under `STORE_BACKEND=sqlite` a table in `sente.db` (SEN-205), so the Ledger
+ * and the cost basis it feeds survive a restart; unset, it stays in memory.
+ * The decorators below wrap whichever it is.
  */
 const agentEventsProvider: Provider = {
   provide: AGENT_EVENTS,
-  // StateDirLease: the log is only opened once this process holds the
+  // SenteDbLease: the log is only opened once this process holds the
   // STATE_DIR lock, so a second API cannot interleave appends (SEN-161).
-  inject: [ERC8004_WRITER, StateDirLease, CREATOR_FEES, AGENT_STORE],
+  inject: [ERC8004_WRITER, SenteDbLease, CREATOR_FEES, AGENT_STORE],
   useFactory: (
     reputation: Erc8004Reputation,
-    lease: StateDirLease,
+    lease: SenteDbLease,
     creatorFees: CreatorFeeLedger,
     store: AgentStore,
   ): AgentEventLog => {
-    const dir = lease.dir;
-    let log: AgentEventLog;
-    if (dir) {
-      const file = new FileAgentEventLog(join(dir, AGENT_EVENTS_FILE));
-      Logger.log(`${file.size} agent event(s) loaded from ${file.path}`, 'AgentEventLog');
-      log = file;
-    } else {
-      log = new InMemoryAgentEventLog();
-    }
+    const log = selectStore<AgentEventLog>(lease, AGENT_EVENTS_FILE, 'agent event(s)', {
+      memory: () => new InMemoryAgentEventLog(),
+      file: (path) => new FileAgentEventLog(path),
+      sqlite: (db) => new SqliteAgentEventLog(db),
+    });
     // SEN-184: a fork's fee-paying fill owes its creator a share.
     return new ReputationEventLog(new CreatorFeeEventLog(log, creatorFees, store), reputation);
   },
