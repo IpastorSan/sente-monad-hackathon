@@ -12,8 +12,9 @@
  * `portfolio/view.ts` functions so the two tabs agree. A venue or section
  * that did not answer is named under the figure, never counted as zero.
  * With trading off it is wallet cash (USDC + AUSD) plus the capital with your
- * agents, and says it leaves your own positions out. Either way it reads
- * "≈ $" (different dollars added up) and the line under it says exactly
+ * agents, and says it leaves your own positions out. Either way it is
+ * printed exactly, per asset (SEN-210): `25.52 USDC` over `20.89 AUSD`, never
+ * different tokens added up as dollars, and the line under it says exactly
  * what it counts. An agent's capital comes from `GET /agents/:id/portfolio`
  * and, while that route is not deployed, from the stablecoins in the agent's
  * wallet, which the sentence then names as missing its open trades.
@@ -67,7 +68,8 @@ import {
   realisedSeries,
   realisedToday,
   sinceLabel,
-  stableAmount,
+  walletCapital,
+  portfolioCapital,
   tickerItems,
   totalValue,
   tradingTotal,
@@ -118,7 +120,7 @@ import {
 import { color, font, GUTTER, RADIUS, text } from '@/ui/theme';
 import {
   AsOf,
-  BigNumber,
+  BigAmounts,
   ChangeText,
   MarketRow,
   PerpTag,
@@ -300,6 +302,7 @@ export default function Home() {
       capital={capital}
       trading={user.trading}
       own={own}
+      agents={agents}
       summaries={summaries}
       events={activity.events}
       hidden={hidden}
@@ -501,6 +504,7 @@ function Hero({
   capital,
   trading,
   own,
+  agents,
   summaries,
   events,
   hidden,
@@ -514,6 +518,7 @@ function Hero({
   trading: boolean;
   /** `null` until `/portfolio` and the tickers have answered, or with trading off. */
   own: OwnHoldings | null;
+  agents: readonly Agent[] | null;
   summaries: ReadonlyMap<string, AgentSummary>;
   events: readonly ActivityEvent[];
   hidden: boolean;
@@ -528,7 +533,7 @@ function Hero({
       : trading
         ? tradingTotal(own, capital)
         : totalValue(held?.balances ?? null, capital);
-  const day = realisedToday(summaries);
+  const day = realisedToday(agents ?? [], summaries);
   const series = useMemo(
     () => realisedSeries(events, day?.value ?? null, Date.now()),
     [events, day?.value],
@@ -552,10 +557,8 @@ function Hero({
       ) : (
         <>
           {total !== null ? (
-            <BigNumber
-              value={total.total}
-              prefix="$"
-              approx
+            <BigAmounts
+              amounts={total.amounts}
               size="xl"
               blurred={hidden}
               style={styles.heroFigure}
@@ -637,7 +640,7 @@ function EyeIcon({ off }: { off: boolean }) {
 }
 
 /**
- * Each agent's capital for the total: its portfolio's `≈ $` total when the
+ * Each agent's capital for the total: what its portfolio holds, per asset, when the
  * route answers, else its wallet's stablecoins read from the chain, else
  * unread. `null` until the roster is known, so the hero does not flash a
  * cash-only total and then jump.
@@ -660,12 +663,12 @@ function useAgentCapital(agents: readonly Agent[] | null, pulls: number): AgentC
       targets.map(async ({ id, address }): Promise<AgentCapital> => {
         try {
           const portfolio = await api.portfolio(id);
-          if (portfolio !== null) return { source: 'portfolio', value: portfolio.totals.approxUsd };
+          if (portfolio !== null) return portfolioCapital(portfolio);
         } catch {
           // Fall through to the wallet: a figure with a caveat beats none.
         }
         try {
-          return { source: 'wallet', value: stableAmount(await readStables(address), STABLES) };
+          return walletCapital(await readStables(address), STABLES);
         } catch {
           return { source: 'unread' };
         }
@@ -853,7 +856,7 @@ function AgentCard({
               pnl.tone === 'up' && text.up,
               pnl.tone === 'down' && text.down,
             ]}
-            numberOfLines={1}
+            numberOfLines={pnl.label.split('\n').length}
           >
             {hidden ? maskDigits(pnl.label) : pnl.label}
           </Text>
@@ -1029,6 +1032,7 @@ const styles = StyleSheet.create({
     color: color.textDim,
     flexShrink: 1,
     marginLeft: 8,
+    textAlign: 'right',
   },
   // The strip bleeds to the screen edge, as in the study, so the next card
   // peeks out and says the row scrolls.

@@ -108,7 +108,7 @@ describe('summariseEvents', () => {
       trades: 0,
       held: 0,
       theses: 0,
-      pnl: { last24h: '0', allTime: '0' },
+      pnl: { last24h: '0', allTime: '0', byAsset: [] },
       largestOrderNotional: null,
       lastEvent: null,
     });
@@ -144,6 +144,10 @@ describe('summariseEvents', () => {
     expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl).toEqual({
       last24h: '3.2',
       allTime: '3.2',
+      byAsset: [
+        { asset: 'USDC', last24h: '4.95', allTime: '4.95' },
+        { asset: 'AUSD', last24h: '-1.75', allTime: '-1.75' },
+      ],
     });
   });
 
@@ -163,6 +167,10 @@ describe('summariseEvents', () => {
     expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl).toEqual({
       last24h: '9.5',
       allTime: '109.5',
+      byAsset: [
+        { asset: 'USDC', last24h: '-0.5', allTime: '99.5' },
+        { asset: 'AUSD', last24h: '10', allTime: '10' },
+      ],
     });
   });
 
@@ -177,7 +185,17 @@ describe('summariseEvents', () => {
       event('verdict', { pnlAsset: 'USDC' }),
     ];
 
-    expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl.allTime).toBe('9007199254740993.300001');
+    const { pnl } = summariseEvents(events, NOW, NOT_TRUNCATED);
+    expect(pnl.allTime).toBe('9007199254740993.300001');
+    // Per asset too, and the MON verdict is in neither.
+    expect(pnl.byAsset).toEqual([
+      { asset: 'USDC', last24h: '0.3', allTime: '0.3' },
+      {
+        asset: 'AUSD',
+        last24h: '9007199254740993.000001',
+        allTime: '9007199254740993.000001',
+      },
+    ]);
   });
 
   it('nets a day of losses to a negative string', () => {
@@ -189,6 +207,10 @@ describe('summariseEvents', () => {
     expect(summariseEvents(events, NOW, NOT_TRUNCATED).pnl).toEqual({
       last24h: '-2.25',
       allTime: '-2.25',
+      byAsset: [
+        { asset: 'USDC', last24h: '-3.25', allTime: '-3.25' },
+        { asset: 'AUSD', last24h: '1', allTime: '1' },
+      ],
     });
   });
 
@@ -263,8 +285,17 @@ describe('summariseEvents over a truncated log (SEN-129)', () => {
     const a = summariseEvents(await log.list('a'), NOW, await log.truncation('a'));
     const b = summariseEvents(await log.list('b'), NOW, await log.truncation('b'));
 
-    expect(a.pnl).toEqual({ last24h: '3', allTime: '3', allTimePartial: true });
-    expect(b.pnl).toEqual({ last24h: '5', allTime: '5' });
+    expect(a.pnl).toEqual({
+      last24h: '3',
+      allTime: '3',
+      allTimePartial: true,
+      byAsset: [{ asset: 'USDC', last24h: '3', allTime: '3' }],
+    });
+    expect(b.pnl).toEqual({
+      last24h: '5',
+      allTime: '5',
+      byAsset: [{ asset: 'USDC', last24h: '5', allTime: '5' }],
+    });
   });
 });
 

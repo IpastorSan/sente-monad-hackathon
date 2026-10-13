@@ -22,6 +22,7 @@ import {
   type TickerIndex,
 } from '../markets/select.ts';
 import {
+  agentHoldingAmounts,
   allocation,
   allocationParts,
   holdings,
@@ -29,9 +30,18 @@ import {
   type WalletAmount,
 } from '../portfolio/view.ts';
 import type { Portfolio } from '../trade/types.ts';
+import {
+  addAmounts,
+  amountsText,
+  amountsTone,
+  roundsToZero,
+  signedAmountsText,
+  type AssetAmount,
+} from '../ui/assetAmounts.ts';
 
 import { formatFixedAtoms } from './amounts.ts';
-import type { ActivityEvent, Agent, AgentSummary } from './api.ts';
+import { pnlAmounts } from './cockpit.ts';
+import type { ActivityEvent, Agent, AgentPortfolioDto, AgentSummary } from './api.ts';
 import {
   depositAmount,
   directionLabel,
@@ -44,7 +54,7 @@ import {
 } from './ledger.ts';
 import { stoneFor, sumDecimals, type LedgerStone } from './ledgerView.ts';
 import { marketFor } from './mandate.ts';
-import { describeMove, pnlTone, relativeAge, type Move } from './usage.ts';
+import { describeMove, relativeAge, type Move } from './usage.ts';
 
 /**
  * Home shows at most this many agents; "All" has the rest. Four since SEN-113:
@@ -151,7 +161,7 @@ function describe(
         stone: stoneFor(entry),
         title:
           entry.market !== null ? `${name} closed ${entry.market}` : `${name} closed a position`,
-        detail: `${signedPnl(entry.pnl)} · ${heldLabel(entry.held)}`,
+        detail: `${signedPnl(entry.pnl)}${entry.pnlAsset !== null ? ` ${entry.pnlAsset}` : ''} · ${heldLabel(entry.held)}`,
       };
     }
     case 'deposit':
@@ -193,18 +203,22 @@ const DAY_MS = 24 * 60 * 60_000;
 /** The stablecoins the total counts. MON is gas (sponsored), not capital. */
 const CASH_SYMBOLS: readonly string[] = ['AUSD', 'USDC'];
 
-/** Where one agent's figure in the total came from. */
+/**
+ * Where one agent's share of the total came from, and what it holds, exactly,
+ * per asset (SEN-210). `usd` (stables at $1, spot at its mark) only sizes the
+ * Portfolio bar; it is never printed.
+ */
 export type AgentCapital =
   /** `GET /agents/:id/portfolio` answered: wallet, venue accounts and positions. */
-  | { source: 'portfolio'; value: Decimal }
+  | { source: 'portfolio'; usd: Decimal; amounts: AssetAmount[] }
   /** That route is not deployed (it answers `null`): the agent wallet's stables only. */
-  | { source: 'wallet'; value: Decimal }
+  | { source: 'wallet'; usd: Decimal; amounts: AssetAmount[] }
   /** Neither answered: left out of the sum, and the sentence says so. */
   | { source: 'unread' };
 
 export type TotalValue = {
-  /** ≈ $: USDC and AUSD added as dollars. */
-  total: Decimal;
+  /** Everything it counts, exactly, per asset: `25.52 USDC · 20.89 AUSD`. */
+  amounts: AssetAmount[];
   /** What the figure covers, printed under it. */
   includes: string;
 };
@@ -228,14 +242,16 @@ export function totalValue(
   if (cash === null) return null;
   const stables = cash.filter((balance) => CASH_SYMBOLS.includes(balance.symbol));
   const { read, walletOnly } = splitAgents(agents);
-  const total =
-    sumDecimals([...stables.map((b) => b.amount), ...read.map((agent) => agent.value)]) ?? '0';
+  const amounts = addAmounts(
+    stables.map((b) => ({ asset: b.symbol, amount: b.amount })),
+    ...read.map((agent) => agent.amounts),
+  );
 
   const what = agents.length === 0 ? 'Your USDC and AUSD' : 'Your USDC and AUSD plus your agents’';
   const missing =
     walletOnly > 0 ? 'your own positions or your agents’ open trades' : 'your own positions';
   const left = unreadAgents(agents.length - read.length);
-  return { total, includes: `${what}. Not yet ${missing}.${left === null ? '' : ` ${left}`}` };
+  return { amounts, includes: `${what}. Not yet ${missing}.${left === null ? '' : ` ${left}`}` };
 }
 
 function splitAgents(agents: readonly AgentCapital[]) {
@@ -298,68 +314,92 @@ export function tradingTotal(
   if (own === null) return null;
   const { held, venues } = own;
   const { read, walletOnly } = splitAgents(agents);
-  const agentsUsd = read.length > 0 ? (sumDecimals(read.map((agent) => agent.value)) ?? '0') : null;
-  const { total } = allocation(allocationParts(held, agentsUsd));
+  const agentsPart =
+    read.length > 0
+      ? {
+          usd: sumDecimals(read.map((agent) => agent.usd)) ?? '0',
+          amounts: addAmounts(...read.map((agent) => agent.amounts)),
+        }
+      : null;
+  const { amounts } = allocation(allocationParts(held, agentsPart));
 
   const venuesLeft =
     venues === 'unread'
       ? ['Kuru', 'Perpl']
       : held.unread.flatMap((s) => (s === 'kuru' ? ['Kuru'] : s === 'perpl' ? ['Perpl'] : []));
   const notes = [
-    `Your cash, spot at Kuru prices and perps (margin + P&L)${
+    `Your cash, spot tokens and perps (margin + P&L)${
       agents.length === 0 ? '' : ', plus your agents’'
     }.`,
     walletOnly > 0 ? 'Not yet your agents’ open trades.' : null,
     // The cash then comes from `/wallet` (see `useUserPortfolio`), which is
     // real, but tokens only `/portfolio` lists may be missing (SEN-123).
     held.unread.includes('wallet') ? 'Some wallet tokens may be left out.' : null,
-    held.unpriced.length > 0 ? `Leaves out ${held.unpriced.join(', ')}: no Kuru price.` : null,
     venuesLeft.length > 0
       ? `Leaves out ${venuesLeft.join(' and ')}: ${venuesLeft.length === 1 ? 'it' : 'they'} didn’t answer.`
       : null,
     held.perpsUnknown ? 'Perp positions are left out until Perpl is linked.' : null,
     unreadAgents(agents.length - read.length),
   ];
-  return { total, includes: notes.filter((note) => note !== null).join(' ') };
+  return { amounts, includes: notes.filter((note) => note !== null).join(' ') };
+}
+
+/** An agent's capital from `GET /agents/:id/portfolio`: what it holds, exactly, per asset. */
+export function portfolioCapital(portfolio: AgentPortfolioDto): AgentCapital {
+  return {
+    source: 'portfolio',
+    usd: portfolio.totals.approxUsd,
+    amounts: agentHoldingAmounts(portfolio),
+  };
 }
 
 /**
- * An agent's stablecoins as a plain decimal — no grouping, every place — so it
- * sums exactly into the total. USDC and AUSD count as one quote unit, as the
- * summaries count P&L.
+ * An agent's capital from its wallet's stablecoins alone, each as a plain
+ * decimal — no grouping, every place — so they sum exactly, per asset.
  */
-export function stableAmount(
+export function walletCapital(
   balances: Readonly<Record<string, bigint>>,
   tokens: readonly { symbol: string; decimals: number }[],
-): Decimal {
-  const decimals = Math.max(0, ...tokens.map((token) => token.decimals));
-  const total = tokens.reduce(
-    (sum, token) => sum + (balances[token.symbol] ?? 0n) * 10n ** BigInt(decimals - token.decimals),
-    0n,
-  );
-  return formatFixedAtoms(total, decimals, { group: false });
+): AgentCapital {
+  const amounts = tokens.map((token) => ({
+    asset: token.symbol,
+    amount: formatFixedAtoms(balances[token.symbol] ?? 0n, token.decimals, { group: false }),
+  }));
+  return {
+    source: 'wallet',
+    usd: sumDecimals(amounts.map((a) => a.amount)) ?? '0',
+    amounts: addAmounts(amounts),
+  };
 }
 
 /**
- * What the agents realised over the last 24 hours, summed from the summaries
- * (USDC and AUSD as one unit, so it reads in ≈ $). `null` with no summaries —
- * no agents, or an API that predates them — so the hero shows no change line
- * rather than a zero it does not know.
+ * What the agents realised over the last 24 hours, per asset (SEN-210):
+ * `+0.96 AUSD · −0.13 USDC realised by agents today`. `value` is the mixed sum
+ * the chart under it ends on; it is never printed. `null` with no summaries —
+ * no agents, or an API that predates them — and when one agent's figure
+ * cannot be split by asset, so the hero shows no line rather than a sum of
+ * two tokens.
  */
 export function realisedToday(
+  agents: readonly Pick<Agent, 'id' | 'mandate'>[],
   summaries: ReadonlyMap<string, Pick<AgentSummary, 'pnl'>>,
 ): { value: Decimal; label: string; tone: 'up' | 'down' | null } | null {
   if (summaries.size === 0) return null;
+  const shares: AssetAmount[][] = [];
+  for (const agent of agents) {
+    const summary = summaries.get(agent.id);
+    if (!summary) continue;
+    const amounts = pnlAmounts(summary.pnl, agent.mandate.venues, 'last24h');
+    if (amounts === null) return null;
+    shares.push(amounts);
+  }
   const value = sumDecimals([...summaries.values()].map((s) => s.pnl.last24h)) ?? '0';
-  const tone = pnlTone(value);
-  if (tone === null) return { value, label: 'Agents flat today', tone };
-  // `signedPnl` gives `+18.22` / `−4.1`; the `$` goes between sign and digits.
-  const signed = signedPnl(value);
-  return {
-    value,
-    label: `${signed.slice(0, 1)}$${signed.slice(1)} realised by agents today`,
-    tone,
-  };
+  const amounts = addAmounts(...shares);
+  const tone = amountsTone(amounts);
+  if (roundsToZero(amounts)) {
+    return { value, label: 'Agents flat today', tone: null };
+  }
+  return { value, label: `${signedAmountsText(amounts)} realised by agents today`, tone };
 }
 
 /**
@@ -419,33 +459,27 @@ export function greeting(hour: number): string {
 /** One agent's card under "Your agents at work": its last move and its day. */
 export type AgentAtWork = {
   move: Move | null;
-  /** `+18.22 USDC`, `−4.10 AUSD`, `≈ +$3.10` for an agent on both venues. */
+  /** `+18.22 USDC`, `−4.10 AUSD`, `−0.13 USDC\n+0.96 AUSD` (a line each) on both venues. */
   pnl: { label: string; tone: 'up' | 'down' | null } | null;
 };
 
 /**
  * The card's two lines. The move is the Agents tab's own sentence
- * (`describeMove`), so an agent reads the same on both. The P&L names its
- * quote currency when the mandate has one venue; a Kuru and Perpl agent's
- * figure mixes USDC and AUSD, so it is only ≈ $.
+ * (`describeMove`), so an agent reads the same on both. The P&L is per asset
+ * (SEN-210): one figure in the venue's quote for a one-venue agent, one per
+ * asset for a Kuru and Perpl agent, and none when an older API sends only
+ * the mixed sum.
  */
 export function atWork(
   agent: Pick<Agent, 'mandate'>,
   summary: Pick<AgentSummary, 'pnl' | 'lastEvent'> | undefined,
 ): AgentAtWork {
   const move = summary?.lastEvent ? describeMove(summary.lastEvent) : null;
-  if (!summary) return { move, pnl: null };
-  const value = summary.pnl.last24h;
-  const tone = pnlTone(value);
-  const signed = tone === null ? '0.00' : signedPnl(value);
-  const venues = agent.mandate.venues;
-  const unit = venues.length === 1 ? (venues[0] === 'kuru' ? 'USDC' : 'AUSD') : null;
-  // A flat day has no sign to put the $ after: "≈ $0.00", not "≈ 0$.00".
-  const dollars = tone === null ? '$0.00' : `${signed.slice(0, 1)}$${signed.slice(1)}`;
-  return {
-    move,
-    pnl: { label: unit !== null ? `${signed} ${unit}` : `≈ ${dollars}`, tone },
-  };
+  const amounts = pnlAmounts(summary?.pnl, agent.mandate.venues, 'last24h');
+  if (amounts === null) return { move, pnl: null };
+  // One asset per line: the card is narrow, and a figure cut off mid-asset says nothing.
+  const label = amountsText(amounts, { signed: true, separator: '\n' });
+  return { move, pnl: { label, tone: amountsTone(amounts) } };
 }
 
 // ---------------------------------------------------------------------------

@@ -126,9 +126,9 @@ export type StatsLine = {
  * absent, preset unknown to the server, request failed) — the card then drops
  * the line rather than printing zeros.
  *
- * The median return is preferred and printed over its own sample (`returnN`:
- * only agents with a known deposit count). Without it the median P&L stands
- * in, over the whole cohort `n`, as ≈ $ because it adds USDC and AUSD.
+ * The median return is printed over its own sample (`returnN`: only agents
+ * with a known deposit count). Without it there is no figure: the median P&L
+ * adds USDC and AUSD as one currency, and that sum is never shown (SEN-210).
  */
 export function statsLine(stats: PresetStatsDto | null | undefined): StatsLine | null {
   if (!stats) return null;
@@ -143,20 +143,6 @@ export function statsLine(stats: PresetStatsDto | null | undefined): StatsLine |
         running,
         figure: { kind: 'median', value: `${figure.text}%`, direction: figure.tone ?? 'flat' },
         sample: sample(stats.returnN),
-      };
-    }
-  }
-  if (stats.medianPnl30d !== null) {
-    const figure = flooredFigure(stats.medianPnl30d, 0, 2);
-    if (figure) {
-      return {
-        running,
-        figure: {
-          kind: 'median',
-          value: `≈ ${figure.sign}$${figure.magnitude}`,
-          direction: figure.tone ?? 'flat',
-        },
-        sample: sample(stats.n),
       };
     }
   }

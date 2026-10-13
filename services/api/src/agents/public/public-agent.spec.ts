@@ -104,6 +104,10 @@ async function setup(
       options.portfolio ??
       (() =>
         Promise.resolve({
+          wallet: { ok: true, balances: [{ asset: 'USDC', total: '500', decimals: 6 }] },
+          kuru: { ok: true, accountId: null, balances: [], openOrders: [] },
+          perpl: { ok: false, error: 'down' },
+          holdings: [{ asset: 'MON', amount: '0.25' }],
           totals: { approxUsd: '512.40', byQuote: { USDC: '0', AUSD: '0' }, note: 'note' },
         })),
   } as unknown as AgentPortfolioService;
@@ -163,10 +167,17 @@ const ALLOWED_DEEP_KEYS = new Set([
   'pnl.allTime',
   'pnl.last24h',
   'pnl.allTimePartial',
+  'pnl.byAsset',
+  'pnl.byAsset[].asset',
+  'pnl.byAsset[].last24h',
+  'pnl.byAsset[].allTime',
   'counts.trades',
   'counts.held',
   'counts.theses',
   'balance.approxUsd',
+  'balance.amounts',
+  'balance.amounts[].asset',
+  'balance.amounts[].amount',
   'balance.note',
   ...['venue', 'symbol', 'side', 'price', 'size', 'txHash', 'at'].map((k) => `fills[].${k}`),
   ...['layer', 'code', 'message', 'at'].map((k) => `refusals[].${k}`),
@@ -257,8 +268,20 @@ describe('GET /public/agents/:id', () => {
       status: 'active',
       address: AGENT_ADDRESS,
       copies: 1,
-      balance: { approxUsd: '512.40', note: 'note' },
-      pnl: { allTime: '12.5', last24h: '12.5', allTimePartial: false },
+      balance: {
+        approxUsd: '512.40',
+        amounts: [
+          { asset: 'USDC', amount: '500' },
+          { asset: 'MON', amount: '0.25' },
+        ],
+        note: 'note',
+      },
+      pnl: {
+        allTime: '12.5',
+        last24h: '12.5',
+        allTimePartial: false,
+        byAsset: [{ asset: 'USDC', last24h: '12.5', allTime: '12.5' }],
+      },
       counts: { trades: 1, held: 1, theses: 0 },
       mandateAnchor: null,
     });

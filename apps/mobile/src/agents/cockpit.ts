@@ -25,6 +25,7 @@ import type {
   AgentPresetRef,
   AgentScheduleStatusDto,
   AgentSummary,
+  AssetPnl,
 } from './api.ts';
 import type { LedgerEntry, VerdictEntry } from './ledger.ts';
 import { levelsNote, presetLevels, stopAndTarget, type StopTarget } from './levels.ts';
@@ -32,6 +33,7 @@ import { PNL_LABEL_PLACES, pnlLabel } from './leaderboard.ts';
 import { outcome, sumDecimals } from './ledgerView.ts';
 import { formatNotional, marketFor, tokenFor } from './mandate.ts';
 import { formatDuration, pnlTone } from './usage.ts';
+import { addAmounts, type AssetAmount } from '../ui/assetAmounts.ts';
 import { signedFigure } from '../ui/money.ts';
 import { formatPct } from '../ui/tradingFormat.ts';
 
@@ -83,6 +85,8 @@ export type SettledTrade = {
   direction: VerdictEntry['direction'];
   /** Exact decimal string, as the verdict carried it. */
   pnl: string;
+  /** What `pnl` is in; `null` when the verdict did not say (then left out of per-asset figures). */
+  asset: string | null;
   tone: Tone;
   /** From its first fill to the close; `null` when no fill on that market explains it. */
   holdMs: number | null;
@@ -118,6 +122,7 @@ export function settledTrades(entries: readonly LedgerEntry[]): SettledTrade[] {
       market: entry.market,
       direction: entry.direction,
       pnl: entry.pnl,
+      asset: entry.pnlAsset,
       tone: outcome(entry),
       holdMs: opened !== undefined && entry.at >= opened ? entry.at - opened : null,
     });
@@ -189,21 +194,41 @@ export function signedParts(pnl: string | null | undefined): {
   return { sign: figure.sign, magnitude: figure.plain, tone: figure.tone };
 }
 
-/**
- * What the P&L headline is in. The summary adds USDC and AUSD as one unit, so
- * an agent on both venues gets "≈ $" and no currency, never one of the two.
- */
-export function pnlUnit(venues: readonly string[]): { unit: string; approx: boolean } {
+/** The one asset an agent's P&L is in, or `null` for an agent on both venues. */
+export function pnlUnit(venues: readonly string[]): 'USDC' | 'AUSD' | null {
   const unit = quoteUnit(venues);
-  return unit === 'quote units' ? { unit: '', approx: true } : { unit, approx: false };
+  return unit === 'USDC' || unit === 'AUSD' ? unit : null;
+}
+
+/**
+ * An agent's realised P&L over `window`, per asset (SEN-210): the summary's
+ * `byAsset` when the API sends it, else the mixed figure when the mandate has
+ * one venue (it is then all in that venue's quote). `null` for an agent on
+ * both venues read from an older API: its figure adds USDC and AUSD, and that
+ * sum is never shown.
+ */
+export function pnlAmounts(
+  pnl: { last24h: string; allTime: string; byAsset?: readonly AssetPnl[] } | undefined,
+  venues: readonly string[],
+  window: 'last24h' | 'allTime',
+): AssetAmount[] | null {
+  if (!pnl) return null;
+  const unit = pnlUnit(venues);
+  if (pnl.byAsset) {
+    const amounts = addAmounts(pnl.byAsset.map((p) => ({ asset: p.asset, amount: p[window] })));
+    return amounts.length > 0 || unit === null ? amounts : [{ asset: unit, amount: '0' }];
+  }
+  return unit === null ? null : [{ asset: unit, amount: pnl[window] }];
 }
 
 export type EquityRange = '1D' | '1W' | 'All';
 export const EQUITY_RANGES: readonly EquityRange[] = ['1D', '1W', 'All'];
 
 export type EquitySeries = {
-  /** Cumulative realised P&L, oldest first, as exact decimal strings. */
+  /** Cumulative realised P&L, oldest first, as exact decimal strings: the chart's line only. */
   points: string[];
+  /** The same points per asset, for any text about them (SEN-210). */
+  amounts: AssetAmount[][];
   /** When each point was reached, epoch ms. */
   ats: number[];
 };
@@ -221,39 +246,59 @@ export function equitySeries(
   since: number,
 ): EquitySeries | null {
   const from = range === '1D' ? now - DAY : range === '1W' ? now - 7 * DAY : since;
-  const before = trades.filter((trade) => trade.at < from).map((trade) => trade.pnl);
+  const before = trades.filter((trade) => trade.at < from);
   const inside = trades.filter((trade) => trade.at >= from);
   if (inside.length === 0) return null;
-  let running = sumDecimals(before) ?? '0';
+  let running = sumDecimals(before.map((trade) => trade.pnl)) ?? '0';
+  let perAsset = addAmounts(assetPnls(before));
   const points = [running];
+  const amounts = [perAsset];
   const ats = [Math.min(from, inside[0]?.at ?? from)];
   for (const trade of inside) {
     running = sumDecimals([running, trade.pnl]) ?? running;
+    perAsset = addAmounts(perAsset, assetPnls([trade]));
     points.push(running);
+    amounts.push(perAsset);
     ats.push(trade.at);
   }
-  return { points, ats };
+  return { points, amounts, ats };
+}
+
+function assetPnls(trades: readonly SettledTrade[]): AssetAmount[] {
+  return trades.flatMap((t) => (t.asset === null ? [] : [{ asset: t.asset, amount: t.pnl }]));
 }
 
 /**
- * Realised P&L over the window the range pills pick (SEN-177): the summary's
- * all-time and 24 h figures for All and 1D, and the curve's own change for
- * 1W. `null` when there is no figure to give (no summary); a week with no
- * settled trade is a zero, not a missing figure.
+ * Realised P&L over the window the range pills pick (SEN-177), per asset
+ * (SEN-210): the summary's all-time and 24 h figures for All and 1D, and the
+ * curve's own change for 1W. `null` when there is no figure to give (no
+ * summary, or a mixed one that cannot be split); a week with no settled trade
+ * is a zero, not a missing figure.
  */
 export function windowPnl(
   range: EquityRange,
   summary: Pick<AgentSummary, 'pnl'> | undefined,
   series: EquitySeries | null,
-): string | null {
+  venues: readonly string[],
+): AssetAmount[] | null {
   if (!summary) return null;
-  if (range === 'All') return summary.pnl.allTime;
-  if (range === '1D') return summary.pnl.last24h;
-  const first = series?.points[0];
-  const last = series?.points.at(-1);
-  if (first === undefined || last === undefined) return '0';
-  const negated = first.startsWith('-') ? first.slice(1) : `-${first.replace(/^\+/, '')}`;
-  return sumDecimals([last, negated]) ?? '0';
+  if (range === 'All') return pnlAmounts(summary.pnl, venues, 'allTime');
+  if (range === '1D') return pnlAmounts(summary.pnl, venues, 'last24h');
+  const unit = pnlUnit(venues);
+  const zero = unit === null ? [] : [{ asset: unit, amount: '0' }];
+  const first = series?.amounts[0];
+  const last = series?.amounts.at(-1);
+  if (first === undefined || last === undefined) return zero;
+  const change = addAmounts(
+    last,
+    first.map(({ asset, amount }) => ({ asset, amount: negateDecimal(amount) })),
+  );
+  return change.length > 0 ? change : zero;
+}
+
+function negateDecimal(value: string): string {
+  const v = value.trim().replace(/^\+/, '');
+  return v.startsWith('-') ? v.slice(1) : `-${v}`;
 }
 
 /** What the window is called next to its P&L. */
@@ -335,6 +380,8 @@ export type PositionRow = {
   detail: string;
   /** `+1.22`, or `null` when nothing prices it. */
   pnl: string | null;
+  /** What `pnl` is in: the market's quote (`USDC` on Kuru, `AUSD` on Perpl). */
+  quote: string;
   /** `+0.70%` of the cost, or `null`. */
   pct: string | null;
   tone: Tone;
@@ -382,6 +429,7 @@ export function positionRows(
         side: position.side,
         detail: `${position.size} ${base} @ ${position.entryPrice} · Perpl ${position.leverage}×`,
         pnl: pnlLabel(position.unrealizedPnl),
+        quote: position.quote,
         pct: percentOf(position.unrealizedPnl, cost),
         tone: pnlTone(position.unrealizedPnl, PNL_LABEL_PLACES),
         entry: position.entryPrice,
@@ -404,6 +452,7 @@ export function positionRows(
       side: 'long',
       detail: `${holding.amount} ${holding.asset}${avgPrice !== null ? ` @ ${avgPrice}` : ''} · Kuru`,
       pnl: unrealizedPnl !== null ? pnlLabel(unrealizedPnl) : null,
+      quote: holding.market.split('-')[1] ?? 'USDC',
       pct:
         unrealizedPnl !== null && avgPrice !== null
           ? percentOf(unrealizedPnl, covered * Number(avgPrice))
@@ -456,7 +505,7 @@ export function bestTrades(trades: readonly SettledTrade[], limit = 3): BestTrad
       return {
         seq: trade.seq,
         title: `Trade #${index + 1}${what ? ` · ${what}` : ''}`,
-        pnl: pnlLabel(trade.pnl),
+        pnl: `${pnlLabel(trade.pnl)}${trade.asset !== null ? ` ${trade.asset}` : ''}`,
         caption: [
           trade.holdMs !== null ? `held ${formatDuration(trade.holdMs)}` : null,
           shortDate(trade.at),

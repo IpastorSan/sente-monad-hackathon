@@ -1,7 +1,12 @@
 /**
- * The Portfolio hero (SEN-152): the ≈ $ total, its change over the chosen
- * range and a sign-tinted area chart with 1D / 1W / 1M / ALL pills — the
- * `hero-v` block of `docs/design/trading/portfolio.html`.
+ * The Portfolio hero (SEN-152): the total, its change over the chosen range
+ * and a sign-tinted area chart with 1D / 1W / 1M / ALL pills — the `hero-v`
+ * block of `docs/design/trading/portfolio.html`.
+ *
+ * The total is printed exactly, per asset (SEN-210): `25.52 USDC` over
+ * `20.89 AUSD`, never the two added up as dollars. The line and the change's
+ * percent need one number, so they use the dollar sum (USDC and AUSD at $1,
+ * spot at its Kuru price); no dollar amount is printed from it.
  *
  * The line is the server's recorded history (`GET /portfolio/history`) ending
  * at the live total. Until the server has a point in the range — trading off,
@@ -14,30 +19,31 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Chart } from '@/ui/chart/Chart';
 import { text } from '@/ui/theme';
-import { BigNumber, ChangeText, RangePills } from '@/ui/trading';
+import type { AssetAmount } from '@/ui/assetAmounts';
+import { BigAmounts, ChangeText, RangePills } from '@/ui/trading';
 
 import { HERO_RANGES, heroLine, PARTIAL_NOTE, type HeroRange } from './history';
 import { useObservedValue } from './usePortfolio';
 import { useValueHistory } from './useValueHistory';
-import { cents, clock, seriesChange, shown, signedUsd } from './view';
+import { clock, seriesChange } from './view';
 
 export function ValueHero({
   total,
-  approx,
+  amounts,
   at,
   trading,
   hidden,
   note,
 }: {
-  /** The exact $ total the screen computed, agents included; shown floored to the cent. */
+  /** The dollar sum, agents included: the line's newest point. Never printed. */
   total: string;
-  /** Some of it is a token valued at its Kuru price (`totalIsApprox`). */
-  approx: boolean;
+  /** The same total, exactly, per asset: what is printed. */
+  amounts: readonly AssetAmount[];
   /** The newest data time behind `total`, `null` before any read. */
   at: number | null;
   trading: boolean;
   hidden: boolean;
-  /** What the ≈ $ leaves out, said under it. */
+  /** What the total leaves out, said under it. */
   note: string;
 }) {
   const [range, setRange] = useState<HeroRange>('1D');
@@ -59,20 +65,8 @@ export function ValueHero({
     <>
       <View style={styles.hero}>
         <Text style={text.label}>Total value</Text>
-        <BigNumber
-          value={cents(total) ?? total}
-          prefix="$"
-          approx={approx}
-          size="xl"
-          blurred={hidden}
-        />
-        {change !== null ? (
-          <ChangeText
-            pct={change.pct}
-            lead={`${shown(signedUsd(change.delta), hidden)} (`}
-            suffix={`)${suffix}`}
-          />
-        ) : null}
+        <BigAmounts amounts={amounts} size="xl" blurred={hidden} />
+        {change !== null ? <ChangeText pct={change.pct} suffix={suffix} /> : null}
         {points.length > 1 ? (
           <Chart
             kind="area"

@@ -192,7 +192,7 @@ test('markets and venues replay apart; the same fill on two pages counts once', 
   assert.equal(positions[0]?.realisedPnl, '1');
 });
 
-test('closedList: a complete history gets its ≈ $ total across venues', () => {
+test('closedList: a complete history gets its total per asset, never USDC and AUSD added up', () => {
   const list = closedList(
     [
       fill('buy', '1', '1', 1),
@@ -203,7 +203,11 @@ test('closedList: a complete history gets its ≈ $ total across venues', () => 
     ALL,
   );
   assert.equal(list.positions.length, 2);
-  assert.equal(list.total, '-0.5');
+  assert.deepEqual(list.total, [
+    { asset: 'USDC', amount: '0.5' },
+    { asset: 'AUSD', amount: '-1' },
+  ]);
+  assert.equal(closedTotal(list.total, false), '+0.50 USDC · −1.00 AUSD');
   assert.deepEqual(list.gaps, []);
   assert.equal(list.feesIncluded, false);
 });
@@ -274,7 +278,8 @@ test('closedRow: exact money, both dates, and hiding keeps the percent', () => {
   const masked = closedRow(p, true);
   assert.equal(masked.pnl, '+•.••');
   assert.match(masked.under, /^\+18\.18%/u);
-  assert.equal(closedTotal('-2.675', false), '−$2.68');
+  assert.equal(closedTotal([{ asset: 'USDC', amount: '-2.675' }], false), '−2.68 USDC');
+  assert.equal(closedTotal([{ asset: 'USDC', amount: '-2.675' }], true), '−•.•• USDC');
   assert.equal(closedTotal(null, false), null);
 });
 
@@ -282,7 +287,7 @@ test('closedNotes: "before fees" only when a trip has a fill without its fee (SE
   const paid = { fee: '0.01', feeAsset: 'USDC' };
   const after = closedList([fill('buy', '1', '1', 1, paid), fill('sell', '1', '2', 2, paid)], ALL);
   assert.equal(after.feesIncluded, true);
-  assert.equal(after.total, '0.98');
+  assert.deepEqual(after.total, [{ asset: 'USDC', amount: '0.98' }]);
   assert.deepEqual(closedNotes(after), []);
 
   // One fill of one trip with its fee unreported (`null` on the route) is enough.
@@ -319,5 +324,5 @@ test('a perp round trip that lost under a cent net of fees reads −0.01, red (S
   const row = closedRow(p!, false);
   assert.equal(row.pnl, '−0.01');
   assert.equal(row.tone, 'down');
-  assert.equal(closedTotal('-0.00344', false), '−$0.01');
+  assert.equal(closedTotal([{ asset: 'AUSD', amount: '-0.00344' }], false), '−0.01 AUSD');
 });

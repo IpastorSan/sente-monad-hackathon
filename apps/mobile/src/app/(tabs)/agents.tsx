@@ -22,7 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { modelLabel, type Agent, type AgentSummary, type LeaderboardRow } from '@/agents/api';
 import { ArchivedAgents } from '@/agents/ArchivedAgents';
-import { signedPnl } from '@/agents/ledger';
+import { pnlAmounts } from '@/agents/cockpit';
 import { MoveLine } from '@/agents/MoveLine';
 import { yourBest } from '@/agents/top';
 import { BestRow, TopBoard, useBoard } from '@/agents/TopBoard';
@@ -32,7 +32,6 @@ import {
   holdsReturnable,
   isTrading,
   mainHolding,
-  pnlTone,
   venuesCaption,
   type Holding,
 } from '@/agents/usage';
@@ -47,6 +46,7 @@ import {
 import { FeaturedPreset, PresetCard } from '@/presets/PresetCard';
 import { usePresets, type PresetsState } from '@/presets/usePresets';
 import { useSession } from '@/session';
+import { amountsTone, signedAmountsText } from '@/ui/assetAmounts';
 import { isoDate } from '@/ui/format';
 import { Pill, Sigil } from '@/ui/goban';
 import { Icon } from '@/ui/icons';
@@ -360,8 +360,9 @@ function AgentCard({
     ? mainHolding(holdings, agent.mandate.venues.includes('kuru') ? 'USDC' : 'AUSD')
     : null;
   const move = summary?.lastEvent ? describeMove(summary.lastEvent) : null;
-  const today = summary?.pnl.last24h;
-  const tone = pnlTone(today);
+  // Per asset (SEN-210): `+0.96 AUSD · −0.13 USDC today`, never the two as one.
+  const today = pnlAmounts(summary?.pnl, agent.mandate.venues, 'last24h');
+  const tone = today !== null ? amountsTone(today) : null;
 
   return (
     <Pressable
@@ -397,7 +398,7 @@ function AgentCard({
                 {main ? formatHolding(main) : '—'}{' '}
                 <Text style={text.dim}>{main?.symbol ?? ''}</Text>
               </Text>
-              {today !== undefined ? (
+              {today !== null ? (
                 <Text
                   style={[
                     text.dim,
@@ -406,7 +407,7 @@ function AgentCard({
                     tone === 'down' && text.down,
                   ]}
                 >
-                  {tone === null ? '0' : signedPnl(today)} today
+                  {signedAmountsText(today)} today
                 </Text>
               ) : null}
             </View>

@@ -13,6 +13,7 @@ import {
   historyDays,
   largestOrderLine,
   mandateSigned,
+  pnlAmounts,
   pnlUnit,
   positionRows,
   rulesSentence,
@@ -111,10 +112,10 @@ test('signedParts signs and tones the cent BigNumber shows, not the exact figure
   assert.deepEqual(signedParts('-2.675'), { sign: '−', magnitude: '2.68', tone: 'down' });
 });
 
-test('pnlUnit names one venue’s quote, and only approximates across both', () => {
-  assert.deepEqual(pnlUnit(['kuru']), { unit: 'USDC', approx: false });
-  assert.deepEqual(pnlUnit(['perpl']), { unit: 'AUSD', approx: false });
-  assert.deepEqual(pnlUnit(['kuru', 'perpl']), { unit: '', approx: true });
+test('pnlUnit names one venue’s quote, and none across both', () => {
+  assert.equal(pnlUnit(['kuru']), 'USDC');
+  assert.equal(pnlUnit(['perpl']), 'AUSD');
+  assert.equal(pnlUnit(['kuru', 'perpl']), null);
 });
 
 test('equitySeries steps cumulative P&L from where the window opened', () => {
@@ -218,6 +219,7 @@ test('positionRows: explained Kuru holdings and Perpl positions, with the latest
   const [row] = rows;
   assert.equal(row?.detail, '180 MON @ 0.9744 · Kuru');
   assert.equal(row?.pnl, '+1.22');
+  assert.equal(row?.quote, 'USDC');
   assert.equal(row?.pct, '+0.70%');
   assert.equal(row?.thesis, 'Range again.');
   assert.deepEqual(row?.levels, { target: '1.0036', stop: '0.9452' });
@@ -394,18 +396,48 @@ test('scheduleLine: next check, pauses, manual, and the record alone without the
   assert.equal(scheduleLine(null, null, NOW), 'Runs only when you run it.');
 });
 
-test('windowPnl follows the range pills: summary for All and 1D, the curve for 1W', () => {
+test('windowPnl follows the range pills, per asset: summary for All and 1D, the curve for 1W', () => {
+  const kuru = ['kuru'];
   const summary = { pnl: { last24h: '-1.5', allTime: '12.25' } };
-  assert.equal(windowPnl('All', summary, null), '12.25');
-  assert.equal(windowPnl('1D', summary, null), '-1.5');
+  const usdc = (amount: string) => [{ asset: 'USDC', amount }];
+  const series = (amounts: string[]) => ({
+    points: amounts,
+    amounts: amounts.map(usdc),
+    ats: amounts.map((_, i) => i),
+  });
+  assert.deepEqual(windowPnl('All', summary, null, kuru), usdc('12.25'));
+  assert.deepEqual(windowPnl('1D', summary, null, kuru), usdc('-1.5'));
   // The week's curve starts where P&L stood when the window opened.
-  assert.equal(
-    windowPnl('1W', summary, { points: ['10', '11.5', '8.25'], ats: [0, 1, 2] }),
-    '-1.75',
-  );
-  assert.equal(windowPnl('1W', summary, { points: ['-2', '3'], ats: [0, 1] }), '5');
+  assert.deepEqual(windowPnl('1W', summary, series(['10', '11.5', '8.25']), kuru), usdc('-1.75'));
+  assert.deepEqual(windowPnl('1W', summary, series(['-2', '3']), kuru), usdc('5'));
   // No trade settled in the window: nothing was realised in it.
-  assert.equal(windowPnl('1W', summary, null), '0');
+  assert.deepEqual(windowPnl('1W', summary, null, kuru), usdc('0'));
   // No summary at all is no figure, not a zero.
-  assert.equal(windowPnl('All', undefined, null), null);
+  assert.equal(windowPnl('All', undefined, null, kuru), null);
+  // A Kuru and Perpl agent's mixed sum is never a figure: per asset, or nothing.
+  assert.equal(windowPnl('All', summary, null, ['kuru', 'perpl']), null);
+  const split = {
+    pnl: {
+      ...summary.pnl,
+      byAsset: [
+        { asset: 'AUSD', last24h: '0.96', allTime: '1' },
+        { asset: 'USDC', last24h: '-0.13', allTime: '11.25' },
+      ],
+    },
+  };
+  assert.deepEqual(windowPnl('1D', split, null, ['kuru', 'perpl']), [
+    { asset: 'USDC', amount: '-0.13' },
+    { asset: 'AUSD', amount: '0.96' },
+  ]);
+});
+
+test('pnlAmounts names the asset of a one-venue agent with nothing settled', () => {
+  assert.deepEqual(pnlAmounts({ last24h: '0', allTime: '0', byAsset: [] }, ['perpl'], 'allTime'), [
+    { asset: 'AUSD', amount: '0' },
+  ]);
+  assert.deepEqual(
+    pnlAmounts({ last24h: '0', allTime: '0', byAsset: [] }, ['kuru', 'perpl'], 'allTime'),
+    [],
+  );
+  assert.equal(pnlAmounts(undefined, ['kuru'], 'allTime'), null);
 });

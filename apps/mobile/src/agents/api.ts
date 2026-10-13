@@ -425,8 +425,11 @@ export type AgentSummary = {
    * when nothing has settled. `allTimePartial` (SEN-129) is `true` when the
    * server's event log has dropped the agent's oldest events, so `allTime`
    * covers only what it still holds; absent otherwise. Not shown yet.
+   *
+   * `byAsset` (SEN-210) is the same two figures per asset, which is what the
+   * app shows: the mixed sum is never printed. Absent on an older API.
    */
-  pnl: { last24h: string; allTime: string; allTimePartial?: true };
+  pnl: { last24h: string; allTime: string; allTimePartial?: true; byAsset?: AssetPnl[] };
   /** The largest notional among orders that landed, in quote units, as recorded; `null` if none. */
   largestOrderNotional: string | null;
   /** Epoch ms the current mandate took effect: the hire or the last amend. */
@@ -609,6 +612,9 @@ export type PerplPortfolioSection =
   | { status: 'not_in_mandate' };
 
 /** `GET /agents/:id/portfolio` (B-T10): what the agent holds, venue by venue. */
+/** One asset's share of an agent's realised P&L (SEN-210). */
+export type AssetPnl = { asset: string; last24h: Decimal; allTime: Decimal };
+
 export type AgentPortfolioDto = {
   agentId: string;
   address: string;
@@ -617,7 +623,10 @@ export type AgentPortfolioDto = {
   kuru: SectionResult<{ accountId: string | null; balances: BalanceDto[]; openOrders: OrderDto[] }>;
   perpl: SectionResult<PerplPortfolioSection>;
   holdings: SpotHoldingDto[];
-  /** USDC and AUSD added as dollars, so only ever "≈ $". */
+  /**
+   * USDC, AUSD and spot at its mark added as dollars. Never printed (SEN-210):
+   * the app shows `agentHoldingAmounts` and uses this only to size a bar.
+   */
   totals: { approxUsd: Decimal; byQuote: { USDC: Decimal; AUSD: Decimal }; note: string };
 };
 

@@ -1,6 +1,6 @@
 /**
  * Portfolio (SEN-118, plan U-12): where your money is and what it is doing.
- * One ≈ $ total, a bar splitting it into cash, capital with agents, spot and
+ * The total, a bar splitting it into cash, capital with agents, spot and
  * perps, the cash card, then Positions / Orders / History. Spec:
  * `docs/design/trading/portfolio.html`.
  *
@@ -13,9 +13,11 @@
  * Your agents' positions sit beside yours for the full picture but are
  * read-only: an agent's funds are the agent's, so a row opens its cockpit.
  *
- * The total is computed on the phone (`portfolio/view.ts`): USDC and AUSD at
- * $1, anything else at its Kuru last price (then, and only then, "≈ $"),
- * summed exactly and floored to the cent. The
+ * The total is computed on the phone (`portfolio/view.ts`) and printed
+ * exactly, per asset (SEN-210): `25.52 USDC · 20.89 AUSD · 0.00999 WETH`,
+ * never USDC and AUSD added up as dollars and never a token converted at its
+ * price. Only the bar and the line need one number: they count USDC and AUSD
+ * at $1 and anything else at its Kuru last price. The
  * line under it is the server's recorded history over 1D / 1W / 1M / ALL
  * (SEN-152, `portfolio/ValueHero.tsx`); until that has a point, it is what
  * this phone observed since the app opened, and the caption says exactly that.
@@ -54,7 +56,6 @@ import {
   perplFillsNote,
   sectionFailure,
   shown,
-  totalIsApprox,
   type Holdings,
   type OrderRow,
   type PortfolioSection,
@@ -164,7 +165,7 @@ export default function PortfolioScreen() {
         <>
           <ValueHero
             total={split.total}
-            approx={totalIsApprox(held, group?.priced ?? false)}
+            amounts={split.amounts}
             at={at}
             trading={user.trading}
             hidden={hidden}
@@ -341,11 +342,13 @@ export default function PortfolioScreen() {
   );
 }
 
-/** What the ≈ $ leaves out, said under it rather than folded silently into the number. */
+/** What the total leaves out, said under it rather than folded silently into the number. */
 function totalNote(held: Holdings, agentsLoading: boolean) {
-  const parts = ['USDC and AUSD counted as $1, other tokens at their Kuru price.'];
+  const parts = [
+    'The bar and the chart add USDC and AUSD at $1 and other tokens at their Kuru price.',
+  ];
   if (held.unpriced.length > 0) {
-    parts.push(`Leaves out ${held.unpriced.join(', ')}: no Kuru price.`);
+    parts.push(`They leave out ${held.unpriced.join(', ')}: no Kuru price.`);
   }
   const unread = held.unread.filter((s) => s !== 'wallet').map((s) => VENUE_NAME[s]);
   if (unread.length > 0) parts.push(`Leaves out ${unread.join(' and ')}: it didn’t answer.`);

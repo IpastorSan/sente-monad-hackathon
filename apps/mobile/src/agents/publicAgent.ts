@@ -7,8 +7,9 @@
  * answer missing its mandate or its name is an error, never a half page.
  */
 import { unboundFetch } from '../platform/fetch.ts';
+import type { AssetAmount } from '../ui/assetAmounts.ts';
 import { API_URL } from '../wallet/api.ts';
-import { fromWireMandate, type AgentMandate, type WireMandate } from './api.ts';
+import { fromWireMandate, type AgentMandate, type AssetPnl, type WireMandate } from './api.ts';
 
 /** Where a shared link points when the app is not running in a browser. */
 export const PUBLIC_ORIGIN = 'https://sente.lol';
@@ -60,9 +61,11 @@ export type PublicAgent = {
   forkedFrom: string | null;
   copies: number;
   prompt: { systemPrompt: string; strategy: string } | null;
-  pnl: { allTime: string; last24h: string; allTimePartial: boolean };
+  /** `byAsset` is absent on an API before SEN-210. */
+  pnl: { allTime: string; last24h: string; allTimePartial: boolean; byAsset?: AssetPnl[] };
   counts: { trades: number; held: number; theses: number };
-  balance: { approxUsd: string; note: string } | null;
+  /** `amounts` is what it holds per asset, exactly; absent on an API before SEN-210. */
+  balance: { amounts: AssetAmount[] | null; note: string } | null;
   fills: PublicFill[];
   refusals: PublicRefusal[];
   generatedAt: string;
@@ -132,6 +135,23 @@ function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function parseAssetPnl(value: unknown): AssetPnl[] {
+  if (!isObject(value)) return [];
+  const asset = str(value['asset']);
+  const last24h = str(value['last24h']);
+  const allTime = str(value['allTime']);
+  return asset !== null && last24h !== null && allTime !== null
+    ? [{ asset, last24h, allTime }]
+    : [];
+}
+
+function parseAmount(value: unknown): AssetAmount[] {
+  if (!isObject(value)) return [];
+  const asset = str(value['asset']);
+  const amount = str(value['amount']);
+  return asset !== null && amount !== null ? [{ asset, amount }] : [];
+}
+
 export function parsePublicAgent(body: unknown): PublicAgent {
   if (!isObject(body)) throw new PublicAgentError(200, 'Malformed public agent');
   const owner = isObject(body['owner']) ? body['owner'] : {};
@@ -182,19 +202,21 @@ export function parsePublicAgent(body: unknown): PublicAgent {
       allTime: str(pnl['allTime']) ?? '0',
       last24h: str(pnl['last24h']) ?? '0',
       allTimePartial: pnl['allTimePartial'] === true,
+      ...(Array.isArray(pnl['byAsset']) ? { byAsset: pnl['byAsset'].flatMap(parseAssetPnl) } : {}),
     },
     counts: {
       trades: num(counts['trades']) ?? 0,
       held: num(counts['held']) ?? 0,
       theses: num(counts['theses']) ?? 0,
     },
-    balance:
-      isObject(body['balance']) && str(body['balance']['approxUsd']) !== null
-        ? {
-            approxUsd: str(body['balance']['approxUsd'])!,
-            note: str(body['balance']['note']) ?? '',
-          }
-        : null,
+    balance: isObject(body['balance'])
+      ? {
+          amounts: Array.isArray(body['balance']['amounts'])
+            ? body['balance']['amounts'].flatMap(parseAmount)
+            : null,
+          note: str(body['balance']['note']) ?? '',
+        }
+      : null,
     fills: (Array.isArray(body['fills']) ? body['fills'] : []).flatMap(parseFill),
     refusals: (Array.isArray(body['refusals']) ? body['refusals'] : []).flatMap(parseRefusal),
     generatedAt: str(body['generatedAt']) ?? '',
@@ -262,14 +284,6 @@ export function statusPill(status: PublicAgentStatus): {
     case 'revoked':
       return { label: 'Revoked', tone: 'revoked' };
   }
-}
-
-/** A signed decimal string as money: `+12.50`, `−3.10`, `0.00`. */
-export function signedMoney(decimal: string): { text: string; tone: 'up' | 'down' | null } {
-  const value = Number(decimal);
-  if (!Number.isFinite(value) || value === 0) return { text: '0.00', tone: null };
-  const abs = Math.abs(value).toFixed(2);
-  return value > 0 ? { text: `+${abs}`, tone: 'up' } : { text: `−${abs}`, tone: 'down' };
 }
 
 /** Where "Hire a copy" goes: the fork flow, behind Welcome when signed out. */

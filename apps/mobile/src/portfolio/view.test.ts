@@ -10,8 +10,8 @@ import {
   allocation,
   allocationParts,
   amountText,
+  agentHoldingAmounts,
   appendSample,
-  approxUsd,
   cents,
   fillDays,
   floorTo,
@@ -28,19 +28,20 @@ import {
   sectionFailure,
   seriesChange,
   shown,
-  signedUsd,
   subDecimal,
-  totalIsApprox,
   unreadSections,
   usdPrice,
 } from './view.ts';
 
 const NOW = Date.UTC(2026, 8, 27, 9, 41);
 
-test('the change line reads a delta in exponent form as zero, not a dash (SEN-136)', () => {
-  // Pre-fix: `$—`, because the price formatter refused `1e-7`.
-  assert.equal(signedUsd('1e-7'), '$0.00');
-  assert.equal(signedUsd('-0.005'), '−$0.01', 'half away from zero');
+test('the change reads a delta in exponent form as zero, not a dash (SEN-136)', () => {
+  const change = seriesChange([
+    { at: 0, usd: '1' },
+    { at: 1, usd: '1.0000001' },
+  ]);
+  assert.equal(change?.delta, '0.00');
+  assert.equal(change?.tone, 'flat');
 });
 
 function ticker(symbol: string, last: string, venue: 'kuru' | 'perpl' = 'kuru'): TickerDto {
@@ -149,12 +150,10 @@ test('USDC and AUSD are $1, other assets take their Kuru last price, the rest ar
   assert.equal(usdPrice('WETH', TICKERS), null);
 });
 
-test('balances truncate to their token places, totals round and say ≈ $', () => {
+test('balances truncate to their token places', () => {
   assert.equal(amountText('0.009', 'AUSD'), '0.00');
   assert.equal(amountText('1284.5', 'AUSD'), '1,284.50');
   assert.equal(amountText('412.123456', 'MON'), '412.1234');
-  assert.equal(approxUsd('3918.4'), '≈ $3,918.40');
-  assert.equal(approxUsd(null), '—');
 });
 
 test('holdings: cash per currency, venue cash, spot at the Kuru price, perps as margin + uPnL', () => {
@@ -177,7 +176,7 @@ test('holdings: cash per currency, venue cash, spot at the Kuru price, perps as 
   assert.equal(held.perpsUnknown, false);
 });
 
-test('an unpriced asset is named and left out, never counted as zero', () => {
+test('an unpriced asset is named and left out of the bar, but still listed as itself', () => {
   const p = portfolio({
     wallet: {
       ok: true,
@@ -187,7 +186,11 @@ test('an unpriced asset is named and left out, never counted as zero', () => {
   const held = holdings(walletOf(p), p, TICKERS);
   assert.deepEqual(held.unpriced, ['WETH']);
   assert.equal(held.spot[0]?.value, null);
-  assert.equal(allocationParts(held, null).spot, '0');
+  // No price: nothing in the bar's dollars, and its exact amount still printed.
+  assert.deepEqual(allocationParts(held, null).spot, {
+    usd: '0',
+    amounts: [{ asset: 'WETH', amount: '1.5' }],
+  });
 });
 
 test('unlinked Perpl: the chain balance is cash and perps are unknown', () => {
@@ -259,8 +262,15 @@ test('trading off: wallet cash alone, from the wallet session', () => {
   assert.deepEqual(held.perps, []);
 });
 
+const usd = (value: string) => ({ usd: value, amounts: [] });
+
 test('allocation shares are whole percents that add to 100, empty parts left out', () => {
-  const split = allocation({ cash: '1784.91', agents: '1509.54', spot: '404.25', perps: '219.70' });
+  const split = allocation({
+    cash: usd('1784.91'),
+    agents: usd('1509.54'),
+    spot: usd('404.25'),
+    perps: usd('219.70'),
+  });
   assert.equal(split.total, '3918.40');
   assert.deepEqual(
     split.segments.map((s) => [s.key, s.share]),
@@ -275,18 +285,32 @@ test('allocation shares are whole percents that add to 100, empty parts left out
     split.segments.reduce((a, s) => a + s.share, 0),
     100,
   );
-  const thirds = allocation({ cash: '1', agents: '1', spot: '1', perps: '0' });
+  const thirds = allocation({ cash: usd('1'), agents: usd('1'), spot: usd('1'), perps: usd('0') });
   assert.deepEqual(
     thirds.segments.map((s) => s.share),
     [34, 33, 33],
   );
-  assert.deepEqual(allocation({ cash: '0', agents: '0', spot: '0', perps: '0' }).segments, []);
+  assert.deepEqual(
+    allocation({ cash: usd('0'), agents: usd('0'), spot: usd('0'), perps: usd('0') }).segments,
+    [],
+  );
 });
 
 test('hidden balances: digits masked, the legend switches to shares', () => {
-  const [cash] = allocation({ cash: '1784.91', agents: '0', spot: '0', perps: '0' }).segments;
+  const [cash] = allocation({
+    cash: {
+      usd: '1784.91',
+      amounts: [
+        { asset: 'USDC', amount: '1000' },
+        { asset: 'AUSD', amount: '784.91' },
+      ],
+    },
+    agents: usd('0'),
+    spot: usd('0'),
+    perps: usd('0'),
+  }).segments;
   assert.ok(cash);
-  assert.equal(legendValue(cash, false), '$1,784.91');
+  assert.equal(legendValue(cash, false), '1,000.00 USDC\n784.91 AUSD', 'per asset, never $');
   assert.equal(legendValue(cash, true), '100%');
   assert.equal(shown('1,284.50', true), '•,•••.••');
   assert.equal(shown('1,284.50', false), '1,284.50');
@@ -301,8 +325,6 @@ test('the hero series keeps the newest samples and reports first → last', () =
   const change = seriesChange(series);
   assert.equal(change?.delta, '-1.01');
   assert.equal(change?.tone, 'down');
-  assert.equal(signedUsd('-1.01'), '−$1.01');
-  assert.equal(signedUsd('84.12'), '+$84.12');
   assert.equal(seriesChange(series.slice(0, 1)), null);
   const capped = [0, 10_000, 20_000].reduce(
     (s, at) => appendSample(s, { at, usd: '1' }, { max: 2 }),
@@ -347,7 +369,12 @@ function agentPortfolio(overrides: Partial<AgentPortfolioDto> = {}): AgentPortfo
   };
 }
 
-test('agents group: positions open the cockpit, idle agents show their ≈ $, revoked only with funds', () => {
+const ausd = (amount: string): AgentPortfolioDto['wallet'] => ({
+  ok: true,
+  balances: [{ asset: 'AUSD', available: amount, locked: '0', total: amount, decimals: 6 }],
+});
+
+test('agents group: positions open the cockpit, idle agents say so and hold exact amounts, revoked only with funds', () => {
   const { rows, total } = agentGroup([
     {
       agent: { id: 'a1', name: 'Range Hunter', status: 'active' },
@@ -356,8 +383,9 @@ test('agents group: positions open the cockpit, idle agents show their ≈ $, re
     {
       agent: { id: 'a2', name: 'Quiet', status: 'active' },
       portfolio: agentPortfolio({
+        wallet: ausd('50'),
         holdings: [],
-        totals: { ...agentPortfolio().totals, approxUsd: '5' },
+        totals: { ...agentPortfolio().totals, approxUsd: '50' },
       }),
     },
     {
@@ -368,6 +396,7 @@ test('agents group: positions open the cockpit, idle agents show their ≈ $, re
         revokedAt: '2026-09-23T10:00:00.000Z',
       },
       portfolio: agentPortfolio({
+        wallet: ausd('412'),
         holdings: [],
         totals: { ...agentPortfolio().totals, approxUsd: '412' },
       }),
@@ -381,22 +410,68 @@ test('agents group: positions open the cockpit, idle agents show their ≈ $, re
     },
     { agent: { id: 'a5', name: 'Old API', status: 'active' }, portfolio: null },
   ]);
-  assert.equal(total, '1029.40');
+  // The bar's dollars, and what is printed: MON as itself, never at its price.
+  assert.equal(total?.usd, '1074.40');
+  assert.deepEqual(total?.amounts, [
+    { asset: 'AUSD', amount: '462' },
+    { asset: 'MON', amount: '180' },
+  ]);
   assert.deepEqual(
     rows.map((r) =>
       r.kind === 'position' ? `${r.agentId}:${r.symbol}` : `${r.agentId}:${r.caption}`,
     ),
-    ['a1:MON', 'a2:No open position', 'a3:Revoked Sep 23', 'a5:Holdings unavailable'],
+    ['a1:MON', 'a2:No open position · idle', 'a3:Revoked Sep 23', 'a5:Holdings unavailable'],
   );
-  const [position] = rows;
+  const [position, idle] = rows;
   assert.equal(position?.kind, 'position');
   if (position?.kind === 'position') {
     assert.equal(position.caption, 'Range Hunter · from 0.9744');
     assert.equal(position.unit, 'USDC');
     assert.ok(Math.abs((position.pct ?? 0) - 0.6979) < 0.001);
   }
+  // The idle agent's figure is what it holds, not a $50 position.
+  assert.deepEqual(idle?.kind === 'agent' && idle.amounts, [{ asset: 'AUSD', amount: '50' }]);
   const revoked = rows[2];
   assert.equal(revoked?.kind === 'agent' && revoked.aside, 'ready to return');
+  assert.equal(rows[3]?.kind === 'agent' && rows[3].amounts, null);
+});
+
+test('agentHoldingAmounts: stables from wallet and venues, perps at margin + P&L, spot as itself', () => {
+  const amounts = agentHoldingAmounts(
+    agentPortfolio({
+      wallet: {
+        ok: true,
+        balances: [
+          { asset: 'USDC', available: '25', locked: '0', total: '25', decimals: 6 },
+          { asset: 'AUSD', available: '1', locked: '0', total: '1', decimals: 6 },
+        ],
+      },
+      kuru: {
+        ok: true,
+        accountId: '9',
+        balances: [{ asset: 'USDC', available: '0.52', locked: '0', total: '0.52' }],
+        openOrders: [],
+      },
+      perpl: {
+        ok: true,
+        status: 'not_enrolled',
+        accountId: '1',
+        balances: [{ asset: 'AUSD', available: '19.89', locked: '0', total: '19.89' }],
+        positions: null,
+        openOrders: null,
+      },
+    }),
+  );
+  assert.deepEqual(amounts, [
+    { asset: 'USDC', amount: '25.52' },
+    { asset: 'AUSD', amount: '20.89' },
+    { asset: 'MON', amount: '180' },
+  ]);
+  // A section that failed is left out, not read as zero.
+  assert.deepEqual(
+    agentHoldingAmounts(agentPortfolio({ wallet: { ok: false, error: 'down' }, holdings: [] })),
+    [],
+  );
 });
 
 test('orders: distance to the market, what cancelling returns, when it was placed', () => {
@@ -594,36 +669,32 @@ test('the total and its parts are exact sums, shown to the cent without rounding
   const p = afterRoundTrip();
   const held = holdings(walletOf(p), p, TICKERS);
   assert.deepEqual(held.venueCash, [{ venue: 'perpl', asset: 'AUSD', amount: '99.996127' }]);
-  const split = allocation(allocationParts(held, '10'));
+  const split = allocation(
+    allocationParts(held, { usd: '10', amounts: [{ asset: 'USDC', amount: '10' }] }),
+  );
   assert.equal(split.total, '349.996127');
-  assert.equal(money(split.total), '349.99', 'not $350.00');
+  // Printed per asset, each floored: 249.99 AUSD, never a $350.00 you don't have.
+  assert.deepEqual(split.amounts, [
+    { asset: 'USDC', amount: '100' },
+    { asset: 'AUSD', amount: '249.996127' },
+  ]);
   const cash = split.segments.find((s) => s.key === 'cash');
   assert.equal(
     cash && legendValue(cash, false),
-    '$339.99',
+    '90.00 USDC\n249.99 AUSD',
     'the parts the card lists add up to it',
   );
   assert.equal(amountText('99.996127', 'AUSD'), '99.99');
 });
 
-test('only a total that prices a non-stable token is ≈', () => {
-  const p = afterRoundTrip();
-  const stableOnly = holdings(walletOf(p), p, TICKERS);
-  assert.equal(totalIsApprox(stableOnly, false), false);
-  assert.equal(totalIsApprox(stableOnly, true), true, 'an agent holding MON');
-  const withMon = holdings(walletOf(portfolio()), portfolio(), TICKERS);
-  assert.equal(totalIsApprox(withMon, false), true);
-  const priced = agentGroup([
-    { agent: { id: 'a1', name: 'R', status: 'active' }, portfolio: agentPortfolio() },
-  ]).priced;
-  assert.equal(priced, true);
-  const cashOnly = agentGroup([
-    {
-      agent: { id: 'a1', name: 'R', status: 'active' },
-      portfolio: agentPortfolio({ holdings: [] }),
-    },
-  ]).priced;
-  assert.equal(cashOnly, false);
+test('a spot token is listed as itself in the total, never converted at its price', () => {
+  const p = portfolio();
+  const held = holdings(walletOf(p), p, TICKERS);
+  const split = allocation(allocationParts(held, null));
+  const mon = split.amounts.find((a) => a.asset === 'MON');
+  assert.ok(mon, 'MON is in the printed total as MON');
+  const spot = split.segments.find((s) => s.key === 'spot');
+  assert.ok(spot && !legendValue(spot, false).includes('$'));
 });
 
 test('the change line is the difference of the totals as shown: 350.00 → 349.99 is −$0.01', () => {
@@ -633,7 +704,6 @@ test('the change line is the difference of the totals as shown: 350.00 → 349.9
   ]);
   assert.equal(change?.delta, '-0.01');
   assert.equal(change?.tone, 'down');
-  assert.equal(signedUsd(change!.delta), '−$0.01');
   // A move inside the same shown cent is no change at all.
   assert.equal(
     seriesChange([

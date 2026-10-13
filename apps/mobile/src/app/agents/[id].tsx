@@ -56,13 +56,12 @@ import {
   historyDays,
   largestOrderLine,
   mandateSigned,
-  pnlUnit,
+  pnlAmounts,
   positionRows,
   rulesSentence,
   scheduleLine,
   settledTrades,
   shortDate,
-  signedParts,
   tabFrom,
   trackLayout,
   windowPnl,
@@ -130,7 +129,9 @@ import {
 } from '@/ui/kit';
 import { PageTitle } from '@/ui/PageTitle';
 import { color, font, RADIUS, text } from '@/ui/theme';
-import { BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
+import { agentHoldingAmounts } from '@/portfolio/view';
+import { amountsTone, signedAmountsText } from '@/ui/assetAmounts';
+import { BigAmounts, BigNumber, RangePills, SideTag, TokenGlyph } from '@/ui/trading';
 
 /** `reason`: the API's refusal, when one is worth a link (SEN-183: out of credits → Credits). */
 type NoticeState = {
@@ -649,11 +650,14 @@ function Overview({
   // the eye lands; P&L sits under it, over the window the pills pick.
   // Scrubbing the curve moves the P&L line to that point and its date.
   const scrubbed = scrub !== null && series ? scrub : null;
-  const pnl = signedParts(
-    scrubbed !== null ? series?.points[scrubbed] : windowPnl(range, summary, series),
-  );
-  const today = signedParts(summary?.pnl.last24h);
-  const { unit, approx } = pnlUnit(agent.mandate.venues);
+  // Per asset (SEN-210): a Kuru and Perpl agent's P&L is `+0.96 AUSD · −0.13
+  // USDC`, never the two added up; the curve alone uses their sum.
+  const pnl =
+    scrubbed !== null
+      ? (series?.amounts[scrubbed] ?? null)
+      : windowPnl(range, summary, series, agent.mandate.venues);
+  const today = pnlAmounts(summary?.pnl, agent.mandate.venues, 'last24h');
+  const pnlTone = pnl !== null ? amountsTone(pnl) : null;
 
   const holdings = balances ? toHoldings(balances) : null;
   const main = holdings
@@ -662,17 +666,18 @@ function Overview({
   const others = holdings?.filter((holding) => holding !== main && holding.atoms > 0n) ?? [];
   const rows = portfolio ? positionRows(portfolio, entries, agent.preset) : null;
   // Gain green, loss red, and zero the readable dim, never ink on ink.
-  const toneStyle = (tone: typeof pnl.tone) =>
+  const toneStyle = (tone: typeof pnlTone) =>
     tone === 'up' ? text.up : tone === 'down' ? text.down : text.dim;
-  // No summary (an API before SEN-56) is no figure, not a zero.
-  const hasPnl = scrubbed !== null || summary !== undefined;
+  // No summary (an API before SEN-56), or a mixed one an older API cannot
+  // split by asset, is no figure, not a zero.
+  const hasPnl = pnl !== null;
 
   return (
     <View>
       <View style={styles.hero}>
         <Text style={text.label}>Balance</Text>
         {portfolio ? (
-          <BigNumber value={portfolio.totals.approxUsd} prefix="$" approx />
+          <BigAmounts amounts={agentHoldingAmounts(portfolio)} />
         ) : main ? (
           <View style={styles.figure}>
             <BigNumber value={formatAtoms(main.atoms, main.decimals, { group: false })} />
@@ -697,20 +702,17 @@ function Overview({
                 : ''}
         </Text>
         <View style={styles.pnlLine}>
-          <Text style={[text.strong, text.num, hasPnl ? toneStyle(pnl.tone) : text.dim]}>
-            {hasPnl
-              ? `${approx ? '≈ ' : ''}${pnl.sign}${pnl.magnitude}${unit ? ` ${unit}` : ''}`
-              : '—'}
+          <Text style={[text.strong, text.num, hasPnl ? toneStyle(pnlTone) : text.dim]}>
+            {pnl !== null ? signedAmountsText(pnl) : '—'}
           </Text>
           <Text style={[text.dim, text.num]}>
             {scrubbed !== null && series
               ? `realised P&L at ${shortDate(series.ats[scrubbed] ?? now)}`
               : `realised P&L, ${WINDOW_LABEL[range]}`}
           </Text>
-          {scrubbed === null && summary && range !== '1D' ? (
-            <Text style={[text.dim, text.num, styles.pushRight, toneStyle(today.tone)]}>
-              {today.sign}
-              {today.magnitude} today
+          {scrubbed === null && today !== null && range !== '1D' ? (
+            <Text style={[text.dim, text.num, styles.pushRight, toneStyle(amountsTone(today))]}>
+              {signedAmountsText(today)} today
             </Text>
           ) : null}
         </View>
@@ -832,7 +834,7 @@ function PositionCard({ row, agentId }: { row: PositionRow; agentId: string }) {
                 row.tone === 'down' && text.down,
               ]}
             >
-              {row.pnl ?? '—'}
+              {row.pnl !== null ? `${row.pnl} ${row.quote}` : '—'}
             </Text>
             {row.pct ? (
               <Text
@@ -1171,8 +1173,8 @@ function MandateCard({
     mandate.expiresAt,
     now,
   );
-  const made = signedParts(summary?.pnl.allTime);
-  const { unit } = pnlUnit(mandate.venues);
+  const made = pnlAmounts(summary?.pnl, mandate.venues, 'allTime');
+  const madeTone = made !== null ? amountsTone(made) : null;
 
   return (
     <View>
@@ -1202,11 +1204,11 @@ function MandateCard({
               style={[
                 text.strong,
                 text.num,
-                made.tone === 'up' && text.up,
-                made.tone === 'down' && text.down,
+                madeTone === 'up' && text.up,
+                madeTone === 'down' && text.down,
               ]}
             >
-              {summary ? `${made.sign}${made.magnitude}${unit ? ` ${unit}` : ''}` : '—'}
+              {made !== null ? signedAmountsText(made) : '—'}
             </Text>
           </ProofRow>
           <ProofRow label="Held orders that broke its limits">

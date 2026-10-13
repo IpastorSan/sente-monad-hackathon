@@ -58,7 +58,7 @@ export interface PresetStatsDto {
   /** Agents on the preset active at any point in the window: the cohort. */
   n: number;
   minN: number;
-  /** ≈ $ (USDC + AUSD as one); `null` when `n < minN`. */
+  /** USDC and AUSD added as one, so never shown (SEN-210); `null` when `n < minN`. */
   medianPnl30d: Decimal | null;
   /** A fraction (P&L ÷ capital); `null` below `minN`. Its sample is `returnN`, not `n`. */
   medianReturn30d: Decimal | null;

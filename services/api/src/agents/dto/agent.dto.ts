@@ -772,8 +772,16 @@ export interface AgentSummaryDto {
    * has dropped some of the agent's oldest events: `allTime` then covers only
    * what is still held. OPTIONAL so a client that predates it keeps working;
    * one that knows it should show `allTime` as "at least"/partial.
+   *
+   * `byAsset` (SEN-210) is the same two figures per asset (`USDC`, `AUSD`),
+   * so a client never has to present the sum of two tokens as one figure.
    */
-  pnl: { last24h: string; allTime: string; allTimePartial?: true };
+  pnl: {
+    last24h: string;
+    allTime: string;
+    allTimePartial?: true;
+    byAsset: { asset: string; last24h: string; allTime: string }[];
+  };
   /** Max notional (quote units, decimal string) among the orders that landed; null if none. */
   largestOrderNotional: string | null;
   /** Epoch ms when the CURRENT mandate took effect: the hire, or the last committed amend. */
