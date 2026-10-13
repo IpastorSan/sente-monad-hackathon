@@ -47,6 +47,12 @@
 // `bind`, so an existing binding under a different device key is refused here
 // exactly as it is in `POST /wallet/register`.
 //
+// `--apply` writes the registry the API reads: `user-wallets.json`, or the
+// `user_wallets` table in `<dir>/sente.db` under `STORE_BACKEND=sqlite`
+// (SEN-205), read from the environment or the env file like `STATE_DIR`. It
+// refuses (exit 2) a backend that does not match the directory: `file` beside
+// a `sente.db`, `sqlite` without one.
+//
 // SECRETS: the app secret is never printed. What is printed is wallet ids,
 // addresses, quorum ids and PUBLIC keys.
 
@@ -59,9 +65,12 @@ import { getAddress } from 'viem';
 import type { UserWallet } from '../src/agents/privy/user-wallet.ts';
 import { PrivyClient, PrivyError } from '../src/agents/privy/privy.client.ts';
 import type { KeyQuorum } from '../src/agents/privy/key-quorum.ts';
+import { SenteDb, senteDbPath } from '../src/state/db/sente-db.ts';
 import { STATE_DIR_VAR, statePath } from '../src/state/json-file.ts';
 import { acquireStateDirLock } from '../src/state/state-dir-lock.ts';
+import { backendMismatch, storeBackend } from '../src/state/store-backend.ts';
 import { FileUserWalletRegistry } from '../src/wallet/store/file-user-wallet-registry.ts';
+import { SqliteUserWalletRegistry } from '../src/wallet/store/sqlite-user-wallet-registry.ts';
 import { envFileFromArgs } from './env-file.ts';
 
 /**
@@ -158,6 +167,13 @@ async function main(): Promise<number> {
     console.error(`--apply needs a state file: set ${STATE_DIR_VAR} or pass --state-dir <dir>`);
     return 1;
   }
+  // From the environment or the env file loaded above, as the API would read it.
+  const backend = storeBackend();
+  const mismatch = apply ? backendMismatch(backend, dirname(registryPath!)) : undefined;
+  if (mismatch) {
+    console.error(`Refusing: ${mismatch}`);
+    return 2;
+  }
 
   const privy = new PrivyClient({ appId, appSecret });
   const wallets = await listWallets(privy);
@@ -238,8 +254,13 @@ async function main(): Promise<number> {
   // while it runs would be overwritten by its next save. Taking the same
   // STATE_DIR lock refuses that instead, naming the running API (SEN-161).
   // Released by the lock's own exit hook.
-  acquireStateDirLock(dirname(registryPath!));
-  const registry = new FileUserWalletRegistry(registryPath!);
+  const dir = dirname(registryPath!);
+  acquireStateDirLock(dir);
+  // Closed by the process exiting: `bind` is one committed transaction.
+  const registry =
+    backend === 'sqlite'
+      ? new SqliteUserWalletRegistry(SenteDb.open(senteDbPath(dir)))
+      : new FileUserWalletRegistry(registryPath!);
   const result = await registry.bind({
     userId: userId!,
     walletId: wallet.id,

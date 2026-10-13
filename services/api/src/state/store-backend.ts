@@ -8,11 +8,15 @@
 // back to `file` would look like a working API reading the wrong store.
 //
 // Without `STATE_DIR` the value is irrelevant — every store stays in memory.
+//
+// Erasable syntax and `.ts` specifiers: the scripts load this under node's type
+// stripping (CLAUDE.md gotcha 10).
 
 import { Logger } from '@nestjs/common';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { SenteDb } from './db/sente-db';
+import { SENTE_DB_FILE, type SenteDb } from './db/sente-db.ts';
 
 export const STORE_BACKEND_VAR = 'STORE_BACKEND';
 
@@ -31,6 +35,31 @@ export function storeBackend(env: Env = process.env): StoreBackend {
       `(one JSON file per store under STATE_DIR, the default) or "sqlite" ` +
       `(<STATE_DIR>/sente.db). Refusing to boot rather than guess which stores to read.`,
   );
+}
+
+/**
+ * For a script that writes `dir` outside the API: why `backend` cannot be what
+ * the API runs on there, or `undefined` when it fits. `file` beside a
+ * `sente.db`, or `sqlite` without one, means the script would write a store
+ * the API does not read.
+ */
+export function backendMismatch(backend: StoreBackend, dir: string): string | undefined {
+  const db = join(dir, SENTE_DB_FILE);
+  const hasDb = existsSync(db);
+  if (backend === 'file' && hasDb) {
+    return (
+      `${STORE_BACKEND_VAR}=file but ${db} exists: the API probably runs on sqlite there. Set ` +
+      `${STORE_BACKEND_VAR}=sqlite as the API has it (or, if the API really runs on file after a ` +
+      'rollback, move sente.db, -wal and -shm aside first).'
+    );
+  }
+  if (backend === 'sqlite' && !hasDb) {
+    return (
+      `${STORE_BACKEND_VAR}=sqlite but there is no ${db}: the API runs on the JSON files there. ` +
+      `Set ${STORE_BACKEND_VAR}=file (or unset it) as the API has it.`
+    );
+  }
+  return undefined;
 }
 
 /** What a store provider needs to pick an implementation: `SenteDbLease` is one. */
