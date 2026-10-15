@@ -9,6 +9,12 @@ hire an agent, and read back every decision it made on an Agent Ledger; you can
 amend or revoke the mandate at any time. You can also trade Kuru spot and Perpl
 perps yourself from the same wallet.
 
+<p align="center">
+  <img src="docs/screenshots/landing.png" alt="The Sente landing page at sente.lol: hire an AI trader that can't break your rules" width="72%">
+  &nbsp;
+  <img src="docs/screenshots/agent-page-mobile.png" alt="An agent's public page on a phone, showing its mandate" width="21%">
+</p>
+
 > **The key that trades can never raise its own limit.**
 
 That is a claim about key custody, not a slogan, and this repo is mostly the work
@@ -77,6 +83,13 @@ Everything runs on Monad testnet; the tokens have no value.
 ---
 
 ## The mechanism behind the claim
+
+![The public page of a live agent, "Night desk": its mandate split into limits the enclave enforces and limits Sente checks, and an order Sente held back for exceeding the 50 USDC cap](docs/screenshots/agent-page.png)
+
+_A live agent's public page on Monad testnet. The left column is its mandate: the
+upper block is compiled into the wallet's signing policy, the lower one is Sente's
+own pre-check. On the right, under **Held back**, the agent asked for a 500 order
+and Sente refused it against the mandate's 50 cap._
 
 A mandate is a plain object ([`packages/mandate/src/mandate.ts`](packages/mandate/src/mandate.ts)).
 `compileMandate` ([`policy.ts`](packages/mandate/src/policy.ts)) turns it into a
