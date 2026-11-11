@@ -25,22 +25,21 @@ given. Everything that has not happened says so, in
 
 ## Try it
 
-- **Web app: <https://sente.lol>**, in **Google Chrome** on a desktop or laptop,
-  with the passkey saved to **Google Password Manager**. Chromium has no Google
-  Password Manager passkeys, and the Bitwarden extension takes over the prompt
-  without the PRF extension the wallet is derived from (pick "Use your device"
-  in its popup). Other providers are not measured
-  ([`docs/web.md`](docs/web.md#provider-matrix)).
-- **Android APK: <https://sente.lol/download/sente.apk>** (Android 9 or later,
-  sideloading allowed), also attached to the
-  [`v1.0-judging` release](https://github.com/IpastorSan/sente-monad-hackathon/releases/tag/v1.0-judging) with its SHA-256. Same domain and same
-  derivation as the web app.
-- **How it works: <https://sente.lol/how-it-works>**, readable without signing in.
-- **Judging walkthrough: [`docs/judges.md`](docs/judges.md).**
+The live deployment was taken down on 2026-11-11, after the hackathon judging.
+`sente.lol` and `api.sente.lol` no longer answer, so the web app, the hosted
+APK and the "How it works" page are gone, and passkeys created on `sente.lol`
+can no longer sign in. The Android APK is still attached to the
+[`v1.0-judging` release](https://github.com/IpastorSan/sente-monad-hackathon/releases/tag/v1.0-judging)
+with its SHA-256, but it needs the API to do anything past the first screen.
 
-Everything runs on Monad testnet; the tokens have no value.
+What remains is the code, the screenshots and the record below.
+[`docs/judges.md`](docs/judges.md) is the walkthrough judges followed, and
+[`docs/deploy.md`](docs/deploy.md) describes how to bring the stack back up on
+a new box.
 
-## What is live
+Everything ran on Monad testnet; the tokens had no value.
+
+## What was live
 
 - **Passkey sign-in, no seed phrase.** One passkey, two keys derived from its PRF
   output: a secp256k1 key that identifies you to the API, and a P-256 **device
