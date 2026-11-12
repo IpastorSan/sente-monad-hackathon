@@ -47,9 +47,9 @@ SEN-3), from the compiled mandate (`compileMandate`):
 Not enforced by the enclave. Sente's layer 1 (`checkIntent`) checks these,
 and `AGENT_PRECHECK=off` removes them:
 
-- **Perpl order size and leverage.** Perpl orders are REST calls that Perpl
-  forwards; no transaction of ours carries them, so the enclave never sees
-  them. That is why Perpl is kept out of this demo.
+- **Perpl order size and leverage.** Perpl orders are frames on Perpl's trading
+  socket that Perpl forwards on chain; no transaction of ours carries them,
+  so the enclave never sees them. That is why Perpl is kept out of this demo.
 - **Kuru order size** inside a `batch`.
 
 Two limits of what the enclave does enforce:

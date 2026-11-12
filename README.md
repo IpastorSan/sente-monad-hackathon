@@ -139,8 +139,9 @@ server proposed before it signs ([`apps/mobile/src/agents/approval.ts`](apps/mob
 a device key that rubber-stamps a server-composed blob would prove nothing.
 
 One honest bound. The enclave sees transactions, so it cannot see what is not one:
-Perpl order size and leverage arrive as REST calls Perpl forwards, and the size
-inside a Kuru `batch` is one argument among many. Those are checked by Sente's own
+Perpl order size and leverage are fields of order frames on Perpl's trading
+socket, which Perpl forwards on chain, and the size inside a Kuru `batch` is one
+argument among many. Those are checked by Sente's own
 pre-check first ([`packages/mandate/src/enforce.ts`](packages/mandate/src/enforce.ts)),
 which is layer 1 and is removable with `AGENT_PRECHECK=off` — the demo turns it off
 precisely to show the enclave refusing on its own. The enclave bounds the capital
